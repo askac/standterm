@@ -23,3 +23,6 @@ Thumbs.db
 
 # Flask/Socket.IO
 *.log
+
+# Unused reference assets
+colorscheme.png

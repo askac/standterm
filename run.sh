@@ -97,5 +97,36 @@ if [[ "$PLATFORM_NAME" == "macOS" ]]; then
     echo "[*] macOS note: enable Remote Login if you want to SSH into localhost."
 fi
 
+open_browser() {
+    local url="$1"
+    case "$PLATFORM_NAME" in
+        WSL)
+            (cmd.exe /c start "" "$url" >/dev/null 2>&1 &) >/dev/null 2>&1
+            ;;
+        macOS)
+            (open "$url" >/dev/null 2>&1 &) >/dev/null 2>&1
+            ;;
+        Linux)
+            if command -v xdg-open >/dev/null 2>&1; then
+                (xdg-open "$url" >/dev/null 2>&1 &) >/dev/null 2>&1
+            fi
+            ;;
+    esac
+}
+
 echo "[*] Starting WebSSH server..."
-python "$APP_FILE"
+# Run python with unbuffered output so we can detect the access URL line and open
+# the browser once on the first launch.
+python -u "$APP_FILE" 2>&1 | {
+    browser_opened=
+    while IFS= read -r line; do
+        printf '%s\n' "$line"
+        if [[ -z "$browser_opened" && "$line" == *"Access URL:"* ]]; then
+            url="${line##*Access URL: }"
+            url="${url%%[[:space:]]*}"
+            browser_opened=1
+            open_browser "$url"
+        fi
+    done
+}
+exit "${PIPESTATUS[0]}"

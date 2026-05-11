@@ -50,6 +50,8 @@ type nul > "%INSTALLED_FLAG%"
 
 :start
 echo [*] Starting WebSSH server...
-python "%APP_FILE%"
+:: Run python with unbuffered output, then watch the first "Access URL:" line and
+:: open it in the default browser on the first launch.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$o=$false; & python -u '%APP_FILE%' 2>&1 | ForEach-Object { Write-Host $_; if (-not $o -and $_ -match 'Access URL:\s*(\S+)') { Start-Process $matches[1]; $o=$true } }"
 
 pause
