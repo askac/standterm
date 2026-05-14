@@ -12,6 +12,7 @@ import argparse
 import select
 import shutil
 import re
+from collections import deque
 from pathlib import Path
 from flask import Flask, render_template, request, abort, make_response, redirect
 from flask_socketio import SocketIO
@@ -69,6 +70,8 @@ CONNECTION_TYPE_LOCAL_SHELL = 'local_shell'
 TERMINAL_ID_MAIN = 'main'
 MAX_TERMINAL_ID_LENGTH = 64
 MAX_TERMINALS_PER_CLIENT = 12
+MAX_TERMINAL_REPLAY_EVENTS = 1000
+MAX_TERMINAL_REPLAY_BYTES = 200000
 TERMINAL_ID_PATTERN = re.compile(r'^[A-Za-z0-9_.:-]+$')
 LOCAL_PUBLIC_KEY_TYPES = {
     'ssh-ed25519',
@@ -183,10 +186,14 @@ class TerminalBridge:
     terminal_kind = None
     terminal_label = None
 
-    def __init__(self, sid, terminal_id):
-        self.sid = sid
+    def __init__(self, owner_session, terminal_id):
+        self.owner_session = owner_session
         self.terminal_id = terminal_id
+        self.attached_sids = set()
+        self.sid = None
         self.closing = False
+        self.replay_buffer = deque()
+        self.replay_buffer_bytes = 0
 
     def metadata(self, cols=80, rows=24):
         return build_terminal_metadata(
@@ -197,6 +204,43 @@ class TerminalBridge:
             cols,
             rows,
         )
+
+    def attach(self, sid):
+        self.sid = sid
+        self.attached_sids.add(sid)
+
+    def detach(self, sid):
+        self.attached_sids.discard(sid)
+        if self.sid == sid:
+            self.sid = next(iter(self.attached_sids), None)
+
+    def emit_output(self, payload):
+        payload = dict(payload)
+        payload.setdefault('connection_type', self.connection_type)
+        payload.setdefault('terminal_id', self.terminal_id)
+        if payload.get('message_type') == 'terminal':
+            self._remember_terminal_payload(payload)
+        for sid in list(self.attached_sids):
+            socketio.emit('ssh_output', payload, room=sid)
+
+    def _remember_terminal_payload(self, payload):
+        data = payload.get('data')
+        if not isinstance(data, str) or not data:
+            return
+        payload_size = len(data.encode('utf-8', errors='ignore'))
+        self.replay_buffer.append(dict(payload))
+        self.replay_buffer_bytes += payload_size
+        while (
+            len(self.replay_buffer) > MAX_TERMINAL_REPLAY_EVENTS
+            or self.replay_buffer_bytes > MAX_TERMINAL_REPLAY_BYTES
+        ):
+            removed = self.replay_buffer.popleft()
+            removed_data = removed.get('data', '')
+            self.replay_buffer_bytes -= len(removed_data.encode('utf-8', errors='ignore'))
+
+    def replay_to(self, sid):
+        for payload in list(self.replay_buffer):
+            socketio.emit('ssh_output', payload, room=sid)
 
     def read_loop(self):
         raise NotImplementedError
@@ -563,48 +607,30 @@ class SSHBridge(TerminalBridge):
                 if self.channel.recv_ready():
                     data = self.channel.recv(4096).decode('utf-8', errors='ignore')
                     if data:
-                        socketio.emit(
-                            'ssh_output',
-                            {
-                                'message_type': 'terminal',
-                                'connection_type': self.connection_type,
-                                'terminal_id': self.terminal_id,
-                                'data': data,
-                            },
-                            room=self.sid,
-                        )
+                        self.emit_output({
+                            'message_type': 'terminal',
+                            'data': data,
+                        })
                 
                 if self.channel.exit_status_ready():
                     print(f"[*] SSH session exited for {self.sid}")
-                    socketio.emit(
-                        'ssh_output',
-                        {
-                            'message_type': 'ssh_closed',
-                            'connection_type': self.connection_type,
-                            'terminal_id': self.terminal_id,
-                            'message': 'SSH session closed.',
-                        },
-                        room=self.sid,
-                    )
+                    self.emit_output({
+                        'message_type': 'ssh_closed',
+                        'message': 'SSH session closed.',
+                    })
                     break
             except Exception as e:
                 if self.closing:
                     break
                 print(f"[!] Read error: {e}")
-                socketio.emit(
-                    'ssh_output',
-                    {
-                        'message_type': 'ssh_closed',
-                        'connection_type': self.connection_type,
-                        'terminal_id': self.terminal_id,
-                        'message': 'SSH connection closed due to a read error.',
-                        'error_code': 'ssh_read_error',
-                    },
-                    room=self.sid,
-                )
+                self.emit_output({
+                    'message_type': 'ssh_closed',
+                    'message': 'SSH connection closed due to a read error.',
+                    'error_code': 'ssh_read_error',
+                })
                 break
         print(f"[*] SSH read loop terminated for {self.sid}")
-        unregister_terminal_bridge(self.sid, self.terminal_id, self)
+        unregister_terminal_bridge(self.owner_session, self.terminal_id, self)
 
     def write(self, data):
         if self.channel:
@@ -721,121 +747,73 @@ class LocalShellBridge(TerminalBridge):
                     if self.closing:
                         break
                     if not self.process.isalive():
-                        socketio.emit(
-                            'ssh_output',
-                            {
-                                'message_type': 'ssh_closed',
-                                'connection_type': self.connection_type,
-                                'terminal_id': self.terminal_id,
-                                'message': 'Local shell session closed.',
-                            },
-                            room=self.sid,
-                        )
+                        self.emit_output({
+                            'message_type': 'ssh_closed',
+                            'message': 'Local shell session closed.',
+                        })
                         break
                     continue
 
                 data = self.process.read(size=4096)
                 if data:
-                    socketio.emit(
-                        'ssh_output',
-                        {
-                            'message_type': 'terminal',
-                            'connection_type': self.connection_type,
-                            'terminal_id': self.terminal_id,
-                            'data': data,
-                        },
-                        room=self.sid,
-                    )
+                    self.emit_output({
+                        'message_type': 'terminal',
+                        'data': data,
+                    })
             except EOFError:
                 if self.closing:
                     break
-                socketio.emit(
-                    'ssh_output',
-                    {
-                        'message_type': 'ssh_closed',
-                        'connection_type': self.connection_type,
-                        'terminal_id': self.terminal_id,
-                        'message': 'Local shell session closed.',
-                    },
-                    room=self.sid,
-                )
+                self.emit_output({
+                    'message_type': 'ssh_closed',
+                    'message': 'Local shell session closed.',
+                })
                 break
             except Exception as exc:
                 if self.closing:
                     break
                 print(f"[!] Local shell read error: {exc}")
-                socketio.emit(
-                    'ssh_output',
-                    {
-                        'message_type': 'ssh_closed',
-                        'connection_type': self.connection_type,
-                        'terminal_id': self.terminal_id,
-                        'message': 'Local shell closed due to a read error.',
-                        'error_code': 'local_shell_read_error',
-                    },
-                    room=self.sid,
-                )
+                self.emit_output({
+                    'message_type': 'ssh_closed',
+                    'message': 'Local shell closed due to a read error.',
+                    'error_code': 'local_shell_read_error',
+                })
                 break
 
         print(f"[*] Local shell read loop terminated for {self.sid}")
-        unregister_terminal_bridge(self.sid, self.terminal_id, self)
+        unregister_terminal_bridge(self.owner_session, self.terminal_id, self)
 
     def _read_windows_once(self):
         try:
             data = self.process.read(4096)
             if data:
-                socketio.emit(
-                    'ssh_output',
-                    {
-                        'message_type': 'terminal',
-                        'connection_type': self.connection_type,
-                        'terminal_id': self.terminal_id,
-                        'data': data,
-                    },
-                    room=self.sid,
-                )
+                self.emit_output({
+                    'message_type': 'terminal',
+                    'data': data,
+                })
             if not self.process.isalive():
-                socketio.emit(
-                    'ssh_output',
-                    {
-                        'message_type': 'ssh_closed',
-                        'connection_type': self.connection_type,
-                        'terminal_id': self.terminal_id,
-                        'message': 'Local shell session closed.',
-                    },
-                    room=self.sid,
-                )
+                self.emit_output({
+                    'message_type': 'ssh_closed',
+                    'message': 'Local shell session closed.',
+                })
                 return False
             return True
         except EOFError:
             if self.closing:
                 return False
-            socketio.emit(
-                'ssh_output',
-                {
-                    'message_type': 'ssh_closed',
-                    'connection_type': self.connection_type,
-                    'terminal_id': self.terminal_id,
-                    'message': 'Local shell session closed.',
-                },
-                room=self.sid,
-            )
+            self.emit_output({
+                'message_type': 'ssh_closed',
+                'message': 'Local shell session closed.',
+            })
             return False
         except Exception as exc:
             if self.closing:
                 return False
             print(f"[!] Windows local shell read error: {exc}")
-            socketio.emit(
-                'ssh_output',
-                {
-                    'message_type': 'ssh_closed',
-                    'connection_type': self.connection_type,
-                    'terminal_id': self.terminal_id,
-                    'message': 'Local shell closed due to a read error.',
-                    'error_code': 'local_shell_read_error',
-                },
-                room=self.sid,
-            )
+            self.emit_output({
+                'message_type': 'ssh_closed',
+                'message': 'Local shell closed due to a read error.',
+                'error_code': 'local_shell_read_error',
+            })
             return False
 
     def write(self, data):
@@ -879,6 +857,7 @@ class LocalShellBridge(TerminalBridge):
 bridges = {}
 pending_localhost_key_setups = {}
 active_sessions = {}
+socket_session_tokens = {}
 
 def is_valid_access_token(token):
     if not isinstance(token, str):
@@ -893,8 +872,15 @@ def is_valid_session(session_token):
         return False
     if time.time() > expires_at:
         active_sessions.pop(session_token, None)
+        close_all_terminal_bridges(session_token)
         return False
     return True
+
+def get_request_session_token():
+    session_token = request.cookies.get(SESSION_COOKIE_NAME)
+    if not is_valid_session(session_token):
+        return None
+    return session_token
 
 def has_control_chars(value):
     return any(ord(ch) < 32 or ord(ch) == 127 for ch in value)
@@ -912,34 +898,53 @@ def close_bridge(bridge):
     bridge.closing = True
     bridge.close()
 
-def get_bridge(sid, terminal_id):
-    return bridges.get(sid, {}).get(terminal_id)
+def get_bridge(session_token, terminal_id):
+    return bridges.get(session_token, {}).get(terminal_id)
 
-def set_bridge(sid, terminal_id, bridge):
-    bridges.setdefault(sid, {})[terminal_id] = bridge
+def set_bridge(session_token, terminal_id, bridge):
+    bridges.setdefault(session_token, {})[terminal_id] = bridge
 
-def pop_bridge(sid, terminal_id):
-    terminals = bridges.get(sid)
+def pop_bridge(session_token, terminal_id):
+    terminals = bridges.get(session_token)
     if not terminals:
         return None
     bridge = terminals.pop(terminal_id, None)
     if not terminals:
-        bridges.pop(sid, None)
+        bridges.pop(session_token, None)
     return bridge
 
-def unregister_terminal_bridge(sid, terminal_id, bridge):
-    if get_bridge(sid, terminal_id) is not bridge:
+def unregister_terminal_bridge(session_token, terminal_id, bridge):
+    if get_bridge(session_token, terminal_id) is not bridge:
         return
-    pop_bridge(sid, terminal_id)
+    pop_bridge(session_token, terminal_id)
     close_bridge(bridge)
 
-def close_terminal_bridge(sid, terminal_id):
-    close_bridge(pop_bridge(sid, terminal_id))
+def close_terminal_bridge(session_token, terminal_id):
+    close_bridge(pop_bridge(session_token, terminal_id))
 
-def close_all_terminal_bridges(sid):
-    terminals = bridges.pop(sid, {})
+def close_all_terminal_bridges(session_token):
+    terminals = bridges.pop(session_token, {})
     for bridge in list(terminals.values()):
         close_bridge(bridge)
+
+def detach_session_bridges(session_token, sid):
+    for bridge in bridges.get(session_token, {}).values():
+        bridge.detach(sid)
+
+def build_terminal_list(session_token):
+    terminals = []
+    for terminal_id, bridge in sorted(bridges.get(session_token, {}).items()):
+        terminal_info = {
+            'terminal_id': terminal_id,
+            'connection_type': bridge.connection_type,
+            'terminal_kind': bridge.terminal_kind,
+            'terminal_label': bridge.terminal_label,
+            'term': SSH_TERM,
+            'connected': True,
+            'buffered_events': len(bridge.replay_buffer),
+        }
+        terminals.append(terminal_info)
+    return terminals
 
 def is_valid_terminal_id(terminal_id):
     if not isinstance(terminal_id, str):
@@ -1089,14 +1094,43 @@ def index():
 
 @socketio.on('connect')
 def on_connect():
-    if not is_valid_session(request.cookies.get(SESSION_COOKIE_NAME)):
+    session_token = get_request_session_token()
+    if not session_token:
         print(f"[!] Unauthorized WebSocket attempt: {request.sid}")
         return False 
+    socket_session_tokens[request.sid] = session_token
     print(f"[+] Client connected: {request.sid}")
+
+@socketio.on('list_terminals')
+def on_list_terminals():
+    session_token = socket_session_tokens.get(request.sid)
+    if not session_token:
+        return
+    socketio.emit(
+        'terminal_list',
+        {
+            'terminals': build_terminal_list(session_token),
+        },
+        room=request.sid,
+    )
+
+@socketio.on('replay_terminal')
+def on_replay_terminal(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    if not session_token or not terminal_id:
+        return
+    bridge = get_bridge(session_token, terminal_id)
+    if bridge:
+        bridge.attach(request.sid)
+        bridge.replay_to(request.sid)
 
 
 @socketio.on('start_ssh')
 def on_start_ssh(data):
+    session_token = socket_session_tokens.get(request.sid)
+    if not session_token:
+        return
     payload, validation_error = validate_start_ssh_payload(data)
     if validation_error:
         emit_connection_error(request.sid, validation_error, error_code='invalid_start_ssh_payload')
@@ -1104,8 +1138,8 @@ def on_start_ssh(data):
 
     pending_localhost_key_setups.pop(request.sid, None)
     terminal_id = payload['terminal_id']
-    replacing_existing = get_bridge(request.sid, terminal_id) is not None
-    if not replacing_existing and len(bridges.get(request.sid, {})) >= MAX_TERMINALS_PER_CLIENT:
+    replacing_existing = get_bridge(session_token, terminal_id) is not None
+    if not replacing_existing and len(bridges.get(session_token, {})) >= MAX_TERMINALS_PER_CLIENT:
         emit_connection_error(
             request.sid,
             'Terminal limit reached.',
@@ -1118,26 +1152,24 @@ def on_start_ssh(data):
     cols = 80
     rows = 24
     if connection_type == CONNECTION_TYPE_LOCAL_SHELL:
-        bridge = LocalShellBridge(request.sid, terminal_id)
+        bridge = LocalShellBridge(session_token, terminal_id)
+        bridge.attach(request.sid)
         success, result = bridge.connect(cols=cols, rows=rows)
     else:
         host = payload['host']
         port = payload['port']
         user = payload['username']
         password = payload['password']
-        bridge = SSHBridge(request.sid, terminal_id)
+        bridge = SSHBridge(session_token, terminal_id)
+        bridge.attach(request.sid)
         success, result = bridge.connect(host, port, user, password, cols=cols, rows=rows)
 
     if success:
-        close_terminal_bridge(request.sid, terminal_id)
-        set_bridge(request.sid, terminal_id, bridge)
+        close_terminal_bridge(session_token, terminal_id)
+        set_bridge(session_token, terminal_id, bridge)
         connected_payload = {'message_type': 'ssh_connected'}
         connected_payload.update(bridge.metadata(cols=cols, rows=rows))
-        socketio.emit(
-            'ssh_output',
-            connected_payload,
-            room=request.sid,
-        )
+        bridge.emit_output(connected_payload)
         socketio.start_background_task(target=bridge.read_loop)
         return
 
@@ -1150,6 +1182,7 @@ def on_start_ssh(data):
         elif result:
             message = str(result)
 
+        close_bridge(bridge)
         emit_connection_error(
             request.sid,
             message,
@@ -1195,6 +1228,7 @@ def on_start_ssh(data):
             action_message = None
             action_question = None
 
+    close_bridge(bridge)
     emit_connection_error(
         request.sid,
         message,
@@ -1208,10 +1242,13 @@ def on_start_ssh(data):
 
 @socketio.on('setup_localhost_key_access')
 def on_setup_localhost_key_access(data):
+    session_token = socket_session_tokens.get(request.sid)
+    if not session_token:
+        return
     data = data if isinstance(data, dict) else {}
     action_id = data.get('action_id')
     pending_setup, pending_error_code = get_pending_localhost_key_setup(request.sid, action_id)
-    bridge = SSHBridge(request.sid, pending_setup.get('terminal_id', TERMINAL_ID_MAIN) if pending_setup else TERMINAL_ID_MAIN)
+    bridge = SSHBridge(session_token, pending_setup.get('terminal_id', TERMINAL_ID_MAIN) if pending_setup else TERMINAL_ID_MAIN)
 
     if not pending_setup:
         result = {
@@ -1244,12 +1281,14 @@ def on_setup_localhost_key_access(data):
 
 @socketio.on('ssh_input')
 def on_ssh_input(data):
+    session_token = socket_session_tokens.get(request.sid)
     terminal_id = validate_terminal_id_payload(data)
-    if not terminal_id:
+    if not session_token or not terminal_id:
         return
-    bridge = get_bridge(request.sid, terminal_id)
+    bridge = get_bridge(session_token, terminal_id)
     if not bridge:
         return
+    bridge.attach(request.sid)
     ssh_input = data.get('data')
     if not isinstance(ssh_input, str):
         return
@@ -1259,10 +1298,11 @@ def on_ssh_input(data):
 
 @socketio.on('resize')
 def on_resize(data):
+    session_token = socket_session_tokens.get(request.sid)
     terminal_id = validate_terminal_id_payload(data)
-    if not terminal_id:
+    if not session_token or not terminal_id:
         return
-    bridge = get_bridge(request.sid, terminal_id)
+    bridge = get_bridge(session_token, terminal_id)
     size = parse_terminal_size(data)
     if bridge and size:
         cols, rows = size
@@ -1270,17 +1310,18 @@ def on_resize(data):
 
 @socketio.on('close_terminal')
 def on_close_terminal(data):
+    session_token = socket_session_tokens.get(request.sid)
     terminal_id = validate_terminal_id_payload(data)
-    if not terminal_id:
+    if not session_token or not terminal_id:
         return
-    close_terminal_bridge(request.sid, terminal_id)
+    close_terminal_bridge(session_token, terminal_id)
 
 @socketio.on('disconnect')
 def on_disconnect():
     pending_localhost_key_setups.pop(request.sid, None)
-    if bridges.get(request.sid):
-        print(f"[*] Cleaning up terminal session for {request.sid}")
-        close_all_terminal_bridges(request.sid)
+    session_token = socket_session_tokens.pop(request.sid, None)
+    if session_token:
+        detach_session_bridges(session_token, request.sid)
     print(f"[-] Client disconnected: {request.sid}")
 
 def is_wsl():

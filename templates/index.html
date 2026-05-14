@@ -714,6 +714,7 @@
                     connectedAt: null,
                     termName: '{{ ssh_term }}',
                     lastNotifiedSize: { cols: null, rows: null },
+                    needsReplay: true,
                     container,
                     tabEl,
                     titleEl,
@@ -739,17 +740,21 @@
                 return state;
             }
 
+            function removeTerminalState(state) {
+                if (state.webLinksAddon) state.webLinksAddon.dispose();
+                state.term.dispose();
+                state.container.remove();
+                state.tabEl.remove();
+                terminals.delete(state.id);
+            }
+
             function closeTerminalTab(terminalId) {
                 const state = terminals.get(terminalId);
                 if (!state || terminals.size <= 1) return;
                 if (socket && socket.connected && (state.connected || state.connecting)) {
                     socket.emit('close_terminal', { terminal_id: terminalId });
                 }
-                if (state.webLinksAddon) state.webLinksAddon.dispose();
-                state.term.dispose();
-                state.container.remove();
-                state.tabEl.remove();
-                terminals.delete(terminalId);
+                removeTerminalState(state);
                 updateTabBarVisibility();
                 if (terminalId === activeTerminalId) {
                     const nextState = terminals.values().next().value;
@@ -773,7 +778,56 @@
             requestAnimationFrame(fitAndNotifyResize);
 
             socket = io({ reconnectionAttempts: 5 });
-            socket.on('connect', () => { socketStatusEl.innerText = "Connected"; socketStatusEl.style.color = "#34c759"; updateDebugHud('socket.connect', 'connected'); });
+            socket.on('connect', () => {
+                socketStatusEl.innerText = "Connected";
+                socketStatusEl.style.color = "#34c759";
+                updateDebugHud('socket.connect', 'connected');
+                socket.emit('list_terminals');
+            });
+            socket.on('terminal_list', data => {
+                if (!data || !Array.isArray(data.terminals)) return;
+                const serverTerminalIds = new Set();
+                data.terminals.forEach(item => {
+                    if (item && typeof item.terminal_id === 'string') serverTerminalIds.add(item.terminal_id);
+                });
+                const initialPlaceholder = terminals.get(INITIAL_TERMINAL_ID);
+                if (
+                    initialPlaceholder
+                    && serverTerminalIds.size > 0
+                    && !serverTerminalIds.has(INITIAL_TERMINAL_ID)
+                    && !initialPlaceholder.connected
+                    && !initialPlaceholder.connecting
+                ) {
+                    removeTerminalState(initialPlaceholder);
+                    if (activeTerminalId === INITIAL_TERMINAL_ID) activeTerminalId = null;
+                }
+                data.terminals.forEach(item => {
+                    if (!item || typeof item.terminal_id !== 'string') return;
+                    let state = terminals.get(item.terminal_id);
+                    if (!state) {
+                        state = createTerminalTab(item.terminal_id, item.terminal_label || item.terminal_id);
+                    }
+                    if (!activeTerminalId || !terminals.has(activeTerminalId)) {
+                        activeTerminalId = state.id;
+                        state.container.classList.add('active');
+                    }
+                    state.connected = !!item.connected;
+                    state.connecting = false;
+                    state.error = false;
+                    state.connectionType = normalizeConnectionType(item.connection_type);
+                    state.label = item.terminal_label || CONNECTION_LABELS[state.connectionType] || 'Terminal';
+                    state.title = state.label;
+                    state.termName = item.term || state.termName;
+                    if (state.connected && !state.connectedAt) state.connectedAt = new Date();
+                    updateTabState(state);
+                    if (state.needsReplay && state.connected) {
+                        state.needsReplay = false;
+                        socket.emit('replay_terminal', { terminal_id: state.id });
+                    }
+                });
+                updateActiveTerminalUi();
+                requestAnimationFrame(fitAndNotifyResize);
+            });
             socket.on('disconnect', (r) => {
                 socketStatusEl.innerText = "Disconnected (" + r + ")";
                 socketStatusEl.style.color = "#ff9f0a";
@@ -782,6 +836,7 @@
                     state.connecting = false;
                     state.error = true;
                     state.connectedAt = null;
+                    state.needsReplay = true;
                 });
                 connectBtn.disabled = false;
                 updateActiveTerminalUi();
@@ -955,6 +1010,7 @@
                         state.lastNotifiedSize = { cols: null, rows: null };
                         state.termName = data.term || state.termName;
                         state.connectedAt = new Date();
+                        state.needsReplay = false;
                         if (state.id === activeTerminalId) {
                             updateActiveTerminalUi();
                             fitAndNotifyResize();
