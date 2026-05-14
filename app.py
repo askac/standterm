@@ -8,9 +8,22 @@ import paramiko
 import secrets
 import socket
 import time
+import argparse
+import select
+import shutil
 from pathlib import Path
 from flask import Flask, render_template, request, abort, make_response, redirect
 from flask_socketio import SocketIO
+
+try:
+    from ptyprocess import PtyProcessUnicode
+except Exception:
+    PtyProcessUnicode = None
+
+try:
+    from winpty import PtyProcess as WinPtyProcess
+except Exception:
+    WinPtyProcess = None
 
 ASYNC_MODE = os.getenv('WEBSSH_ASYNC_MODE', '').strip().lower()
 if not ASYNC_MODE:
@@ -50,6 +63,9 @@ MIN_TERMINAL_COLS = 2
 MAX_TERMINAL_COLS = 500
 MIN_TERMINAL_ROWS = 2
 MAX_TERMINAL_ROWS = 500
+CONNECTION_TYPE_SSH = 'ssh'
+CONNECTION_TYPE_LOCAL_SHELL = 'local_shell'
+TERMINAL_ID_MAIN = 'main'
 LOCAL_PUBLIC_KEY_TYPES = {
     'ssh-ed25519',
     'ssh-rsa',
@@ -61,8 +77,139 @@ LOCAL_PUBLIC_KEY_TYPES = {
     'sk-ecdsa-sha2-nistp256@openssh.com',
 }
 
-class SSHBridge:
+def normalize_connection_type(value):
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower().replace('-', '_')
+    if normalized in {CONNECTION_TYPE_SSH, CONNECTION_TYPE_LOCAL_SHELL}:
+        return normalized
+    return None
+
+def connection_type_cli_value(value):
+    normalized = normalize_connection_type(value)
+    if not normalized:
+        raise argparse.ArgumentTypeError('expected ssh or local-shell')
+    return normalized
+
+def parse_cli_args(argv):
+    parser = argparse.ArgumentParser(description='WebSSH server')
+    parser.add_argument(
+        '--default-connection',
+        type=connection_type_cli_value,
+        default=CONNECTION_TYPE_SSH,
+        metavar='ssh|local-shell',
+        help='Default connection mode shown in the UI.',
+    )
+    parser.add_argument(
+        '--force-connection',
+        type=connection_type_cli_value,
+        default=None,
+        metavar='ssh|local-shell',
+        help='Force one connection mode in both the UI and backend.',
+    )
+    parser.add_argument(
+        '--force',
+        '-f',
+        action='store_true',
+        help='Accepted for run script compatibility; dependency checks are handled by the launcher.',
+    )
+    return parser.parse_args(argv)
+
+CLI_ARGS = parse_cli_args(sys.argv[1:])
+DEFAULT_CONNECTION_TYPE = CLI_ARGS.default_connection
+FORCE_CONNECTION_TYPE = CLI_ARGS.force_connection
+
+def build_terminal_policy():
+    return {
+        'default_connection': DEFAULT_CONNECTION_TYPE,
+        'force_connection': FORCE_CONNECTION_TYPE,
+    }
+
+def build_terminal_metadata(connection_type, terminal_kind, terminal_label, cols, rows):
+    return {
+        'connection_type': connection_type,
+        'terminal_id': TERMINAL_ID_MAIN,
+        'terminal_kind': terminal_kind,
+        'terminal_label': terminal_label,
+        'term': SSH_TERM,
+        'cols': cols,
+        'rows': rows,
+    }
+
+def get_shell_kind(shell_path):
+    shell_name = Path(shell_path).name.lower()
+    if shell_name in {'bash', 'zsh', 'sh', 'fish', 'dash', 'ksh'}:
+        return shell_name
+    return 'shell'
+
+def get_shell_label(shell_kind):
+    labels = {
+        'bash': 'bash',
+        'zsh': 'zsh',
+        'sh': 'sh',
+        'fish': 'fish',
+        'dash': 'dash',
+        'ksh': 'ksh',
+        'powershell': 'PowerShell',
+        'pwsh': 'PowerShell',
+        'cmd': 'cmd',
+        'shell': 'Shell',
+    }
+    return labels.get(shell_kind, 'Shell')
+
+def get_windows_shell_path():
+    for shell_name in ('pwsh.exe', 'powershell.exe', 'cmd.exe'):
+        shell_path = shutil.which(shell_name)
+        if shell_path:
+            return shell_path
+    return 'cmd.exe'
+
+def get_windows_shell_kind(shell_path):
+    shell_name = Path(shell_path).name.lower()
+    if shell_name == 'pwsh.exe':
+        return 'pwsh'
+    if shell_name == 'powershell.exe':
+        return 'powershell'
+    if shell_name == 'cmd.exe':
+        return 'cmd'
+    return 'shell'
+
+class TerminalBridge:
+    connection_type = None
+    terminal_kind = None
+    terminal_label = None
+
     def __init__(self, sid):
+        self.sid = sid
+
+    def metadata(self, cols=80, rows=24):
+        return build_terminal_metadata(
+            self.connection_type,
+            self.terminal_kind,
+            self.terminal_label,
+            cols,
+            rows,
+        )
+
+    def read_loop(self):
+        raise NotImplementedError
+
+    def write(self, data):
+        raise NotImplementedError
+
+    def resize(self, cols, rows):
+        raise NotImplementedError
+
+    def close(self):
+        raise NotImplementedError
+
+class SSHBridge(TerminalBridge):
+    connection_type = CONNECTION_TYPE_SSH
+    terminal_kind = 'ssh'
+    terminal_label = 'SSH'
+
+    def __init__(self, sid):
+        super().__init__(sid)
         self.sid = sid
         self.ssh = None
         self._reset_ssh_client()
@@ -352,7 +499,7 @@ class SSHBridge:
 
         return False, '; '.join(auth_errors)
 
-    def connect(self, host, port, user, password=None):
+    def connect(self, host, port, user, password=None, cols=80, rows=24):
         try:
             pwd = password if password else ""
             print(f"[*] Attempting SSH connection for {user!r} at {host!r}:{port}...")
@@ -389,7 +536,7 @@ class SSHBridge:
                     look_for_keys=False,
                 )
 
-            self.channel = self.ssh.invoke_shell(term=SSH_TERM, width=80, height=24)
+            self.channel = self.ssh.invoke_shell(term=SSH_TERM, width=cols, height=rows)
             self.channel.setblocking(0)
             print(f"[+] SSH connection established for {self.sid}")
             return True, None
@@ -398,7 +545,7 @@ class SSHBridge:
             print(f"[!] SSH Connection Error: {error_msg}")
             return False, {'message': error_msg}
 
-    def read_from_ssh(self):
+    def read_loop(self):
         print(f"[*] Starting SSH read loop for {self.sid}")
         while True:
             # Short sleep to prevent CPU hogging while allowing high responsiveness
@@ -410,13 +557,27 @@ class SSHBridge:
                 if self.channel.recv_ready():
                     data = self.channel.recv(4096).decode('utf-8', errors='ignore')
                     if data:
-                        socketio.emit('ssh_output', {'message_type': 'terminal', 'data': data}, room=self.sid)
+                        socketio.emit(
+                            'ssh_output',
+                            {
+                                'message_type': 'terminal',
+                                'connection_type': self.connection_type,
+                                'terminal_id': TERMINAL_ID_MAIN,
+                                'data': data,
+                            },
+                            room=self.sid,
+                        )
                 
                 if self.channel.exit_status_ready():
                     print(f"[*] SSH session exited for {self.sid}")
                     socketio.emit(
                         'ssh_output',
-                        {'message_type': 'ssh_closed', 'message': 'SSH session closed.'},
+                        {
+                            'message_type': 'ssh_closed',
+                            'connection_type': self.connection_type,
+                            'terminal_id': TERMINAL_ID_MAIN,
+                            'message': 'SSH session closed.',
+                        },
                         room=self.sid,
                     )
                     break
@@ -426,6 +587,8 @@ class SSHBridge:
                     'ssh_output',
                     {
                         'message_type': 'ssh_closed',
+                        'connection_type': self.connection_type,
+                        'terminal_id': TERMINAL_ID_MAIN,
                         'message': 'SSH connection closed due to a read error.',
                         'error_code': 'ssh_read_error',
                     },
@@ -437,19 +600,267 @@ class SSHBridge:
             bridges.pop(self.sid, None)
             close_bridge(self)
 
-    def write_to_ssh(self, data):
+    def write(self, data):
         if self.channel:
             try:
                 self.channel.send(data)
             except Exception as e:
                 print(f"[!] Write error: {e}")
 
-    def resize_ssh(self, cols, rows):
+    def resize(self, cols, rows):
         if self.channel:
             try:
                 self.channel.resize_pty(width=cols, height=rows)
             except Exception as e:
                 print(f"[!] Resize error: {e}")
+
+    def close(self):
+        if self.channel:
+            try:
+                self.channel.close()
+            except Exception:
+                pass
+            self.channel = None
+        if self.ssh:
+            try:
+                self.ssh.close()
+            except Exception:
+                pass
+
+class LocalShellBridge(TerminalBridge):
+    connection_type = CONNECTION_TYPE_LOCAL_SHELL
+
+    def __init__(self, sid):
+        super().__init__(sid)
+        self.process = None
+        shell = get_windows_shell_path() if sys.platform.startswith('win') else (os.environ.get('SHELL') or '/bin/sh')
+        self.shell = shell
+        self.terminal_kind = get_windows_shell_kind(shell) if sys.platform.startswith('win') else get_shell_kind(shell)
+        self.terminal_label = get_shell_label(self.terminal_kind)
+
+    def connect(self, cols=80, rows=24):
+        if sys.platform.startswith('win'):
+            return self._connect_windows(cols, rows)
+        if PtyProcessUnicode is None:
+            return False, {
+                'message': 'Local Shell requires ptyprocess. Re-run the launcher with --force to install dependencies.',
+                'error_code': 'local_shell_dependency_missing',
+            }
+
+        try:
+            env = dict(os.environ)
+            env['TERM'] = SSH_TERM
+            cwd = str(Path.home())
+            self.process = PtyProcessUnicode.spawn(
+                [self.shell],
+                cwd=cwd,
+                env=env,
+                dimensions=(rows, cols),
+            )
+            print(f"[+] Local shell started for {self.sid}: {self.shell}")
+            return True, None
+        except Exception as exc:
+            print(f"[!] Local shell start error: {exc}")
+            return False, {'message': str(exc), 'error_code': 'local_shell_start_failed'}
+
+    def _connect_windows(self, cols, rows):
+        if WinPtyProcess is None:
+            return False, {
+                'message': 'Local Shell on Windows requires pywinpty. Re-run run.bat with --force to install dependencies.',
+                'error_code': 'local_shell_dependency_missing',
+            }
+
+        try:
+            env = dict(os.environ)
+            env['TERM'] = SSH_TERM
+            cwd = str(Path.home())
+            self.process = self._spawn_windows_process(cols, rows, cwd, env)
+            self.resize(cols, rows)
+            print(f"[+] Windows local shell started for {self.sid}: {self.shell}")
+            return True, None
+        except Exception as exc:
+            print(f"[!] Windows local shell start error: {exc}")
+            return False, {'message': str(exc), 'error_code': 'local_shell_start_failed'}
+
+    def _spawn_windows_process(self, cols, rows, cwd, env):
+        spawn_attempts = (
+            lambda: WinPtyProcess.spawn(self.shell, cwd=cwd, env=env, dimensions=(rows, cols)),
+            lambda: WinPtyProcess.spawn(self.shell, cwd=cwd, env=env),
+            lambda: WinPtyProcess.spawn(self.shell, dimensions=(rows, cols)),
+            lambda: WinPtyProcess.spawn(self.shell),
+        )
+        last_error = None
+        for spawn in spawn_attempts:
+            try:
+                return spawn()
+            except TypeError as exc:
+                last_error = exc
+        raise last_error
+
+    def read_loop(self):
+        print(f"[*] Starting local shell read loop for {self.sid}")
+        while True:
+            socketio.sleep(0.01)
+            if not self.process:
+                break
+
+            if sys.platform.startswith('win'):
+                if not self._read_windows_once():
+                    break
+                continue
+
+            try:
+                readable, _, _ = select.select([self.process.fd], [], [], 0)
+                if not readable:
+                    if not self.process.isalive():
+                        socketio.emit(
+                            'ssh_output',
+                            {
+                                'message_type': 'ssh_closed',
+                                'connection_type': self.connection_type,
+                                'terminal_id': TERMINAL_ID_MAIN,
+                                'message': 'Local shell session closed.',
+                            },
+                            room=self.sid,
+                        )
+                        break
+                    continue
+
+                data = self.process.read(size=4096)
+                if data:
+                    socketio.emit(
+                        'ssh_output',
+                        {
+                            'message_type': 'terminal',
+                            'connection_type': self.connection_type,
+                            'terminal_id': TERMINAL_ID_MAIN,
+                            'data': data,
+                        },
+                        room=self.sid,
+                    )
+            except EOFError:
+                socketio.emit(
+                    'ssh_output',
+                    {
+                        'message_type': 'ssh_closed',
+                        'connection_type': self.connection_type,
+                        'terminal_id': TERMINAL_ID_MAIN,
+                        'message': 'Local shell session closed.',
+                    },
+                    room=self.sid,
+                )
+                break
+            except Exception as exc:
+                print(f"[!] Local shell read error: {exc}")
+                socketio.emit(
+                    'ssh_output',
+                    {
+                        'message_type': 'ssh_closed',
+                        'connection_type': self.connection_type,
+                        'terminal_id': TERMINAL_ID_MAIN,
+                        'message': 'Local shell closed due to a read error.',
+                        'error_code': 'local_shell_read_error',
+                    },
+                    room=self.sid,
+                )
+                break
+
+        print(f"[*] Local shell read loop terminated for {self.sid}")
+        if bridges.get(self.sid) is self:
+            bridges.pop(self.sid, None)
+            close_bridge(self)
+
+    def _read_windows_once(self):
+        try:
+            data = self.process.read(4096)
+            if data:
+                socketio.emit(
+                    'ssh_output',
+                    {
+                        'message_type': 'terminal',
+                        'connection_type': self.connection_type,
+                        'terminal_id': TERMINAL_ID_MAIN,
+                        'data': data,
+                    },
+                    room=self.sid,
+                )
+            if not self.process.isalive():
+                socketio.emit(
+                    'ssh_output',
+                    {
+                        'message_type': 'ssh_closed',
+                        'connection_type': self.connection_type,
+                        'terminal_id': TERMINAL_ID_MAIN,
+                        'message': 'Local shell session closed.',
+                    },
+                    room=self.sid,
+                )
+                return False
+            return True
+        except EOFError:
+            socketio.emit(
+                'ssh_output',
+                {
+                    'message_type': 'ssh_closed',
+                    'connection_type': self.connection_type,
+                    'terminal_id': TERMINAL_ID_MAIN,
+                    'message': 'Local shell session closed.',
+                },
+                room=self.sid,
+            )
+            return False
+        except Exception as exc:
+            print(f"[!] Windows local shell read error: {exc}")
+            socketio.emit(
+                'ssh_output',
+                {
+                    'message_type': 'ssh_closed',
+                    'connection_type': self.connection_type,
+                    'terminal_id': TERMINAL_ID_MAIN,
+                    'message': 'Local shell closed due to a read error.',
+                    'error_code': 'local_shell_read_error',
+                },
+                room=self.sid,
+            )
+            return False
+
+    def write(self, data):
+        if self.process:
+            try:
+                self.process.write(data)
+            except Exception as exc:
+                print(f"[!] Local shell write error: {exc}")
+
+    def resize(self, cols, rows):
+        if self.process:
+            try:
+                if sys.platform.startswith('win'):
+                    if hasattr(self.process, 'set_size'):
+                        self.process.set_size(cols, rows)
+                    elif hasattr(self.process, 'setwinsize'):
+                        self.process.setwinsize(rows, cols)
+                    elif hasattr(self.process, 'resize'):
+                        self.process.resize(cols, rows)
+                else:
+                    self.process.setwinsize(rows, cols)
+            except Exception as exc:
+                print(f"[!] Local shell resize error: {exc}")
+
+    def close(self):
+        if not self.process:
+            return
+        try:
+            if sys.platform.startswith('win') and hasattr(self.process, 'terminate'):
+                self.process.terminate()
+            elif sys.platform.startswith('win') and hasattr(self.process, 'kill'):
+                self.process.kill()
+            else:
+                self.process.close(force=True)
+        except TypeError:
+            self.process.close()
+        except Exception:
+            pass
+        self.process = None
 
 bridges = {}
 pending_localhost_key_setups = {}
@@ -484,17 +895,7 @@ def add_common_headers(response):
 def close_bridge(bridge):
     if not bridge:
         return
-    if bridge.channel:
-        try:
-            bridge.channel.close()
-        except Exception:
-            pass
-        bridge.channel = None
-    if bridge.ssh:
-        try:
-            bridge.ssh.close()
-        except Exception:
-            pass
+    bridge.close()
 
 def emit_connection_error(sid, message, error_code=None, action_type=None, action_message=None,
                           action_question=None, action_id=None):
@@ -515,6 +916,22 @@ def emit_connection_error(sid, message, error_code=None, action_type=None, actio
 def validate_start_ssh_payload(data):
     if not isinstance(data, dict):
         return None, 'Invalid connection payload.'
+
+    connection_type = normalize_connection_type(data.get('connection_type', DEFAULT_CONNECTION_TYPE))
+    if not connection_type:
+        return None, 'Connection type must be ssh or local_shell.'
+    if FORCE_CONNECTION_TYPE and connection_type != FORCE_CONNECTION_TYPE:
+        return None, f'Connection type is locked to {FORCE_CONNECTION_TYPE}.'
+
+    terminal_id = data.get('terminal_id', TERMINAL_ID_MAIN)
+    if terminal_id != TERMINAL_ID_MAIN:
+        return None, 'Unsupported terminal id.'
+
+    if connection_type == CONNECTION_TYPE_LOCAL_SHELL:
+        return {
+            'connection_type': connection_type,
+            'terminal_id': TERMINAL_ID_MAIN,
+        }, None
 
     host = data.get('host', SSH_HOST)
     if not isinstance(host, str):
@@ -548,6 +965,8 @@ def validate_start_ssh_payload(data):
         return None, 'Password is too long.'
 
     return {
+        'connection_type': connection_type,
+        'terminal_id': TERMINAL_ID_MAIN,
         'host': host,
         'port': port,
         'username': user,
@@ -601,7 +1020,11 @@ def index():
     if not is_valid_session(request.cookies.get(SESSION_COOKIE_NAME)):
         return abort(403, description="Invalid or missing access token.")
 
-    response = make_response(render_template('index.html', ssh_term=SSH_TERM))
+    response = make_response(render_template(
+        'index.html',
+        ssh_term=SSH_TERM,
+        terminal_policy=build_terminal_policy(),
+    ))
     return add_common_headers(response)
 
 @socketio.on('connect')
@@ -623,68 +1046,93 @@ def on_start_ssh(data):
     old_bridge = bridges.pop(request.sid, None)
     close_bridge(old_bridge)
 
-    host = payload['host']
-    port = payload['port']
-    user = payload['username']
-    password = payload['password']
-    
-    bridge = SSHBridge(request.sid)
-    success, result = bridge.connect(host, port, user, password)
+    connection_type = payload['connection_type']
+    cols = 80
+    rows = 24
+    if connection_type == CONNECTION_TYPE_LOCAL_SHELL:
+        bridge = LocalShellBridge(request.sid)
+        success, result = bridge.connect(cols=cols, rows=rows)
+    else:
+        host = payload['host']
+        port = payload['port']
+        user = payload['username']
+        password = payload['password']
+        bridge = SSHBridge(request.sid)
+        success, result = bridge.connect(host, port, user, password, cols=cols, rows=rows)
+
     if success:
         bridges[request.sid] = bridge
+        connected_payload = {'message_type': 'ssh_connected'}
+        connected_payload.update(bridge.metadata(cols=cols, rows=rows))
         socketio.emit(
             'ssh_output',
-            {
-                'message_type': 'ssh_connected',
-                'term': SSH_TERM,
-                'cols': 80,
-                'rows': 24,
-            },
+            connected_payload,
             room=request.sid,
         )
-        socketio.start_background_task(target=bridge.read_from_ssh)
-    else:
+        socketio.start_background_task(target=bridge.read_loop)
+        return
+
+    if connection_type == CONNECTION_TYPE_LOCAL_SHELL:
         message = 'Connection failed.'
         error_code = None
-        action_type = None
-        action_message = None
-        action_question = None
         if isinstance(result, dict):
             message = result.get('message', message)
             error_code = result.get('error_code')
-            action_type = result.get('action_type')
-            action_message = result.get('action_message')
-            action_question = result.get('action_question')
         elif result:
             message = str(result)
-
-        action_id = None
-        if action_type == 'offer_localhost_key_setup':
-            missing_entries = bridge._get_missing_local_public_keys()
-            if missing_entries:
-                action_id = secrets.token_urlsafe(16)
-                pending_localhost_key_setups[request.sid] = {
-                    'action_id': action_id,
-                    'host': host,
-                    'port': port,
-                    'username': user,
-                    'key_entry': missing_entries[0],
-                    'expires_at': time.time() + LOCALHOST_KEY_SETUP_TTL_SECONDS,
-                }
-            else:
-                action_type = None
-                action_message = None
-                action_question = None
 
         emit_connection_error(
             request.sid,
             message,
             error_code=error_code,
-            action_type=action_type,
-            action_message=action_message,
-            action_question=action_question,
-            action_id=action_id,
         )
+        return
+
+    host = payload['host']
+    port = payload['port']
+    user = payload['username']
+    password = payload['password']
+    message = 'Connection failed.'
+    error_code = None
+    action_type = None
+    action_message = None
+    action_question = None
+    if isinstance(result, dict):
+        message = result.get('message', message)
+        error_code = result.get('error_code')
+        action_type = result.get('action_type')
+        action_message = result.get('action_message')
+        action_question = result.get('action_question')
+    elif result:
+        message = str(result)
+
+    action_id = None
+    if action_type == 'offer_localhost_key_setup':
+        missing_entries = bridge._get_missing_local_public_keys()
+        if missing_entries:
+            action_id = secrets.token_urlsafe(16)
+            pending_localhost_key_setups[request.sid] = {
+                'action_id': action_id,
+                'host': host,
+                'port': port,
+                'username': user,
+                'key_entry': missing_entries[0],
+                'expires_at': time.time() + LOCALHOST_KEY_SETUP_TTL_SECONDS,
+            }
+        else:
+            action_type = None
+            action_message = None
+            action_question = None
+
+    emit_connection_error(
+        request.sid,
+        message,
+        error_code=error_code,
+        action_type=action_type,
+        action_message=action_message,
+        action_question=action_question,
+        action_id=action_id,
+    )
 
 @socketio.on('setup_localhost_key_access')
 def on_setup_localhost_key_access(data):
@@ -726,27 +1174,31 @@ def on_ssh_input(data):
     bridge = bridges.get(request.sid)
     if not bridge or not isinstance(data, dict):
         return
+    if data.get('terminal_id', TERMINAL_ID_MAIN) != TERMINAL_ID_MAIN:
+        return
     ssh_input = data.get('data')
     if not isinstance(ssh_input, str):
         return
     if len(ssh_input.encode('utf-8', errors='ignore')) > MAX_SSH_INPUT_BYTES:
         return
-    bridge.write_to_ssh(ssh_input)
+    bridge.write(ssh_input)
 
 @socketio.on('resize')
 def on_resize(data):
     bridge = bridges.get(request.sid)
+    if isinstance(data, dict) and data.get('terminal_id', TERMINAL_ID_MAIN) != TERMINAL_ID_MAIN:
+        return
     size = parse_terminal_size(data)
     if bridge and size:
         cols, rows = size
-        bridge.resize_ssh(cols, rows)
+        bridge.resize(cols, rows)
 
 @socketio.on('disconnect')
 def on_disconnect():
     pending_localhost_key_setups.pop(request.sid, None)
     bridge = bridges.pop(request.sid, None)
     if bridge:
-        print(f"[*] Cleaning up SSH session for {request.sid}")
+        print(f"[*] Cleaning up terminal session for {request.sid}")
         close_bridge(bridge)
     print(f"[-] Client disconnected: {request.sid}")
 
@@ -799,6 +1251,12 @@ def get_access_host(bind_host):
 
     return bind_host
 
+def is_loopback_bind(bind_host):
+    return bind_host in {'127.0.0.1', 'localhost', '::1'}
+
+def is_local_shell_enabled():
+    return DEFAULT_CONNECTION_TYPE == CONNECTION_TYPE_LOCAL_SHELL or FORCE_CONNECTION_TYPE == CONNECTION_TYPE_LOCAL_SHELL
+
 def get_runtime_name():
     if is_wsl():
         return "WSL"
@@ -816,8 +1274,14 @@ if __name__ == '__main__':
     print(f"WebSSH Server Starting...")
     print(f"Runtime: {get_runtime_name()}")
     print(f"Async Mode: {ASYNC_MODE}")
+    print(f"Default Connection: {DEFAULT_CONNECTION_TYPE}")
+    if FORCE_CONNECTION_TYPE:
+        print(f"Forced Connection: {FORCE_CONNECTION_TYPE}")
     print(f"Access URL: http://{access_host}:{port}/?token={ACCESS_TOKEN}")
     print(f"Listening on: {bind_host}:{port}")
+    if is_local_shell_enabled() and not is_loopback_bind(bind_host) and os.getenv('WEBSSH_ALLOW_REMOTE_LOCAL_SHELL') != '1':
+        print("[!] WARNING: Local Shell is enabled while listening on a non-loopback address.")
+        print("[!] Set WEBSSH_ALLOW_REMOTE_LOCAL_SHELL=1 to acknowledge this deployment mode.")
     if sys.platform == 'darwin':
         print("Tip: Enable Remote Login in macOS if you want localhost SSH access.")
     print("="*60 + "\n")

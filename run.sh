@@ -52,9 +52,11 @@ echo "========================================"
 
 # Check for force flag
 FORCE_RECHECK=false
-if [[ "$1" == "--force" || "$1" == "-f" ]]; then
-    FORCE_RECHECK=true
-fi
+for arg in "$@"; do
+    if [[ "$arg" == "--force" || "$arg" == "-f" ]]; then
+        FORCE_RECHECK=true
+    fi
+done
 
 # 1. Check and create virtual environment
 if [ ! -d "$VENV_DIR" ]; then
@@ -117,7 +119,7 @@ open_browser() {
 echo "[*] Starting WebSSH server..."
 # Run python with unbuffered output so we can detect the access URL line and open
 # the browser once on the first launch.
-python -u "$APP_FILE" 2>&1 | {
+python -u "$APP_FILE" "$@" 2>&1 | {
     browser_opened=
     while IFS= read -r line; do
         printf '%s\n' "$line"

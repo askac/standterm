@@ -27,8 +27,10 @@ if not exist "%VENV_DIR%" (
 call "%VENV_DIR%\Scripts\activate.bat"
 
 :: 3. Check and install dependencies
-if "%1"=="--force" set FORCE_RECHECK=true
-if "%1"=="-f" set FORCE_RECHECK=true
+for %%A in (%*) do (
+    if "%%~A"=="--force" set FORCE_RECHECK=true
+    if "%%~A"=="-f" set FORCE_RECHECK=true
+)
 
 if "%FORCE_RECHECK%"=="true" goto :install
 if not exist "%INSTALLED_FLAG%" goto :install
@@ -52,6 +54,6 @@ type nul > "%INSTALLED_FLAG%"
 echo [*] Starting WebSSH server...
 :: Run python with unbuffered output, then watch the first "Access URL:" line and
 :: open it in the default browser on the first launch.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$o=$false; & python -u '%APP_FILE%' 2>&1 | ForEach-Object { Write-Host $_; if (-not $o -and $_ -match 'Access URL:\s*(\S+)') { Start-Process $matches[1]; $o=$true } }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$o=$false; & python -u '%APP_FILE%' @args 2>&1 | ForEach-Object { Write-Host $_; if (-not $o -and $_ -match 'Access URL:\s*(\S+)') { Start-Process $matches[1]; $o=$true } }" %*
 
 pause
