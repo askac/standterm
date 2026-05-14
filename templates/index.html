@@ -19,8 +19,10 @@
         .tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
         .tab-close { width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border: none; border-radius: 4px; background: transparent; color: #888; cursor: pointer; font-size: 15px; line-height: 1; padding: 0; flex: 0 0 auto; }
         .tab-close:hover { background: #444; color: #fff; }
-        #new-tab-btn { height: 21px; border: 1px solid #333; border-radius: 5px; background: #202020; color: #aaa; cursor: pointer; font-size: 12px; line-height: 1; padding: 0 8px; flex: 0 0 auto; margin-left: auto; }
-        #new-tab-btn:hover { color: #fff; border-color: #0a84ff; }
+        .status-action { height: 21px; border: 1px solid #333; border-radius: 5px; background: #202020; color: #aaa; cursor: pointer; font-size: 12px; line-height: 1; padding: 0 8px; flex: 0 0 auto; }
+        .status-action:hover { color: #fff; border-color: #0a84ff; }
+        .status-action:disabled { opacity: 0.45; cursor: default; border-color: #333; color: #777; }
+        #new-tab-btn { margin-left: auto; }
         #terminal { position: absolute; top: 0; left: 0; right: 0; height: calc(100vh - var(--status-bar-height)); width: 100vw; background: #000; z-index: 1; display: none; }
         body.has-terminal-tabs #terminal { top: var(--tab-bar-height); height: calc(100vh - var(--status-bar-height) - var(--tab-bar-height)); }
         .terminal-pane { height: 100%; width: 100%; display: none; }
@@ -351,7 +353,8 @@
         <span class="sb-sep">|</span>
         <span class="sb-item" id="clock-display"></span>
         <span id="uptime-section" class="sb-item" style="display:none"><span class="sb-sep">|</span>connected:&nbsp;<span id="uptime-display"></span></span>
-        <button id="new-tab-btn" title="New terminal tab">[+ Add tab]</button>
+        <button id="new-tab-btn" class="status-action" title="New terminal tab">[+ Add tab]</button>
+        <button id="close-tabs-btn" class="status-action" title="Close all terminal tabs">[Close tabs]</button>
         <div id="quick-settings" title="Settings">&#x2699;&#xFE0F;</div>
     </div>
     <div id="debug-hud"></div>
@@ -473,6 +476,7 @@
             const payloadLog = document.getElementById('payload-log');
             const tabsList = document.getElementById('tabs-list');
             const newTabBtn = document.getElementById('new-tab-btn');
+            const closeTabsBtn = document.getElementById('close-tabs-btn');
             const debugEnabled = (new URLSearchParams(window.location.search)).get('debug') === '1';
             const INITIAL_TERMINAL_ID = 'main';
             let activeTerminalId = INITIAL_TERMINAL_ID;
@@ -636,10 +640,16 @@
                 document.body.classList.toggle('has-terminal-tabs', terminals.size > 1);
             }
 
+            function updateTerminalActions() {
+                const hasCloseableTerminal = [...terminals.values()].some(state => state.connected || state.connecting) || terminals.size > 1;
+                closeTabsBtn.disabled = !(socket && socket.connected && hasCloseableTerminal);
+            }
+
             function updateActiveTerminalUi() {
                 const state = getActiveTerminalState();
                 updateTabBarVisibility();
                 terminals.forEach(updateTabState);
+                updateTerminalActions();
                 if (!state) return;
                 sshStatusEl.innerText = state.connected ? state.label : (state.connecting ? 'Connecting' : 'Disconnected');
                 sshStatusEl.style.color = state.connected ? '#34c759' : (state.connecting ? '#ffcc00' : '#ff9f0a');
@@ -748,6 +758,18 @@
                 terminals.delete(state.id);
             }
 
+            function resetTerminalWorkspace() {
+                [...terminals.values()].forEach(removeTerminalState);
+                activeTerminalId = INITIAL_TERMINAL_ID;
+                nextTerminalIndex = 2;
+                const state = createTerminalTab(INITIAL_TERMINAL_ID, 'Terminal 1');
+                state.container.classList.add('active');
+                hideActionPrompt();
+                hideError();
+                updateActiveTerminalUi();
+                requestAnimationFrame(fitAndNotifyResize);
+            }
+
             function closeTerminalTab(terminalId) {
                 const state = terminals.get(terminalId);
                 if (!state || terminals.size <= 1) return;
@@ -786,6 +808,10 @@
             });
             socket.on('terminal_list', data => {
                 if (!data || !Array.isArray(data.terminals)) return;
+                if (data.terminals.length === 0 && [...terminals.values()].some(state => state.connected || state.connecting)) {
+                    resetTerminalWorkspace();
+                    return;
+                }
                 const serverTerminalIds = new Set();
                 data.terminals.forEach(item => {
                     if (item && typeof item.terminal_id === 'string') serverTerminalIds.add(item.terminal_id);
@@ -920,6 +946,13 @@
                 const state = createTerminalTab(terminalId, `Terminal ${nextTerminalIndex}`);
                 nextTerminalIndex += 1;
                 switchTerminal(state.id);
+            };
+            closeTabsBtn.onclick = () => {
+                const hasCloseableTerminal = [...terminals.values()].some(state => state.connected || state.connecting) || terminals.size > 1;
+                if (!socket || !socket.connected || !hasCloseableTerminal) return;
+                if (!window.confirm('Close all terminal tabs?')) return;
+                if (socket && socket.connected) socket.emit('close_all_terminals');
+                resetTerminalWorkspace();
             };
             modeInputs.forEach(input => {
                 input.addEventListener('change', () => setConnectionType(input.value));

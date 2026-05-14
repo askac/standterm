@@ -60,6 +60,7 @@ MAX_HOST_LENGTH = 255
 MAX_USERNAME_LENGTH = 128
 SESSION_COOKIE_NAME = 'webssh_session'
 SESSION_COOKIE_MAX_AGE = 12 * 60 * 60
+SESSION_CLEANUP_INTERVAL_SECONDS = 60
 LOCALHOST_KEY_SETUP_TTL_SECONDS = 120
 MIN_TERMINAL_COLS = 2
 MAX_TERMINAL_COLS = 500
@@ -858,6 +859,7 @@ bridges = {}
 pending_localhost_key_setups = {}
 active_sessions = {}
 socket_session_tokens = {}
+session_cleanup_task_started = False
 
 def is_valid_access_token(token):
     if not isinstance(token, str):
@@ -875,6 +877,32 @@ def is_valid_session(session_token):
         close_all_terminal_bridges(session_token)
         return False
     return True
+
+def cleanup_expired_sessions():
+    now = time.time()
+    expired_tokens = [
+        session_token
+        for session_token, expires_at in list(active_sessions.items())
+        if now > expires_at
+    ]
+    for session_token in expired_tokens:
+        active_sessions.pop(session_token, None)
+        close_all_terminal_bridges(session_token)
+        for sid, sid_session_token in list(socket_session_tokens.items()):
+            if sid_session_token == session_token:
+                socket_session_tokens.pop(sid, None)
+
+def session_cleanup_loop():
+    while True:
+        socketio.sleep(SESSION_CLEANUP_INTERVAL_SECONDS)
+        cleanup_expired_sessions()
+
+def ensure_session_cleanup_task():
+    global session_cleanup_task_started
+    if session_cleanup_task_started:
+        return
+    session_cleanup_task_started = True
+    socketio.start_background_task(target=session_cleanup_loop)
 
 def get_request_session_token():
     session_token = request.cookies.get(SESSION_COOKIE_NAME)
@@ -930,6 +958,13 @@ def close_all_terminal_bridges(session_token):
 def detach_session_bridges(session_token, sid):
     for bridge in bridges.get(session_token, {}).values():
         bridge.detach(sid)
+
+def get_session_sids(session_token):
+    return [
+        sid
+        for sid, sid_session_token in socket_session_tokens.items()
+        if sid_session_token == session_token
+    ]
 
 def build_terminal_list(session_token):
     terminals = []
@@ -1053,6 +1088,7 @@ def parse_terminal_size(data):
     return cols, rows
 
 def build_session_response():
+    ensure_session_cleanup_task()
     session_token = secrets.token_urlsafe(32)
     active_sessions[session_token] = time.time() + SESSION_COOKIE_MAX_AGE
     response = redirect('/')
@@ -1094,6 +1130,8 @@ def index():
 
 @socketio.on('connect')
 def on_connect():
+    ensure_session_cleanup_task()
+    cleanup_expired_sessions()
     session_token = get_request_session_token()
     if not session_token:
         print(f"[!] Unauthorized WebSocket attempt: {request.sid}")
@@ -1103,6 +1141,7 @@ def on_connect():
 
 @socketio.on('list_terminals')
 def on_list_terminals():
+    cleanup_expired_sessions()
     session_token = socket_session_tokens.get(request.sid)
     if not session_token:
         return
@@ -1128,6 +1167,7 @@ def on_replay_terminal(data):
 
 @socketio.on('start_ssh')
 def on_start_ssh(data):
+    cleanup_expired_sessions()
     session_token = socket_session_tokens.get(request.sid)
     if not session_token:
         return
@@ -1314,7 +1354,29 @@ def on_close_terminal(data):
     terminal_id = validate_terminal_id_payload(data)
     if not session_token or not terminal_id:
         return
+    bridge = get_bridge(session_token, terminal_id)
+    if bridge:
+        bridge.emit_output({
+            'message_type': 'ssh_closed',
+            'message': 'Terminal session closed.',
+        })
     close_terminal_bridge(session_token, terminal_id)
+
+@socketio.on('close_all_terminals')
+def on_close_all_terminals():
+    session_token = socket_session_tokens.get(request.sid)
+    if not session_token:
+        return
+    session_sids = get_session_sids(session_token)
+    close_all_terminal_bridges(session_token)
+    for sid in session_sids:
+        socketio.emit(
+            'terminal_list',
+            {
+                'terminals': [],
+            },
+            room=sid,
+        )
 
 @socketio.on('disconnect')
 def on_disconnect():
