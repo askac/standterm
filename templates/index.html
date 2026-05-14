@@ -5,9 +5,26 @@
     <!-- Local Fallback Assets -->
     <link rel="stylesheet" href="/static/css/xterm.css" />
     <style>
-        :root { --status-bar-height: 26px; }
+        :root { --status-bar-height: 26px; --tab-bar-height: 34px; }
         body { margin: 0; background: #000; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-        #terminal { height: calc(100vh - var(--status-bar-height)); width: 100vw; background: #000; z-index: 1; display: none; }
+        #terminal-tabs { position: absolute; top: 0; left: 0; right: 0; height: var(--tab-bar-height); box-sizing: border-box; background: #151515; border-bottom: 1px solid #2a2a2a; display: none; align-items: center; gap: 4px; padding: 4px 8px; z-index: 40; overflow: hidden; }
+        body.has-terminal-tabs #terminal-tabs { display: flex; }
+        #tabs-list { display: flex; align-items: center; gap: 4px; min-width: 0; overflow-x: auto; overflow-y: hidden; flex: 1; height: 100%; }
+        .terminal-tab { height: 25px; min-width: 120px; max-width: 220px; display: flex; align-items: center; gap: 6px; border: 1px solid #333; background: #202020; color: #aaa; border-radius: 5px; padding: 0 4px 0 10px; cursor: pointer; user-select: none; font-size: 12px; box-sizing: border-box; }
+        .terminal-tab.active { color: #fff; background: #2c2c2e; border-color: #0a84ff; }
+        .terminal-tab.connected .tab-state { background: #34c759; }
+        .terminal-tab.connecting .tab-state { background: #ffcc00; }
+        .terminal-tab.error .tab-state { background: #ff9f0a; }
+        .tab-state { width: 7px; height: 7px; border-radius: 50%; background: #777; flex: 0 0 auto; }
+        .tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+        .tab-close { width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border: none; border-radius: 4px; background: transparent; color: #888; cursor: pointer; font-size: 15px; line-height: 1; padding: 0; flex: 0 0 auto; }
+        .tab-close:hover { background: #444; color: #fff; }
+        #new-tab-btn { height: 21px; border: 1px solid #333; border-radius: 5px; background: #202020; color: #aaa; cursor: pointer; font-size: 12px; line-height: 1; padding: 0 8px; flex: 0 0 auto; margin-left: auto; }
+        #new-tab-btn:hover { color: #fff; border-color: #0a84ff; }
+        #terminal { position: absolute; top: 0; left: 0; right: 0; height: calc(100vh - var(--status-bar-height)); width: 100vw; background: #000; z-index: 1; display: none; }
+        body.has-terminal-tabs #terminal { top: var(--tab-bar-height); height: calc(100vh - var(--status-bar-height) - var(--tab-bar-height)); }
+        .terminal-pane { height: 100%; width: 100%; display: none; }
+        .terminal-pane.active { display: block; }
         
         /* Loading Screen */
         #loader-screen {
@@ -150,7 +167,7 @@
         .error-msg { color: #ff453a; font-size: 13px; margin-bottom: 10px; display: none; }
         
         /* Quick Settings Button */
-        #quick-settings { margin-left: auto; cursor: pointer; opacity: 0.6; transition: opacity 0.2s; padding: 0 5px; }
+        #quick-settings { cursor: pointer; opacity: 0.6; transition: opacity 0.2s; padding: 0 5px; }
         #quick-settings:hover { opacity: 1; color: #0a84ff; }
         #debug-hud {
             position: fixed;
@@ -317,6 +334,9 @@
         <button id="connectBtn">Connect to SSH</button>
     </div>
     
+    <div id="terminal-tabs">
+        <div id="tabs-list"></div>
+    </div>
     <div id="terminal"></div>
     <div id="status-bar">
         <span class="sb-item">Socket:&nbsp;<span id="socketStatus">Disconnected</span></span>
@@ -331,6 +351,7 @@
         <span class="sb-sep">|</span>
         <span class="sb-item" id="clock-display"></span>
         <span id="uptime-section" class="sb-item" style="display:none"><span class="sb-sep">|</span>connected:&nbsp;<span id="uptime-display"></span></span>
+        <button id="new-tab-btn" title="New terminal tab">[+ Add tab]</button>
         <div id="quick-settings" title="Settings">&#x2699;&#xFE0F;</div>
     </div>
     <div id="debug-hud"></div>
@@ -450,17 +471,17 @@
             const terminalSizeEl = document.getElementById('terminal-size');
             const debugHud = document.getElementById('debug-hud');
             const payloadLog = document.getElementById('payload-log');
+            const tabsList = document.getElementById('tabs-list');
+            const newTabBtn = document.getElementById('new-tab-btn');
             const debugEnabled = (new URLSearchParams(window.location.search)).get('debug') === '1';
-            const ACTIVE_TERMINAL_ID = 'main';
-            let connectedAt = null;
+            const INITIAL_TERMINAL_ID = 'main';
+            let activeTerminalId = INITIAL_TERMINAL_ID;
+            let nextTerminalIndex = 2;
+            const terminals = new Map();
             let payloadEntries = [];
             let pendingAction = null;
             let pendingActionId = null;
             let pendingReconnect = null;
-            let sshSessionActive = false;
-            let activeConnectionType = null;
-            let activeTerminalLabel = null;
-            let lastNotifiedSize = { cols: null, rows: null };
             let overlayFallbackTimer = null;
             let socket = null;
 
@@ -473,8 +494,17 @@
                 return Object.prototype.hasOwnProperty.call(CONNECTION_LABELS, normalized) ? normalized : fallback;
             }
 
+            function getActiveTerminalState() {
+                return terminals.get(activeTerminalId) || null;
+            }
+
+            function getActiveTerm() {
+                const state = getActiveTerminalState();
+                return state ? state.term : null;
+            }
+
             function isActiveTerminalPayload(data) {
-                return data && data.terminal_id === ACTIVE_TERMINAL_ID;
+                return data && data.terminal_id === activeTerminalId;
             }
 
             const defaultConnectionType = getPolicyConnection(TERMINAL_POLICY.default_connection, 'ssh');
@@ -519,10 +549,12 @@
 
             function updateDebugHud(title, payload) {
                 if (!debugEnabled) return;
+                const activeTerm = getActiveTerm();
                 debugHud.style.display = 'block';
                 debugHud.textContent =
                     `title=${title}\n` +
-                    `cols=${term.cols} rows=${term.rows}\n` +
+                    `terminal_id=${activeTerminalId}\n` +
+                    `cols=${activeTerm ? activeTerm.cols : '--'} rows=${activeTerm ? activeTerm.rows : '--'}\n` +
                     `payload=${payload}`;
             }
 
@@ -551,68 +583,208 @@
             }
             setInterval(() => {
                 const now = new Date();
+                const state = getActiveTerminalState();
                 document.getElementById('clock-display').innerText = now.toLocaleString();
-                if (connectedAt) document.getElementById('uptime-display').innerText = formatUptime(Math.floor((now - connectedAt) / 1000));
+                if (state && state.connectedAt) document.getElementById('uptime-display').innerText = formatUptime(Math.floor((now - state.connectedAt) / 1000));
             }, 1000);
 
-            const term = new Terminal({
-                cursorBlink: true,
-                fontFamily: prefs.fontFace,
-                fontSize: prefs.fontSize,
-                theme: SCHEMES[prefs.colorScheme] || SCHEMES.ibm5153
-            });
-            let fitAddon = (typeof FitAddon !== 'undefined') ? new FitAddon.FitAddon() : null;
-            if (fitAddon) term.loadAddon(fitAddon);
-            term.open(terminalContainer);
-
             function updateTerminalSizeStatus() {
-                terminalSizeEl.innerText = `${term.cols}x${term.rows}`;
+                const activeTerm = getActiveTerm();
+                terminalSizeEl.innerText = activeTerm ? `${activeTerm.cols}x${activeTerm.rows}` : '--x--';
             }
 
-            function notifyTerminalResize() {
+            function notifyTerminalResize(state = getActiveTerminalState()) {
+                if (!state || state.id !== activeTerminalId) return;
                 updateTerminalSizeStatus();
-                if (!socket || !socket.connected || !sshSessionActive) return;
-                if (lastNotifiedSize.cols === term.cols && lastNotifiedSize.rows === term.rows) return;
-                lastNotifiedSize = { cols: term.cols, rows: term.rows };
-                socket.emit('resize', { terminal_id: ACTIVE_TERMINAL_ID, cols: term.cols, rows: term.rows });
+                if (!socket || !socket.connected || !state.connected) return;
+                if (state.lastNotifiedSize.cols === state.term.cols && state.lastNotifiedSize.rows === state.term.rows) return;
+                state.lastNotifiedSize = { cols: state.term.cols, rows: state.term.rows };
+                socket.emit('resize', { terminal_id: state.id, cols: state.term.cols, rows: state.term.rows });
             }
 
             function fitAndNotifyResize() {
-                if (fitAddon) fitAddon.fit();
-                notifyTerminalResize();
+                const state = getActiveTerminalState();
+                if (!state) return;
+                if (state.fitAddon) state.fitAddon.fit();
+                notifyTerminalResize(state);
             }
-            term.onResize(notifyTerminalResize);
-            updateTerminalSizeStatus();
 
-            let webLinksAddon = null;
-            function applyDetectUrls() {
-                if (webLinksAddon) { webLinksAddon.dispose(); webLinksAddon = null; }
+            function configureWebLinks(state) {
+                if (state.webLinksAddon) {
+                    state.webLinksAddon.dispose();
+                    state.webLinksAddon = null;
+                }
                 if (prefs.detectUrls && typeof WebLinksAddon !== 'undefined') {
-                    webLinksAddon = new WebLinksAddon.WebLinksAddon((e, uri) => {
+                    state.webLinksAddon = new WebLinksAddon.WebLinksAddon((e, uri) => {
                         const ctrl = e.ctrlKey || e.metaKey;
                         if ((prefs.urlClickAction === 'overlay') !== ctrl) openUrlInOverlay(uri);
                         else openExternalUrl(uri);
                     });
-                    term.loadAddon(webLinksAddon);
+                    state.term.loadAddon(state.webLinksAddon);
                 }
             }
-            applyDetectUrls();
+
+            function updateTabState(state) {
+                state.tabEl.classList.toggle('active', state.id === activeTerminalId);
+                state.tabEl.classList.toggle('connected', state.connected);
+                state.tabEl.classList.toggle('connecting', state.connecting);
+                state.tabEl.classList.toggle('error', state.error);
+                state.titleEl.innerText = state.title;
+            }
+
+            function updateTabBarVisibility() {
+                document.body.classList.toggle('has-terminal-tabs', terminals.size > 1);
+            }
+
+            function updateActiveTerminalUi() {
+                const state = getActiveTerminalState();
+                updateTabBarVisibility();
+                terminals.forEach(updateTabState);
+                if (!state) return;
+                sshStatusEl.innerText = state.connected ? state.label : (state.connecting ? 'Connecting' : 'Disconnected');
+                sshStatusEl.style.color = state.connected ? '#34c759' : (state.connecting ? '#ffcc00' : '#ff9f0a');
+                terminalTermEl.innerText = state.termName || '{{ ssh_term }}';
+                document.getElementById('uptime-section').style.display = state.connectedAt ? 'inline' : 'none';
+                document.getElementById('controls').style.display = state.connected ? 'none' : 'block';
+                if (state.connecting) {
+                    connectBtn.innerText = 'Connecting...';
+                    connectBtn.disabled = true;
+                } else {
+                    resetConnectButton();
+                }
+                updateTerminalSizeStatus();
+            }
+
+            function switchTerminal(terminalId) {
+                const nextState = terminals.get(terminalId);
+                if (!nextState || terminalId === activeTerminalId) return;
+                const previousState = getActiveTerminalState();
+                if (previousState) previousState.container.classList.remove('active');
+                activeTerminalId = terminalId;
+                nextState.container.classList.add('active');
+                hideActionPrompt();
+                hideError();
+                updateActiveTerminalUi();
+                requestAnimationFrame(() => {
+                    fitAndNotifyResize();
+                    nextState.term.focus();
+                });
+            }
+
+            function createTerminalTab(terminalId, title) {
+                const container = document.createElement('div');
+                container.className = 'terminal-pane';
+                terminalContainer.appendChild(container);
+
+                const tabEl = document.createElement('div');
+                tabEl.className = 'terminal-tab';
+                tabEl.dataset.terminalId = terminalId;
+                tabEl.title = terminalId;
+                const stateEl = document.createElement('span');
+                stateEl.className = 'tab-state';
+                const titleEl = document.createElement('span');
+                titleEl.className = 'tab-title';
+                titleEl.innerText = title;
+                const closeBtn = document.createElement('button');
+                closeBtn.type = 'button';
+                closeBtn.className = 'tab-close';
+                closeBtn.title = 'Close terminal tab';
+                closeBtn.innerText = '×';
+                tabEl.append(stateEl, titleEl, closeBtn);
+                tabsList.appendChild(tabEl);
+
+                const term = new Terminal({
+                    cursorBlink: true,
+                    fontFamily: prefs.fontFace,
+                    fontSize: prefs.fontSize,
+                    theme: SCHEMES[prefs.colorScheme] || SCHEMES.ibm5153
+                });
+                const fitAddon = (typeof FitAddon !== 'undefined') ? new FitAddon.FitAddon() : null;
+                if (fitAddon) term.loadAddon(fitAddon);
+                term.open(container);
+
+                const state = {
+                    id: terminalId,
+                    title,
+                    label: 'Disconnected',
+                    connectionType: null,
+                    connected: false,
+                    connecting: false,
+                    error: false,
+                    connectedAt: null,
+                    termName: '{{ ssh_term }}',
+                    lastNotifiedSize: { cols: null, rows: null },
+                    container,
+                    tabEl,
+                    titleEl,
+                    term,
+                    fitAddon,
+                    webLinksAddon: null
+                };
+                terminals.set(terminalId, state);
+                configureWebLinks(state);
+                term.onResize(() => notifyTerminalResize(state));
+                term.onData(data => {
+                    if (socket && socket.connected && state.connected) {
+                        socket.emit('ssh_input', { terminal_id: state.id, data });
+                    }
+                });
+                tabEl.addEventListener('click', () => switchTerminal(terminalId));
+                closeBtn.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    closeTerminalTab(terminalId);
+                });
+                updateTabBarVisibility();
+                updateTabState(state);
+                return state;
+            }
+
+            function closeTerminalTab(terminalId) {
+                const state = terminals.get(terminalId);
+                if (!state || terminals.size <= 1) return;
+                if (socket && socket.connected && (state.connected || state.connecting)) {
+                    socket.emit('close_terminal', { terminal_id: terminalId });
+                }
+                if (state.webLinksAddon) state.webLinksAddon.dispose();
+                state.term.dispose();
+                state.container.remove();
+                state.tabEl.remove();
+                terminals.delete(terminalId);
+                updateTabBarVisibility();
+                if (terminalId === activeTerminalId) {
+                    const nextState = terminals.values().next().value;
+                    activeTerminalId = nextState.id;
+                    nextState.container.classList.add('active');
+                    updateActiveTerminalUi();
+                    requestAnimationFrame(() => {
+                        fitAndNotifyResize();
+                        nextState.term.focus();
+                    });
+                }
+            }
+
+            function applyDetectUrls() {
+                terminals.forEach(configureWebLinks);
+            }
+
+            const initialState = createTerminalTab(INITIAL_TERMINAL_ID, 'Terminal 1');
+            initialState.container.classList.add('active');
+            updateActiveTerminalUi();
+            requestAnimationFrame(fitAndNotifyResize);
 
             socket = io({ reconnectionAttempts: 5 });
             socket.on('connect', () => { socketStatusEl.innerText = "Connected"; socketStatusEl.style.color = "#34c759"; updateDebugHud('socket.connect', 'connected'); });
             socket.on('disconnect', (r) => {
                 socketStatusEl.innerText = "Disconnected (" + r + ")";
                 socketStatusEl.style.color = "#ff9f0a";
-                sshStatusEl.innerText = "Disconnected";
-                sshStatusEl.style.color = "#ff9f0a";
-                document.getElementById('controls').style.display = 'block';
-                connectBtn.innerText = getConnectButtonText();
+                terminals.forEach(state => {
+                    state.connected = false;
+                    state.connecting = false;
+                    state.error = true;
+                    state.connectedAt = null;
+                });
                 connectBtn.disabled = false;
-                sshSessionActive = false;
-                activeConnectionType = null;
-                activeTerminalLabel = null;
-                connectedAt = null; 
-                document.getElementById('uptime-section').style.display = 'none'; 
+                updateActiveTerminalUi();
                 updateDebugHud('socket.disconnect', r);
             });
 
@@ -654,7 +826,7 @@
                 const connectionType = forcedConnectionType || getSelectedConnectionType();
                 const formData = {
                     connection_type: connectionType,
-                    terminal_id: ACTIVE_TERMINAL_ID
+                    terminal_id: activeTerminalId
                 };
                 if (connectionType === 'ssh') {
                     formData.host = document.getElementById('host').value;
@@ -666,13 +838,18 @@
             }
 
             function submitConnection(formData) {
+                const state = terminals.get(formData.terminal_id);
+                if (!state) return;
                 hideError();
                 hideActionPrompt();
-                sshSessionActive = false;
-                activeConnectionType = formData.connection_type;
-                activeTerminalLabel = CONNECTION_LABELS[activeConnectionType] || 'Terminal';
-                connectedAt = null;
-                document.getElementById('uptime-section').style.display = 'none';
+                state.connected = false;
+                state.connecting = true;
+                state.error = false;
+                state.connectionType = formData.connection_type;
+                state.label = CONNECTION_LABELS[state.connectionType] || 'Terminal';
+                state.connectedAt = null;
+                state.lastNotifiedSize = { cols: null, rows: null };
+                updateActiveTerminalUi();
                 socket.emit('start_ssh', formData);
                 connectBtn.innerText = "Connecting...";
                 connectBtn.disabled = true;
@@ -683,6 +860,12 @@
                 submitConnection(getConnectionFormData());
             };
             connectBtn.onclick = doConnect;
+            newTabBtn.onclick = () => {
+                const terminalId = `term-${nextTerminalIndex}`;
+                const state = createTerminalTab(terminalId, `Terminal ${nextTerminalIndex}`);
+                nextTerminalIndex += 1;
+                switchTerminal(state.id);
+            };
             modeInputs.forEach(input => {
                 input.addEventListener('change', () => setConnectionType(input.value));
             });
@@ -707,8 +890,6 @@
                 hideActionPrompt();
                 resetConnectButton();
             };
-
-            term.onData(data => { if (socket.connected && sshSessionActive) socket.emit('ssh_input', { terminal_id: ACTIVE_TERMINAL_ID, data }); });
             socket.on('ssh_output', data => {
                 if (!data || typeof data !== 'object') return;
                 const messageType = data.message_type;
@@ -717,71 +898,86 @@
                     if (debugEnabled) appendPayloadLog('socket.invalid_message_type', JSON.stringify(data));
                     return;
                 }
-                if (!isActiveTerminalPayload(data)) {
-                    if (debugEnabled) appendPayloadLog('socket.inactive_terminal', JSON.stringify(data));
+                const state = terminals.get(data.terminal_id);
+                if (!state) {
+                    if (debugEnabled) appendPayloadLog('socket.unknown_terminal', JSON.stringify(data));
                     return;
                 }
                 const displayText = typeof data.data === 'string' ? data.data : (data.message || '');
-                appendPayloadLog('socket.ssh_output', displayText);
-                updateDebugHud(
-                    'socket.ssh_output',
-                    `terminal_id=${data.terminal_id} type=${messageType} len=${displayText.length}\n${escapeForDebug(displayText)}`
-                );
+                if (isActiveTerminalPayload(data)) {
+                    appendPayloadLog('socket.ssh_output', displayText);
+                    updateDebugHud(
+                        'socket.ssh_output',
+                        `terminal_id=${data.terminal_id} type=${messageType} len=${displayText.length}\n${escapeForDebug(displayText)}`
+                    );
+                }
                 switch (messageType) {
                     case 'connection_error':
-                        sshSessionActive = false;
-                        activeConnectionType = null;
-                        activeTerminalLabel = null;
-                        sshStatusEl.innerText = "Disconnected";
-                        sshStatusEl.style.color = "#ff9f0a";
-                        showError(data.message || 'Connection failed.');
-                        resetConnectButton();
-                        if (data.action_type === 'offer_localhost_key_setup' && data.action_id) {
-                            showActionPrompt(data.action_message, data.action_question, data.action_type, data.action_id);
+                        state.connected = false;
+                        state.connecting = false;
+                        state.error = true;
+                        state.connectedAt = null;
+                        if (state.id === activeTerminalId) {
+                            showError(data.message || 'Connection failed.');
+                            resetConnectButton();
+                            if (data.action_type === 'offer_localhost_key_setup' && data.action_id) {
+                                showActionPrompt(data.action_message, data.action_question, data.action_type, data.action_id);
+                            } else {
+                                hideActionPrompt();
+                            }
+                            updateActiveTerminalUi();
                         } else {
-                            hideActionPrompt();
+                            updateTabState(state);
                         }
                         break;
                     case 'setup_result':
-                        hideActionPrompt();
-                        if (data.setup_status === 'success' && pendingReconnect) {
-                            showError(data.message || 'Localhost key setup completed. Reconnecting...');
-                            submitConnection(pendingReconnect);
-                            pendingReconnect = null;
-                        } else {
-                            pendingReconnect = null;
-                            showError(data.message || 'Localhost key setup completed.');
-                            resetConnectButton();
+                        if (state.id === activeTerminalId) {
+                            hideActionPrompt();
+                            if (data.setup_status === 'success' && pendingReconnect) {
+                                showError(data.message || 'Localhost key setup completed. Reconnecting...');
+                                submitConnection(pendingReconnect);
+                                pendingReconnect = null;
+                            } else {
+                                pendingReconnect = null;
+                                showError(data.message || 'Localhost key setup completed.');
+                                resetConnectButton();
+                                updateActiveTerminalUi();
+                            }
                         }
                         break;
                     case 'ssh_connected':
-                        sshSessionActive = true;
-                        activeConnectionType = normalizeConnectionType(data.connection_type);
-                        activeTerminalLabel = data.terminal_label || CONNECTION_LABELS[activeConnectionType] || 'Terminal';
-                        lastNotifiedSize = { cols: null, rows: null };
-                        sshStatusEl.innerText = activeTerminalLabel;
-                        sshStatusEl.style.color = "#34c759";
-                        terminalTermEl.innerText = data.term || terminalTermEl.innerText;
-                        document.getElementById('controls').style.display = 'none';
-                        connectedAt = new Date();
-                        document.getElementById('uptime-section').style.display = 'inline';
-                        fitAndNotifyResize();
-                        setTimeout(() => term.focus(), 100);
+                        state.connected = true;
+                        state.connecting = false;
+                        state.error = false;
+                        state.connectionType = normalizeConnectionType(data.connection_type);
+                        state.label = data.terminal_label || CONNECTION_LABELS[state.connectionType] || 'Terminal';
+                        state.title = state.label;
+                        state.lastNotifiedSize = { cols: null, rows: null };
+                        state.termName = data.term || state.termName;
+                        state.connectedAt = new Date();
+                        if (state.id === activeTerminalId) {
+                            updateActiveTerminalUi();
+                            fitAndNotifyResize();
+                            setTimeout(() => state.term.focus(), 100);
+                        } else {
+                            updateTabState(state);
+                        }
                         break;
                     case 'ssh_closed':
-                        sshSessionActive = false;
-                        activeConnectionType = null;
-                        activeTerminalLabel = null;
-                        sshStatusEl.innerText = "Disconnected";
-                        sshStatusEl.style.color = "#ff9f0a";
-                        connectedAt = null;
-                        document.getElementById('uptime-section').style.display = 'none';
-                        document.getElementById('controls').style.display = 'block';
-                        resetConnectButton();
-                        showError(data.message || 'Terminal session closed.');
+                        state.connected = false;
+                        state.connecting = false;
+                        state.error = false;
+                        state.connectionType = null;
+                        state.connectedAt = null;
+                        if (state.id === activeTerminalId) {
+                            updateActiveTerminalUi();
+                            showError(data.message || 'Terminal session closed.');
+                        } else {
+                            updateTabState(state);
+                        }
                         break;
                     case 'terminal':
-                        if (typeof data.data === 'string') term.write(data.data);
+                        if (typeof data.data === 'string') state.term.write(data.data);
                         break;
                     default:
                         if (debugEnabled) {
@@ -806,7 +1002,9 @@
             const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp'];
 
             function showContextMenu(x, y) {
-                const sel = term.getSelection().trim(); const hasSel = !!sel;
+                const activeTerm = getActiveTerm();
+                const sel = activeTerm ? activeTerm.getSelection().trim() : '';
+                const hasSel = !!sel;
                 openOption.classList.toggle('hidden', !hasSel); searchOption.classList.toggle('hidden', !hasSel); menuSepSel.style.display = hasSel ? 'block' : 'none';
                 if (hasSel) { openOption.dataset.url = sel; searchOption.dataset.query = sel; }
                 contextMenu.style.left = `${x}px`; contextMenu.style.top = `${y}px`; contextMenu.style.display = 'block';
@@ -822,8 +1020,9 @@
             window.addEventListener('mouseup', (e) => {
                 if (e.button === 0) {
                     setTimeout(() => {
-                        const sel = term.getSelection().trim();
-                        if (prefs.copyOnSelect && sel) { copyToClipboard(sel); term.clearSelection(); }
+                        const activeTerm = getActiveTerm();
+                        const sel = activeTerm ? activeTerm.getSelection().trim() : '';
+                        if (prefs.copyOnSelect && sel) { copyToClipboard(sel); activeTerm.clearSelection(); }
                     }, 50);
                 }
             });
@@ -880,7 +1079,8 @@
                 try {
                     if (navigator.clipboard && navigator.clipboard.readText) text = await navigator.clipboard.readText();
                     else text = prompt("Paste text here:");
-                    if (text && socket.connected && sshSessionActive) socket.emit('ssh_input', { terminal_id: ACTIVE_TERMINAL_ID, data: text });
+                    const state = getActiveTerminalState();
+                    if (text && socket.connected && state && state.connected) socket.emit('ssh_input', { terminal_id: state.id, data: text });
                 } catch(err) {}
             };
             document.getElementById('close-overlay').onclick = (e) => {
@@ -889,7 +1089,10 @@
                 urlOverlay.style.display = 'none';
                 overlayIframe.src = 'about:blank';
                 overlayImg.removeAttribute('src');
-                setTimeout(() => term.focus(), 100);
+                setTimeout(() => {
+                    const activeTerm = getActiveTerm();
+                    if (activeTerm) activeTerm.focus();
+                }, 100);
             };
             
             const header = document.getElementById('overlay-header'), shield = document.getElementById('overlay-shield');
@@ -966,9 +1169,11 @@
                 prefs.fontFace = document.getElementById('pref-fontFace').value;
                 prefs.fontSize = normalizeFontSize(document.getElementById('pref-fontSize').value, prefs.fontSize);
                 savePrefs(prefs);
-                term.options.fontFamily = prefs.fontFace; 
-                term.options.fontSize = prefs.fontSize;
-                term.options.theme = SCHEMES[prefs.colorScheme] || SCHEMES.ibm5153;
+                terminals.forEach(state => {
+                    state.term.options.fontFamily = prefs.fontFace;
+                    state.term.options.fontSize = prefs.fontSize;
+                    state.term.options.theme = SCHEMES[prefs.colorScheme] || SCHEMES.ibm5153;
+                });
                 fitAndNotifyResize(); applyDetectUrls(); settingsModal.classList.remove('open');
             };
             document.getElementById('settings-reset').onclick = () => { prefs = { ...PREF_DEFAULTS }; savePrefs(prefs); location.reload(); };

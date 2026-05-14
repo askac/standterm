@@ -11,6 +11,7 @@ import time
 import argparse
 import select
 import shutil
+import re
 from pathlib import Path
 from flask import Flask, render_template, request, abort, make_response, redirect
 from flask_socketio import SocketIO
@@ -66,6 +67,9 @@ MAX_TERMINAL_ROWS = 500
 CONNECTION_TYPE_SSH = 'ssh'
 CONNECTION_TYPE_LOCAL_SHELL = 'local_shell'
 TERMINAL_ID_MAIN = 'main'
+MAX_TERMINAL_ID_LENGTH = 64
+MAX_TERMINALS_PER_CLIENT = 12
+TERMINAL_ID_PATTERN = re.compile(r'^[A-Za-z0-9_.:-]+$')
 LOCAL_PUBLIC_KEY_TYPES = {
     'ssh-ed25519',
     'ssh-rsa',
@@ -182,6 +186,7 @@ class TerminalBridge:
     def __init__(self, sid, terminal_id):
         self.sid = sid
         self.terminal_id = terminal_id
+        self.closing = False
 
     def metadata(self, cols=80, rows=24):
         return build_terminal_metadata(
@@ -583,6 +588,8 @@ class SSHBridge(TerminalBridge):
                     )
                     break
             except Exception as e:
+                if self.closing:
+                    break
                 print(f"[!] Read error: {e}")
                 socketio.emit(
                     'ssh_output',
@@ -711,6 +718,8 @@ class LocalShellBridge(TerminalBridge):
             try:
                 readable, _, _ = select.select([self.process.fd], [], [], 0)
                 if not readable:
+                    if self.closing:
+                        break
                     if not self.process.isalive():
                         socketio.emit(
                             'ssh_output',
@@ -738,6 +747,8 @@ class LocalShellBridge(TerminalBridge):
                         room=self.sid,
                     )
             except EOFError:
+                if self.closing:
+                    break
                 socketio.emit(
                     'ssh_output',
                     {
@@ -750,6 +761,8 @@ class LocalShellBridge(TerminalBridge):
                 )
                 break
             except Exception as exc:
+                if self.closing:
+                    break
                 print(f"[!] Local shell read error: {exc}")
                 socketio.emit(
                     'ssh_output',
@@ -795,6 +808,8 @@ class LocalShellBridge(TerminalBridge):
                 return False
             return True
         except EOFError:
+            if self.closing:
+                return False
             socketio.emit(
                 'ssh_output',
                 {
@@ -807,6 +822,8 @@ class LocalShellBridge(TerminalBridge):
             )
             return False
         except Exception as exc:
+            if self.closing:
+                return False
             print(f"[!] Windows local shell read error: {exc}")
             socketio.emit(
                 'ssh_output',
@@ -892,6 +909,7 @@ def add_common_headers(response):
 def close_bridge(bridge):
     if not bridge:
         return
+    bridge.closing = True
     bridge.close()
 
 def get_bridge(sid, terminal_id):
@@ -923,11 +941,18 @@ def close_all_terminal_bridges(sid):
     for bridge in list(terminals.values()):
         close_bridge(bridge)
 
-def validate_terminal_id_payload(data):
+def is_valid_terminal_id(terminal_id):
+    if not isinstance(terminal_id, str):
+        return False
+    if not terminal_id or len(terminal_id) > MAX_TERMINAL_ID_LENGTH:
+        return False
+    return bool(TERMINAL_ID_PATTERN.fullmatch(terminal_id))
+
+def validate_terminal_id_payload(data, default=None):
     if not isinstance(data, dict):
         return None
-    terminal_id = data.get('terminal_id')
-    if terminal_id != TERMINAL_ID_MAIN:
+    terminal_id = data.get('terminal_id', default)
+    if not is_valid_terminal_id(terminal_id):
         return None
     return terminal_id
 
@@ -958,9 +983,9 @@ def validate_start_ssh_payload(data):
     if FORCE_CONNECTION_TYPE and connection_type != FORCE_CONNECTION_TYPE:
         return None, f'Connection type is locked to {FORCE_CONNECTION_TYPE}.'
 
-    terminal_id = data.get('terminal_id', TERMINAL_ID_MAIN)
-    if terminal_id != TERMINAL_ID_MAIN:
-        return None, 'Unsupported terminal id.'
+    terminal_id = validate_terminal_id_payload(data, default=TERMINAL_ID_MAIN)
+    if not terminal_id:
+        return None, 'Invalid terminal id.'
 
     if connection_type == CONNECTION_TYPE_LOCAL_SHELL:
         return {
@@ -1079,7 +1104,15 @@ def on_start_ssh(data):
 
     pending_localhost_key_setups.pop(request.sid, None)
     terminal_id = payload['terminal_id']
-    close_terminal_bridge(request.sid, terminal_id)
+    replacing_existing = get_bridge(request.sid, terminal_id) is not None
+    if not replacing_existing and len(bridges.get(request.sid, {})) >= MAX_TERMINALS_PER_CLIENT:
+        emit_connection_error(
+            request.sid,
+            'Terminal limit reached.',
+            error_code='terminal_limit_reached',
+            terminal_id=terminal_id,
+        )
+        return
 
     connection_type = payload['connection_type']
     cols = 80
@@ -1096,6 +1129,7 @@ def on_start_ssh(data):
         success, result = bridge.connect(host, port, user, password, cols=cols, rows=rows)
 
     if success:
+        close_terminal_bridge(request.sid, terminal_id)
         set_bridge(request.sid, terminal_id, bridge)
         connected_payload = {'message_type': 'ssh_connected'}
         connected_payload.update(bridge.metadata(cols=cols, rows=rows))
@@ -1233,6 +1267,13 @@ def on_resize(data):
     if bridge and size:
         cols, rows = size
         bridge.resize(cols, rows)
+
+@socketio.on('close_terminal')
+def on_close_terminal(data):
+    terminal_id = validate_terminal_id_payload(data)
+    if not terminal_id:
+        return
+    close_terminal_bridge(request.sid, terminal_id)
 
 @socketio.on('disconnect')
 def on_disconnect():
