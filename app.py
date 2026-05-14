@@ -125,10 +125,10 @@ def build_terminal_policy():
         'force_connection': FORCE_CONNECTION_TYPE,
     }
 
-def build_terminal_metadata(connection_type, terminal_kind, terminal_label, cols, rows):
+def build_terminal_metadata(connection_type, terminal_id, terminal_kind, terminal_label, cols, rows):
     return {
         'connection_type': connection_type,
-        'terminal_id': TERMINAL_ID_MAIN,
+        'terminal_id': terminal_id,
         'terminal_kind': terminal_kind,
         'terminal_label': terminal_label,
         'term': SSH_TERM,
@@ -179,12 +179,14 @@ class TerminalBridge:
     terminal_kind = None
     terminal_label = None
 
-    def __init__(self, sid):
+    def __init__(self, sid, terminal_id):
         self.sid = sid
+        self.terminal_id = terminal_id
 
     def metadata(self, cols=80, rows=24):
         return build_terminal_metadata(
             self.connection_type,
+            self.terminal_id,
             self.terminal_kind,
             self.terminal_label,
             cols,
@@ -208,9 +210,8 @@ class SSHBridge(TerminalBridge):
     terminal_kind = 'ssh'
     terminal_label = 'SSH'
 
-    def __init__(self, sid):
-        super().__init__(sid)
-        self.sid = sid
+    def __init__(self, sid, terminal_id=TERMINAL_ID_MAIN):
+        super().__init__(sid, terminal_id)
         self.ssh = None
         self._reset_ssh_client()
         self.channel = None
@@ -562,7 +563,7 @@ class SSHBridge(TerminalBridge):
                             {
                                 'message_type': 'terminal',
                                 'connection_type': self.connection_type,
-                                'terminal_id': TERMINAL_ID_MAIN,
+                                'terminal_id': self.terminal_id,
                                 'data': data,
                             },
                             room=self.sid,
@@ -575,7 +576,7 @@ class SSHBridge(TerminalBridge):
                         {
                             'message_type': 'ssh_closed',
                             'connection_type': self.connection_type,
-                            'terminal_id': TERMINAL_ID_MAIN,
+                            'terminal_id': self.terminal_id,
                             'message': 'SSH session closed.',
                         },
                         room=self.sid,
@@ -588,7 +589,7 @@ class SSHBridge(TerminalBridge):
                     {
                         'message_type': 'ssh_closed',
                         'connection_type': self.connection_type,
-                        'terminal_id': TERMINAL_ID_MAIN,
+                        'terminal_id': self.terminal_id,
                         'message': 'SSH connection closed due to a read error.',
                         'error_code': 'ssh_read_error',
                     },
@@ -596,9 +597,7 @@ class SSHBridge(TerminalBridge):
                 )
                 break
         print(f"[*] SSH read loop terminated for {self.sid}")
-        if bridges.get(self.sid) is self:
-            bridges.pop(self.sid, None)
-            close_bridge(self)
+        unregister_terminal_bridge(self.sid, self.terminal_id, self)
 
     def write(self, data):
         if self.channel:
@@ -630,8 +629,8 @@ class SSHBridge(TerminalBridge):
 class LocalShellBridge(TerminalBridge):
     connection_type = CONNECTION_TYPE_LOCAL_SHELL
 
-    def __init__(self, sid):
-        super().__init__(sid)
+    def __init__(self, sid, terminal_id=TERMINAL_ID_MAIN):
+        super().__init__(sid, terminal_id)
         self.process = None
         shell = get_windows_shell_path() if sys.platform.startswith('win') else (os.environ.get('SHELL') or '/bin/sh')
         self.shell = shell
@@ -718,7 +717,7 @@ class LocalShellBridge(TerminalBridge):
                             {
                                 'message_type': 'ssh_closed',
                                 'connection_type': self.connection_type,
-                                'terminal_id': TERMINAL_ID_MAIN,
+                                'terminal_id': self.terminal_id,
                                 'message': 'Local shell session closed.',
                             },
                             room=self.sid,
@@ -733,7 +732,7 @@ class LocalShellBridge(TerminalBridge):
                         {
                             'message_type': 'terminal',
                             'connection_type': self.connection_type,
-                            'terminal_id': TERMINAL_ID_MAIN,
+                            'terminal_id': self.terminal_id,
                             'data': data,
                         },
                         room=self.sid,
@@ -744,7 +743,7 @@ class LocalShellBridge(TerminalBridge):
                     {
                         'message_type': 'ssh_closed',
                         'connection_type': self.connection_type,
-                        'terminal_id': TERMINAL_ID_MAIN,
+                        'terminal_id': self.terminal_id,
                         'message': 'Local shell session closed.',
                     },
                     room=self.sid,
@@ -757,7 +756,7 @@ class LocalShellBridge(TerminalBridge):
                     {
                         'message_type': 'ssh_closed',
                         'connection_type': self.connection_type,
-                        'terminal_id': TERMINAL_ID_MAIN,
+                        'terminal_id': self.terminal_id,
                         'message': 'Local shell closed due to a read error.',
                         'error_code': 'local_shell_read_error',
                     },
@@ -766,9 +765,7 @@ class LocalShellBridge(TerminalBridge):
                 break
 
         print(f"[*] Local shell read loop terminated for {self.sid}")
-        if bridges.get(self.sid) is self:
-            bridges.pop(self.sid, None)
-            close_bridge(self)
+        unregister_terminal_bridge(self.sid, self.terminal_id, self)
 
     def _read_windows_once(self):
         try:
@@ -779,7 +776,7 @@ class LocalShellBridge(TerminalBridge):
                     {
                         'message_type': 'terminal',
                         'connection_type': self.connection_type,
-                        'terminal_id': TERMINAL_ID_MAIN,
+                        'terminal_id': self.terminal_id,
                         'data': data,
                     },
                     room=self.sid,
@@ -790,7 +787,7 @@ class LocalShellBridge(TerminalBridge):
                     {
                         'message_type': 'ssh_closed',
                         'connection_type': self.connection_type,
-                        'terminal_id': TERMINAL_ID_MAIN,
+                        'terminal_id': self.terminal_id,
                         'message': 'Local shell session closed.',
                     },
                     room=self.sid,
@@ -803,7 +800,7 @@ class LocalShellBridge(TerminalBridge):
                 {
                     'message_type': 'ssh_closed',
                     'connection_type': self.connection_type,
-                    'terminal_id': TERMINAL_ID_MAIN,
+                    'terminal_id': self.terminal_id,
                     'message': 'Local shell session closed.',
                 },
                 room=self.sid,
@@ -816,7 +813,7 @@ class LocalShellBridge(TerminalBridge):
                 {
                     'message_type': 'ssh_closed',
                     'connection_type': self.connection_type,
-                    'terminal_id': TERMINAL_ID_MAIN,
+                    'terminal_id': self.terminal_id,
                     'message': 'Local shell closed due to a read error.',
                     'error_code': 'local_shell_read_error',
                 },
@@ -897,12 +894,50 @@ def close_bridge(bridge):
         return
     bridge.close()
 
+def get_bridge(sid, terminal_id):
+    return bridges.get(sid, {}).get(terminal_id)
+
+def set_bridge(sid, terminal_id, bridge):
+    bridges.setdefault(sid, {})[terminal_id] = bridge
+
+def pop_bridge(sid, terminal_id):
+    terminals = bridges.get(sid)
+    if not terminals:
+        return None
+    bridge = terminals.pop(terminal_id, None)
+    if not terminals:
+        bridges.pop(sid, None)
+    return bridge
+
+def unregister_terminal_bridge(sid, terminal_id, bridge):
+    if get_bridge(sid, terminal_id) is not bridge:
+        return
+    pop_bridge(sid, terminal_id)
+    close_bridge(bridge)
+
+def close_terminal_bridge(sid, terminal_id):
+    close_bridge(pop_bridge(sid, terminal_id))
+
+def close_all_terminal_bridges(sid):
+    terminals = bridges.pop(sid, {})
+    for bridge in list(terminals.values()):
+        close_bridge(bridge)
+
+def validate_terminal_id_payload(data):
+    if not isinstance(data, dict):
+        return None
+    terminal_id = data.get('terminal_id')
+    if terminal_id != TERMINAL_ID_MAIN:
+        return None
+    return terminal_id
+
 def emit_connection_error(sid, message, error_code=None, action_type=None, action_message=None,
-                          action_question=None, action_id=None):
+                          action_question=None, action_id=None, terminal_id=TERMINAL_ID_MAIN):
     socketio.emit(
         'ssh_output',
         {
             'message_type': 'connection_error',
+            'terminal_id': terminal_id,
             'message': message,
             'error_code': error_code,
             'action_type': action_type,
@@ -930,7 +965,7 @@ def validate_start_ssh_payload(data):
     if connection_type == CONNECTION_TYPE_LOCAL_SHELL:
         return {
             'connection_type': connection_type,
-            'terminal_id': TERMINAL_ID_MAIN,
+            'terminal_id': terminal_id,
         }, None
 
     host = data.get('host', SSH_HOST)
@@ -966,7 +1001,7 @@ def validate_start_ssh_payload(data):
 
     return {
         'connection_type': connection_type,
-        'terminal_id': TERMINAL_ID_MAIN,
+        'terminal_id': terminal_id,
         'host': host,
         'port': port,
         'username': user,
@@ -1043,25 +1078,25 @@ def on_start_ssh(data):
         return
 
     pending_localhost_key_setups.pop(request.sid, None)
-    old_bridge = bridges.pop(request.sid, None)
-    close_bridge(old_bridge)
+    terminal_id = payload['terminal_id']
+    close_terminal_bridge(request.sid, terminal_id)
 
     connection_type = payload['connection_type']
     cols = 80
     rows = 24
     if connection_type == CONNECTION_TYPE_LOCAL_SHELL:
-        bridge = LocalShellBridge(request.sid)
+        bridge = LocalShellBridge(request.sid, terminal_id)
         success, result = bridge.connect(cols=cols, rows=rows)
     else:
         host = payload['host']
         port = payload['port']
         user = payload['username']
         password = payload['password']
-        bridge = SSHBridge(request.sid)
+        bridge = SSHBridge(request.sid, terminal_id)
         success, result = bridge.connect(host, port, user, password, cols=cols, rows=rows)
 
     if success:
-        bridges[request.sid] = bridge
+        set_bridge(request.sid, terminal_id, bridge)
         connected_payload = {'message_type': 'ssh_connected'}
         connected_payload.update(bridge.metadata(cols=cols, rows=rows))
         socketio.emit(
@@ -1085,6 +1120,7 @@ def on_start_ssh(data):
             request.sid,
             message,
             error_code=error_code,
+            terminal_id=terminal_id,
         )
         return
 
@@ -1116,6 +1152,7 @@ def on_start_ssh(data):
                 'host': host,
                 'port': port,
                 'username': user,
+                'terminal_id': terminal_id,
                 'key_entry': missing_entries[0],
                 'expires_at': time.time() + LOCALHOST_KEY_SETUP_TTL_SECONDS,
             }
@@ -1132,6 +1169,7 @@ def on_start_ssh(data):
         action_message=action_message,
         action_question=action_question,
         action_id=action_id,
+        terminal_id=terminal_id,
     )
 
 @socketio.on('setup_localhost_key_access')
@@ -1139,7 +1177,7 @@ def on_setup_localhost_key_access(data):
     data = data if isinstance(data, dict) else {}
     action_id = data.get('action_id')
     pending_setup, pending_error_code = get_pending_localhost_key_setup(request.sid, action_id)
-    bridge = SSHBridge(request.sid)
+    bridge = SSHBridge(request.sid, pending_setup.get('terminal_id', TERMINAL_ID_MAIN) if pending_setup else TERMINAL_ID_MAIN)
 
     if not pending_setup:
         result = {
@@ -1162,6 +1200,7 @@ def on_setup_localhost_key_access(data):
         'ssh_output',
         {
             'message_type': 'setup_result',
+            'terminal_id': bridge.terminal_id,
             'message': result['message'],
             'setup_status': result['status'],
             'error_code': result.get('error_code'),
@@ -1171,10 +1210,11 @@ def on_setup_localhost_key_access(data):
 
 @socketio.on('ssh_input')
 def on_ssh_input(data):
-    bridge = bridges.get(request.sid)
-    if not bridge or not isinstance(data, dict):
+    terminal_id = validate_terminal_id_payload(data)
+    if not terminal_id:
         return
-    if data.get('terminal_id', TERMINAL_ID_MAIN) != TERMINAL_ID_MAIN:
+    bridge = get_bridge(request.sid, terminal_id)
+    if not bridge:
         return
     ssh_input = data.get('data')
     if not isinstance(ssh_input, str):
@@ -1185,9 +1225,10 @@ def on_ssh_input(data):
 
 @socketio.on('resize')
 def on_resize(data):
-    bridge = bridges.get(request.sid)
-    if isinstance(data, dict) and data.get('terminal_id', TERMINAL_ID_MAIN) != TERMINAL_ID_MAIN:
+    terminal_id = validate_terminal_id_payload(data)
+    if not terminal_id:
         return
+    bridge = get_bridge(request.sid, terminal_id)
     size = parse_terminal_size(data)
     if bridge and size:
         cols, rows = size
@@ -1196,10 +1237,9 @@ def on_resize(data):
 @socketio.on('disconnect')
 def on_disconnect():
     pending_localhost_key_setups.pop(request.sid, None)
-    bridge = bridges.pop(request.sid, None)
-    if bridge:
+    if bridges.get(request.sid):
         print(f"[*] Cleaning up terminal session for {request.sid}")
-        close_bridge(bridge)
+        close_all_terminal_bridges(request.sid)
     print(f"[-] Client disconnected: {request.sid}")
 
 def is_wsl():

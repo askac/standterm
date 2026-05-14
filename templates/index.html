@@ -451,6 +451,7 @@
             const debugHud = document.getElementById('debug-hud');
             const payloadLog = document.getElementById('payload-log');
             const debugEnabled = (new URLSearchParams(window.location.search)).get('debug') === '1';
+            const ACTIVE_TERMINAL_ID = 'main';
             let connectedAt = null;
             let payloadEntries = [];
             let pendingAction = null;
@@ -470,6 +471,10 @@
             function getPolicyConnection(value, fallback) {
                 const normalized = normalizeConnectionType(value);
                 return Object.prototype.hasOwnProperty.call(CONNECTION_LABELS, normalized) ? normalized : fallback;
+            }
+
+            function isActiveTerminalPayload(data) {
+                return data && data.terminal_id === ACTIVE_TERMINAL_ID;
             }
 
             const defaultConnectionType = getPolicyConnection(TERMINAL_POLICY.default_connection, 'ssh');
@@ -569,7 +574,7 @@
                 if (!socket || !socket.connected || !sshSessionActive) return;
                 if (lastNotifiedSize.cols === term.cols && lastNotifiedSize.rows === term.rows) return;
                 lastNotifiedSize = { cols: term.cols, rows: term.rows };
-                socket.emit('resize', { terminal_id: 'main', cols: term.cols, rows: term.rows });
+                socket.emit('resize', { terminal_id: ACTIVE_TERMINAL_ID, cols: term.cols, rows: term.rows });
             }
 
             function fitAndNotifyResize() {
@@ -649,7 +654,7 @@
                 const connectionType = forcedConnectionType || getSelectedConnectionType();
                 const formData = {
                     connection_type: connectionType,
-                    terminal_id: 'main'
+                    terminal_id: ACTIVE_TERMINAL_ID
                 };
                 if (connectionType === 'ssh') {
                     formData.host = document.getElementById('host').value;
@@ -703,7 +708,7 @@
                 resetConnectButton();
             };
 
-            term.onData(data => { if (socket.connected && sshSessionActive) socket.emit('ssh_input', { terminal_id: 'main', data }); });
+            term.onData(data => { if (socket.connected && sshSessionActive) socket.emit('ssh_input', { terminal_id: ACTIVE_TERMINAL_ID, data }); });
             socket.on('ssh_output', data => {
                 if (!data || typeof data !== 'object') return;
                 const messageType = data.message_type;
@@ -712,11 +717,15 @@
                     if (debugEnabled) appendPayloadLog('socket.invalid_message_type', JSON.stringify(data));
                     return;
                 }
+                if (!isActiveTerminalPayload(data)) {
+                    if (debugEnabled) appendPayloadLog('socket.inactive_terminal', JSON.stringify(data));
+                    return;
+                }
                 const displayText = typeof data.data === 'string' ? data.data : (data.message || '');
                 appendPayloadLog('socket.ssh_output', displayText);
                 updateDebugHud(
                     'socket.ssh_output',
-                    `type=${messageType} len=${displayText.length}\n${escapeForDebug(displayText)}`
+                    `terminal_id=${data.terminal_id} type=${messageType} len=${displayText.length}\n${escapeForDebug(displayText)}`
                 );
                 switch (messageType) {
                     case 'connection_error':
@@ -871,7 +880,7 @@
                 try {
                     if (navigator.clipboard && navigator.clipboard.readText) text = await navigator.clipboard.readText();
                     else text = prompt("Paste text here:");
-                    if (text && socket.connected && sshSessionActive) socket.emit('ssh_input', { terminal_id: 'main', data: text });
+                    if (text && socket.connected && sshSessionActive) socket.emit('ssh_input', { terminal_id: ACTIVE_TERMINAL_ID, data: text });
                 } catch(err) {}
             };
             document.getElementById('close-overlay').onclick = (e) => {
