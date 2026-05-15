@@ -21,8 +21,9 @@ A lightweight, web-based SSH terminal with advanced features, designed to run on
 - **Advanced Capabilities**:
   - **URL Overlay**: Open URLs or image links in a resizable, draggable overlay window without leaving the terminal.
   - **Terminal PiP (Picture-in-Picture)**: Pop the terminal into a system-level floating window.
+  - **Persistent Web Terminal Tabs**: Keep multiple terminal sessions alive across browser reloads while the WebSSH server process is still running.
 - **Robustness**:
-  - **Async Resource Loader**: Guaranteed startup stability with progress tracking and CDN fallbacks.
+  - **Async Resource Loader**: Guaranteed startup stability with progress tracking for local browser assets.
   - **Anti-Crash Failsafes**: Graceful degradation if external addons fail to load.
 
 ## Prerequisites
@@ -63,9 +64,27 @@ ssh 127.0.0.1
 
 WebSSH uses your local private key for localhost targets. The server side must have the matching public key in `~/.ssh/authorized_keys`.
 
+## Vendored Browser Assets
+
+WebSSH vendors xterm.js runtime files under `static/` so the terminal works without a CDN:
+
+- `@xterm/xterm` 6.0.0: `static/js/xterm.js`, `static/css/xterm.css`
+- `@xterm/addon-fit` 0.11.0: `static/js/xterm-addon-fit.js`
+- `@xterm/addon-web-links` 0.12.0: `static/js/xterm-addon-web-links.js`
+
+The browser bundles are copied from the official npm release packages. A matching
+source checkout is kept at `/mnt/d/workspace/github/xterm.js`, tag `6.0.0` /
+commit `f447274f430fd22513f6adbf9862d19524471c04`, for auditing and future
+upgrades.
+
+xterm.js and these addons are MIT licensed. Keep `THIRD-PARTY-NOTICES.md`,
+`static/licenses/xtermjs-MIT-LICENSE.txt`, and `static/js/README.md` when
+publishing GitHub releases that include the vendored files.
+
 ## Acknowledgements & Copyright
 
 This project utilizes color schemes and design patterns inspired by official terminal emulators:
+- **xterm.js**: Browser terminal emulator and addons from the [xterm.js](https://github.com/xtermjs/xterm.js) project (MIT License).
 - **Windows Terminal**: Color schemes (Campbell, Vintage, etc.) are replicated from the [Microsoft Windows Terminal](https://github.com/microsoft/terminal) project (MIT License).
 - **IBM 5153**: Color palette based on the classic IBM 5153 Color Display.
 

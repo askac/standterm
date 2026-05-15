@@ -24,5 +24,9 @@ Thumbs.db
 # Flask/Socket.IO
 *.log
 
+# Session handoff notes
+handover_*.md
+handover_*_prompt.txt
+
 # Unused reference assets
 colorscheme.png

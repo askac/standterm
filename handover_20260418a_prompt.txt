@@ -1,1 +1,0 @@
-請閱讀 /mnt/d/workspace/github/webssh/handover_20260418a.md。本次已完成 localhost key auth 提示/自動 setup/reconnect 與 Windows 保守限制；若要續做，優先決定是否補 Windows 完整支援或回到 /debug/xterm-wrap 調查。

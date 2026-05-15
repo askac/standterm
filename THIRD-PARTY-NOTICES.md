@@ -4,8 +4,11 @@ This project incorporates components from the following projects:
 
 ## xterm.js
 - **License**: MIT
-- **Copyright**: (c) 2017-2023 The xterm.js authors
+- **Copyright**: (c) 2017-2026 The xterm.js authors
 - **Project**: https://github.com/xtermjs/xterm.js
+- **Vendored files**: `static/js/xterm.js`, `static/js/xterm-addon-fit.js`, `static/js/xterm-addon-web-links.js`, `static/css/xterm.css`
+- **Versions**: `@xterm/xterm` 6.0.0, `@xterm/addon-fit` 0.11.0, `@xterm/addon-web-links` 0.12.0
+- **License text**: `static/licenses/xtermjs-MIT-LICENSE.txt`
 
 ## Socket.IO
 - **License**: MIT
