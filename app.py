@@ -144,6 +144,9 @@ def build_terminal_metadata(connection_type, terminal_id, terminal_kind, termina
         'rows': rows,
     }
 
+def get_request_client_ip():
+    return request.remote_addr or request.environ.get('REMOTE_ADDR') or 'unknown'
+
 def get_shell_kind(shell_path):
     shell_name = Path(shell_path).name.lower()
     if shell_name in {'bash', 'zsh', 'sh', 'fish', 'dash', 'ksh'}:
@@ -859,6 +862,7 @@ bridges = {}
 pending_localhost_key_setups = {}
 active_sessions = {}
 socket_session_tokens = {}
+socket_client_ips = {}
 session_cleanup_task_started = False
 
 def is_valid_access_token(token):
@@ -891,6 +895,7 @@ def cleanup_expired_sessions():
         for sid, sid_session_token in list(socket_session_tokens.items()):
             if sid_session_token == session_token:
                 socket_session_tokens.pop(sid, None)
+                socket_client_ips.pop(sid, None)
 
 def session_cleanup_loop():
     while True:
@@ -1133,11 +1138,13 @@ def on_connect():
     ensure_session_cleanup_task()
     cleanup_expired_sessions()
     session_token = get_request_session_token()
+    client_ip = get_request_client_ip()
     if not session_token:
-        print(f"[!] Unauthorized WebSocket attempt: {request.sid}")
+        print(f"[!] Unauthorized WebSocket attempt: {request.sid} from {client_ip}")
         return False 
     socket_session_tokens[request.sid] = session_token
-    print(f"[+] Client connected: {request.sid}")
+    socket_client_ips[request.sid] = client_ip
+    print(f"[+] Client connected: {request.sid} from {client_ip}")
 
 @socketio.on('list_terminals')
 def on_list_terminals():
@@ -1382,9 +1389,10 @@ def on_close_all_terminals():
 def on_disconnect():
     pending_localhost_key_setups.pop(request.sid, None)
     session_token = socket_session_tokens.pop(request.sid, None)
+    client_ip = socket_client_ips.pop(request.sid, 'unknown')
     if session_token:
         detach_session_bridges(session_token, request.sid)
-    print(f"[-] Client disconnected: {request.sid}")
+    print(f"[-] Client disconnected: {request.sid} from {client_ip}")
 
 def is_wsl():
     if not sys.platform.startswith('linux'):
