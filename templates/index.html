@@ -613,27 +613,6 @@
                 notifyTerminalResize(state);
             }
 
-            function getSelectionCellLength(term, position) {
-                if (!position) return 0;
-                const rowDelta = position.endRow - position.startRow;
-                return (rowDelta * term.cols) + position.endColumn - position.startColumn;
-            }
-
-            function restoreSelectionAfterWrite(term, position) {
-                if (!position || term.hasSelection()) return;
-                const length = getSelectionCellLength(term, position);
-                if (length <= 0) return;
-                term.select(position.startColumn, position.startRow, length);
-            }
-
-            function writeTerminalData(state, data) {
-                const term = state.term;
-                const selectionPosition = term.hasSelection() && term.getSelectionPosition
-                    ? term.getSelectionPosition()
-                    : null;
-                term.write(data, () => restoreSelectionAfterWrite(term, selectionPosition));
-            }
-
             function configureWebLinks(state) {
                 if (state.webLinksAddon) {
                     state.webLinksAddon.dispose();
@@ -1087,7 +1066,7 @@
                         }
                         break;
                     case 'terminal':
-                        if (typeof data.data === 'string') writeTerminalData(state, data.data);
+                        if (typeof data.data === 'string') state.term.write(data.data);
                         break;
                     default:
                         if (debugEnabled) {
