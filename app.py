@@ -122,11 +122,18 @@ def parse_cli_args(argv):
         action='store_true',
         help='Accepted for run script compatibility; dependency checks are handled by the launcher.',
     )
+    parser.add_argument(
+        '--debug-input',
+        '-d',
+        action='store_true',
+        help='Log terminal input bytes for debugging key sequences.',
+    )
     return parser.parse_args(argv)
 
 CLI_ARGS = parse_cli_args(sys.argv[1:])
 DEFAULT_CONNECTION_TYPE = CLI_ARGS.default_connection
 FORCE_CONNECTION_TYPE = CLI_ARGS.force_connection
+DEBUG_INPUT = CLI_ARGS.debug_input or os.getenv('WEBSSH_DEBUG_INPUT') == '1'
 
 def build_terminal_policy():
     return {
@@ -1013,6 +1020,25 @@ def validate_terminal_id_payload(data, default=None):
         return None
     return terminal_id
 
+def escape_debug_text(value):
+    return value.encode('unicode_escape', errors='backslashreplace').decode('ascii')
+
+def log_terminal_input(sid, terminal_id, data):
+    if not DEBUG_INPUT:
+        return
+    data_bytes = data.encode('utf-8', errors='backslashreplace')
+    hex_bytes = ' '.join(f'{byte:02x}' for byte in data_bytes)
+    codepoints = ' '.join(f'U+{ord(ch):04X}' for ch in data)
+    print(
+        '[debug-input] '
+        f'sid={sid} terminal_id={terminal_id} '
+        f'chars={len(data)} bytes={len(data_bytes)} '
+        f'hex={hex_bytes} '
+        f'codepoints={codepoints} '
+        f'text={escape_debug_text(data)}',
+        flush=True,
+    )
+
 def emit_connection_error(sid, message, error_code=None, action_type=None, action_message=None,
                           action_question=None, action_id=None, terminal_id=TERMINAL_ID_MAIN):
     socketio.emit(
@@ -1353,6 +1379,7 @@ def on_ssh_input(data):
         return
     if len(ssh_input.encode('utf-8', errors='ignore')) > MAX_SSH_INPUT_BYTES:
         return
+    log_terminal_input(request.sid, terminal_id, ssh_input)
     bridge.write(ssh_input)
 
 @socketio.on('resize')
@@ -1479,6 +1506,7 @@ if __name__ == '__main__':
     print(f"WebSSH Server Starting...")
     print(f"Runtime: {get_runtime_name()}")
     print(f"Async Mode: {ASYNC_MODE}")
+    print(f"Debug Input: {'on' if DEBUG_INPUT else 'off'}")
     print(f"Default Connection: {DEFAULT_CONNECTION_TYPE}")
     if FORCE_CONNECTION_TYPE:
         print(f"Forced Connection: {FORCE_CONNECTION_TYPE}")
