@@ -4,7 +4,6 @@ import subprocess
 import base64
 import getpass
 import logging
-import paramiko
 import secrets
 import socket
 import time
@@ -26,6 +25,8 @@ try:
     from winpty import PtyProcess as WinPtyProcess
 except Exception:
     WinPtyProcess = None
+
+paramiko = None
 
 ASYNC_MODE = os.getenv('WEBSSH_ASYNC_MODE', '').strip().lower()
 if not ASYNC_MODE:
@@ -146,6 +147,13 @@ def build_terminal_metadata(connection_type, terminal_id, terminal_kind, termina
 
 def get_request_client_ip():
     return request.remote_addr or request.environ.get('REMOTE_ADDR') or 'unknown'
+
+def get_paramiko():
+    global paramiko
+    if paramiko is None:
+        import paramiko as paramiko_module
+        paramiko = paramiko_module
+    return paramiko
 
 def get_shell_kind(shell_path):
     shell_name = Path(shell_path).name.lower()
@@ -270,14 +278,15 @@ class SSHBridge(TerminalBridge):
         self.channel = None
 
     def _reset_ssh_client(self, trust_unknown_host=False):
+        paramiko_module = get_paramiko()
         if self.ssh:
             self.ssh.close()
-        self.ssh = paramiko.SSHClient()
+        self.ssh = paramiko_module.SSHClient()
         self.ssh.load_system_host_keys()
         if trust_unknown_host:
-            self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            self.ssh.set_missing_host_key_policy(paramiko_module.AutoAddPolicy())
         else:
-            self.ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
+            self.ssh.set_missing_host_key_policy(paramiko_module.RejectPolicy())
 
     @staticmethod
     def _is_local_target(host):
@@ -485,24 +494,26 @@ class SSHBridge(TerminalBridge):
 
     @staticmethod
     def _load_private_key(key_path, passphrase=None):
+        paramiko_module = get_paramiko()
         key_types = []
         for key_type_name in ('Ed25519Key', 'ECDSAKey', 'RSAKey', 'DSSKey'):
-            key_type = getattr(paramiko, key_type_name, None)
+            key_type = getattr(paramiko_module, key_type_name, None)
             if key_type is not None:
                 key_types.append(key_type)
         last_error = None
         for key_type in key_types:
             try:
                 return key_type.from_private_key_file(str(key_path), password=passphrase)
-            except paramiko.PasswordRequiredException:
+            except paramiko_module.PasswordRequiredException:
                 raise
-            except paramiko.SSHException as exc:
+            except paramiko_module.SSHException as exc:
                 last_error = exc
         if last_error:
             raise last_error
-        raise paramiko.SSHException(f"Unsupported key format: {key_path}")
+        raise paramiko_module.SSHException(f"Unsupported key format: {key_path}")
 
     def _connect_with_local_keys(self, host, port, user, password):
+        paramiko_module = get_paramiko()
         auth_errors = []
         passphrase = password or None
 
@@ -519,7 +530,7 @@ class SSHBridge(TerminalBridge):
             )
             print(f"[+] Local key auth succeeded via agent/default keys for {self.sid}")
             return True, None
-        except paramiko.AuthenticationException as exc:
+        except paramiko_module.AuthenticationException as exc:
             auth_errors.append(f"agent/default keys: {exc}")
         except Exception as exc:
             auth_errors.append(f"agent/default keys: {exc}")
@@ -527,7 +538,7 @@ class SSHBridge(TerminalBridge):
         for key_path in self._iter_local_private_key_files():
             try:
                 pkey = self._load_private_key(key_path, passphrase=passphrase)
-            except paramiko.PasswordRequiredException:
+            except paramiko_module.PasswordRequiredException:
                 auth_errors.append(f"{key_path.name}: passphrase required")
                 continue
             except Exception as exc:
@@ -554,6 +565,7 @@ class SSHBridge(TerminalBridge):
         return False, '; '.join(auth_errors)
 
     def connect(self, host, port, user, password=None, cols=80, rows=24):
+        paramiko_module = get_paramiko()
         try:
             pwd = password if password else ""
             print(f"[*] Attempting SSH connection for {user!r} at {host!r}:{port}...")
@@ -575,7 +587,7 @@ class SSHBridge(TerminalBridge):
                             setup_availability['reason'],
                             setup_availability.get('error_code'),
                         )
-                    raise paramiko.AuthenticationException(
+                    raise paramiko_module.AuthenticationException(
                         f"Local public key auth failed: {key_error or 'no usable local key found'}"
                     )
             else:
@@ -1459,6 +1471,7 @@ def get_runtime_name():
     return "Linux"
 
 if __name__ == '__main__':
+    print("[*] Python imports completed; resolving bind host...", flush=True)
     bind_host = get_bind_host()
     access_host = get_access_host(bind_host)
     port = DEFAULT_PORT

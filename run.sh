@@ -117,6 +117,7 @@ open_browser() {
 }
 
 echo "[*] Starting WebSSH server..."
+echo "[*] Loading Python modules; first startup from /mnt/* may take a few seconds..."
 # Run python with unbuffered output so we can detect the access URL line and open
 # the browser once on the first launch.
 python -u "$APP_FILE" "$@" 2>&1 | {
