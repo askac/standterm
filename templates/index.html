@@ -112,7 +112,7 @@
         /* Controls */
         #controls { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 100; background: #222; padding: 30px; border-radius: 8px; color: white; border: 1px solid #444; box-shadow: 0 10px 25px rgba(0,0,0,0.5); width: 320px; }
         #controls h2 { margin-top: 0; color: #0a84ff; font-size: 1.2rem; }
-        #controls input { display: block; width: 100%; margin-bottom: 15px; padding: 10px; background: #333; border: 1px solid #555; color: white; border-radius: 4px; box-sizing: border-box; }
+        #controls input, #controls select { display: block; width: 100%; margin-bottom: 15px; padding: 10px; background: #333; border: 1px solid #555; color: white; border-radius: 4px; box-sizing: border-box; }
         #controls button { width: 100%; padding: 12px; background: #0a84ff; border: none; color: white; border-radius: 4px; cursor: pointer; font-weight: bold; }
         #controls button:hover { background: #007aff; }
         .mode-selector { display: flex; border: 1px solid #555; border-radius: 6px; overflow: hidden; margin-bottom: 15px; background: #161616; }
@@ -123,6 +123,21 @@
         .mode-selector.locked label { cursor: default; opacity: 0.55; }
         .mode-selector.locked label.active { opacity: 1; }
         #ssh-fields { display: block; }
+        #uart-fields { display: none; }
+        #browser-auth-box { display: none; margin-bottom: 14px; padding: 10px 12px; background: #1f1f1f; border: 1px solid #444; border-radius: 6px; }
+        #browser-auth-header { color: #aaa; font-size: 12px; line-height: 1.4; margin-bottom: 10px; word-break: break-word; }
+        #browser-auth-message { display: inline; }
+        #browser-auth-details-toggle { width: auto !important; padding: 0 !important; margin-left: 4px; background: transparent !important; border: none !important; color: #64a9ff !important; font-size: 12px; font-weight: normal; cursor: pointer; }
+        #browser-auth-details-toggle:hover { color: #9dccff !important; text-decoration: underline; }
+        #browser-auth-details { display: none; margin: 0 0 10px 0; padding-left: 18px; color: #bbb; font-size: 12px; line-height: 1.45; }
+        #browser-auth-details li { margin-bottom: 5px; }
+        #browser-auth-details a { color: #64a9ff; }
+        #browser-auth-actions { display: flex; gap: 10px; }
+        #browser-auth-actions button { width: auto; flex: 1; }
+        #authorizeBrowserBtn { background: #0a84ff !important; }
+        #authorizeBrowserBtn:hover { background: #007aff !important; }
+        #checkBrowserAuthBtn { background: #444 !important; }
+        #checkBrowserAuthBtn:hover { background: #555 !important; }
         .action-box {
             display: none;
             margin-bottom: 14px;
@@ -188,6 +203,25 @@
             font: 12px/1.4 Consolas, "Courier New", monospace;
             white-space: pre-wrap;
             word-break: break-word;
+        }
+        #policy-debug-panel {
+            position: fixed;
+            left: 10px;
+            top: 10px;
+            z-index: 6000;
+            width: min(560px, calc(100vw - 20px));
+            max-height: 55vh;
+            display: none;
+            overflow: auto;
+            background: rgba(10, 10, 10, 0.96);
+            color: #d7f7ff;
+            border: 1px solid #0a84ff;
+            border-radius: 6px;
+            padding: 10px 12px;
+            font: 12px/1.45 Consolas, "Courier New", monospace;
+            white-space: pre-wrap;
+            word-break: break-word;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
         }
         #payload-log {
             position: fixed;
@@ -324,6 +358,7 @@
         <div class="mode-selector" id="modeSelector">
             <label data-mode="ssh"><input type="radio" name="connection_type" value="ssh">SSH</label>
             <label data-mode="local_shell"><input type="radio" name="connection_type" value="local_shell">Local Shell</label>
+            <label data-mode="uart"><input type="radio" name="connection_type" value="uart">UART</label>
         </div>
         <div id="ssh-fields">
             <div style="display: flex; gap: 10px;">
@@ -332,6 +367,22 @@
             </div>
             <input type="text" id="username" placeholder="Username" value="aska">
             <input type="password" id="password" placeholder="Password (Optional)">
+        </div>
+        <div id="uart-fields">
+            <input type="text" id="uart-port" list="uart-port-list" placeholder="COM3 or /dev/ttyUSB0">
+            <datalist id="uart-port-list"></datalist>
+            <select id="uart-baud"></select>
+        </div>
+        <div id="browser-auth-box">
+            <div id="browser-auth-header">
+                <span id="browser-auth-message"></span>
+                <button id="browser-auth-details-toggle" type="button">Details...</button>
+            </div>
+            <ol id="browser-auth-details"></ol>
+            <div id="browser-auth-actions">
+                <button id="authorizeBrowserBtn" type="button">Authorize</button>
+                <button id="checkBrowserAuthBtn" type="button">Check</button>
+            </div>
         </div>
         <button id="connectBtn">Connect to SSH</button>
     </div>
@@ -357,15 +408,17 @@
         <button id="close-tabs-btn" class="status-action" title="Close all terminal tabs">[Close tabs]</button>
         <div id="quick-settings" title="Settings">&#x2699;&#xFE0F;</div>
     </div>
+    <div id="policy-debug-panel"></div>
     <div id="debug-hud"></div>
     <div id="payload-log"></div>
 
     <script>
         // --- Official Windows Terminal Color Schemes Replicated ---
-        const TERMINAL_POLICY = {{ terminal_policy|tojson }};
+        const INITIAL_TERMINAL_POLICY = {{ terminal_policy|tojson }};
         const CONNECTION_LABELS = {
             ssh: 'SSH',
-            local_shell: 'Local Shell'
+            local_shell: 'Local Shell',
+            uart: 'UART'
         };
         const SCHEMES = {
             ibm5153: { background: '#000000', foreground: '#aaaaaa', black: '#000000', red: '#aa0000', green: '#00aa00', yellow: '#aa5500', blue: '#0000aa', magenta: '#aa00aa', cyan: '#00aaaa', white: '#aaaaaa', brightBlack: '#555555', brightRed: '#ff5555', brightGreen: '#55ff55', brightYellow: '#ffff55', brightBlue: '#5555ff', brightMagenta: '#ff55ff', brightCyan: '#55ffff', brightWhite: '#ffffff', cursor: '#aaaaaa' },
@@ -419,6 +472,117 @@
             document.body.removeChild(ta);
         }
 
+        const BROWSER_AUTH_DB = 'webssh-browser-auth-v1';
+        const BROWSER_AUTH_STORE = 'keys';
+        const BROWSER_AUTH_KEY = 'identity';
+        const BROWSER_KEY_ALGORITHM = { name: 'ECDSA', namedCurve: 'P-256' };
+        const BROWSER_SIGN_ALGORITHM = { name: 'ECDSA', hash: { name: 'SHA-256' } };
+
+        function arrayBufferToBase64(buffer) {
+            let binary = '';
+            const bytes = new Uint8Array(buffer);
+            bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+            return btoa(binary);
+        }
+
+        async function arrayBufferToHex(buffer) {
+            const digest = await crypto.subtle.digest('SHA-256', buffer);
+            return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+        }
+
+        function openBrowserAuthDb() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(BROWSER_AUTH_DB, 1);
+                request.onupgradeneeded = () => request.result.createObjectStore(BROWSER_AUTH_STORE);
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        async function browserAuthDbGet(key) {
+            const db = await openBrowserAuthDb();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(BROWSER_AUTH_STORE, 'readonly');
+                const request = tx.objectStore(BROWSER_AUTH_STORE).get(key);
+                request.onsuccess = () => resolve(request.result || null);
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        async function browserAuthDbPut(key, value) {
+            const db = await openBrowserAuthDb();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(BROWSER_AUTH_STORE, 'readwrite');
+                const request = tx.objectStore(BROWSER_AUTH_STORE).put(value, key);
+                request.onsuccess = () => resolve(true);
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        async function buildBrowserIdentityFromKeys(privateKey, publicKey) {
+            const publicKeyBuffer = await crypto.subtle.exportKey('spki', publicKey);
+            return {
+                privateKey,
+                publicKey,
+                publicKeyB64: arrayBufferToBase64(publicKeyBuffer),
+                browserId: await arrayBufferToHex(publicKeyBuffer)
+            };
+        }
+
+        async function createBrowserIdentityRecord() {
+            const keyPair = await crypto.subtle.generateKey(BROWSER_KEY_ALGORITHM, false, ['sign', 'verify']);
+            const identity = await buildBrowserIdentityFromKeys(keyPair.privateKey, keyPair.publicKey);
+            try {
+                await browserAuthDbPut(BROWSER_AUTH_KEY, {
+                    format: 'cryptoKey',
+                    privateKey: identity.privateKey,
+                    publicKey: identity.publicKey,
+                    publicKeyB64: identity.publicKeyB64,
+                    browserId: identity.browserId
+                });
+                return identity;
+            } catch (e) {
+                const fallbackKeyPair = await crypto.subtle.generateKey(BROWSER_KEY_ALGORITHM, true, ['sign', 'verify']);
+                const fallbackIdentity = await buildBrowserIdentityFromKeys(fallbackKeyPair.privateKey, fallbackKeyPair.publicKey);
+                await browserAuthDbPut(BROWSER_AUTH_KEY, {
+                    format: 'jwk',
+                    privateJwk: await crypto.subtle.exportKey('jwk', fallbackKeyPair.privateKey),
+                    publicJwk: await crypto.subtle.exportKey('jwk', fallbackKeyPair.publicKey),
+                    publicKeyB64: fallbackIdentity.publicKeyB64,
+                    browserId: fallbackIdentity.browserId
+                });
+                return fallbackIdentity;
+            }
+        }
+
+        async function loadBrowserIdentity() {
+            if (!window.crypto || !crypto.subtle || !window.indexedDB) {
+                const origin = window.location.origin;
+                const localhostUrl = INITIAL_TERMINAL_POLICY.localhost_access_url || '';
+                const urlHint = localhostUrl ? ` Open ${localhostUrl} or the HTTPS Access URL printed by the launcher.` : ' Open the HTTPS Access URL printed by the launcher.';
+                throw new Error(`Browser authorization requires WebCrypto and IndexedDB. Current origin ${origin} is not a secure browser context.${urlHint}`);
+            }
+
+            const record = await browserAuthDbGet(BROWSER_AUTH_KEY);
+            if (record && record.format === 'cryptoKey' && record.privateKey && record.publicKey) {
+                return {
+                    privateKey: record.privateKey,
+                    publicKey: record.publicKey,
+                    publicKeyB64: record.publicKeyB64,
+                    browserId: record.browserId
+                };
+            }
+            if (record && record.format === 'jwk' && record.privateJwk && record.publicJwk) {
+                return {
+                    privateKey: await crypto.subtle.importKey('jwk', record.privateJwk, BROWSER_KEY_ALGORITHM, false, ['sign']),
+                    publicKey: await crypto.subtle.importKey('jwk', record.publicJwk, BROWSER_KEY_ALGORITHM, true, ['verify']),
+                    publicKeyB64: record.publicKeyB64,
+                    browserId: record.browserId
+                };
+            }
+            return createBrowserIdentityRecord();
+        }
+
         // --- Loader Logic ---
         let startTime = Date.now();
         const timerInterval = setInterval(() => { document.getElementById('loader-timer').innerText = ((Date.now() - startTime) / 1000).toFixed(1) + 's'; }, 100);
@@ -469,10 +633,21 @@
             const connectBtn = document.getElementById('connectBtn');
             const modeSelector = document.getElementById('modeSelector');
             const sshFields = document.getElementById('ssh-fields');
+            const uartFields = document.getElementById('uart-fields');
+            const uartPortInput = document.getElementById('uart-port');
+            const uartPortList = document.getElementById('uart-port-list');
+            const uartBaudSelect = document.getElementById('uart-baud');
+            const browserAuthBox = document.getElementById('browser-auth-box');
+            const browserAuthMessage = document.getElementById('browser-auth-message');
+            const browserAuthDetailsToggle = document.getElementById('browser-auth-details-toggle');
+            const browserAuthDetails = document.getElementById('browser-auth-details');
+            const authorizeBrowserBtn = document.getElementById('authorizeBrowserBtn');
+            const checkBrowserAuthBtn = document.getElementById('checkBrowserAuthBtn');
             const modeInputs = [...document.querySelectorAll('input[name="connection_type"]')];
             const terminalTermEl = document.getElementById('terminal-term');
             const terminalSizeEl = document.getElementById('terminal-size');
             const debugHud = document.getElementById('debug-hud');
+            const policyDebugPanel = document.getElementById('policy-debug-panel');
             const payloadLog = document.getElementById('payload-log');
             const tabsList = document.getElementById('tabs-list');
             const newTabBtn = document.getElementById('new-tab-btn');
@@ -488,14 +663,45 @@
             let pendingReconnect = null;
             let overlayFallbackTimer = null;
             let socket = null;
+            let terminalPolicy = { ...INITIAL_TERMINAL_POLICY };
+            let defaultConnectionType = 'ssh';
+            let forcedConnectionType = null;
+            let selectedConnectionType = null;
+            let userSelectedConnectionType = null;
+            let browserIdentityPromise = null;
+            let browserIdentityRegistered = false;
+            let browserPairingResponseTimer = null;
+            let browserAuthDetailsVisible = false;
 
             function normalizeConnectionType(value) {
                 return String(value || '').trim().toLowerCase().replace('-', '_');
             }
 
+            function getConnectionOption(value) {
+                const normalized = normalizeConnectionType(value);
+                const options = Array.isArray(terminalPolicy.connection_options)
+                    ? terminalPolicy.connection_options
+                    : [];
+                return options.find(option => normalizeConnectionType(option.connection_type) === normalized) || null;
+            }
+
+            function isConnectionAllowed(value) {
+                const normalized = normalizeConnectionType(value);
+                if (normalized === 'ssh' && !getConnectionOption(normalized)) return true;
+                const option = getConnectionOption(normalized);
+                return !!(option && option.allowed);
+            }
+
+            function getFallbackConnection() {
+                if (isConnectionAllowed('local_shell')) return 'local_shell';
+                if (isConnectionAllowed('ssh')) return 'ssh';
+                const allowedInput = modeInputs.find(input => isConnectionAllowed(input.value));
+                return allowedInput ? normalizeConnectionType(allowedInput.value) : 'ssh';
+            }
+
             function getPolicyConnection(value, fallback) {
                 const normalized = normalizeConnectionType(value);
-                return Object.prototype.hasOwnProperty.call(CONNECTION_LABELS, normalized) ? normalized : fallback;
+                return Object.prototype.hasOwnProperty.call(CONNECTION_LABELS, normalized) && isConnectionAllowed(normalized) ? normalized : fallback;
             }
 
             function getActiveTerminalState() {
@@ -511,33 +717,176 @@
                 return data && data.terminal_id === activeTerminalId;
             }
 
-            const defaultConnectionType = getPolicyConnection(TERMINAL_POLICY.default_connection, 'ssh');
-            const forcedConnectionType = TERMINAL_POLICY.force_connection
-                ? getPolicyConnection(TERMINAL_POLICY.force_connection, defaultConnectionType)
-                : null;
+            function refreshPolicyState() {
+                defaultConnectionType = getPolicyConnection(terminalPolicy.default_connection, getFallbackConnection());
+                forcedConnectionType = terminalPolicy.force_connection
+                    ? getPolicyConnection(terminalPolicy.force_connection, defaultConnectionType)
+                    : null;
+            }
+
+            function getActiveModeCount() {
+                return modeInputs.filter(input => isConnectionAllowed(input.value)).length;
+            }
 
             function getSelectedConnectionType() {
+                if (selectedConnectionType) {
+                    return getPolicyConnection(selectedConnectionType, defaultConnectionType);
+                }
                 const checked = modeInputs.find(input => input.checked);
                 return getPolicyConnection(checked ? checked.value : defaultConnectionType, defaultConnectionType);
             }
 
             function getConnectButtonText() {
                 const mode = getSelectedConnectionType();
-                return mode === 'local_shell' ? 'Connect to Local Shell' : 'Connect to SSH';
+                return `Connect to ${CONNECTION_LABELS[mode] || 'Terminal'}`;
+            }
+
+            function populateUartFields() {
+                const uartOption = getConnectionOption('uart') || {};
+                const ports = Array.isArray(uartOption.available_ports) ? uartOption.available_ports : [];
+                const previousPort = uartPortInput.value;
+                uartPortList.replaceChildren();
+                ports.forEach(port => {
+                    if (!port || typeof port.device !== 'string') return;
+                    const option = document.createElement('option');
+                    option.value = port.device;
+                    option.label = port.label || port.device;
+                    uartPortList.appendChild(option);
+                });
+                if (!previousPort && ports.length > 0) uartPortInput.value = ports[0].device;
+
+                const baudRates = Array.isArray(uartOption.baud_rates) && uartOption.baud_rates.length
+                    ? uartOption.baud_rates
+                    : [115200];
+                uartBaudSelect.replaceChildren();
+                baudRates.forEach(rate => {
+                    const option = document.createElement('option');
+                    option.value = String(rate);
+                    option.innerText = String(rate);
+                    uartBaudSelect.appendChild(option);
+                });
+                uartBaudSelect.value = String(uartOption.default_baud_rate || 115200);
             }
 
             function setConnectionType(mode) {
+                refreshPolicyState();
                 const normalized = getPolicyConnection(mode, defaultConnectionType);
+                selectedConnectionType = normalized;
                 modeInputs.forEach(input => {
+                    const allowed = isConnectionAllowed(input.value);
                     input.checked = input.value === normalized;
-                    input.disabled = !!forcedConnectionType;
-                    input.closest('label').classList.toggle('active', input.checked);
+                    input.disabled = !!forcedConnectionType || !allowed;
+                    const label = input.closest('label');
+                    label.classList.toggle('active', input.checked);
+                    label.style.display = allowed ? '' : 'none';
                 });
-                modeSelector.classList.toggle('locked', !!forcedConnectionType);
+                modeSelector.classList.toggle('locked', !!forcedConnectionType || getActiveModeCount() <= 1);
                 sshFields.style.display = normalized === 'ssh' ? 'block' : 'none';
+                uartFields.style.display = normalized === 'uart' ? 'block' : 'none';
+                updateBrowserAuthUi();
                 connectBtn.innerText = getConnectButtonText();
                 hideActionPrompt();
                 hideError();
+            }
+
+            function updateBrowserAuthUi(message) {
+                const localShellOption = getConnectionOption('local_shell');
+                const authorizationAvailable = localShellOption && localShellOption.authorization_available;
+                const alreadyAuthorized = localShellOption && localShellOption.browser_authorized;
+                browserAuthBox.style.display = authorizationAvailable && !alreadyAuthorized ? 'block' : 'none';
+                if (authorizationAvailable && !alreadyAuthorized) {
+                    browserAuthMessage.innerText = message || (
+                        localShellOption.allowed
+                            ? 'Authorize this browser for Local Shell access when using the WSL IP URL.'
+                            : 'Authorize this browser to enable Local Shell.'
+                    );
+                    browserAuthDetailsToggle.style.display = '';
+                    renderBrowserAuthDetails();
+                } else {
+                    browserAuthMessage.innerText = '';
+                    browserAuthDetailsToggle.style.display = 'none';
+                    browserAuthDetails.style.display = 'none';
+                    browserAuthDetails.replaceChildren();
+                }
+            }
+
+            function appendBrowserAuthDetail(text, linkText, linkUrl) {
+                const item = document.createElement('li');
+                if (text) item.appendChild(document.createTextNode(text));
+                if (linkText && linkUrl) {
+                    if (text) item.appendChild(document.createTextNode(' '));
+                    const link = document.createElement('a');
+                    link.href = linkUrl;
+                    link.target = '_blank';
+                    link.rel = 'noopener noreferrer';
+                    link.innerText = linkText;
+                    item.appendChild(link);
+                }
+                browserAuthDetails.appendChild(item);
+            }
+
+            function renderBrowserAuthDetails() {
+                browserAuthDetails.replaceChildren();
+                if (terminalPolicy.https_enabled) {
+                    appendBrowserAuthDetail('Use the HTTPS Access URL when opening WebSSH through the WSL IP.');
+                } else {
+                    appendBrowserAuthDetail('Use a secure browser context. For WSL IP access, restart WebSSH with HTTPS enabled.');
+                }
+                if (terminalPolicy.ca_download_url) {
+                    appendBrowserAuthDetail('If the browser does not trust this page yet, download the local CA certificate:', 'Download WebSSH CA', terminalPolicy.ca_download_url);
+                    appendBrowserAuthDetail('Import webssh-local-ca.crt into Windows Trusted Root Certification Authorities, then reload the HTTPS URL.');
+                }
+                appendBrowserAuthDetail('Click Authorize to download webssh-authorize_*.json.');
+                appendBrowserAuthDetail(`Move the downloaded authorization file into ${terminalPolicy.authorized_dir || 'authorized/'}.`);
+                appendBrowserAuthDetail('Click Check. If the file matches this browser key, Local Shell becomes available.');
+                browserAuthDetails.style.display = browserAuthDetailsVisible ? 'block' : 'none';
+                browserAuthDetailsToggle.innerText = browserAuthDetailsVisible ? 'Hide details' : 'Details...';
+            }
+
+            function setBrowserAuthBusy(isBusy) {
+                authorizeBrowserBtn.disabled = isBusy;
+                checkBrowserAuthBtn.disabled = isBusy;
+            }
+
+            function applyTerminalPolicy(policy) {
+                if (!policy || typeof policy !== 'object') return;
+                const previousLocalShellOption = getConnectionOption('local_shell') || {};
+                terminalPolicy = policy;
+                refreshPolicyState();
+                populateUartFields();
+                const nextLocalShellOption = getConnectionOption('local_shell') || {};
+                if (!previousLocalShellOption.allowed && nextLocalShellOption.allowed && defaultConnectionType === 'local_shell') {
+                    userSelectedConnectionType = null;
+                }
+                const activeState = getActiveTerminalState();
+                const canFollowLocalShellDefault = (
+                    defaultConnectionType === 'local_shell'
+                    && isConnectionAllowed('local_shell')
+                    && !(activeState && (activeState.connected || activeState.connecting))
+                );
+                const nextConnection = canFollowLocalShellDefault
+                    ? 'local_shell'
+                    : userSelectedConnectionType && isConnectionAllowed(userSelectedConnectionType)
+                    ? userSelectedConnectionType
+                    : (forcedConnectionType || defaultConnectionType);
+                setConnectionType(nextConnection);
+                updateDebugHud(
+                    'policy.apply',
+                    `default=${defaultConnectionType} next=${nextConnection} local_allowed=${!!nextLocalShellOption.allowed} user_selected=${userSelectedConnectionType || ''}`
+                );
+                updatePolicyDebugPanel('policy.apply', {
+                    nextConnection,
+                    localShellAllowed: !!nextLocalShellOption.allowed
+                });
+                if (window.console && console.debug) {
+                    console.debug('[webssh policy]', {
+                        defaultConnectionType,
+                        nextConnection,
+                        localShellAllowed: !!nextLocalShellOption.allowed,
+                        userSelectedConnectionType,
+                        policy
+                    });
+                }
             }
 
             function escapeForDebug(text) {
@@ -562,6 +911,35 @@
                     `payload=${payload}`;
             }
 
+            function updatePolicyDebugPanel(reason, extra = {}) {
+                if (!debugEnabled) return;
+                const localShellOption = getConnectionOption('local_shell') || {};
+                const uartOption = getConnectionOption('uart') || {};
+                const activeState = getActiveTerminalState();
+                const checkedInput = modeInputs.find(input => input.checked);
+                policyDebugPanel.style.display = 'block';
+                policyDebugPanel.textContent = [
+                    `reason=${reason}`,
+                    `socket=${socket ? (socket.connected ? 'connected' : 'not-connected') : 'not-created'}`,
+                    `policy.default=${terminalPolicy.default_connection || ''}`,
+                    `defaultConnectionType=${defaultConnectionType}`,
+                    `forcedConnectionType=${forcedConnectionType || ''}`,
+                    `selectedConnectionType=${selectedConnectionType || ''}`,
+                    `userSelectedConnectionType=${userSelectedConnectionType || ''}`,
+                    `radioChecked=${checkedInput ? checkedInput.value : ''}`,
+                    `connectButton=${connectBtn.innerText}`,
+                    `localShell.allowed=${!!localShellOption.allowed}`,
+                    `localShell.authorization_available=${!!localShellOption.authorization_available}`,
+                    `localShell.browser_authorized=${!!localShellOption.browser_authorized}`,
+                    `uart.allowed=${!!uartOption.allowed}`,
+                    `activeTerminalId=${activeTerminalId}`,
+                    `active.connected=${activeState ? !!activeState.connected : ''}`,
+                    `active.connecting=${activeState ? !!activeState.connecting : ''}`,
+                    `active.connectionType=${activeState ? (activeState.connectionType || '') : ''}`,
+                    `extra=${JSON.stringify(extra)}`
+                ].join('\n');
+            }
+
             function appendPayloadLog(title, text) {
                 if (!debugEnabled) return;
                 payloadLog.style.display = 'block';
@@ -573,6 +951,50 @@
                 );
                 payloadEntries = payloadEntries.slice(0, 8);
                 payloadLog.textContent = payloadEntries.join('\n\n-----\n\n');
+            }
+
+            function getBrowserIdentity() {
+                if (!browserIdentityPromise) browserIdentityPromise = loadBrowserIdentity();
+                return browserIdentityPromise;
+            }
+
+            function registerBrowserIdentity() {
+                if (!socket || !socket.connected) return Promise.reject(new Error('Socket is not connected yet.'));
+                return getBrowserIdentity()
+                    .then(identity => {
+                        socket.emit('register_browser_identity', {
+                            browser_id: identity.browserId,
+                            public_key: identity.publicKeyB64
+                        });
+                        browserIdentityRegistered = true;
+                        return identity;
+                    });
+            }
+
+            function downloadTextFile(filename, content) {
+                const blob = new Blob([content], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = filename;
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+                URL.revokeObjectURL(url);
+            }
+
+            function startBrowserPairingResponseTimer() {
+                if (browserPairingResponseTimer) clearTimeout(browserPairingResponseTimer);
+                browserPairingResponseTimer = setTimeout(() => {
+                    setBrowserAuthBusy(false);
+                    updateBrowserAuthUi('No authorization response from server. Restart WebSSH, refresh this page, then try Authorize again.');
+                }, 5000);
+            }
+
+            function clearBrowserPairingResponseTimer() {
+                if (!browserPairingResponseTimer) return;
+                clearTimeout(browserPairingResponseTimer);
+                browserPairingResponseTimer = null;
             }
 
             function openExternalUrl(url) {
@@ -799,12 +1221,54 @@
             updateActiveTerminalUi();
             requestAnimationFrame(fitAndNotifyResize);
 
-            socket = io({ reconnectionAttempts: 5 });
+            socket = io({ transports: ['websocket'], reconnectionAttempts: 5 });
             socket.on('connect', () => {
                 socketStatusEl.innerText = "Connected";
                 socketStatusEl.style.color = "#34c759";
                 updateDebugHud('socket.connect', 'connected');
+                updatePolicyDebugPanel('socket.connect');
+                registerBrowserIdentity()
+                    .catch(err => updateBrowserAuthUi(err.message));
                 socket.emit('list_terminals');
+            });
+            socket.on('terminal_policy', data => {
+                applyTerminalPolicy(data);
+            });
+            socket.on('browser_auth_challenge', data => {
+                if (!data || typeof data.nonce !== 'string') return;
+                getBrowserIdentity()
+                    .then(identity => crypto.subtle.sign(
+                        BROWSER_SIGN_ALGORITHM,
+                        identity.privateKey,
+                        new TextEncoder().encode(data.nonce)
+                    ))
+                    .then(signature => {
+                        socket.emit('browser_auth_signature', {
+                            signature: arrayBufferToBase64(signature)
+                        });
+                    })
+                    .catch(err => updateBrowserAuthUi(err.message));
+            });
+            socket.on('browser_pairing_file', data => {
+                clearBrowserPairingResponseTimer();
+                setBrowserAuthBusy(false);
+                if (!data || typeof data.filename !== 'string' || typeof data.content !== 'string') return;
+                downloadTextFile(data.filename, data.content);
+                updateBrowserAuthUi(`Move ${data.filename} to ${data.authorized_dir}, then click Check.`);
+            });
+            socket.on('browser_authorization_status', data => {
+                clearBrowserPairingResponseTimer();
+                setBrowserAuthBusy(false);
+                if (!data || typeof data !== 'object') return;
+                if (data.status === 'authorized') {
+                    userSelectedConnectionType = null;
+                    browserAuthBox.style.display = 'none';
+                    updatePolicyDebugPanel('browser_authorized', data);
+                    if (socket && socket.connected) socket.emit('refresh_terminal_policy');
+                } else if (data.message) {
+                    updateBrowserAuthUi(data.message);
+                    updatePolicyDebugPanel('browser_auth_status', data);
+                }
             });
             socket.on('terminal_list', data => {
                 if (!data || !Array.isArray(data.terminals)) return;
@@ -852,9 +1316,12 @@
                     }
                 });
                 updateActiveTerminalUi();
+                updatePolicyDebugPanel('terminal_list', { count: data.terminals.length });
                 requestAnimationFrame(fitAndNotifyResize);
             });
             socket.on('disconnect', (r) => {
+                clearBrowserPairingResponseTimer();
+                setBrowserAuthBusy(false);
                 socketStatusEl.innerText = "Disconnected (" + r + ")";
                 socketStatusEl.style.color = "#ff9f0a";
                 terminals.forEach(state => {
@@ -867,6 +1334,7 @@
                 connectBtn.disabled = false;
                 updateActiveTerminalUi();
                 updateDebugHud('socket.disconnect', r);
+                updatePolicyDebugPanel('socket.disconnect', { reason: r });
             });
 
             window.addEventListener('resize', fitAndNotifyResize);
@@ -901,6 +1369,7 @@
             function resetConnectButton() {
                 connectBtn.innerText = getConnectButtonText();
                 connectBtn.disabled = false;
+                updatePolicyDebugPanel('reset_connect_button');
             }
 
             function getConnectionFormData() {
@@ -914,6 +1383,9 @@
                     formData.port = document.getElementById('port').value;
                     formData.username = document.getElementById('username').value;
                     formData.password = document.getElementById('password').value;
+                } else if (connectionType === 'uart') {
+                    formData.serial_port = uartPortInput.value;
+                    formData.baud_rate = uartBaudSelect.value;
                 }
                 return formData;
             }
@@ -934,6 +1406,7 @@
                 socket.emit('start_ssh', formData);
                 connectBtn.innerText = "Connecting...";
                 connectBtn.disabled = true;
+                updatePolicyDebugPanel('submit_connection', formData);
             }
 
             const doConnect = () => {
@@ -941,6 +1414,48 @@
                 submitConnection(getConnectionFormData());
             };
             connectBtn.onclick = doConnect;
+            browserAuthDetailsToggle.onclick = () => {
+                browserAuthDetailsVisible = !browserAuthDetailsVisible;
+                renderBrowserAuthDetails();
+            };
+            authorizeBrowserBtn.onclick = () => {
+                if (!socket || !socket.connected) {
+                    updateBrowserAuthUi('Socket is not connected yet. Wait until the Socket status is Connected, then try again.');
+                    return;
+                }
+                clearBrowserPairingResponseTimer();
+                setBrowserAuthBusy(true);
+                updateBrowserAuthUi('Preparing browser authorization...');
+                registerBrowserIdentity()
+                    .then(() => {
+                        updateBrowserAuthUi('Requesting authorization file from server...');
+                        socket.emit('request_browser_pairing');
+                        startBrowserPairingResponseTimer();
+                    })
+                    .catch(err => {
+                        setBrowserAuthBusy(false);
+                        updateBrowserAuthUi(err.message);
+                    });
+            };
+            checkBrowserAuthBtn.onclick = () => {
+                if (!socket || !socket.connected) {
+                    updateBrowserAuthUi('Socket is not connected yet. Wait until the Socket status is Connected, then try again.');
+                    return;
+                }
+                clearBrowserPairingResponseTimer();
+                setBrowserAuthBusy(true);
+                updateBrowserAuthUi('Checking authorization file...');
+                const ready = browserIdentityRegistered ? Promise.resolve() : registerBrowserIdentity();
+                ready
+                    .then(() => {
+                        socket.emit('check_browser_pairing');
+                        startBrowserPairingResponseTimer();
+                    })
+                    .catch(err => {
+                        setBrowserAuthBusy(false);
+                        updateBrowserAuthUi(err.message);
+                    });
+            };
             newTabBtn.onclick = () => {
                 const terminalId = `term-${nextTerminalIndex}`;
                 const state = createTerminalTab(terminalId, `Terminal ${nextTerminalIndex}`);
@@ -955,10 +1470,14 @@
                 resetTerminalWorkspace();
             };
             modeInputs.forEach(input => {
-                input.addEventListener('change', () => setConnectionType(input.value));
+                input.addEventListener('change', () => {
+                    userSelectedConnectionType = normalizeConnectionType(input.value);
+                    setConnectionType(input.value);
+                    updatePolicyDebugPanel('manual_mode_change', { value: input.value });
+                });
             });
-            setConnectionType(forcedConnectionType || defaultConnectionType);
-            ['host', 'port', 'username', 'password'].forEach(id => {
+            applyTerminalPolicy(terminalPolicy);
+            ['host', 'port', 'username', 'password', 'uart-port', 'uart-baud'].forEach(id => {
                 document.getElementById(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') doConnect(); });
             });
 

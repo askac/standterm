@@ -45,6 +45,7 @@ case "$PLATFORM_NAME" in
 esac
 
 INSTALLED_FLAG="$VENV_DIR/.installed"
+WIN_UART_VENV_DIR="$PROJECT_DIR/tools/.venv_win"
 
 echo "========================================"
 echo "   WebSSH Automated Starter ($PLATFORM_NAME)"
@@ -72,6 +73,13 @@ fi
 # 2. Activate virtual environment
 source "$VENV_DIR/bin/activate"
 
+if ! python -c "import serial" >/dev/null 2>&1; then
+    FORCE_RECHECK=true
+fi
+if ! python -c "import cryptography" >/dev/null 2>&1; then
+    FORCE_RECHECK=true
+fi
+
 # 3. Check and install dependencies
 if [ "$FORCE_RECHECK" = true ] || [ ! -f "$INSTALLED_FLAG" ]; then
     if [ -f "$REQ_FILE" ]; then
@@ -95,9 +103,44 @@ else
 fi
 
 # 4. Start the server
+ensure_wsl_windows_uart_helper() {
+    if [[ "$PLATFORM_NAME" != "WSL" ]]; then
+        return
+    fi
+    if ! command -v python.exe >/dev/null 2>&1; then
+        echo "[*] WSL UART note: python.exe was not found; Windows COM bridge will be unavailable."
+        return
+    fi
+
+    if [[ ! -x "$WIN_UART_VENV_DIR/Scripts/python.exe" ]]; then
+        echo "[*] WSL UART note: creating Windows Python helper venv for COM bridge..."
+        local win_uart_venv
+        win_uart_venv="$(wslpath -w "$WIN_UART_VENV_DIR")"
+        python.exe -m venv "$win_uart_venv" >/dev/null 2>&1 || {
+            echo "[*] WSL UART note: failed to create Windows helper venv; install pyserial in Windows Python manually if needed."
+            return
+        }
+    fi
+
+    if ! "$WIN_UART_VENV_DIR/Scripts/python.exe" -c "import serial" >/dev/null 2>&1; then
+        echo "[*] WSL UART note: installing pyserial in Windows helper venv..."
+        "$WIN_UART_VENV_DIR/Scripts/python.exe" -m pip install -q pyserial >/dev/null 2>&1 || {
+            echo "[*] WSL UART note: failed to install pyserial in Windows helper venv."
+            return
+        }
+    fi
+}
+
 if [[ "$PLATFORM_NAME" == "macOS" ]]; then
     echo "[*] macOS note: enable Remote Login if you want to SSH into localhost."
 fi
+if [[ "$PLATFORM_NAME" == "WSL" ]]; then
+    echo "[*] WSL note: the browser will auto-open the WSL IP Access URL."
+    echo "[*] WSL note: non-loopback access uses HTTPS by default."
+    echo "[*] WSL note: if browser authorization needs certificate trust, use the Authorizer details in the page."
+fi
+
+ensure_wsl_windows_uart_helper
 
 open_browser() {
     local url="$1"

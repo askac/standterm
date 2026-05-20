@@ -26,6 +26,11 @@ if not exist "%VENV_DIR%" (
 :: 2. Activate virtual environment
 call "%VENV_DIR%\Scripts\activate.bat"
 
+python -c "import serial" >nul 2>nul
+if %errorlevel% neq 0 set FORCE_RECHECK=true
+python -c "import cryptography" >nul 2>nul
+if %errorlevel% neq 0 set FORCE_RECHECK=true
+
 :: 3. Check and install dependencies
 for %%A in (%*) do (
     if "%%~A"=="--force" set FORCE_RECHECK=true

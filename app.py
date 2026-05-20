@@ -11,9 +11,13 @@ import argparse
 import select
 import shutil
 import re
+import ipaddress
+import json
+import hmac
+import hashlib
 from collections import deque
 from pathlib import Path
-from flask import Flask, render_template, request, abort, make_response, redirect
+from flask import Flask, render_template, request, abort, make_response, redirect, send_file
 from flask_socketio import SocketIO
 
 try:
@@ -27,6 +31,8 @@ except Exception:
     WinPtyProcess = None
 
 paramiko = None
+serial_module = None
+serial_list_ports_module = None
 
 ASYNC_MODE = os.getenv('WEBSSH_ASYNC_MODE', '').strip().lower()
 if not ASYNC_MODE:
@@ -69,12 +75,27 @@ MIN_TERMINAL_ROWS = 2
 MAX_TERMINAL_ROWS = 500
 CONNECTION_TYPE_SSH = 'ssh'
 CONNECTION_TYPE_LOCAL_SHELL = 'local_shell'
+CONNECTION_TYPE_UART = 'uart'
 TERMINAL_ID_MAIN = 'main'
 MAX_TERMINAL_ID_LENGTH = 64
 MAX_TERMINALS_PER_CLIENT = 12
 MAX_TERMINAL_REPLAY_EVENTS = 1000
 MAX_TERMINAL_REPLAY_BYTES = 200000
+MAX_UART_PORT_LENGTH = 128
+DEFAULT_UART_BAUD_RATE = 115200
+MIN_UART_BAUD_RATE = 300
+MAX_UART_BAUD_RATE = 4000000
+UART_BAUD_RATES = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600]
+SERIAL_PORT_CACHE_TTL_SECONDS = 10
+WINDOWS_COM_PATTERN = re.compile(r'^COM([1-9][0-9]*)$', re.IGNORECASE)
+BROWSER_PAIRING_TYPE = 'webssh_browser_authorization'
+BROWSER_PAIRING_VERSION = 1
+BROWSER_PAIRING_TTL_SECONDS = 10 * 60
+MAX_BROWSER_PUBLIC_KEY_BYTES = 4096
+MAX_BROWSER_SIGNATURE_BYTES = 256
+MAX_BROWSER_ID_LENGTH = 128
 TERMINAL_ID_PATTERN = re.compile(r'^[A-Za-z0-9_.:-]+$')
+BROWSER_ID_PATTERN = re.compile(r'^[a-f0-9]{64}$')
 LOCAL_PUBLIC_KEY_TYPES = {
     'ssh-ed25519',
     'ssh-rsa',
@@ -90,14 +111,14 @@ def normalize_connection_type(value):
     if not isinstance(value, str):
         return None
     normalized = value.strip().lower().replace('-', '_')
-    if normalized in {CONNECTION_TYPE_SSH, CONNECTION_TYPE_LOCAL_SHELL}:
+    if normalized in {CONNECTION_TYPE_SSH, CONNECTION_TYPE_LOCAL_SHELL, CONNECTION_TYPE_UART}:
         return normalized
     return None
 
 def connection_type_cli_value(value):
     normalized = normalize_connection_type(value)
     if not normalized:
-        raise argparse.ArgumentTypeError('expected ssh or local-shell')
+        raise argparse.ArgumentTypeError('expected ssh, local-shell, or uart')
     return normalized
 
 def parse_cli_args(argv):
@@ -105,15 +126,15 @@ def parse_cli_args(argv):
     parser.add_argument(
         '--default-connection',
         type=connection_type_cli_value,
-        default=CONNECTION_TYPE_SSH,
-        metavar='ssh|local-shell',
+        default=CONNECTION_TYPE_LOCAL_SHELL,
+        metavar='ssh|local-shell|uart',
         help='Default connection mode shown in the UI.',
     )
     parser.add_argument(
         '--force-connection',
         type=connection_type_cli_value,
         default=None,
-        metavar='ssh|local-shell',
+        metavar='ssh|local-shell|uart',
         help='Force one connection mode in both the UI and backend.',
     )
     parser.add_argument(
@@ -128,17 +149,160 @@ def parse_cli_args(argv):
         action='store_true',
         help='Log terminal input bytes for debugging key sequences.',
     )
+    parser.add_argument(
+        '--https',
+        action='store_true',
+        help='Serve WebSSH over HTTPS using a local generated certificate.',
+    )
+    parser.add_argument(
+        '--certfile',
+        default=None,
+        help='TLS certificate file for HTTPS.',
+    )
+    parser.add_argument(
+        '--keyfile',
+        default=None,
+        help='TLS private key file for HTTPS.',
+    )
     return parser.parse_args(argv)
 
 CLI_ARGS = parse_cli_args(sys.argv[1:])
 DEFAULT_CONNECTION_TYPE = CLI_ARGS.default_connection
 FORCE_CONNECTION_TYPE = CLI_ARGS.force_connection
 DEBUG_INPUT = CLI_ARGS.debug_input or os.getenv('WEBSSH_DEBUG_INPUT') == '1'
+DEBUG_POLICY = os.getenv('WEBSSH_DEBUG_POLICY') == '1'
+HTTPS_REQUESTED = CLI_ARGS.https or os.getenv('WEBSSH_HTTPS') == '1' or bool(CLI_ARGS.certfile or CLI_ARGS.keyfile)
+HTTPS_ENABLED = HTTPS_REQUESTED
+HTTPS_AUTO_DISABLED = os.getenv('WEBSSH_DISABLE_AUTO_HTTPS') == '1'
+APP_DIR = Path(__file__).resolve().parent
+AUTHORIZED_DIR = APP_DIR / 'authorized'
+AUTHORIZED_BROWSERS_PATH = AUTHORIZED_DIR / 'browsers.json'
 
-def build_terminal_policy():
+def is_wsl_runtime_hint():
+    if not sys.platform.startswith('linux'):
+        return False
+    if os.getenv('WSL_DISTRO_NAME'):
+        return True
+    try:
+        with open('/proc/version', 'r', encoding='utf-8') as version_file:
+            return 'microsoft' in version_file.read().lower()
+    except OSError:
+        return False
+
+def get_default_certs_dir():
+    configured_dir = os.getenv('WEBSSH_CERTS_DIR', '').strip()
+    if configured_dir:
+        return Path(configured_dir).expanduser()
+    if is_wsl_runtime_hint() and str(APP_DIR).startswith('/mnt/'):
+        app_hash = hashlib.sha256(str(APP_DIR).encode('utf-8')).hexdigest()[:12]
+        return Path.home() / '.webssh' / 'certs' / app_hash
+    return APP_DIR / 'certs'
+
+CERTS_DIR = get_default_certs_dir()
+LOCAL_CA_CERT_PATH = CERTS_DIR / 'webssh-local-ca.crt'
+LOCAL_CA_KEY_PATH = CERTS_DIR / 'webssh-local-ca.key'
+LOCAL_SERVER_CERT_PATH = CERTS_DIR / 'webssh-server.crt'
+LOCAL_SERVER_KEY_PATH = CERTS_DIR / 'webssh-server.key'
+BROWSER_PAIRING_SECRET = secrets.token_bytes(32)
+serial_port_cache = {
+    'expires_at': 0,
+    'ports': [],
+}
+wsl_ip_cache = None
+WINDOWS_SERIAL_HELPER = r'''
+import json
+import sys
+import threading
+
+try:
+    import serial
+except Exception as exc:
+    sys.stderr.write(json.dumps({"event": "error", "message": f"pyserial is not available in Windows Python: {exc}"}) + "\n")
+    sys.stderr.flush()
+    raise SystemExit(1)
+
+port = sys.argv[1]
+baud_rate = int(sys.argv[2])
+
+try:
+    serial_port = serial.Serial(port=port, baudrate=baud_rate, timeout=0.05, write_timeout=1)
+except Exception as exc:
+    sys.stderr.write(json.dumps({"event": "error", "message": f"Failed to open {port}: {exc}"}) + "\n")
+    sys.stderr.flush()
+    raise SystemExit(2)
+
+sys.stderr.write(json.dumps({"event": "ready"}) + "\n")
+sys.stderr.flush()
+
+def copy_stdin_to_serial():
+    while True:
+        data = sys.stdin.buffer.read(4096)
+        if not data:
+            break
+        serial_port.write(data)
+        serial_port.flush()
+
+threading.Thread(target=copy_stdin_to_serial, daemon=True).start()
+
+try:
+    while True:
+        data = serial_port.read(4096)
+        if data:
+            sys.stdout.buffer.write(data)
+            sys.stdout.buffer.flush()
+except KeyboardInterrupt:
+    pass
+finally:
+    serial_port.close()
+'''
+
+def build_terminal_policy(browser_authorized=False):
+    client_ip = get_request_client_ip()
+    local_shell_allowed = is_local_shell_allowed_for_client(client_ip, browser_authorized=browser_authorized)
+    uart_allowed = is_uart_allowed_for_client(client_ip, browser_authorized=browser_authorized)
+    uart_ports = detect_serial_ports() if uart_allowed else []
+
+    allowed_connections = {
+        CONNECTION_TYPE_SSH: True,
+        CONNECTION_TYPE_LOCAL_SHELL: local_shell_allowed,
+        CONNECTION_TYPE_UART: uart_allowed,
+    }
+    default_connection = DEFAULT_CONNECTION_TYPE
+    if not allowed_connections.get(default_connection):
+        default_connection = CONNECTION_TYPE_LOCAL_SHELL if local_shell_allowed else CONNECTION_TYPE_SSH
+    force_connection = FORCE_CONNECTION_TYPE
+    if force_connection and not allowed_connections.get(force_connection):
+        force_connection = None
+
     return {
-        'default_connection': DEFAULT_CONNECTION_TYPE,
-        'force_connection': FORCE_CONNECTION_TYPE,
+        'default_connection': default_connection,
+        'force_connection': force_connection,
+        'https_enabled': HTTPS_ENABLED,
+        'ca_download_url': '/download_ca' if HTTPS_ENABLED and not (CLI_ARGS.certfile and CLI_ARGS.keyfile) else None,
+        'authorized_dir': str(AUTHORIZED_DIR),
+        'localhost_access_url': get_localhost_access_url(DEFAULT_PORT) if is_wsl() else None,
+        'connection_options': [
+            {
+                'connection_type': CONNECTION_TYPE_SSH,
+                'label': 'SSH',
+                'allowed': True,
+            },
+            {
+                'connection_type': CONNECTION_TYPE_LOCAL_SHELL,
+                'label': 'Local Shell',
+                'allowed': local_shell_allowed,
+                'authorization_available': not local_shell_allowed,
+                'browser_authorized': bool(browser_authorized),
+            },
+            {
+                'connection_type': CONNECTION_TYPE_UART,
+                'label': 'UART',
+                'allowed': uart_allowed,
+                'available_ports': uart_ports,
+                'default_baud_rate': DEFAULT_UART_BAUD_RATE,
+                'baud_rates': UART_BAUD_RATES,
+            },
+        ],
     }
 
 def build_terminal_metadata(connection_type, terminal_id, terminal_kind, terminal_label, cols, rows):
@@ -161,6 +325,449 @@ def get_paramiko():
         import paramiko as paramiko_module
         paramiko = paramiko_module
     return paramiko
+
+def get_serial_modules():
+    global serial_module, serial_list_ports_module
+    if serial_module is None:
+        import serial as imported_serial
+        import serial.tools.list_ports as imported_list_ports
+        serial_module = imported_serial
+        serial_list_ports_module = imported_list_ports
+    return serial_module, serial_list_ports_module
+
+def iter_windows_python_candidates():
+    candidates = []
+    repo_windows_helper_venv = APP_DIR / 'tools' / '.venv_win' / 'Scripts' / 'python.exe'
+    repo_windows_venv = APP_DIR / 'tools' / '.venv' / 'Scripts' / 'python.exe'
+    candidates.append(str(repo_windows_helper_venv))
+    candidates.append(str(repo_windows_venv))
+    for executable_name in ('python.exe', 'py.exe'):
+        found = shutil.which(executable_name)
+        if found:
+            candidates.append(found)
+
+    seen = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        yield candidate
+
+def find_windows_python_with_pyserial():
+    last_error = None
+    for candidate in iter_windows_python_candidates():
+        try:
+            result = subprocess.run(
+                [candidate, '-c', 'import serial'],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except Exception as exc:
+            last_error = str(exc)
+            continue
+        if result.returncode == 0:
+            return candidate, None
+        stderr = (result.stderr or result.stdout or '').strip()
+        last_error = f'{candidate} cannot import pyserial: {stderr or "unknown error"}'
+    return None, last_error or 'No Windows Python executable was found for WSL COM access.'
+
+def close_process(process):
+    if not process:
+        return
+    try:
+        process.terminate()
+        process.wait(timeout=2)
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            pass
+
+def load_or_create_private_key(key_path):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    if key_path.is_file():
+        return serialization.load_pem_private_key(key_path.read_bytes(), password=None)
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    key_path.write_bytes(key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    ))
+    try:
+        os.chmod(key_path, 0o600)
+    except OSError:
+        pass
+    return key
+
+def chmod_private_key(path):
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+def ensure_local_https_certificates(bind_host, access_host):
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+    import datetime
+
+    CERTS_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(CERTS_DIR, 0o700)
+    except OSError:
+        pass
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    if LOCAL_CA_CERT_PATH.is_file() and LOCAL_CA_KEY_PATH.is_file():
+        ca_key = serialization.load_pem_private_key(LOCAL_CA_KEY_PATH.read_bytes(), password=None)
+        ca_cert = x509.load_pem_x509_certificate(LOCAL_CA_CERT_PATH.read_bytes())
+    else:
+        ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        ca_name = x509.Name([
+            x509.NameAttribute(NameOID.COMMON_NAME, 'WebSSH Local Development CA'),
+        ])
+        ca_cert = (
+            x509.CertificateBuilder()
+            .subject_name(ca_name)
+            .issuer_name(ca_name)
+            .public_key(ca_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - datetime.timedelta(days=1))
+            .not_valid_after(now + datetime.timedelta(days=3650))
+            .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+            .add_extension(x509.KeyUsage(
+                digital_signature=True,
+                key_cert_sign=True,
+                crl_sign=True,
+                key_encipherment=False,
+                content_commitment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                encipher_only=False,
+                decipher_only=False,
+            ), critical=True)
+            .sign(ca_key, hashes.SHA256())
+        )
+        LOCAL_CA_KEY_PATH.write_bytes(ca_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption(),
+        ))
+        LOCAL_CA_CERT_PATH.write_bytes(ca_cert.public_bytes(serialization.Encoding.PEM))
+        chmod_private_key(LOCAL_CA_KEY_PATH)
+
+    server_key = load_or_create_private_key(LOCAL_SERVER_KEY_PATH)
+    dns_names = {'localhost'}
+    ip_addresses = {'127.0.0.1', '::1'}
+    for host in (bind_host, access_host, get_wsl_ip() if is_wsl() else None):
+        if not host or host in {'0.0.0.0', '::'}:
+            continue
+        try:
+            ipaddress.ip_address(host)
+            ip_addresses.add(host)
+        except ValueError:
+            dns_names.add(host)
+
+    san_entries = [x509.DNSName(name) for name in sorted(dns_names)]
+    san_entries.extend(x509.IPAddress(ipaddress.ip_address(address)) for address in sorted(ip_addresses))
+    subject = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, 'WebSSH Local Server'),
+    ])
+    server_cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(ca_cert.subject)
+        .public_key(server_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=825))
+        .add_extension(x509.SubjectAlternativeName(san_entries), critical=False)
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .sign(ca_key, hashes.SHA256())
+    )
+    LOCAL_SERVER_CERT_PATH.write_bytes(server_cert.public_bytes(serialization.Encoding.PEM))
+    chmod_private_key(LOCAL_CA_KEY_PATH)
+    chmod_private_key(LOCAL_SERVER_KEY_PATH)
+    return str(LOCAL_SERVER_CERT_PATH), str(LOCAL_SERVER_KEY_PATH)
+
+def _format_serial_label(port_info):
+    device = getattr(port_info, 'device', '') or ''
+    description = getattr(port_info, 'description', '') or ''
+    label = device
+
+    path_name = Path(device).name
+    if sys.platform.startswith('linux') and path_name.startswith('ttyS'):
+        suffix = path_name[4:]
+        if suffix.isdigit():
+            label = f'COM{int(suffix) + 1} ({device})'
+
+    if description and description.lower() not in {'n/a', device.lower()}:
+        label = f'{label} - {description}'
+    return label
+
+def is_windows_com_device(device):
+    return isinstance(device, str) and bool(WINDOWS_COM_PATTERN.fullmatch(device.strip()))
+
+def detect_windows_serial_ports_for_wsl():
+    if not is_wsl():
+        return []
+
+    try:
+        result = subprocess.run(
+            [
+                'powershell.exe',
+                '-NoProfile',
+                '-Command',
+                '[System.IO.Ports.SerialPort]::GetPortNames() | Sort-Object',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except Exception:
+        return []
+
+    if result.returncode != 0:
+        return []
+
+    ports = []
+    seen_devices = set()
+    for line in result.stdout.splitlines():
+        device = line.strip()
+        if not is_windows_com_device(device):
+            continue
+        normalized = device.upper()
+        if normalized in seen_devices or len(normalized) > MAX_UART_PORT_LENGTH:
+            continue
+        seen_devices.add(normalized)
+        ports.append({
+            'device': normalized,
+            'label': f'{normalized} (Windows)',
+            'description': 'Windows serial port',
+            'hwid': '',
+            'backend': 'windows',
+        })
+    return ports
+
+def scan_serial_ports():
+    if is_wsl():
+        return detect_windows_serial_ports_for_wsl()
+
+    try:
+        _, list_ports_module = get_serial_modules()
+    except Exception:
+        return []
+
+    ports = []
+    seen_devices = set()
+    for port_info in sorted(list_ports_module.comports(), key=lambda item: (item.device or '').lower()):
+        device = getattr(port_info, 'device', '') or ''
+        if not device or device in seen_devices:
+            continue
+        if len(device) > MAX_UART_PORT_LENGTH or has_control_chars(device):
+            continue
+        seen_devices.add(device)
+        ports.append({
+            'device': device,
+            'label': _format_serial_label(port_info),
+            'description': getattr(port_info, 'description', '') or '',
+            'hwid': getattr(port_info, 'hwid', '') or '',
+        })
+    return ports
+
+def detect_serial_ports():
+    now = time.time()
+    if serial_port_cache['expires_at'] > now:
+        return [dict(port) for port in serial_port_cache['ports']]
+
+    ports = scan_serial_ports()
+    serial_port_cache['ports'] = [dict(port) for port in ports]
+    serial_port_cache['expires_at'] = now + SERIAL_PORT_CACHE_TTL_SECONDS
+    return ports
+
+def get_manual_serial_port(device):
+    if not isinstance(device, str):
+        return None
+    selected_device = device.strip()
+    if not selected_device or len(selected_device) > MAX_UART_PORT_LENGTH:
+        return None
+    if has_control_chars(selected_device):
+        return None
+
+    if is_windows_com_device(selected_device):
+        normalized = selected_device.upper()
+        return {
+            'device': normalized,
+            'label': normalized,
+            'description': 'Manual Windows serial port',
+            'hwid': '',
+            'backend': 'windows',
+        }
+
+    if selected_device.startswith('/dev/'):
+        return {
+            'device': selected_device,
+            'label': selected_device,
+            'description': 'Manual serial device',
+            'hwid': '',
+            'backend': 'manual',
+        }
+
+    return None
+
+def decode_base64_bytes(value, max_bytes):
+    if not isinstance(value, str):
+        return None
+    try:
+        decoded = base64.b64decode(value.encode('ascii'), validate=True)
+    except Exception:
+        return None
+    if not decoded or len(decoded) > max_bytes:
+        return None
+    return decoded
+
+def build_browser_id(public_key_b64):
+    public_key_bytes = decode_base64_bytes(public_key_b64, MAX_BROWSER_PUBLIC_KEY_BYTES)
+    if not public_key_bytes:
+        return None
+    return hashlib.sha256(public_key_bytes).hexdigest()
+
+def validate_browser_identity(browser_id, public_key_b64):
+    if not isinstance(browser_id, str) or not BROWSER_ID_PATTERN.fullmatch(browser_id):
+        return False
+    expected_browser_id = build_browser_id(public_key_b64)
+    return expected_browser_id == browser_id
+
+def load_authorized_browsers():
+    try:
+        data = json.loads(AUTHORIZED_BROWSERS_PATH.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return {'browsers': []}
+    if not isinstance(data, dict) or not isinstance(data.get('browsers'), list):
+        return {'browsers': []}
+    return data
+
+def save_authorized_browsers(data):
+    AUTHORIZED_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_path = AUTHORIZED_BROWSERS_PATH.with_suffix('.json.tmp')
+    tmp_path.write_text(json.dumps(data, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+    tmp_path.replace(AUTHORIZED_BROWSERS_PATH)
+
+def get_authorized_browser(browser_id):
+    for entry in load_authorized_browsers().get('browsers', []):
+        if isinstance(entry, dict) and entry.get('browser_id') == browser_id:
+            return entry
+    return None
+
+def is_browser_authorized(browser_id, public_key_b64):
+    entry = get_authorized_browser(browser_id)
+    return bool(entry and entry.get('public_key') == public_key_b64)
+
+def authorize_browser(browser_id, public_key_b64):
+    data = load_authorized_browsers()
+    browsers = [
+        entry for entry in data.get('browsers', [])
+        if isinstance(entry, dict) and entry.get('browser_id') != browser_id
+    ]
+    browsers.append({
+        'browser_id': browser_id,
+        'public_key': public_key_b64,
+        'authorized_at': int(time.time()),
+    })
+    data['browsers'] = sorted(browsers, key=lambda entry: entry.get('browser_id', ''))
+    save_authorized_browsers(data)
+
+def canonical_pairing_payload(pairing):
+    payload = {
+        'type': pairing['type'],
+        'version': pairing['version'],
+        'pairing_id': pairing['pairing_id'],
+        'browser_id': pairing['browser_id'],
+        'public_key': pairing['public_key'],
+        'server_nonce': pairing['server_nonce'],
+        'expires_at': pairing['expires_at'],
+    }
+    return json.dumps(payload, sort_keys=True, separators=(',', ':')).encode('utf-8')
+
+def sign_pairing_payload(pairing):
+    return hmac.new(BROWSER_PAIRING_SECRET, canonical_pairing_payload(pairing), hashlib.sha256).hexdigest()
+
+def build_pairing_file(browser_id, public_key_b64):
+    pairing = {
+        'type': BROWSER_PAIRING_TYPE,
+        'version': BROWSER_PAIRING_VERSION,
+        'pairing_id': secrets.token_urlsafe(16),
+        'browser_id': browser_id,
+        'public_key': public_key_b64,
+        'server_nonce': secrets.token_urlsafe(32),
+        'expires_at': int(time.time() + BROWSER_PAIRING_TTL_SECONDS),
+    }
+    pairing['signature'] = sign_pairing_payload(pairing)
+    return pairing
+
+def validate_pairing_file(data, browser_id, public_key_b64):
+    if not isinstance(data, dict):
+        return False
+    expected = {
+        'type': BROWSER_PAIRING_TYPE,
+        'version': BROWSER_PAIRING_VERSION,
+        'browser_id': browser_id,
+        'public_key': public_key_b64,
+    }
+    for key, value in expected.items():
+        if data.get(key) != value:
+            return False
+    if not isinstance(data.get('pairing_id'), str) or not isinstance(data.get('server_nonce'), str):
+        return False
+    try:
+        expires_at = int(data.get('expires_at'))
+    except (TypeError, ValueError):
+        return False
+    if time.time() > expires_at:
+        return False
+    signature = data.get('signature')
+    if not isinstance(signature, str):
+        return False
+    return hmac.compare_digest(signature, sign_pairing_payload(data))
+
+def accept_browser_pairing_file(browser_id, public_key_b64):
+    if not AUTHORIZED_DIR.is_dir():
+        return False
+    for pairing_path in sorted(AUTHORIZED_DIR.glob('webssh-authorize_*.json')):
+        try:
+            data = json.loads(pairing_path.read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if validate_pairing_file(data, browser_id, public_key_b64):
+            authorize_browser(browser_id, public_key_b64)
+            return True
+    return False
+
+def verify_browser_signature(public_key_b64, nonce, signature_b64):
+    public_key_bytes = decode_base64_bytes(public_key_b64, MAX_BROWSER_PUBLIC_KEY_BYTES)
+    signature = decode_base64_bytes(signature_b64, MAX_BROWSER_SIGNATURE_BYTES)
+    if not public_key_bytes or not signature or not isinstance(nonce, str):
+        return False
+
+    try:
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec, utils
+        public_key = serialization.load_der_public_key(public_key_bytes)
+        if len(signature) == 64:
+            r = int.from_bytes(signature[:32], 'big')
+            s = int.from_bytes(signature[32:], 'big')
+            signature = utils.encode_dss_signature(r, s)
+        public_key.verify(signature, nonce.encode('utf-8'), ec.ECDSA(hashes.SHA256()))
+        return True
+    except Exception:
+        return False
 
 def get_shell_kind(shell_path):
     shell_name = Path(shell_path).name.lower()
@@ -877,11 +1484,196 @@ class LocalShellBridge(TerminalBridge):
             pass
         self.process = None
 
+class UARTBridge(TerminalBridge):
+    connection_type = CONNECTION_TYPE_UART
+    terminal_kind = 'uart'
+
+    def __init__(self, sid, terminal_id, port_info, baud_rate):
+        super().__init__(sid, terminal_id)
+        self.serial = None
+        self.device = port_info['device']
+        self.baud_rate = baud_rate
+        self.terminal_label = f'UART {port_info.get("label") or self.device}'
+
+    def connect(self, cols=80, rows=24):
+        if is_wsl() and is_windows_com_device(self.device):
+            return self._connect_wsl_windows_com()
+
+        try:
+            serial_lib, _ = get_serial_modules()
+        except Exception:
+            return False, {
+                'message': 'UART requires pyserial. Re-run the launcher with --force to install dependencies.',
+                'error_code': 'uart_dependency_missing',
+            }
+
+        try:
+            self.serial = serial_lib.Serial(
+                port=self.device,
+                baudrate=self.baud_rate,
+                timeout=0,
+                write_timeout=1,
+            )
+            print(f"[+] UART opened for {self.sid}: {self.device} @ {self.baud_rate}")
+            return True, None
+        except serial_lib.SerialException as exc:
+            print(f"[!] UART open error: {exc}")
+            return False, {'message': str(exc), 'error_code': 'uart_open_failed'}
+        except PermissionError as exc:
+            print(f"[!] UART permission error: {exc}")
+            return False, {'message': str(exc), 'error_code': 'uart_permission_denied'}
+        except Exception as exc:
+            print(f"[!] UART start error: {exc}")
+            return False, {'message': str(exc), 'error_code': 'uart_open_failed'}
+
+    def _connect_wsl_windows_com(self):
+        helper_python, helper_error = find_windows_python_with_pyserial()
+        if not helper_python:
+            return False, {
+                'message': helper_error or 'WSL Windows COM access requires Windows Python with pyserial installed.',
+                'error_code': 'uart_windows_python_unavailable',
+            }
+
+        try:
+            self.serial = subprocess.Popen(
+                [
+                    helper_python,
+                    '-u',
+                    '-c',
+                    WINDOWS_SERIAL_HELPER,
+                    self.device,
+                    str(self.baud_rate),
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=0,
+            )
+        except Exception as exc:
+            print(f"[!] Windows UART helper start error: {exc}")
+            return False, {'message': str(exc), 'error_code': 'uart_helper_start_failed'}
+
+        status = self._read_helper_status(timeout_seconds=5)
+        if status.get('event') == 'ready':
+            print(f"[+] Windows UART helper opened for {self.sid}: {self.device} @ {self.baud_rate}")
+            return True, None
+
+        message = status.get('message') or 'Windows UART helper did not become ready.'
+        close_process(self.serial)
+        self.serial = None
+        return False, {'message': message, 'error_code': 'uart_open_failed'}
+
+    def _read_helper_status(self, timeout_seconds):
+        if not self.serial or not self.serial.stderr:
+            return {'event': 'error', 'message': 'Windows UART helper stderr is unavailable.'}
+
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            timeout = max(0, deadline - time.time())
+            try:
+                readable, _, _ = select.select([self.serial.stderr], [], [], timeout)
+            except Exception as exc:
+                return {'event': 'error', 'message': str(exc)}
+            if not readable:
+                continue
+            line = self.serial.stderr.readline()
+            if not line:
+                break
+            try:
+                data = json.loads(line.decode('utf-8', errors='replace'))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(data, dict) and data.get('event') in {'ready', 'error'}:
+                return data
+
+        if self.serial and self.serial.poll() is not None:
+            return {'event': 'error', 'message': 'Windows UART helper exited before opening the port.'}
+        return {'event': 'error', 'message': 'Timed out while opening Windows UART port.'}
+
+    def read_loop(self):
+        print(f"[*] Starting UART read loop for {self.sid}")
+        while True:
+            socketio.sleep(0.01)
+            if not self.serial:
+                break
+
+            try:
+                if isinstance(self.serial, subprocess.Popen):
+                    data = self._read_windows_helper_once()
+                else:
+                    waiting = self.serial.in_waiting
+                    data = self.serial.read(waiting or 1)
+                if data:
+                    self.emit_output({
+                        'message_type': 'terminal',
+                        'data': data.decode('utf-8', errors='replace'),
+                    })
+                elif isinstance(self.serial, subprocess.Popen) and self.serial.poll() is not None:
+                    self.emit_output({
+                        'message_type': 'ssh_closed',
+                        'message': 'UART helper exited.',
+                        'error_code': 'uart_helper_exited',
+                    })
+                    break
+            except Exception as exc:
+                if self.closing:
+                    break
+                print(f"[!] UART read error: {exc}")
+                self.emit_output({
+                    'message_type': 'ssh_closed',
+                    'message': 'UART connection closed due to a read error.',
+                    'error_code': 'uart_read_error',
+                })
+                break
+
+        print(f"[*] UART read loop terminated for {self.sid}")
+        unregister_terminal_bridge(self.owner_session, self.terminal_id, self)
+
+    def _read_windows_helper_once(self):
+        if not self.serial or not self.serial.stdout:
+            return b''
+        readable, _, _ = select.select([self.serial.stdout], [], [], 0)
+        if not readable:
+            return b''
+        return self.serial.stdout.read(4096)
+
+    def write(self, data):
+        if not self.serial:
+            return
+        try:
+            encoded = data.encode('utf-8', errors='replace')
+            if isinstance(self.serial, subprocess.Popen):
+                if self.serial.stdin:
+                    self.serial.stdin.write(encoded)
+                    self.serial.stdin.flush()
+            else:
+                self.serial.write(encoded)
+        except Exception as exc:
+            print(f"[!] UART write error: {exc}")
+
+    def resize(self, cols, rows):
+        return
+
+    def close(self):
+        if not self.serial:
+            return
+        try:
+            if isinstance(self.serial, subprocess.Popen):
+                close_process(self.serial)
+            else:
+                self.serial.close()
+        except Exception:
+            pass
+        self.serial = None
+
 bridges = {}
 pending_localhost_key_setups = {}
 active_sessions = {}
 socket_session_tokens = {}
 socket_client_ips = {}
+socket_browser_identities = {}
+socket_browser_authorized = {}
+socket_browser_auth_challenges = {}
 session_cleanup_task_started = False
 
 def is_valid_access_token(token):
@@ -915,6 +1707,9 @@ def cleanup_expired_sessions():
             if sid_session_token == session_token:
                 socket_session_tokens.pop(sid, None)
                 socket_client_ips.pop(sid, None)
+                socket_browser_identities.pop(sid, None)
+                socket_browser_authorized.pop(sid, None)
+                socket_browser_auth_challenges.pop(sid, None)
 
 def session_cleanup_loop():
     while True:
@@ -1005,6 +1800,32 @@ def build_terminal_list(session_token):
         terminals.append(terminal_info)
     return terminals
 
+def emit_terminal_policy(sid):
+    browser_authorized = socket_browser_authorized.get(sid, False)
+    client_ip = socket_client_ips.get(sid, 'unknown')
+    policy = build_terminal_policy(browser_authorized=browser_authorized)
+    local_shell_option = next(
+        (
+            option for option in policy.get('connection_options', [])
+            if option.get('connection_type') == CONNECTION_TYPE_LOCAL_SHELL
+        ),
+        {},
+    )
+    if DEBUG_POLICY:
+        print(
+            '[policy] '
+            f'sid={sid} client_ip={client_ip} '
+            f'browser_authorized={browser_authorized} '
+            f'default={policy.get("default_connection")} '
+            f'local_shell_allowed={local_shell_option.get("allowed")}',
+            flush=True,
+        )
+    socketio.emit(
+        'terminal_policy',
+        policy,
+        room=sid,
+    )
+
 def is_valid_terminal_id(terminal_id):
     if not isinstance(terminal_id, str):
         return False
@@ -1019,6 +1840,19 @@ def validate_terminal_id_payload(data, default=None):
     if not is_valid_terminal_id(terminal_id):
         return None
     return terminal_id
+
+def get_detected_serial_port(device):
+    if not isinstance(device, str):
+        return None
+    selected_device = device.strip()
+    if not selected_device or len(selected_device) > MAX_UART_PORT_LENGTH:
+        return None
+    if has_control_chars(selected_device):
+        return None
+    for port_info in detect_serial_ports():
+        if port_info['device'] == selected_device:
+            return port_info
+    return get_manual_serial_port(selected_device)
 
 def escape_debug_text(value):
     return value.encode('unicode_escape', errors='backslashreplace').decode('ascii')
@@ -1056,13 +1890,13 @@ def emit_connection_error(sid, message, error_code=None, action_type=None, actio
         room=sid,
     )
 
-def validate_start_ssh_payload(data):
+def validate_start_ssh_payload(data, client_ip, browser_authorized=False):
     if not isinstance(data, dict):
         return None, 'Invalid connection payload.'
 
     connection_type = normalize_connection_type(data.get('connection_type', DEFAULT_CONNECTION_TYPE))
     if not connection_type:
-        return None, 'Connection type must be ssh or local_shell.'
+        return None, 'Connection type must be ssh, local_shell, or uart.'
     if FORCE_CONNECTION_TYPE and connection_type != FORCE_CONNECTION_TYPE:
         return None, f'Connection type is locked to {FORCE_CONNECTION_TYPE}.'
 
@@ -1071,9 +1905,49 @@ def validate_start_ssh_payload(data):
         return None, 'Invalid terminal id.'
 
     if connection_type == CONNECTION_TYPE_LOCAL_SHELL:
+        if not is_local_shell_allowed_for_client(client_ip, browser_authorized=browser_authorized):
+            return None, {
+                'message': 'Local Shell is not available for this client.',
+                'error_code': 'local_shell_unavailable_for_client',
+            }
         return {
             'connection_type': connection_type,
             'terminal_id': terminal_id,
+        }, None
+
+    if connection_type == CONNECTION_TYPE_UART:
+        if not is_uart_allowed_for_client(client_ip, browser_authorized=browser_authorized):
+            return None, {
+                'message': 'UART is not available for this client.',
+                'error_code': 'uart_unavailable_for_client',
+            }
+
+        port_info = get_detected_serial_port(data.get('serial_port'))
+        if not port_info:
+            return None, {
+                'message': 'Select an available UART port.',
+                'error_code': 'uart_port_unavailable',
+            }
+
+        try:
+            baud_rate = int(data.get('baud_rate', DEFAULT_UART_BAUD_RATE))
+        except (TypeError, ValueError):
+            return None, {
+                'message': 'UART baud rate must be a number.',
+                'error_code': 'uart_invalid_baud_rate',
+            }
+        if baud_rate < MIN_UART_BAUD_RATE or baud_rate > MAX_UART_BAUD_RATE:
+            return None, {
+                'message': 'UART baud rate is outside the supported range.',
+                'error_code': 'uart_invalid_baud_rate',
+            }
+
+        return {
+            'connection_type': connection_type,
+            'terminal_id': terminal_id,
+            'serial_port': port_info['device'],
+            'serial_port_info': port_info,
+            'baud_rate': baud_rate,
         }, None
 
     host = data.get('host', SSH_HOST)
@@ -1171,6 +2045,20 @@ def index():
     ))
     return add_common_headers(response)
 
+@app.route('/download_ca')
+def download_ca():
+    if not is_valid_session(request.cookies.get(SESSION_COOKIE_NAME)):
+        return abort(403, description="Invalid or missing session.")
+    if not HTTPS_ENABLED or CLI_ARGS.certfile or CLI_ARGS.keyfile or not LOCAL_CA_CERT_PATH.is_file():
+        return abort(404, description="Local CA certificate is not available.")
+    response = send_file(
+        LOCAL_CA_CERT_PATH,
+        mimetype='application/x-x509-ca-cert',
+        as_attachment=True,
+        download_name='webssh-local-ca.crt',
+    )
+    return add_common_headers(response)
+
 @socketio.on('connect')
 def on_connect():
     ensure_session_cleanup_task()
@@ -1182,7 +2070,156 @@ def on_connect():
         return False 
     socket_session_tokens[request.sid] = session_token
     socket_client_ips[request.sid] = client_ip
+    socket_browser_authorized[request.sid] = False
     print(f"[+] Client connected: {request.sid} from {client_ip}")
+
+@socketio.on('register_browser_identity')
+def on_register_browser_identity(data):
+    session_token = socket_session_tokens.get(request.sid)
+    if not session_token or not isinstance(data, dict):
+        return
+
+    browser_id = data.get('browser_id')
+    public_key = data.get('public_key')
+    if not validate_browser_identity(browser_id, public_key):
+        socketio.emit(
+            'browser_authorization_status',
+            {
+                'status': 'failed',
+                'message': 'Browser identity is invalid.',
+                'error_code': 'browser_identity_invalid',
+            },
+            room=request.sid,
+        )
+        emit_terminal_policy(request.sid)
+        return
+
+    socket_browser_identities[request.sid] = {
+        'browser_id': browser_id,
+        'public_key': public_key,
+    }
+    socket_browser_authorized[request.sid] = False
+
+    if accept_browser_pairing_file(browser_id, public_key) or is_browser_authorized(browser_id, public_key):
+        nonce = secrets.token_urlsafe(32)
+        socket_browser_auth_challenges[request.sid] = nonce
+        socketio.emit(
+            'browser_auth_challenge',
+            {
+                'nonce': nonce,
+                'browser_id': browser_id,
+            },
+            room=request.sid,
+        )
+        return
+
+    emit_terminal_policy(request.sid)
+
+@socketio.on('browser_auth_signature')
+def on_browser_auth_signature(data):
+    session_token = socket_session_tokens.get(request.sid)
+    identity = socket_browser_identities.get(request.sid)
+    nonce = socket_browser_auth_challenges.pop(request.sid, None)
+    if not session_token or not identity or not nonce or not isinstance(data, dict):
+        return
+
+    signature = data.get('signature')
+    if verify_browser_signature(identity['public_key'], nonce, signature):
+        socket_browser_authorized[request.sid] = True
+        socketio.emit(
+            'browser_authorization_status',
+            {
+                'status': 'authorized',
+                'message': 'Browser authorized for Local Shell.',
+            },
+            room=request.sid,
+        )
+    else:
+        socket_browser_authorized[request.sid] = False
+        socketio.emit(
+            'browser_authorization_status',
+            {
+                'status': 'failed',
+                'message': 'Browser authorization signature failed.',
+                'error_code': 'browser_signature_invalid',
+            },
+            room=request.sid,
+        )
+    emit_terminal_policy(request.sid)
+
+@socketio.on('request_browser_pairing')
+def on_request_browser_pairing():
+    session_token = socket_session_tokens.get(request.sid)
+    identity = socket_browser_identities.get(request.sid)
+    if not session_token:
+        return
+    if not identity:
+        socketio.emit(
+            'browser_authorization_status',
+            {
+                'status': 'failed',
+                'message': 'Browser identity is not registered yet. Refresh the page and try again.',
+                'error_code': 'browser_identity_missing',
+            },
+            room=request.sid,
+        )
+        return
+
+    AUTHORIZED_DIR.mkdir(parents=True, exist_ok=True)
+    pairing = build_pairing_file(identity['browser_id'], identity['public_key'])
+    filename = f"webssh-authorize_{pairing['pairing_id']}.json"
+    socketio.emit(
+        'browser_pairing_file',
+        {
+            'filename': filename,
+            'content': json.dumps(pairing, indent=2, sort_keys=True) + '\n',
+            'authorized_dir': str(AUTHORIZED_DIR),
+            'expires_at': pairing['expires_at'],
+        },
+        room=request.sid,
+    )
+
+@socketio.on('check_browser_pairing')
+def on_check_browser_pairing():
+    session_token = socket_session_tokens.get(request.sid)
+    identity = socket_browser_identities.get(request.sid)
+    if not session_token:
+        return
+    if not identity:
+        socketio.emit(
+            'browser_authorization_status',
+            {
+                'status': 'failed',
+                'message': 'Browser identity is not registered yet. Refresh the page and try again.',
+                'error_code': 'browser_identity_missing',
+            },
+            room=request.sid,
+        )
+        return
+
+    if accept_browser_pairing_file(identity['browser_id'], identity['public_key']):
+        nonce = secrets.token_urlsafe(32)
+        socket_browser_auth_challenges[request.sid] = nonce
+        socketio.emit(
+            'browser_auth_challenge',
+            {
+                'nonce': nonce,
+                'browser_id': identity['browser_id'],
+            },
+            room=request.sid,
+        )
+        return
+
+    socketio.emit(
+        'browser_authorization_status',
+        {
+            'status': 'pending',
+            'message': 'Authorization file has not been accepted yet.',
+            'error_code': 'browser_pairing_pending',
+        },
+        room=request.sid,
+    )
+    emit_terminal_policy(request.sid)
 
 @socketio.on('list_terminals')
 def on_list_terminals():
@@ -1197,6 +2234,13 @@ def on_list_terminals():
         },
         room=request.sid,
     )
+
+@socketio.on('refresh_terminal_policy')
+def on_refresh_terminal_policy():
+    session_token = socket_session_tokens.get(request.sid)
+    if not session_token:
+        return
+    emit_terminal_policy(request.sid)
 
 @socketio.on('replay_terminal')
 def on_replay_terminal(data):
@@ -1216,9 +2260,21 @@ def on_start_ssh(data):
     session_token = socket_session_tokens.get(request.sid)
     if not session_token:
         return
-    payload, validation_error = validate_start_ssh_payload(data)
+    client_ip = socket_client_ips.get(request.sid, 'unknown')
+    payload, validation_error = validate_start_ssh_payload(
+        data,
+        client_ip,
+        browser_authorized=socket_browser_authorized.get(request.sid, False),
+    )
     if validation_error:
-        emit_connection_error(request.sid, validation_error, error_code='invalid_start_ssh_payload')
+        if isinstance(validation_error, dict):
+            message = validation_error.get('message', 'Invalid connection payload.')
+            error_code = validation_error.get('error_code', 'invalid_start_ssh_payload')
+        else:
+            message = validation_error
+            error_code = 'invalid_start_ssh_payload'
+        terminal_id = validate_terminal_id_payload(data, default=TERMINAL_ID_MAIN) or TERMINAL_ID_MAIN
+        emit_connection_error(request.sid, message, error_code=error_code, terminal_id=terminal_id)
         return
 
     pending_localhost_key_setups.pop(request.sid, None)
@@ -1240,6 +2296,15 @@ def on_start_ssh(data):
         bridge = LocalShellBridge(session_token, terminal_id)
         bridge.attach(request.sid)
         success, result = bridge.connect(cols=cols, rows=rows)
+    elif connection_type == CONNECTION_TYPE_UART:
+        bridge = UARTBridge(
+            session_token,
+            terminal_id,
+            payload['serial_port_info'],
+            payload['baud_rate'],
+        )
+        bridge.attach(request.sid)
+        success, result = bridge.connect(cols=cols, rows=rows)
     else:
         host = payload['host']
         port = payload['port']
@@ -1258,7 +2323,7 @@ def on_start_ssh(data):
         socketio.start_background_task(target=bridge.read_loop)
         return
 
-    if connection_type == CONNECTION_TYPE_LOCAL_SHELL:
+    if connection_type in {CONNECTION_TYPE_LOCAL_SHELL, CONNECTION_TYPE_UART}:
         message = 'Connection failed.'
         error_code = None
         if isinstance(result, dict):
@@ -1425,13 +2490,16 @@ def on_close_all_terminals():
         )
 
 @socketio.on('disconnect')
-def on_disconnect():
+def on_disconnect(reason=None):
     pending_localhost_key_setups.pop(request.sid, None)
     session_token = socket_session_tokens.pop(request.sid, None)
     client_ip = socket_client_ips.pop(request.sid, 'unknown')
+    socket_browser_identities.pop(request.sid, None)
+    socket_browser_authorized.pop(request.sid, None)
+    socket_browser_auth_challenges.pop(request.sid, None)
     if session_token:
         detach_session_bridges(session_token, request.sid)
-    print(f"[-] Client disconnected: {request.sid} from {client_ip}")
+    print(f"[-] Client disconnected: {request.sid} from {client_ip}; reason={reason or 'unknown'}")
 
 def is_wsl():
     if not sys.platform.startswith('linux'):
@@ -1457,36 +2525,199 @@ def get_primary_ip():
         return "127.0.0.1"
 
 def get_wsl_ip():
+    global wsl_ip_cache
+    if wsl_ip_cache:
+        return wsl_ip_cache
     try:
         result = subprocess.run(['hostname', '-I'], capture_output=True, text=True, check=False)
         ips = result.stdout.strip().split()
         if ips:
-            return ips[0]
+            wsl_ip_cache = ips[0]
+            return wsl_ip_cache
     except Exception:
         pass
 
-    return get_primary_ip()
+    primary_ip = get_primary_ip()
+    if primary_ip != "127.0.0.1":
+        wsl_ip_cache = primary_ip
+    return primary_ip
 
 def get_bind_host():
     if DEFAULT_BIND_HOST:
         return DEFAULT_BIND_HOST
 
     if is_wsl():
-        return get_wsl_ip()
+        return "0.0.0.0"
 
     return "127.0.0.1"
 
 def get_access_host(bind_host):
+    if is_wsl() and bind_host in {"0.0.0.0", "::"}:
+        return get_wsl_ip()
     if bind_host in {"0.0.0.0", "::"}:
         return get_primary_ip()
 
     return bind_host
 
+def get_url_scheme():
+    return "https" if HTTPS_ENABLED else "http"
+
+def get_localhost_access_url(port):
+    return f"{get_url_scheme()}://127.0.0.1:{port}/?token={ACCESS_TOKEN}"
+
+def get_ssl_context(bind_host, access_host):
+    if CLI_ARGS.certfile or CLI_ARGS.keyfile:
+        if not CLI_ARGS.certfile or not CLI_ARGS.keyfile:
+            raise SystemExit('--certfile and --keyfile must be provided together.')
+        return CLI_ARGS.certfile, CLI_ARGS.keyfile
+    if HTTPS_ENABLED:
+        return ensure_local_https_certificates(bind_host, access_host)
+    return None
+
 def is_loopback_bind(bind_host):
-    return bind_host in {'127.0.0.1', 'localhost', '::1'}
+    if not isinstance(bind_host, str):
+        return False
+    normalized = bind_host.strip().lower().strip('[]')
+    if normalized in {'127.0.0.1', 'localhost', '::1'}:
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+def should_enable_https(bind_host):
+    if HTTPS_REQUESTED:
+        return True
+    if HTTPS_AUTO_DISABLED:
+        return False
+    return not is_loopback_bind(bind_host)
+
+def normalize_ip_address(value):
+    if not isinstance(value, str):
+        return None
+    try:
+        address = ipaddress.ip_address(value.strip())
+    except ValueError:
+        return None
+    ipv4_mapped = getattr(address, 'ipv4_mapped', None)
+    if ipv4_mapped:
+        return ipv4_mapped
+    return address
+
+def get_wsl_host_addresses():
+    addresses = set()
+    resolv_conf = Path('/etc/resolv.conf')
+    try:
+        for line in resolv_conf.read_text(encoding='utf-8').splitlines():
+            parts = line.strip().split()
+            if len(parts) == 2 and parts[0] == 'nameserver':
+                address = normalize_ip_address(parts[1])
+                if address:
+                    addresses.add(address)
+    except OSError:
+        pass
+
+    try:
+        result = subprocess.run(
+            ['ip', 'route', 'show', 'default'],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+        for line in result.stdout.splitlines():
+            parts = line.strip().split()
+            if 'via' not in parts:
+                continue
+            gateway = parts[parts.index('via') + 1]
+            address = normalize_ip_address(gateway)
+            if address:
+                addresses.add(address)
+    except Exception:
+        pass
+
+    try:
+        result = subprocess.run(
+            [
+                'powershell.exe',
+                '-NoProfile',
+                '-Command',
+                'Get-NetIPAddress -AddressFamily IPv4 | ForEach-Object { $_.IPAddress }',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                address = normalize_ip_address(line.strip())
+                if address:
+                    addresses.add(address)
+    except Exception:
+        pass
+
+    route_path = Path('/proc/net/route')
+    try:
+        for line in route_path.read_text(encoding='utf-8').splitlines()[1:]:
+            parts = line.strip().split()
+            if len(parts) < 3 or parts[1] != '00000000':
+                continue
+            gateway_hex = parts[2]
+            if len(gateway_hex) != 8:
+                continue
+            gateway_bytes = bytes.fromhex(gateway_hex)[::-1]
+            address = normalize_ip_address('.'.join(str(byte) for byte in gateway_bytes))
+            if address:
+                addresses.add(address)
+    except Exception:
+        pass
+    return addresses
+
+def is_local_client_ip(client_ip):
+    address = normalize_ip_address(client_ip)
+    if not address:
+        return False
+    if address.is_loopback:
+        return True
+    if is_wsl() and address in get_wsl_host_addresses():
+        return True
+    if is_wsl() and is_wsl_nat_client_ip(address):
+        return True
+    return False
+
+def is_wsl_nat_client_ip(address):
+    if not getattr(address, 'version', None) == 4 or not address.is_private:
+        return False
+    wsl_address = normalize_ip_address(get_wsl_ip())
+    if not wsl_address or getattr(wsl_address, 'version', None) != 4 or not wsl_address.is_private:
+        return False
+    # WSL NAT host/client addresses can differ outside /24. A /20 fallback
+    # covers the vEthernet subnet without treating all RFC1918 clients as local.
+    try:
+        return address in ipaddress.ip_network(f'{wsl_address}/20', strict=False)
+    except ValueError:
+        return False
+
+def is_local_shell_allowed_for_client(client_ip, browser_authorized=False):
+    if os.getenv('WEBSSH_ALLOW_REMOTE_LOCAL_SHELL') == '1':
+        return True
+    if browser_authorized:
+        return True
+    return is_local_client_ip(client_ip)
+
+def is_uart_allowed_for_client(client_ip, browser_authorized=False):
+    if os.getenv('WEBSSH_ALLOW_REMOTE_UART') == '1':
+        return True
+    if browser_authorized:
+        return True
+    return is_local_client_ip(client_ip)
 
 def is_local_shell_enabled():
     return DEFAULT_CONNECTION_TYPE == CONNECTION_TYPE_LOCAL_SHELL or FORCE_CONNECTION_TYPE == CONNECTION_TYPE_LOCAL_SHELL
+
+def is_uart_enabled():
+    return DEFAULT_CONNECTION_TYPE == CONNECTION_TYPE_UART or FORCE_CONNECTION_TYPE == CONNECTION_TYPE_UART
 
 def get_runtime_name():
     if is_wsl():
@@ -1502,19 +2733,35 @@ if __name__ == '__main__':
     bind_host = get_bind_host()
     access_host = get_access_host(bind_host)
     port = DEFAULT_PORT
+    HTTPS_ENABLED = should_enable_https(bind_host)
+    ssl_context = get_ssl_context(bind_host, access_host)
+    scheme = get_url_scheme()
     print("\n" + "="*60)
     print(f"WebSSH Server Starting...")
     print(f"Runtime: {get_runtime_name()}")
     print(f"Async Mode: {ASYNC_MODE}")
     print(f"Debug Input: {'on' if DEBUG_INPUT else 'off'}")
+    print(f"Debug Policy: {'on' if DEBUG_POLICY else 'off'}")
+    print(f"HTTPS: {'on' if HTTPS_ENABLED else 'off'}")
+    if HTTPS_ENABLED and not HTTPS_REQUESTED:
+        print("HTTPS Mode: auto-enabled because bind host is non-loopback.")
     print(f"Default Connection: {DEFAULT_CONNECTION_TYPE}")
     if FORCE_CONNECTION_TYPE:
         print(f"Forced Connection: {FORCE_CONNECTION_TYPE}")
-    print(f"Access URL: http://{access_host}:{port}/?token={ACCESS_TOKEN}")
+    print(f"Access URL: {scheme}://{access_host}:{port}/?token={ACCESS_TOKEN}")
     print(f"Listening on: {bind_host}:{port}")
+    if is_wsl() and not is_loopback_bind(bind_host):
+        print(f"WSL Localhost URL: {get_localhost_access_url(port)}")
+        print("WSL Localhost URL is useful when browsers require a secure context for authorization.")
+    if HTTPS_ENABLED and not (CLI_ARGS.certfile and CLI_ARGS.keyfile):
+        print(f"HTTPS Local CA: {LOCAL_CA_CERT_PATH}")
+        print("Import the HTTPS Local CA into Windows Trusted Root Certification Authorities to trust the WSL IP URL.")
     if is_local_shell_enabled() and not is_loopback_bind(bind_host) and os.getenv('WEBSSH_ALLOW_REMOTE_LOCAL_SHELL') != '1':
         print("[!] WARNING: Local Shell is enabled while listening on a non-loopback address.")
         print("[!] Set WEBSSH_ALLOW_REMOTE_LOCAL_SHELL=1 to acknowledge this deployment mode.")
+    if is_uart_enabled() and not is_loopback_bind(bind_host) and os.getenv('WEBSSH_ALLOW_REMOTE_UART') != '1':
+        print("[!] WARNING: UART is enabled while listening on a non-loopback address.")
+        print("[!] Set WEBSSH_ALLOW_REMOTE_UART=1 to acknowledge this deployment mode.")
     if sys.platform == 'darwin':
         print("Tip: Enable Remote Login in macOS if you want localhost SSH access.")
     print("="*60 + "\n")
@@ -1522,6 +2769,8 @@ if __name__ == '__main__':
     sys.stdout.flush()
 
     run_kwargs = {'host': bind_host, 'port': port, 'log_output': False}
+    if ssl_context:
+        run_kwargs['ssl_context'] = ssl_context
     if ASYNC_MODE == 'threading':
         run_kwargs['allow_unsafe_werkzeug'] = True
 

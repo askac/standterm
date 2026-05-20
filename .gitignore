@@ -24,6 +24,12 @@ Thumbs.db
 # Flask/Socket.IO
 *.log
 
+# Browser authorization state
+authorized/
+
+# Local HTTPS certificates
+certs/
+
 # Session handoff notes
 handover_*.md
 handover_*_prompt.txt
