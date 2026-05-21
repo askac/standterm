@@ -15,6 +15,12 @@ session_token + terminal_id + browser sid
 Terminal output and browser-visible text are display data only. They must not
 create, approve, reject, pause, resume, or upgrade Agent actions.
 
+The frontend may keep hidden Agent state for each terminal and may show a
+bottom `[ PAUSE ]` control while structured Agent state says terminal input is
+direct-active or has pending actions. It must base that control only on typed
+`agent_state`, `agent_action_request`, and `agent_action_result` payloads, not
+terminal display text.
+
 ## Client-to-Server Events
 
 ### `agent_attach`

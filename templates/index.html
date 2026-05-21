@@ -22,6 +22,10 @@
         .status-action { height: 21px; border: 1px solid #333; border-radius: 5px; background: #202020; color: #aaa; cursor: pointer; font-size: 12px; line-height: 1; padding: 0 8px; flex: 0 0 auto; }
         .status-action:hover { color: #fff; border-color: #0a84ff; }
         .status-action:disabled { opacity: 0.45; cursor: default; border-color: #333; color: #777; }
+        #agent-pause-btn { display: none; margin-left: auto; border-color: #7a1f1f; background: #3a1212; color: #ff6b6b; font-weight: bold; }
+        #agent-pause-btn:hover { border-color: #ff453a; background: #4a1616; color: #fff; }
+        #agent-pause-btn.visible { display: inline-flex; align-items: center; justify-content: center; }
+        #agent-pause-btn.visible + #new-tab-btn { margin-left: 0; }
         #new-tab-btn { margin-left: auto; }
         #terminal { position: absolute; top: 0; left: 0; right: 0; height: calc(100vh - var(--status-bar-height)); width: 100vw; background: #000; z-index: 1; display: none; }
         body.has-terminal-tabs #terminal { top: var(--tab-bar-height); height: calc(100vh - var(--status-bar-height) - var(--tab-bar-height)); }
@@ -404,6 +408,7 @@
         <span class="sb-sep">|</span>
         <span class="sb-item" id="clock-display"></span>
         <span id="uptime-section" class="sb-item" style="display:none"><span class="sb-sep">|</span>connected:&nbsp;<span id="uptime-display"></span></span>
+        <button id="agent-pause-btn" class="status-action" title="Pause Agent terminal input">[ PAUSE ]</button>
         <button id="new-tab-btn" class="status-action" title="New terminal tab">[+ Add tab]</button>
         <button id="close-tabs-btn" class="status-action" title="Close all terminal tabs">[Close tabs]</button>
         <div id="quick-settings" title="Settings">&#x2699;&#xFE0F;</div>
@@ -425,6 +430,10 @@
             local_shell: 'Local Shell',
             uart: 'UART'
         };
+        const AGENT_MODE_DISABLED = 'disabled';
+        const AGENT_MODE_DIRECT_ACTIVE = 'direct_active';
+        const AGENT_MODE_PAUSED = 'paused';
+        const AGENT_OPEN_ACTION_STATUSES = new Set(['pending_approval', 'direct_pending', 'approved']);
         const SCHEMES = {
             ibm5153: { background: '#000000', foreground: '#aaaaaa', black: '#000000', red: '#aa0000', green: '#00aa00', yellow: '#aa5500', blue: '#0000aa', magenta: '#aa00aa', cyan: '#00aaaa', white: '#aaaaaa', brightBlack: '#555555', brightRed: '#ff5555', brightGreen: '#55ff55', brightYellow: '#ffff55', brightBlue: '#5555ff', brightMagenta: '#ff55ff', brightCyan: '#55ffff', brightWhite: '#ffffff', cursor: '#aaaaaa' },
             campbell: { background: '#0C0C0C', foreground: '#CCCCCC', black: '#0C0C0C', red: '#C50F1F', green: '#13A10E', yellow: '#C19C00', blue: '#0037DA', magenta: '#881798', cyan: '#3A96DD', white: '#CCCCCC', brightBlack: '#767676', brightRed: '#E74856', brightGreen: '#16C60C', brightYellow: '#F9F1A5', brightBlue: '#3B78FF', brightMagenta: '#B4009E', brightCyan: '#61D6D6', brightWhite: '#F2F2F2', cursor: '#FFFFFF' },
@@ -655,6 +664,7 @@
             const policyDebugPanel = document.getElementById('policy-debug-panel');
             const payloadLog = document.getElementById('payload-log');
             const tabsList = document.getElementById('tabs-list');
+            const agentPauseBtn = document.getElementById('agent-pause-btn');
             const newTabBtn = document.getElementById('new-tab-btn');
             const closeTabsBtn = document.getElementById('close-tabs-btn');
             const debugEnabled = (new URLSearchParams(window.location.search)).get('debug') === '1';
@@ -720,6 +730,114 @@
 
             function isActiveTerminalPayload(data) {
                 return data && data.terminal_id === activeTerminalId;
+            }
+
+            function createAgentClientState() {
+                return {
+                    attached: false,
+                    attachRequested: false,
+                    mode: AGENT_MODE_DISABLED,
+                    paused: false,
+                    controlEpoch: null,
+                    runId: null,
+                    pendingActions: 0,
+                    openActionIds: new Set(),
+                    lastAction: null
+                };
+            }
+
+            function normalizeAgentCount(value) {
+                const count = Number(value);
+                return Number.isFinite(count) && count > 0 ? count : 0;
+            }
+
+            function updateAgentDebugState(eventName, state) {
+                if (!debugEnabled || !state) return;
+                updateDebugHud(eventName, JSON.stringify({
+                    terminal_id: state.id,
+                    mode: state.agent.mode,
+                    paused: state.agent.paused,
+                    control_epoch: state.agent.controlEpoch,
+                    run_id: state.agent.runId,
+                    pending_actions: state.agent.pendingActions
+                }, null, 2));
+            }
+
+            function hasAgentPauseCapability(state) {
+                if (!state || !state.agent || state.agent.paused) return false;
+                return state.agent.mode === AGENT_MODE_DIRECT_ACTIVE || state.agent.pendingActions > 0;
+            }
+
+            function updateAgentPauseButton() {
+                const state = getActiveTerminalState();
+                const visible = hasAgentPauseCapability(state);
+                agentPauseBtn.classList.toggle('visible', visible);
+                agentPauseBtn.disabled = !(visible && socket && socket.connected && state && state.connected);
+            }
+
+            function resetAgentClientState(state) {
+                state.agent = createAgentClientState();
+                updateAgentPauseButton();
+            }
+
+            function attachAgentToTerminal(state) {
+                if (!socket || !socket.connected || !state || !state.connected || state.agent.attachRequested) return;
+                state.agent.attachRequested = true;
+                socket.emit('agent_attach', { terminal_id: state.id });
+            }
+
+            function detachAgentFromTerminal(state) {
+                if (!socket || !socket.connected || !state || !state.agent.attachRequested) return;
+                socket.emit('agent_detach', { terminal_id: state.id });
+            }
+
+            function applyAgentStatePayload(data) {
+                if (!data || typeof data.terminal_id !== 'string') return;
+                const state = terminals.get(data.terminal_id);
+                if (!state) {
+                    if (debugEnabled) appendPayloadLog('agent.unknown_terminal', JSON.stringify(data));
+                    return;
+                }
+                const mode = typeof data.mode === 'string' ? data.mode : AGENT_MODE_DISABLED;
+                state.agent.attached = mode !== AGENT_MODE_DISABLED;
+                state.agent.attachRequested = state.agent.attached;
+                state.agent.mode = mode;
+                state.agent.paused = !!data.paused || mode === AGENT_MODE_PAUSED;
+                state.agent.controlEpoch = Number.isFinite(Number(data.control_epoch)) ? Number(data.control_epoch) : null;
+                state.agent.runId = typeof data.run_id === 'string' ? data.run_id : null;
+                state.agent.pendingActions = normalizeAgentCount(data.pending_actions);
+                if (state.agent.pendingActions === 0) state.agent.openActionIds.clear();
+                updateAgentPauseButton();
+                updateAgentDebugState('agent.state', state);
+            }
+
+            function applyAgentActionPayload(data) {
+                if (!data || typeof data.terminal_id !== 'string') return;
+                const state = terminals.get(data.terminal_id);
+                if (!state) {
+                    if (debugEnabled) appendPayloadLog('agent.action_unknown_terminal', JSON.stringify(data));
+                    return;
+                }
+                const actionId = typeof data.action_id === 'string' ? data.action_id : null;
+                const status = typeof data.status === 'string' ? data.status : '';
+                state.agent.lastAction = {
+                    actionId,
+                    actionType: typeof data.action_type === 'string' ? data.action_type : null,
+                    status,
+                    errorCode: typeof data.error_code === 'string' ? data.error_code : null,
+                    controlEpoch: Number.isFinite(Number(data.control_epoch)) ? Number(data.control_epoch) : null
+                };
+                if (actionId) {
+                    if (AGENT_OPEN_ACTION_STATUSES.has(status)) {
+                        state.agent.openActionIds.add(actionId);
+                        state.agent.pendingActions = Math.max(state.agent.pendingActions, state.agent.openActionIds.size);
+                    } else {
+                        state.agent.openActionIds.delete(actionId);
+                        state.agent.pendingActions = Math.max(state.agent.openActionIds.size, state.agent.pendingActions - 1, 0);
+                    }
+                }
+                updateAgentPauseButton();
+                updateAgentDebugState('agent.action', state);
             }
 
             function refreshPolicyState() {
@@ -1077,6 +1195,7 @@
                 updateTabBarVisibility();
                 terminals.forEach(updateTabState);
                 updateTerminalActions();
+                updateAgentPauseButton();
                 if (!state) return;
                 sshStatusEl.innerText = state.connected ? state.label : (state.connecting ? 'Connecting' : 'Disconnected');
                 sshStatusEl.style.color = state.connected ? '#34c759' : (state.connecting ? '#ffcc00' : '#ff9f0a');
@@ -1152,6 +1271,7 @@
                     termName: '{{ ssh_term }}',
                     lastNotifiedSize: { cols: null, rows: null },
                     needsReplay: true,
+                    agent: createAgentClientState(),
                     container,
                     tabEl,
                     titleEl,
@@ -1178,6 +1298,7 @@
             }
 
             function removeTerminalState(state) {
+                detachAgentFromTerminal(state);
                 if (state.webLinksAddon) state.webLinksAddon.dispose();
                 state.term.dispose();
                 state.container.remove();
@@ -1319,10 +1440,20 @@
                         state.needsReplay = false;
                         socket.emit('replay_terminal', { terminal_id: state.id });
                     }
+                    if (state.connected) attachAgentToTerminal(state);
                 });
                 updateActiveTerminalUi();
                 updatePolicyDebugPanel('terminal_list', { count: data.terminals.length });
                 requestAnimationFrame(fitAndNotifyResize);
+            });
+            socket.on('agent_state', data => {
+                applyAgentStatePayload(data);
+            });
+            socket.on('agent_action_request', data => {
+                applyAgentActionPayload(data);
+            });
+            socket.on('agent_action_result', data => {
+                applyAgentActionPayload(data);
             });
             socket.on('disconnect', (r) => {
                 clearBrowserPairingResponseTimer();
@@ -1335,6 +1466,7 @@
                     state.error = true;
                     state.connectedAt = null;
                     state.needsReplay = true;
+                    state.agent = createAgentClientState();
                 });
                 connectBtn.disabled = false;
                 updateActiveTerminalUi();
@@ -1468,6 +1600,17 @@
                         updateBrowserAuthUi(err.message);
                     });
             };
+            agentPauseBtn.onclick = () => {
+                const state = getActiveTerminalState();
+                if (!socket || !socket.connected || !hasAgentPauseCapability(state)) return;
+                socket.emit('agent_pause', { terminal_id: state.id });
+                state.agent.paused = true;
+                state.agent.mode = AGENT_MODE_PAUSED;
+                state.agent.pendingActions = 0;
+                state.agent.openActionIds.clear();
+                updateAgentPauseButton();
+                updateAgentDebugState('agent.pause_requested', state);
+            };
             newTabBtn.onclick = () => {
                 const terminalId = `term-${nextTerminalIndex}`;
                 const state = createTerminalTab(terminalId, `Terminal ${nextTerminalIndex}`);
@@ -1576,6 +1719,7 @@
                         state.termName = data.term || state.termName;
                         state.connectedAt = new Date();
                         state.needsReplay = false;
+                        attachAgentToTerminal(state);
                         if (state.id === activeTerminalId) {
                             updateActiveTerminalUi();
                             fitAndNotifyResize();
@@ -1590,6 +1734,7 @@
                         state.error = false;
                         state.connectionType = null;
                         state.connectedAt = null;
+                        resetAgentClientState(state);
                         if (state.id === activeTerminalId) {
                             updateActiveTerminalUi();
                             showError(data.message || 'Terminal session closed.');
