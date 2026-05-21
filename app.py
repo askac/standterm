@@ -160,6 +160,14 @@ AGENT_MAX_INPUT_BYTES = 4096
 AGENT_INPUT_CHUNK_BYTES = 256
 AGENT_AUDIT_EVENTS = 200
 AGENT_PREVIEW_CHARS = 160
+AGENT_TRANSCRIPT_TTL_SECONDS = 30 * 60
+AGENT_TRANSCRIPT_MAX_EVENTS = 400
+AGENT_TRANSCRIPT_MAX_BYTES = 120000
+AGENT_TRANSCRIPT_MAX_EVENT_BYTES = 4096
+ANSI_OSC_PATTERN = re.compile(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)')
+ANSI_CSI_PATTERN = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
+ANSI_ESCAPE_PATTERN = re.compile(r'\x1b[@-Z\\-_]')
+AGENT_TRANSCRIPT_CONTROL_PATTERN = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
 MAX_UART_PORT_LENGTH = 128
 DEFAULT_UART_BAUD_RATE = 115200
 MIN_UART_BAUD_RATE = 300
@@ -909,6 +917,11 @@ class TerminalBridge:
         payload.setdefault('terminal_id', self.terminal_id)
         if payload.get('message_type') == 'terminal':
             self._remember_terminal_payload(payload)
+            agent_transcript_store.append_terminal_output(
+                self.owner_session,
+                self.terminal_id,
+                payload.get('data'),
+            )
         for sid in list(self.attached_sids):
             socketio.emit('ssh_output', payload, room=sid)
 
@@ -2013,6 +2026,75 @@ agent_states = {}
 agent_lock = threading.RLock()
 session_cleanup_task_started = False
 
+class AgentTranscriptStore:
+    def __init__(self):
+        self._entries = {}
+
+    def append_terminal_output(self, session_token, terminal_id, data):
+        if not session_token or not terminal_id or not isinstance(data, str):
+            return
+        sanitized = sanitize_agent_transcript_text(data)
+        if not sanitized:
+            return
+        encoded = sanitized.encode('utf-8', errors='ignore')
+        if len(encoded) > AGENT_TRANSCRIPT_MAX_EVENT_BYTES:
+            encoded = encoded[:AGENT_TRANSCRIPT_MAX_EVENT_BYTES]
+            sanitized = encoded.decode('utf-8', errors='ignore')
+        key = (session_token, terminal_id)
+        now = time.time()
+        bucket = self._entries.setdefault(key, {'events': deque(), 'bytes': 0})
+        event = {
+            'captured_at': now,
+            'data': sanitized,
+            'byte_length': len(encoded),
+            'untrusted': True,
+        }
+        bucket['events'].append(event)
+        bucket['bytes'] += event['byte_length']
+        self._trim_bucket(bucket, now)
+
+    def get_recent(self, session_token, terminal_id):
+        key = (session_token, terminal_id)
+        bucket = self._entries.get(key)
+        if not bucket:
+            return []
+        self._trim_bucket(bucket, time.time())
+        return [dict(event) for event in bucket['events']]
+
+    def discard(self, session_token, terminal_id=None):
+        if terminal_id is not None:
+            self._entries.pop((session_token, terminal_id), None)
+            return
+        for key in [
+            key for key in self._entries
+            if key[0] == session_token
+        ]:
+            self._entries.pop(key, None)
+
+    def clear(self):
+        self._entries.clear()
+
+    def _trim_bucket(self, bucket, now):
+        expires_before = now - AGENT_TRANSCRIPT_TTL_SECONDS
+        events = bucket['events']
+        while events and (
+            len(events) > AGENT_TRANSCRIPT_MAX_EVENTS
+            or bucket['bytes'] > AGENT_TRANSCRIPT_MAX_BYTES
+            or events[0]['captured_at'] < expires_before
+        ):
+            removed = events.popleft()
+            bucket['bytes'] -= removed['byte_length']
+
+def sanitize_agent_transcript_text(value):
+    value = ANSI_OSC_PATTERN.sub('', value)
+    value = ANSI_CSI_PATTERN.sub('', value)
+    value = ANSI_ESCAPE_PATTERN.sub('', value)
+    value = value.replace('\r\n', '\n').replace('\r', '\n')
+    value = AGENT_TRANSCRIPT_CONTROL_PATTERN.sub('', value)
+    return value
+
+agent_transcript_store = AgentTranscriptStore()
+
 class AgentControlState:
     def __init__(self, session_token, terminal_id, sid):
         self.session_token = session_token
@@ -2388,14 +2470,17 @@ def unregister_terminal_bridge(session_token, terminal_id, bridge):
         return
     pop_bridge(session_token, terminal_id)
     invalidate_agent_states(session_token, terminal_id=terminal_id, reason=AGENT_REASON_TERMINAL_CLOSED)
+    agent_transcript_store.discard(session_token, terminal_id)
     close_bridge(bridge)
 
 def close_terminal_bridge(session_token, terminal_id):
     invalidate_agent_states(session_token, terminal_id=terminal_id, reason=AGENT_REASON_TERMINAL_CLOSED)
+    agent_transcript_store.discard(session_token, terminal_id)
     close_bridge(pop_bridge(session_token, terminal_id))
 
 def close_all_terminal_bridges(session_token):
     invalidate_agent_states(session_token, reason=AGENT_REASON_TERMINAL_CLOSED)
+    agent_transcript_store.discard(session_token)
     terminals = bridges.pop(session_token, {})
     for bridge in list(terminals.values()):
         close_bridge(bridge)

@@ -32,6 +32,7 @@ def reset_state():
     webssh.socket_browser_authorized.clear()
     webssh.socket_browser_auth_challenges.clear()
     webssh.agent_states.clear()
+    webssh.agent_transcript_store.clear()
 
 
 def make_client():
@@ -195,12 +196,99 @@ def test_mode_change_cancels_pending_action():
     client.disconnect()
 
 
+def test_terminal_close_invalidates_pending_action():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(webssh.AGENT_EVENT_MODE_SET, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'mode': 'approval',
+    })
+    client.emit(webssh.AGENT_EVENT_SUGGESTION_REQUEST, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'mock_input': 'after-close\n',
+    })
+    action = last_payload(client, webssh.AGENT_EVENT_ACTION_REQUEST)
+
+    client.emit('close_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(webssh.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'action_id': action['action_id'],
+    })
+    assert bridge.writes == []
+    assert last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)['error_code'] == webssh.AGENT_ERROR_NOT_ATTACHED
+
+    client.disconnect()
+
+
+def test_disconnect_invalidates_agent_state():
+    client = make_client()
+    session_token = current_session_token()
+    add_dummy_bridge(session_token)
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    assert webssh.agent_states
+    client.disconnect()
+    assert not webssh.agent_states
+
+
+def test_stale_epoch_write_is_rejected():
+    session_token = 'session-a'
+    sid = 'sid-a'
+    bridge = add_dummy_bridge(session_token)
+    state = webssh.get_or_create_agent_state(session_token, webssh.TERMINAL_ID_MAIN, sid)
+    state.mode = webssh.AGENT_MODE_DIRECT_ACTIVE
+    action, error_code = webssh.build_agent_action(
+        state,
+        {
+            'action_type': webssh.AGENT_ACTION_TERMINAL_INPUT,
+            'terminal_id': webssh.TERMINAL_ID_MAIN,
+            'data': 'stale\n',
+        },
+        requires_approval=False,
+    )
+    assert error_code is None
+    stale_epoch = action['control_epoch']
+    state.control_epoch += 1
+
+    ok, result = webssh.write_agent_terminal_input(
+        session_token,
+        webssh.TERMINAL_ID_MAIN,
+        sid,
+        action['action_id'],
+        stale_epoch,
+    )
+    assert ok is False
+    assert result['error_code'] == webssh.AGENT_ERROR_STALE_EPOCH
+    assert bridge.writes == []
+
+
+def test_transcript_store_sanitizes_terminal_output():
+    session_token = 'session-a'
+    bridge = add_dummy_bridge(session_token)
+    bridge.emit_output({
+        'message_type': 'terminal',
+        'data': '\x1b[31mred\x1b[0m\r\nnext\x00\x1b]0;title\x07\n',
+    })
+
+    transcript = webssh.agent_transcript_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    assert len(transcript) == 1
+    assert transcript[0]['data'] == 'red\nnext\n'
+    assert transcript[0]['untrusted'] is True
+
+
 def main():
     tests = [
         test_pause_blocks_pending_approval,
         test_approval_and_direct_writes_use_gate,
         test_wrong_sid_cannot_approve_action,
         test_mode_change_cancels_pending_action,
+        test_terminal_close_invalidates_pending_action,
+        test_disconnect_invalidates_agent_state,
+        test_stale_epoch_write_is_rejected,
+        test_transcript_store_sanitizes_terminal_output,
     ]
     for test in tests:
         reset_state()
