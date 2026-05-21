@@ -25,7 +25,7 @@
         #agent-pause-btn { display: none; margin-left: auto; border-color: #7a1f1f; background: #3a1212; color: #ff6b6b; font-weight: bold; }
         #agent-pause-btn:hover { border-color: #ff453a; background: #4a1616; color: #fff; }
         #agent-pause-btn.visible { display: inline-flex; align-items: center; justify-content: center; }
-        #agent-pause-btn.visible + #new-tab-btn { margin-left: 0; }
+        #agent-toggle-btn.shifted { margin-left: 0; }
         #new-tab-btn { margin-left: auto; }
         #terminal { position: absolute; top: 0; left: 0; right: 0; height: calc(100vh - var(--status-bar-height)); width: 100vw; background: #000; z-index: 1; display: none; }
         body.has-terminal-tabs #terminal { top: var(--tab-bar-height); height: calc(100vh - var(--status-bar-height) - var(--tab-bar-height)); }
@@ -479,6 +479,7 @@
         <span class="sb-item" id="clock-display"></span>
         <span id="uptime-section" class="sb-item" style="display:none"><span class="sb-sep">|</span>connected:&nbsp;<span id="uptime-display"></span></span>
         <button id="agent-pause-btn" class="status-action" title="Pause Agent terminal input">[ PAUSE ]</button>
+        <button id="agent-toggle-btn" class="status-action" title="Show Agent panel">[Agent]</button>
         <button id="new-tab-btn" class="status-action" title="New terminal tab">[+ Add tab]</button>
         <button id="close-tabs-btn" class="status-action" title="Close all terminal tabs">[Close tabs]</button>
         <div id="quick-settings" title="Settings">&#x2699;&#xFE0F;</div>
@@ -785,6 +786,7 @@
             const agentActionPauseBtn = document.getElementById('agent-action-pause-btn');
             const tabsList = document.getElementById('tabs-list');
             const agentPauseBtn = document.getElementById('agent-pause-btn');
+            const agentToggleBtn = document.getElementById('agent-toggle-btn');
             const newTabBtn = document.getElementById('new-tab-btn');
             const closeTabsBtn = document.getElementById('close-tabs-btn');
             const debugEnabled = (new URLSearchParams(window.location.search)).get('debug') === '1';
@@ -807,6 +809,7 @@
             let browserIdentityRegistered = false;
             let browserPairingResponseTimer = null;
             let browserAuthDetailsVisible = false;
+            let agentPanelVisible = false;
 
             function normalizeConnectionType(value) {
                 return String(value || '').trim().toLowerCase().replace('-', '_');
@@ -893,6 +896,7 @@
                 const state = getActiveTerminalState();
                 const visible = hasAgentPauseCapability(state);
                 agentPauseBtn.classList.toggle('visible', visible);
+                agentToggleBtn.classList.toggle('shifted', visible);
                 agentPauseBtn.disabled = !(visible && socket && socket.connected && state && state.connected);
             }
 
@@ -932,7 +936,11 @@
             function updateAgentPanel() {
                 const state = getActiveTerminalState();
                 const usable = canUseAgentPanel(state);
-                agentPanel.classList.toggle('visible', usable);
+                if (!usable) agentPanelVisible = false;
+                agentPanel.classList.toggle('visible', usable && agentPanelVisible);
+                agentToggleBtn.disabled = !usable;
+                agentToggleBtn.innerText = agentPanelVisible ? '[Hide Agent]' : '[Agent]';
+                agentToggleBtn.title = agentPanelVisible ? 'Hide Agent panel' : 'Show Agent panel';
                 const agent = state ? state.agent : null;
                 const mode = agent ? agent.mode : AGENT_MODE_DISABLED;
                 const pending = agent ? agent.pendingActions : 0;
@@ -1836,6 +1844,11 @@
             };
             agentActionPauseBtn.onclick = () => {
                 agentPauseBtn.click();
+            };
+            agentToggleBtn.onclick = () => {
+                if (!canUseAgentPanel(getActiveTerminalState())) return;
+                agentPanelVisible = !agentPanelVisible;
+                updateAgentPanel();
             };
             newTabBtn.onclick = () => {
                 const terminalId = `term-${nextTerminalIndex}`;

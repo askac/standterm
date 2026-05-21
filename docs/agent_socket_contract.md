@@ -27,6 +27,10 @@ panel must display only the public action metadata returned by the backend,
 including `escaped_preview`; it must not receive or render the raw terminal
 input payload.
 
+The mock panel is opened manually from the status bar `[Agent]` toggle. A
+terminal connection must not automatically expand the panel when Agent state is
+not attached.
+
 ## Client-to-Server Events
 
 ### `agent_attach`
