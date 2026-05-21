@@ -1395,6 +1395,13 @@
                 return formData;
             }
 
+            function resetSshFormFields() {
+                ['host', 'port', 'username', 'password'].forEach(id => {
+                    const input = document.getElementById(id);
+                    input.value = input.defaultValue;
+                });
+            }
+
             function submitConnection(formData) {
                 const state = terminals.get(formData.terminal_id);
                 if (!state) return;
@@ -1466,6 +1473,7 @@
                 const state = createTerminalTab(terminalId, `Terminal ${nextTerminalIndex}`);
                 nextTerminalIndex += 1;
                 switchTerminal(state.id);
+                resetSshFormFields();
             };
             closeTabsBtn.onclick = () => {
                 const hasCloseableTerminal = [...terminals.values()].some(state => state.connected || state.connecting) || terminals.size > 1;
