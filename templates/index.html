@@ -19,9 +19,10 @@
         .tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
         .tab-close { width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border: none; border-radius: 4px; background: transparent; color: #888; cursor: pointer; font-size: 15px; line-height: 1; padding: 0; flex: 0 0 auto; }
         .tab-close:hover { background: #444; color: #fff; }
-        .status-action { height: 21px; border: 1px solid #333; border-radius: 5px; background: #202020; color: #aaa; cursor: pointer; font-size: 12px; line-height: 1; padding: 0 8px; flex: 0 0 auto; }
-        .status-action:hover { color: #fff; border-color: #0a84ff; }
-        .status-action:disabled { opacity: 0.45; cursor: default; border-color: #333; color: #777; }
+        .status-action { height: 21px; border: 1px solid #333; border-radius: 5px; background: #202020; color: #b6b6b6; cursor: pointer; font-size: 12px; line-height: 1; padding: 0 8px; flex: 0 0 auto; }
+        .status-action:hover { color: #fff; border-color: #0a84ff; background: #252b33; }
+        .status-action:disabled { opacity: 0.28; cursor: default; border-color: #262626; background: transparent; color: #777; }
+        .status-action:disabled:hover { border-color: #262626; background: transparent; color: #777; }
         #agent-pause-btn { display: none; margin-left: auto; border-color: #7a1f1f; background: #3a1212; color: #ff6b6b; font-weight: bold; }
         #agent-pause-btn:hover { border-color: #ff453a; background: #4a1616; color: #fff; }
         #agent-pause-btn.visible { display: inline-flex; align-items: center; justify-content: center; }
@@ -478,10 +479,10 @@
         <span class="sb-sep">|</span>
         <span class="sb-item" id="clock-display"></span>
         <span id="uptime-section" class="sb-item" style="display:none"><span class="sb-sep">|</span>connected:&nbsp;<span id="uptime-display"></span></span>
-        <button id="agent-pause-btn" class="status-action" title="Pause Agent terminal input">[ PAUSE ]</button>
-        <button id="agent-toggle-btn" class="status-action" title="Show Agent panel">[Agent]</button>
-        <button id="new-tab-btn" class="status-action" title="New terminal tab">[+ Add tab]</button>
-        <button id="close-tabs-btn" class="status-action" title="Close all terminal tabs">[Close tabs]</button>
+        <button id="agent-pause-btn" class="status-action" title="Pause Agent terminal input">PAUSE</button>
+        <button id="agent-toggle-btn" class="status-action" title="Show Agent panel">Show Agent Panel</button>
+        <button id="new-tab-btn" class="status-action" title="New terminal tab">Add tab</button>
+        <button id="close-tabs-btn" class="status-action" title="Close all terminal tabs">Close tabs</button>
         <div id="quick-settings" title="Settings">&#x2699;&#xFE0F;</div>
     </div>
     <div id="policy-debug-panel"></div>
@@ -939,7 +940,7 @@
                 if (!usable) agentPanelVisible = false;
                 agentPanel.classList.toggle('visible', usable && agentPanelVisible);
                 agentToggleBtn.disabled = !usable;
-                agentToggleBtn.innerText = agentPanelVisible ? '[Hide Agent]' : '[Agent]';
+                agentToggleBtn.innerText = agentPanelVisible ? 'Hide Agent Panel' : 'Show Agent Panel';
                 agentToggleBtn.title = agentPanelVisible ? 'Hide Agent panel' : 'Show Agent panel';
                 const agent = state ? state.agent : null;
                 const mode = agent ? agent.mode : AGENT_MODE_DISABLED;
