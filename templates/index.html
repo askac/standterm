@@ -180,6 +180,76 @@
         .action-secondary:hover {
             background: #555 !important;
         }
+        #agent-panel {
+            position: fixed;
+            right: 10px;
+            bottom: calc(var(--status-bar-height) + 10px);
+            z-index: 4500;
+            width: min(380px, calc(100vw - 20px));
+            display: none;
+            background: rgba(22, 22, 22, 0.97);
+            color: #ddd;
+            border: 1px solid #3a3a3c;
+            border-radius: 6px;
+            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+            font-size: 12px;
+        }
+        #agent-panel.visible { display: block; }
+        #agent-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border-bottom: 1px solid #2c2c2e; }
+        #agent-panel-title { color: #fff; font-weight: 700; }
+        #agent-panel-state { color: #aaa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        #agent-panel-body { padding: 10px; display: grid; gap: 10px; }
+        #agent-mode-controls, #agent-action-controls, #agent-mock-row { display: flex; gap: 7px; }
+        #agent-mode-controls button, #agent-action-controls button, #agent-mock-row button {
+            width: auto;
+            margin: 0;
+            padding: 7px 9px;
+            border: 1px solid #444;
+            border-radius: 5px;
+            background: #2a2a2a;
+            color: #ddd;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            flex: 1;
+        }
+        #agent-mode-controls button.active { border-color: #0a84ff; color: #fff; background: #183452; }
+        #agent-mode-controls button:disabled, #agent-action-controls button:disabled, #agent-mock-row button:disabled { opacity: 0.45; cursor: default; }
+        #agent-mock-input {
+            min-width: 0;
+            flex: 1;
+            padding: 7px 8px;
+            background: #101010;
+            border: 1px solid #444;
+            border-radius: 5px;
+            color: #fff;
+            font: 12px/1.35 Consolas, "Courier New", monospace;
+            outline: none;
+        }
+        #agent-action-box {
+            display: none;
+            border: 1px solid #4a3a1f;
+            border-radius: 6px;
+            background: #211b12;
+            padding: 9px;
+        }
+        #agent-action-box.visible { display: grid; gap: 8px; }
+        #agent-action-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; color: #bbb; }
+        .agent-preview {
+            max-height: 120px;
+            overflow: auto;
+            padding: 7px;
+            background: #0c0c0c;
+            border: 1px solid #333;
+            border-radius: 5px;
+            color: #f3d184;
+            font: 12px/1.35 Consolas, "Courier New", monospace;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        #agent-approve-btn { background: #0a84ff !important; border-color: #0a84ff !important; color: #fff !important; }
+        #agent-reject-btn { background: #444 !important; }
+        #agent-action-pause-btn { background: #3a1212 !important; border-color: #7a1f1f !important; color: #ff6b6b !important; }
         
         /* Status Bar */
         #status-bar { position: absolute; bottom: 0; left: 0; right: 0; height: var(--status-bar-height); box-sizing: border-box; background: #111; color: #888; font-size: 12px; padding: 2px 10px; z-index: 50; border-top: 1px solid #222; display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
@@ -416,6 +486,40 @@
     <div id="policy-debug-panel"></div>
     <div id="debug-hud"></div>
     <div id="payload-log"></div>
+    <div id="agent-panel">
+        <div id="agent-panel-header">
+            <span id="agent-panel-title">Agent</span>
+            <span id="agent-panel-state">disabled</span>
+        </div>
+        <div id="agent-panel-body">
+            <div id="agent-mode-controls">
+                <button type="button" data-agent-mode="disabled">Off</button>
+                <button type="button" data-agent-mode="observe">Observe</button>
+                <button type="button" data-agent-mode="approval_pending">Approval</button>
+                <button type="button" data-agent-mode="direct_active">Direct</button>
+            </div>
+            <div id="agent-mock-row">
+                <input type="text" id="agent-mock-input" autocomplete="off" spellcheck="false" value="whoami\n">
+                <button type="button" id="agent-mock-send-btn">Send</button>
+            </div>
+            <div id="agent-action-box">
+                <div class="agent-preview" id="agent-action-preview"></div>
+                <div id="agent-action-meta">
+                    <span>target: <span id="agent-action-target">--</span></span>
+                    <span>bytes: <span id="agent-action-bytes">0</span></span>
+                    <span>lines: <span id="agent-action-lines">0</span></span>
+                    <span>newline: <span id="agent-action-newline">no</span></span>
+                    <span>control: <span id="agent-action-control">no</span></span>
+                    <span>status: <span id="agent-action-status">--</span></span>
+                </div>
+                <div id="agent-action-controls">
+                    <button type="button" id="agent-approve-btn">Approve</button>
+                    <button type="button" id="agent-reject-btn">Reject</button>
+                    <button type="button" id="agent-action-pause-btn">Pause</button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <script>
         // --- Official Windows Terminal Color Schemes Replicated ---
@@ -663,6 +767,22 @@
             const debugHud = document.getElementById('debug-hud');
             const policyDebugPanel = document.getElementById('policy-debug-panel');
             const payloadLog = document.getElementById('payload-log');
+            const agentPanel = document.getElementById('agent-panel');
+            const agentPanelState = document.getElementById('agent-panel-state');
+            const agentModeButtons = [...document.querySelectorAll('[data-agent-mode]')];
+            const agentMockInput = document.getElementById('agent-mock-input');
+            const agentMockSendBtn = document.getElementById('agent-mock-send-btn');
+            const agentActionBox = document.getElementById('agent-action-box');
+            const agentActionPreview = document.getElementById('agent-action-preview');
+            const agentActionTarget = document.getElementById('agent-action-target');
+            const agentActionBytes = document.getElementById('agent-action-bytes');
+            const agentActionLines = document.getElementById('agent-action-lines');
+            const agentActionNewline = document.getElementById('agent-action-newline');
+            const agentActionControl = document.getElementById('agent-action-control');
+            const agentActionStatus = document.getElementById('agent-action-status');
+            const agentApproveBtn = document.getElementById('agent-approve-btn');
+            const agentRejectBtn = document.getElementById('agent-reject-btn');
+            const agentActionPauseBtn = document.getElementById('agent-action-pause-btn');
             const tabsList = document.getElementById('tabs-list');
             const agentPauseBtn = document.getElementById('agent-pause-btn');
             const newTabBtn = document.getElementById('new-tab-btn');
@@ -742,7 +862,8 @@
                     runId: null,
                     pendingActions: 0,
                     openActionIds: new Set(),
-                    lastAction: null
+                    lastAction: null,
+                    pendingAction: null
                 };
             }
 
@@ -775,15 +896,61 @@
                 agentPauseBtn.disabled = !(visible && socket && socket.connected && state && state.connected);
             }
 
+            function canUseAgentPanel(state) {
+                return !!(socket && socket.connected && state && state.connected);
+            }
+
+            function renderAgentActionPanel(state) {
+                const action = state && state.agent ? state.agent.pendingAction : null;
+                agentActionBox.classList.toggle('visible', !!action);
+                if (!action) {
+                    agentActionPreview.innerText = '';
+                    agentActionTarget.innerText = '--';
+                    agentActionBytes.innerText = '0';
+                    agentActionLines.innerText = '0';
+                    agentActionNewline.innerText = 'no';
+                    agentActionControl.innerText = 'no';
+                    agentActionStatus.innerText = '--';
+                    agentApproveBtn.disabled = true;
+                    agentRejectBtn.disabled = true;
+                    agentActionPauseBtn.disabled = true;
+                    return;
+                }
+                agentActionPreview.innerText = typeof action.escaped_preview === 'string' ? action.escaped_preview : '';
+                agentActionTarget.innerText = state.label || state.id;
+                agentActionBytes.innerText = String(normalizeAgentCount(action.byte_length));
+                agentActionLines.innerText = String(normalizeAgentCount(action.line_count));
+                agentActionNewline.innerText = action.ends_with_newline ? 'yes' : 'no';
+                agentActionControl.innerText = action.contains_control_chars ? 'yes' : 'no';
+                agentActionStatus.innerText = action.status || '--';
+                const canDecide = canUseAgentPanel(state) && action.status === 'pending_approval' && !!action.action_id;
+                agentApproveBtn.disabled = !canDecide;
+                agentRejectBtn.disabled = !canDecide;
+                agentActionPauseBtn.disabled = !(canUseAgentPanel(state) && hasAgentPauseCapability(state));
+            }
+
+            function updateAgentPanel() {
+                const state = getActiveTerminalState();
+                const usable = canUseAgentPanel(state);
+                agentPanel.classList.toggle('visible', usable);
+                const agent = state ? state.agent : null;
+                const mode = agent ? agent.mode : AGENT_MODE_DISABLED;
+                const pending = agent ? agent.pendingActions : 0;
+                agentPanelState.innerText = state ? `${state.label || state.id} · ${mode}${pending ? ` · ${pending} pending` : ''}` : AGENT_MODE_DISABLED;
+                agentModeButtons.forEach(button => {
+                    const buttonMode = button.dataset.agentMode;
+                    button.disabled = !usable;
+                    button.classList.toggle('active', buttonMode === mode);
+                });
+                agentMockInput.disabled = !usable || (mode !== 'approval_pending' && mode !== AGENT_MODE_DIRECT_ACTIVE);
+                agentMockSendBtn.disabled = agentMockInput.disabled || !agentMockInput.value;
+                renderAgentActionPanel(state);
+            }
+
             function resetAgentClientState(state) {
                 state.agent = createAgentClientState();
                 updateAgentPauseButton();
-            }
-
-            function attachAgentToTerminal(state) {
-                if (!socket || !socket.connected || !state || !state.connected || state.agent.attachRequested) return;
-                state.agent.attachRequested = true;
-                socket.emit('agent_attach', { terminal_id: state.id });
+                updateAgentPanel();
             }
 
             function detachAgentFromTerminal(state) {
@@ -806,8 +973,12 @@
                 state.agent.controlEpoch = Number.isFinite(Number(data.control_epoch)) ? Number(data.control_epoch) : null;
                 state.agent.runId = typeof data.run_id === 'string' ? data.run_id : null;
                 state.agent.pendingActions = normalizeAgentCount(data.pending_actions);
-                if (state.agent.pendingActions === 0) state.agent.openActionIds.clear();
+                if (state.agent.pendingActions === 0) {
+                    state.agent.openActionIds.clear();
+                    state.agent.pendingAction = null;
+                }
                 updateAgentPauseButton();
+                updateAgentPanel();
                 updateAgentDebugState('agent.state', state);
             }
 
@@ -831,12 +1002,17 @@
                     if (AGENT_OPEN_ACTION_STATUSES.has(status)) {
                         state.agent.openActionIds.add(actionId);
                         state.agent.pendingActions = Math.max(state.agent.pendingActions, state.agent.openActionIds.size);
+                        if (status === 'pending_approval') state.agent.pendingAction = data;
                     } else {
                         state.agent.openActionIds.delete(actionId);
                         state.agent.pendingActions = Math.max(state.agent.openActionIds.size, state.agent.pendingActions - 1, 0);
+                        if (state.agent.pendingAction && state.agent.pendingAction.action_id === actionId) {
+                            state.agent.pendingAction = null;
+                        }
                     }
                 }
                 updateAgentPauseButton();
+                updateAgentPanel();
                 updateAgentDebugState('agent.action', state);
             }
 
@@ -1196,6 +1372,7 @@
                 terminals.forEach(updateTabState);
                 updateTerminalActions();
                 updateAgentPauseButton();
+                updateAgentPanel();
                 if (!state) return;
                 sshStatusEl.innerText = state.connected ? state.label : (state.connecting ? 'Connecting' : 'Disconnected');
                 sshStatusEl.style.color = state.connected ? '#34c759' : (state.connecting ? '#ffcc00' : '#ff9f0a');
@@ -1440,7 +1617,6 @@
                         state.needsReplay = false;
                         socket.emit('replay_terminal', { terminal_id: state.id });
                     }
-                    if (state.connected) attachAgentToTerminal(state);
                 });
                 updateActiveTerminalUi();
                 updatePolicyDebugPanel('terminal_list', { count: data.terminals.length });
@@ -1608,8 +1784,58 @@
                 state.agent.mode = AGENT_MODE_PAUSED;
                 state.agent.pendingActions = 0;
                 state.agent.openActionIds.clear();
+                state.agent.pendingAction = null;
                 updateAgentPauseButton();
+                updateAgentPanel();
                 updateAgentDebugState('agent.pause_requested', state);
+            };
+            agentModeButtons.forEach(button => {
+                button.onclick = () => {
+                    const state = getActiveTerminalState();
+                    const mode = button.dataset.agentMode;
+                    if (!canUseAgentPanel(state) || !mode) return;
+                    const eventName = state.agent.paused && mode !== AGENT_MODE_DISABLED ? 'agent_resume' : 'agent_mode_set';
+                    socket.emit(eventName, { terminal_id: state.id, mode });
+                };
+            });
+            function getMockAgentInput() {
+                return agentMockInput.value
+                    .replace(/\\r/g, '\r')
+                    .replace(/\\n/g, '\n')
+                    .replace(/\\t/g, '\t');
+            }
+            agentMockInput.addEventListener('input', updateAgentPanel);
+            agentMockInput.addEventListener('keydown', event => {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    agentMockSendBtn.click();
+                }
+            });
+            agentMockSendBtn.onclick = () => {
+                const state = getActiveTerminalState();
+                if (!canUseAgentPanel(state) || agentMockSendBtn.disabled) return;
+                socket.emit('agent_suggestion_request', {
+                    terminal_id: state.id,
+                    mock_input: getMockAgentInput()
+                });
+            };
+            function getPendingAgentAction(state) {
+                return state && state.agent ? state.agent.pendingAction : null;
+            }
+            agentApproveBtn.onclick = () => {
+                const state = getActiveTerminalState();
+                const action = getPendingAgentAction(state);
+                if (!canUseAgentPanel(state) || !action || !action.action_id) return;
+                socket.emit('agent_action_approve', { terminal_id: state.id, action_id: action.action_id });
+            };
+            agentRejectBtn.onclick = () => {
+                const state = getActiveTerminalState();
+                const action = getPendingAgentAction(state);
+                if (!canUseAgentPanel(state) || !action || !action.action_id) return;
+                socket.emit('agent_action_reject', { terminal_id: state.id, action_id: action.action_id });
+            };
+            agentActionPauseBtn.onclick = () => {
+                agentPauseBtn.click();
             };
             newTabBtn.onclick = () => {
                 const terminalId = `term-${nextTerminalIndex}`;
@@ -1719,7 +1945,6 @@
                         state.termName = data.term || state.termName;
                         state.connectedAt = new Date();
                         state.needsReplay = false;
-                        attachAgentToTerminal(state);
                         if (state.id === activeTerminalId) {
                             updateActiveTerminalUi();
                             fitAndNotifyResize();

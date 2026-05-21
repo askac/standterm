@@ -1,8 +1,8 @@
 # Agent Socket Contract
 
-This document describes the internal Agent Socket.IO contract. The UI is not
-enabled yet; these events are currently for backend smoke tests and future
-Agent UI wiring.
+This document describes the internal Agent Socket.IO contract. The current UI
+contains a mock Agent panel for exercising the typed contract; no external
+provider is connected yet.
 
 ## Scope
 
@@ -20,6 +20,12 @@ bottom `[ PAUSE ]` control while structured Agent state says terminal input is
 direct-active or has pending actions. It must base that control only on typed
 `agent_state`, `agent_action_request`, and `agent_action_result` payloads, not
 terminal display text.
+
+The mock Agent panel may send `agent_mode_set`, `agent_suggestion_request`,
+`agent_action_approve`, `agent_action_reject`, and `agent_pause`. The approval
+panel must display only the public action metadata returned by the backend,
+including `escaped_preview`; it must not receive or render the raw terminal
+input payload.
 
 ## Client-to-Server Events
 
