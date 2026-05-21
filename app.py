@@ -164,6 +164,9 @@ AGENT_TRANSCRIPT_TTL_SECONDS = 30 * 60
 AGENT_TRANSCRIPT_MAX_EVENTS = 400
 AGENT_TRANSCRIPT_MAX_BYTES = 120000
 AGENT_TRANSCRIPT_MAX_EVENT_BYTES = 4096
+AGENT_USER_INPUT_METADATA_TTL_SECONDS = 30 * 60
+AGENT_USER_INPUT_METADATA_MAX_EVENTS = 400
+AGENT_USER_INPUT_PREVIEW_CHARS = 80
 ANSI_OSC_PATTERN = re.compile(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)')
 ANSI_CSI_PATTERN = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
 ANSI_ESCAPE_PATTERN = re.compile(r'\x1b[@-Z\\-_]')
@@ -2095,6 +2098,68 @@ def sanitize_agent_transcript_text(value):
 
 agent_transcript_store = AgentTranscriptStore()
 
+class AgentUserInputMetadataStore:
+    def __init__(self):
+        self._entries = {}
+
+    def append_input(self, session_token, terminal_id, data):
+        if not session_token or not terminal_id or not isinstance(data, str):
+            return
+        metadata = summarize_agent_user_input_metadata(terminal_id, data)
+        key = (session_token, terminal_id)
+        now = time.time()
+        metadata['timestamp'] = now
+        bucket = self._entries.setdefault(key, deque())
+        bucket.append(metadata)
+        self._trim_bucket(bucket, now)
+
+    def get_recent(self, session_token, terminal_id):
+        key = (session_token, terminal_id)
+        bucket = self._entries.get(key)
+        if not bucket:
+            return []
+        self._trim_bucket(bucket, time.time())
+        return [dict(event) for event in bucket]
+
+    def discard(self, session_token, terminal_id=None):
+        if terminal_id is not None:
+            self._entries.pop((session_token, terminal_id), None)
+            return
+        for key in [
+            key for key in self._entries
+            if key[0] == session_token
+        ]:
+            self._entries.pop(key, None)
+
+    def clear(self):
+        self._entries.clear()
+
+    def _trim_bucket(self, bucket, now):
+        expires_before = now - AGENT_USER_INPUT_METADATA_TTL_SECONDS
+        while bucket and (
+            len(bucket) > AGENT_USER_INPUT_METADATA_MAX_EVENTS
+            or bucket[0]['timestamp'] < expires_before
+        ):
+            bucket.popleft()
+
+def summarize_agent_user_input_metadata(terminal_id, value):
+    encoded = value.encode('utf-8', errors='ignore')
+    contains_control_chars = has_agent_control_chars(value)
+    metadata = {
+        'terminal_id': terminal_id,
+        'byte_length': len(encoded),
+        'line_count': value.count('\n') + (1 if value and not value.endswith('\n') else 0),
+        'contains_control_chars': contains_control_chars,
+    }
+    if value and not contains_control_chars:
+        preview = escape_agent_preview(value)
+        if len(preview) > AGENT_USER_INPUT_PREVIEW_CHARS:
+            preview = preview[:AGENT_USER_INPUT_PREVIEW_CHARS] + '...'
+        metadata['escaped_preview'] = preview
+    return metadata
+
+agent_user_input_metadata_store = AgentUserInputMetadataStore()
+
 class AgentControlState:
     def __init__(self, session_token, terminal_id, sid):
         self.session_token = session_token
@@ -2471,16 +2536,19 @@ def unregister_terminal_bridge(session_token, terminal_id, bridge):
     pop_bridge(session_token, terminal_id)
     invalidate_agent_states(session_token, terminal_id=terminal_id, reason=AGENT_REASON_TERMINAL_CLOSED)
     agent_transcript_store.discard(session_token, terminal_id)
+    agent_user_input_metadata_store.discard(session_token, terminal_id)
     close_bridge(bridge)
 
 def close_terminal_bridge(session_token, terminal_id):
     invalidate_agent_states(session_token, terminal_id=terminal_id, reason=AGENT_REASON_TERMINAL_CLOSED)
     agent_transcript_store.discard(session_token, terminal_id)
+    agent_user_input_metadata_store.discard(session_token, terminal_id)
     close_bridge(pop_bridge(session_token, terminal_id))
 
 def close_all_terminal_bridges(session_token):
     invalidate_agent_states(session_token, reason=AGENT_REASON_TERMINAL_CLOSED)
     agent_transcript_store.discard(session_token)
+    agent_user_input_metadata_store.discard(session_token)
     terminals = bridges.pop(session_token, {})
     for bridge in list(terminals.values()):
         close_bridge(bridge)
@@ -3311,6 +3379,7 @@ def on_ssh_input(data):
     if len(ssh_input.encode('utf-8', errors='ignore')) > MAX_SSH_INPUT_BYTES:
         return
     log_terminal_input(request.sid, terminal_id, ssh_input)
+    agent_user_input_metadata_store.append_input(session_token, terminal_id, ssh_input)
     bridge.write(ssh_input)
 
 @socketio.on('resize')

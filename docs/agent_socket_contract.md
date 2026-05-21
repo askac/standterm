@@ -187,3 +187,19 @@ Payload:
 The backend keeps an internal sanitized transcript buffer for future Agent
 context. It is copied from terminal output, stripped of ANSI/control sequences,
 bounded in memory, and not exposed to the current UI or mock provider.
+
+## Human Input Metadata Boundary
+
+The backend also keeps an internal bounded metadata buffer for human terminal
+input observed through the existing `ssh_input` event. This applies to SSH,
+Local Shell, and UART terminals because they share that input event. Metadata is
+recorded only after the current `ssh_input` session, terminal, bridge, type, and
+size validation passes, immediately before the input is written to the terminal
+bridge.
+
+The buffer is keyed by `session_token + terminal_id`, has a TTL, and is cleared
+when the terminal or session is closed. It stores only minimized metadata:
+timestamp, terminal id, byte length, line count, whether control characters were
+present, and a short escaped preview only when the payload has no unsafe control
+characters. It does not store SSH password form values, access tokens, browser
+authorization data, DOM/app state, or the full input payload.

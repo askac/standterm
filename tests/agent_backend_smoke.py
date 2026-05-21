@@ -33,6 +33,7 @@ def reset_state():
     webssh.socket_browser_auth_challenges.clear()
     webssh.agent_states.clear()
     webssh.agent_transcript_store.clear()
+    webssh.agent_user_input_metadata_store.clear()
 
 
 def make_client():
@@ -211,6 +212,11 @@ def test_terminal_close_invalidates_pending_action():
         'mock_input': 'after-close\n',
     })
     action = last_payload(client, webssh.AGENT_EVENT_ACTION_REQUEST)
+    webssh.agent_user_input_metadata_store.append_input(
+        session_token,
+        webssh.TERMINAL_ID_MAIN,
+        'manual-input\n',
+    )
 
     client.emit('close_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
     client.emit(webssh.AGENT_EVENT_ACTION_APPROVE, {
@@ -218,6 +224,7 @@ def test_terminal_close_invalidates_pending_action():
         'action_id': action['action_id'],
     })
     assert bridge.writes == []
+    assert webssh.agent_user_input_metadata_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN) == []
     assert last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)['error_code'] == webssh.AGENT_ERROR_NOT_ATTACHED
 
     client.disconnect()
@@ -279,6 +286,83 @@ def test_transcript_store_sanitizes_terminal_output():
     assert transcript[0]['untrusted'] is True
 
 
+def test_ssh_input_records_agent_metadata_after_validation():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+
+    client.emit('ssh_input', {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'data': 'whoami\nnext',
+    })
+
+    metadata = webssh.agent_user_input_metadata_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    assert bridge.writes == ['whoami\nnext']
+    assert len(metadata) == 1
+    assert metadata[0]['terminal_id'] == webssh.TERMINAL_ID_MAIN
+    assert metadata[0]['byte_length'] == len('whoami\nnext'.encode('utf-8'))
+    assert metadata[0]['line_count'] == 2
+    assert metadata[0]['contains_control_chars'] is False
+    assert metadata[0]['escaped_preview'] == 'whoami\\nnext'
+    assert 'data' not in metadata[0]
+
+    client.disconnect()
+
+
+def test_agent_input_metadata_bounds_and_sanitized_preview():
+    session_token = 'session-a'
+    long_input = 'x' * (webssh.AGENT_USER_INPUT_PREVIEW_CHARS + 20)
+
+    webssh.agent_user_input_metadata_store.append_input(
+        session_token,
+        webssh.TERMINAL_ID_MAIN,
+        long_input,
+    )
+    metadata = webssh.agent_user_input_metadata_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    assert metadata[0]['escaped_preview'].endswith('...')
+    assert len(metadata[0]['escaped_preview']) == webssh.AGENT_USER_INPUT_PREVIEW_CHARS + 3
+
+    webssh.agent_user_input_metadata_store.append_input(
+        session_token,
+        webssh.TERMINAL_ID_MAIN,
+        'stop\x03',
+    )
+    metadata = webssh.agent_user_input_metadata_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    assert metadata[-1]['contains_control_chars'] is True
+    assert 'escaped_preview' not in metadata[-1]
+
+    for index in range(webssh.AGENT_USER_INPUT_METADATA_MAX_EVENTS + 1):
+        webssh.agent_user_input_metadata_store.append_input(
+            session_token,
+            webssh.TERMINAL_ID_MAIN,
+            f'cmd-{index}\n',
+        )
+    metadata = webssh.agent_user_input_metadata_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    assert len(metadata) == webssh.AGENT_USER_INPUT_METADATA_MAX_EVENTS
+    assert metadata[0]['escaped_preview'] == 'cmd-1\\n'
+
+
+def test_ssh_input_does_not_record_invalid_or_oversized_metadata():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+
+    client.emit('ssh_input', {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'data': 123,
+    })
+    client.emit('ssh_input', {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'data': 'x' * (webssh.MAX_SSH_INPUT_BYTES + 1),
+    })
+
+    metadata = webssh.agent_user_input_metadata_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    assert metadata == []
+    assert bridge.writes == []
+
+    client.disconnect()
+
+
 def main():
     tests = [
         test_pause_blocks_pending_approval,
@@ -289,6 +373,9 @@ def main():
         test_disconnect_invalidates_agent_state,
         test_stale_epoch_write_is_rejected,
         test_transcript_store_sanitizes_terminal_output,
+        test_ssh_input_records_agent_metadata_after_validation,
+        test_agent_input_metadata_bounds_and_sanitized_preview,
+        test_ssh_input_does_not_record_invalid_or_oversized_metadata,
     ]
     for test in tests:
         reset_state()
