@@ -131,11 +131,14 @@ AGENT_EVENT_MODE_SET = 'agent_mode_set'
 AGENT_EVENT_PAUSE = 'agent_pause'
 AGENT_EVENT_RESUME = 'agent_resume'
 AGENT_EVENT_SUGGESTION_REQUEST = 'agent_suggestion_request'
+AGENT_EVENT_PROVIDER_RUN_REQUEST = 'agent_provider_run_request'
 AGENT_EVENT_ACTION_APPROVE = 'agent_action_approve'
 AGENT_EVENT_ACTION_REJECT = 'agent_action_reject'
+AGENT_EVENT_VIEWPORT_SNAPSHOT = 'agent_viewport_snapshot'
 AGENT_EVENT_STATE = 'agent_state'
 AGENT_EVENT_ACTION_REQUEST = 'agent_action_request'
 AGENT_EVENT_ACTION_RESULT = 'agent_action_result'
+AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT = 'agent_viewport_snapshot_result'
 AGENT_ERROR_NOT_ATTACHED = 'agent_not_attached'
 AGENT_ERROR_PAUSED = 'agent_paused'
 AGENT_ERROR_STALE_EPOCH = 'agent_stale_epoch'
@@ -150,6 +153,9 @@ AGENT_ERROR_INVALID_MODE = 'agent_invalid_mode'
 AGENT_ERROR_ACTION_NOT_ALLOWED = 'agent_action_not_allowed'
 AGENT_ERROR_MODE_NOT_WRITABLE = 'agent_mode_not_writable'
 AGENT_ERROR_ACTION_NOT_PENDING = 'agent_action_not_pending'
+AGENT_ERROR_SNAPSHOT_INVALID = 'agent_snapshot_invalid'
+AGENT_ERROR_SNAPSHOT_TOO_LARGE = 'agent_snapshot_too_large'
+AGENT_ERROR_SNAPSHOT_STALE = 'agent_snapshot_stale'
 AGENT_REASON_DETACHED = 'agent_detached'
 AGENT_REASON_DISABLED = 'agent_disabled'
 AGENT_REASON_MODE_CHANGED = 'agent_mode_changed'
@@ -167,6 +173,9 @@ AGENT_TRANSCRIPT_MAX_EVENT_BYTES = 4096
 AGENT_USER_INPUT_METADATA_TTL_SECONDS = 30 * 60
 AGENT_USER_INPUT_METADATA_MAX_EVENTS = 400
 AGENT_USER_INPUT_PREVIEW_CHARS = 80
+AGENT_VIEWPORT_SNAPSHOT_TTL_SECONDS = 5 * 60
+AGENT_VIEWPORT_SNAPSHOT_MAX_BYTES = 120000
+AGENT_VIEWPORT_SNAPSHOT_MAX_LINE_BYTES = 4096
 ANSI_OSC_PATTERN = re.compile(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)')
 ANSI_CSI_PATTERN = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
 ANSI_ESCAPE_PATTERN = re.compile(r'\x1b[@-Z\\-_]')
@@ -2160,6 +2169,110 @@ def summarize_agent_user_input_metadata(terminal_id, value):
 
 agent_user_input_metadata_store = AgentUserInputMetadataStore()
 
+class AgentViewportSnapshotStore:
+    def __init__(self):
+        self._entries = {}
+
+    def put(self, session_token, terminal_id, sid, snapshot):
+        if not session_token or not terminal_id or not sid:
+            return None, AGENT_ERROR_SNAPSHOT_INVALID
+        key = (session_token, terminal_id, sid)
+        now = time.time()
+        existing = self._entries.get(key)
+        snapshot_seq = snapshot.get('snapshot_seq')
+        if existing and isinstance(snapshot_seq, int) and snapshot_seq <= existing.get('snapshot_seq', -1):
+            stale = dict(snapshot)
+            stale['status'] = 'stale'
+            stale['stored_at'] = now
+            return stale, AGENT_ERROR_SNAPSHOT_STALE
+        stored = dict(snapshot)
+        stored['stored_at'] = now
+        stored['status'] = 'accepted'
+        stored['untrusted'] = True
+        self._entries[key] = stored
+        self._trim(now)
+        return dict(stored), None
+
+    def get_latest(self, session_token, terminal_id, sid):
+        key = (session_token, terminal_id, sid)
+        snapshot = self._entries.get(key)
+        if not snapshot:
+            return None
+        if snapshot.get('stored_at', 0) < time.time() - AGENT_VIEWPORT_SNAPSHOT_TTL_SECONDS:
+            self._entries.pop(key, None)
+            return None
+        return dict(snapshot)
+
+    def discard(self, session_token, terminal_id=None, sid=None):
+        for key in [
+            key for key in self._entries
+            if key[0] == session_token
+            and (terminal_id is None or key[1] == terminal_id)
+            and (sid is None or key[2] == sid)
+        ]:
+            self._entries.pop(key, None)
+
+    def clear(self):
+        self._entries.clear()
+
+    def _trim(self, now):
+        expires_before = now - AGENT_VIEWPORT_SNAPSHOT_TTL_SECONDS
+        for key in [
+            key for key, snapshot in self._entries.items()
+            if snapshot.get('stored_at', 0) < expires_before
+        ]:
+            self._entries.pop(key, None)
+
+def validate_agent_viewport_snapshot_payload(data):
+    if not isinstance(data, dict):
+        return None, AGENT_ERROR_SNAPSHOT_INVALID
+    terminal_id = validate_terminal_id_payload(data)
+    if not terminal_id:
+        return None, AGENT_ERROR_SNAPSHOT_INVALID
+    try:
+        cols = int(data.get('cols'))
+        rows = int(data.get('rows'))
+        viewport_y = int(data.get('viewport_y'))
+        base_y = int(data.get('base_y'))
+        snapshot_seq = int(data.get('snapshot_seq'))
+    except (TypeError, ValueError):
+        return None, AGENT_ERROR_SNAPSHOT_INVALID
+    if not (MIN_TERMINAL_COLS <= cols <= MAX_TERMINAL_COLS):
+        return None, AGENT_ERROR_SNAPSHOT_INVALID
+    if not (MIN_TERMINAL_ROWS <= rows <= MAX_TERMINAL_ROWS):
+        return None, AGENT_ERROR_SNAPSHOT_INVALID
+    if viewport_y < 0 or base_y < 0 or snapshot_seq < 1:
+        return None, AGENT_ERROR_SNAPSHOT_INVALID
+    lines = data.get('lines')
+    if not isinstance(lines, list) or len(lines) != rows:
+        return None, AGENT_ERROR_SNAPSHOT_INVALID
+    total_bytes = 0
+    normalized_lines = []
+    for line in lines:
+        if not isinstance(line, str):
+            return None, AGENT_ERROR_SNAPSHOT_INVALID
+        line_bytes = len(line.encode('utf-8', errors='ignore'))
+        if line_bytes > AGENT_VIEWPORT_SNAPSHOT_MAX_LINE_BYTES:
+            return None, AGENT_ERROR_SNAPSHOT_TOO_LARGE
+        total_bytes += line_bytes
+        if total_bytes > AGENT_VIEWPORT_SNAPSHOT_MAX_BYTES:
+            return None, AGENT_ERROR_SNAPSHOT_TOO_LARGE
+        normalized_lines.append(line)
+    return {
+        'terminal_id': terminal_id,
+        'cols': cols,
+        'rows': rows,
+        'viewport_y': viewport_y,
+        'base_y': base_y,
+        'snapshot_seq': snapshot_seq,
+        'captured_at': data.get('captured_at') if isinstance(data.get('captured_at'), str) else None,
+        'line_count': len(normalized_lines),
+        'byte_length': total_bytes,
+        'lines': normalized_lines,
+    }, None
+
+agent_viewport_snapshot_store = AgentViewportSnapshotStore()
+
 class AgentControlState:
     def __init__(self, session_token, terminal_id, sid):
         self.session_token = session_token
@@ -2196,7 +2309,22 @@ class MockAgentBridge:
             'data': data,
         }
 
+    def create_provider_run_action(self, state, context):
+        return {
+            'action_type': AGENT_ACTION_TERMINAL_INPUT,
+            'terminal_id': state.terminal_id,
+            'data': 'pwd\n',
+        }
+
 AGENT_BRIDGE = MockAgentBridge()
+
+def build_agent_context(session_token, terminal_id, sid):
+    return {
+        'terminal_id': terminal_id,
+        'viewport_snapshot': agent_viewport_snapshot_store.get_latest(session_token, terminal_id, sid),
+        'transcript_events': agent_transcript_store.get_recent(session_token, terminal_id),
+        'human_input_metadata': agent_user_input_metadata_store.get_recent(session_token, terminal_id),
+    }
 
 def agent_state_key(session_token, terminal_id, sid):
     return (session_token, terminal_id, sid)
@@ -2537,18 +2665,21 @@ def unregister_terminal_bridge(session_token, terminal_id, bridge):
     invalidate_agent_states(session_token, terminal_id=terminal_id, reason=AGENT_REASON_TERMINAL_CLOSED)
     agent_transcript_store.discard(session_token, terminal_id)
     agent_user_input_metadata_store.discard(session_token, terminal_id)
+    agent_viewport_snapshot_store.discard(session_token, terminal_id=terminal_id)
     close_bridge(bridge)
 
 def close_terminal_bridge(session_token, terminal_id):
     invalidate_agent_states(session_token, terminal_id=terminal_id, reason=AGENT_REASON_TERMINAL_CLOSED)
     agent_transcript_store.discard(session_token, terminal_id)
     agent_user_input_metadata_store.discard(session_token, terminal_id)
+    agent_viewport_snapshot_store.discard(session_token, terminal_id=terminal_id)
     close_bridge(pop_bridge(session_token, terminal_id))
 
 def close_all_terminal_bridges(session_token):
     invalidate_agent_states(session_token, reason=AGENT_REASON_TERMINAL_CLOSED)
     agent_transcript_store.discard(session_token)
     agent_user_input_metadata_store.discard(session_token)
+    agent_viewport_snapshot_store.discard(session_token)
     terminals = bridges.pop(session_token, {})
     for bridge in list(terminals.values()):
         close_bridge(bridge)
@@ -3102,8 +3233,7 @@ def on_agent_resume(data):
         state.run_id = secrets.token_urlsafe(12)
         emit_agent_state(request.sid, state)
 
-@socketio.on(AGENT_EVENT_SUGGESTION_REQUEST)
-def on_agent_suggestion_request(data):
+def process_agent_terminal_input_proposal(data, proposal_builder):
     session_token = socket_session_tokens.get(request.sid)
     terminal_id = validate_terminal_id_payload(data)
     if not session_token or not terminal_id or not isinstance(data, dict):
@@ -3126,8 +3256,8 @@ def on_agent_suggestion_request(data):
             emit_agent_error(request.sid, terminal_id, AGENT_ERROR_MODE_NOT_WRITABLE)
             emit_agent_state(request.sid, state)
             return
-        proposal = AGENT_BRIDGE.create_terminal_input_action(state, data)
-        if proposal.get('action_type') != AGENT_ACTION_TERMINAL_INPUT:
+        proposal = proposal_builder(session_token, terminal_id, request.sid, state, data)
+        if not isinstance(proposal, dict) or proposal.get('action_type') != AGENT_ACTION_TERMINAL_INPUT:
             emit_agent_error(request.sid, terminal_id, AGENT_ERROR_ACTION_NOT_ALLOWED)
             return
         requires_approval = state.mode != AGENT_MODE_DIRECT_ACTIVE
@@ -3156,6 +3286,29 @@ def on_agent_suggestion_request(data):
         state = get_agent_state(session_token, terminal_id, request.sid)
         if state:
             emit_agent_state(request.sid, state)
+
+
+@socketio.on(AGENT_EVENT_SUGGESTION_REQUEST)
+def on_agent_suggestion_request(data):
+    process_agent_terminal_input_proposal(
+        data,
+        lambda _session_token, _terminal_id, _sid, state, payload: (
+            AGENT_BRIDGE.create_terminal_input_action(state, payload)
+        ),
+    )
+
+
+@socketio.on(AGENT_EVENT_PROVIDER_RUN_REQUEST)
+def on_agent_provider_run_request(data):
+    process_agent_terminal_input_proposal(
+        data,
+        lambda session_token, terminal_id, sid, state, _payload: (
+            AGENT_BRIDGE.create_provider_run_action(
+                state,
+                build_agent_context(session_token, terminal_id, sid),
+            )
+        ),
+    )
 
 @socketio.on(AGENT_EVENT_ACTION_APPROVE)
 def on_agent_action_approve(data):
@@ -3233,6 +3386,63 @@ def on_agent_action_reject(data):
         record_agent_audit(state, action, AGENT_STATUS_REJECTED)
         emit_agent_action_result(request.sid, action, AGENT_STATUS_REJECTED)
         emit_agent_state(request.sid, state)
+
+
+@socketio.on(AGENT_EVENT_VIEWPORT_SNAPSHOT)
+def on_agent_viewport_snapshot(data):
+    session_token = socket_session_tokens.get(request.sid)
+    snapshot, error_code = validate_agent_viewport_snapshot_payload(data)
+    terminal_id = snapshot['terminal_id'] if snapshot else validate_terminal_id_payload(data)
+    if not session_token or not terminal_id:
+        return
+    result_payload = {
+        'terminal_id': terminal_id,
+        'status': 'failed',
+    }
+    if error_code:
+        result_payload['error_code'] = error_code
+        socketio.emit(AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT, result_payload, room=request.sid)
+        return
+
+    bridge = get_bridge(session_token, terminal_id)
+    if not bridge:
+        result_payload['error_code'] = AGENT_ERROR_TERMINAL_NOT_FOUND
+        socketio.emit(AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT, result_payload, room=request.sid)
+        return
+    if request.sid not in bridge.attached_sids:
+        result_payload['error_code'] = AGENT_ERROR_NOT_ATTACHED
+        socketio.emit(AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT, result_payload, room=request.sid)
+        return
+
+    stored, store_error = agent_viewport_snapshot_store.put(
+        session_token,
+        terminal_id,
+        request.sid,
+        snapshot,
+    )
+    if store_error:
+        result_payload.update({
+            'status': 'stale' if store_error == AGENT_ERROR_SNAPSHOT_STALE else 'failed',
+            'error_code': store_error,
+            'snapshot_seq': snapshot.get('snapshot_seq'),
+        })
+        socketio.emit(AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT, result_payload, room=request.sid)
+        return
+
+    socketio.emit(
+        AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT,
+        {
+            'terminal_id': terminal_id,
+            'status': 'accepted',
+            'snapshot_seq': stored['snapshot_seq'],
+            'cols': stored['cols'],
+            'rows': stored['rows'],
+            'line_count': stored['line_count'],
+            'byte_length': stored['byte_length'],
+            'stored_at': stored['stored_at'],
+        },
+        room=request.sid,
+    )
 
 
 @socketio.on('start_ssh')
@@ -3434,6 +3644,7 @@ def on_disconnect(reason=None):
     socket_browser_auth_challenges.pop(request.sid, None)
     if session_token:
         invalidate_agent_states(session_token, sid=request.sid, reason=AGENT_REASON_DISCONNECTED)
+        agent_viewport_snapshot_store.discard(session_token, sid=request.sid)
         detach_session_bridges(session_token, request.sid)
     print(f"[-] Client disconnected: {request.sid} from {client_ip}; reason={reason or 'unknown'}")
 

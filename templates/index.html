@@ -216,6 +216,7 @@
         }
         #agent-mode-controls button.active { border-color: #0a84ff; color: #fff; background: #183452; }
         #agent-mode-controls button:disabled, #agent-action-controls button:disabled, #agent-mock-row button:disabled { opacity: 0.45; cursor: default; }
+        #agent-mock-row button { flex: 0 0 auto; }
         #agent-mock-input {
             min-width: 0;
             flex: 1;
@@ -503,6 +504,7 @@
             <div id="agent-mock-row">
                 <input type="text" id="agent-mock-input" autocomplete="off" spellcheck="false" value="whoami\n">
                 <button type="button" id="agent-mock-send-btn">Send</button>
+                <button type="button" id="agent-provider-run-btn">Run</button>
             </div>
             <div id="agent-action-box">
                 <div class="agent-preview" id="agent-action-preview"></div>
@@ -540,6 +542,7 @@
         const AGENT_MODE_DIRECT_ACTIVE = 'direct_active';
         const AGENT_MODE_PAUSED = 'paused';
         const AGENT_OPEN_ACTION_STATUSES = new Set(['pending_approval', 'direct_pending', 'approved']);
+        const AGENT_VIEWPORT_SNAPSHOT_DEBOUNCE_MS = 250;
         const SCHEMES = {
             ibm5153: { background: '#000000', foreground: '#aaaaaa', black: '#000000', red: '#aa0000', green: '#00aa00', yellow: '#aa5500', blue: '#0000aa', magenta: '#aa00aa', cyan: '#00aaaa', white: '#aaaaaa', brightBlack: '#555555', brightRed: '#ff5555', brightGreen: '#55ff55', brightYellow: '#ffff55', brightBlue: '#5555ff', brightMagenta: '#ff55ff', brightCyan: '#55ffff', brightWhite: '#ffffff', cursor: '#aaaaaa' },
             campbell: { background: '#0C0C0C', foreground: '#CCCCCC', black: '#0C0C0C', red: '#C50F1F', green: '#13A10E', yellow: '#C19C00', blue: '#0037DA', magenta: '#881798', cyan: '#3A96DD', white: '#CCCCCC', brightBlack: '#767676', brightRed: '#E74856', brightGreen: '#16C60C', brightYellow: '#F9F1A5', brightBlue: '#3B78FF', brightMagenta: '#B4009E', brightCyan: '#61D6D6', brightWhite: '#F2F2F2', cursor: '#FFFFFF' },
@@ -774,6 +777,7 @@
             const agentModeButtons = [...document.querySelectorAll('[data-agent-mode]')];
             const agentMockInput = document.getElementById('agent-mock-input');
             const agentMockSendBtn = document.getElementById('agent-mock-send-btn');
+            const agentProviderRunBtn = document.getElementById('agent-provider-run-btn');
             const agentActionBox = document.getElementById('agent-action-box');
             const agentActionPreview = document.getElementById('agent-action-preview');
             const agentActionTarget = document.getElementById('agent-action-target');
@@ -867,7 +871,10 @@
                     pendingActions: 0,
                     openActionIds: new Set(),
                     lastAction: null,
-                    pendingAction: null
+                    pendingAction: null,
+                    snapshotSeq: 0,
+                    snapshotTimer: null,
+                    lastSnapshotResult: null
                 };
             }
 
@@ -953,18 +960,82 @@
                 });
                 agentMockInput.disabled = !usable || (mode !== 'approval_pending' && mode !== AGENT_MODE_DIRECT_ACTIVE);
                 agentMockSendBtn.disabled = agentMockInput.disabled || !agentMockInput.value;
+                agentProviderRunBtn.disabled = agentMockInput.disabled;
                 renderAgentActionPanel(state);
             }
 
             function resetAgentClientState(state) {
+                if (state.agent && state.agent.snapshotTimer) clearTimeout(state.agent.snapshotTimer);
                 state.agent = createAgentClientState();
                 updateAgentPauseButton();
                 updateAgentPanel();
             }
 
             function detachAgentFromTerminal(state) {
+                if (state && state.agent && state.agent.snapshotTimer) {
+                    clearTimeout(state.agent.snapshotTimer);
+                    state.agent.snapshotTimer = null;
+                }
                 if (!socket || !socket.connected || !state || !state.agent.attachRequested) return;
                 socket.emit('agent_detach', { terminal_id: state.id });
+            }
+
+            function buildAgentViewportSnapshot(state) {
+                if (!state || !state.term || !state.agent.attached) return null;
+                const activeBuffer = state.term.buffer && state.term.buffer.active;
+                if (!activeBuffer || typeof activeBuffer.getLine !== 'function') return null;
+                const cols = state.term.cols;
+                const rows = state.term.rows;
+                if (!Number.isFinite(cols) || !Number.isFinite(rows) || rows <= 0 || cols <= 0) return null;
+                const viewportY = Number.isFinite(Number(activeBuffer.viewportY)) ? Number(activeBuffer.viewportY) : 0;
+                const baseY = Number.isFinite(Number(activeBuffer.baseY)) ? Number(activeBuffer.baseY) : 0;
+                const lines = [];
+                for (let row = 0; row < rows; row += 1) {
+                    const bufferLine = activeBuffer.getLine(viewportY + row);
+                    lines.push(bufferLine ? bufferLine.translateToString(true) : '');
+                }
+                state.agent.snapshotSeq += 1;
+                return {
+                    terminal_id: state.id,
+                    cols,
+                    rows,
+                    viewport_y: viewportY,
+                    base_y: baseY,
+                    snapshot_seq: state.agent.snapshotSeq,
+                    captured_at: new Date().toISOString(),
+                    lines
+                };
+            }
+
+            function sendAgentViewportSnapshot(state) {
+                if (!socket || !socket.connected || !state || !state.connected || !state.agent.attached) return;
+                const snapshot = buildAgentViewportSnapshot(state);
+                if (!snapshot) return;
+                socket.emit('agent_viewport_snapshot', snapshot);
+                updateAgentDebugState('agent.viewport_snapshot_sent', state);
+            }
+
+            function scheduleAgentViewportSnapshot(state = getActiveTerminalState()) {
+                if (!socket || !socket.connected || !state || !state.connected || !state.agent.attached) return;
+                if (state.agent.snapshotTimer) clearTimeout(state.agent.snapshotTimer);
+                state.agent.snapshotTimer = setTimeout(() => {
+                    state.agent.snapshotTimer = null;
+                    sendAgentViewportSnapshot(state);
+                }, AGENT_VIEWPORT_SNAPSHOT_DEBOUNCE_MS);
+            }
+
+            function applyAgentViewportSnapshotResult(data) {
+                if (!data || typeof data.terminal_id !== 'string') return;
+                const state = terminals.get(data.terminal_id);
+                if (!state) return;
+                state.agent.lastSnapshotResult = {
+                    status: typeof data.status === 'string' ? data.status : null,
+                    errorCode: typeof data.error_code === 'string' ? data.error_code : null,
+                    snapshotSeq: Number.isFinite(Number(data.snapshot_seq)) ? Number(data.snapshot_seq) : null,
+                    byteLength: Number.isFinite(Number(data.byte_length)) ? Number(data.byte_length) : null,
+                    lineCount: Number.isFinite(Number(data.line_count)) ? Number(data.line_count) : null
+                };
+                updateAgentDebugState('agent.viewport_snapshot_result', state);
             }
 
             function applyAgentStatePayload(data) {
@@ -989,6 +1060,7 @@
                 updateAgentPauseButton();
                 updateAgentPanel();
                 updateAgentDebugState('agent.state', state);
+                scheduleAgentViewportSnapshot(state);
             }
 
             function applyAgentActionPayload(data) {
@@ -1334,6 +1406,7 @@
                 if (state.lastNotifiedSize.cols === state.term.cols && state.lastNotifiedSize.rows === state.term.rows) return;
                 state.lastNotifiedSize = { cols: state.term.cols, rows: state.term.rows };
                 socket.emit('resize', { terminal_id: state.id, cols: state.term.cols, rows: state.term.rows });
+                scheduleAgentViewportSnapshot(state);
             }
 
             function fitAndNotifyResize() {
@@ -1410,6 +1483,7 @@
                 requestAnimationFrame(() => {
                     fitAndNotifyResize();
                     nextState.term.focus();
+                    scheduleAgentViewportSnapshot(nextState);
                 });
             }
 
@@ -1468,6 +1542,7 @@
                 terminals.set(terminalId, state);
                 configureWebLinks(state);
                 term.onResize(() => notifyTerminalResize(state));
+                term.onScroll(() => scheduleAgentViewportSnapshot(state));
                 term.onData(data => {
                     if (socket && socket.connected && state.connected) {
                         socket.emit('ssh_input', { terminal_id: state.id, data });
@@ -1640,12 +1715,16 @@
             socket.on('agent_action_result', data => {
                 applyAgentActionPayload(data);
             });
+            socket.on('agent_viewport_snapshot_result', data => {
+                applyAgentViewportSnapshotResult(data);
+            });
             socket.on('disconnect', (r) => {
                 clearBrowserPairingResponseTimer();
                 setBrowserAuthBusy(false);
                 socketStatusEl.innerText = "Disconnected (" + r + ")";
                 socketStatusEl.style.color = "#ff9f0a";
                 terminals.forEach(state => {
+                    if (state.agent && state.agent.snapshotTimer) clearTimeout(state.agent.snapshotTimer);
                     state.connected = false;
                     state.connecting = false;
                     state.error = true;
@@ -1828,6 +1907,14 @@
                     mock_input: getMockAgentInput()
                 });
             };
+            agentProviderRunBtn.onclick = () => {
+                const state = getActiveTerminalState();
+                if (!canUseAgentPanel(state) || agentProviderRunBtn.disabled) return;
+                sendAgentViewportSnapshot(state);
+                socket.emit('agent_provider_run_request', {
+                    terminal_id: state.id
+                });
+            };
             function getPendingAgentAction(state) {
                 return state && state.agent ? state.agent.pendingAction : null;
             }
@@ -1963,6 +2050,7 @@
                             updateActiveTerminalUi();
                             fitAndNotifyResize();
                             setTimeout(() => state.term.focus(), 100);
+                            scheduleAgentViewportSnapshot(state);
                         } else {
                             updateTabState(state);
                         }
@@ -1982,7 +2070,9 @@
                         }
                         break;
                     case 'terminal':
-                        if (typeof data.data === 'string') state.term.write(data.data);
+                        if (typeof data.data === 'string') {
+                            state.term.write(data.data, () => scheduleAgentViewportSnapshot(state));
+                        }
                         break;
                     default:
                         if (debugEnabled) {

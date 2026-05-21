@@ -22,14 +22,17 @@ direct-active or has pending actions. It must base that control only on typed
 terminal display text.
 
 The mock Agent panel may send `agent_mode_set`, `agent_suggestion_request`,
-`agent_action_approve`, `agent_action_reject`, and `agent_pause`. The approval
-panel must display only the public action metadata returned by the backend,
-including `escaped_preview`; it must not receive or render the raw terminal
-input payload.
+`agent_provider_run_request`, `agent_action_approve`, `agent_action_reject`,
+and `agent_pause`. The approval panel must display only the public action
+metadata returned by the backend, including `escaped_preview`; it must not
+receive or render the raw terminal input payload.
 
-The mock panel is opened manually from the status bar `[Agent]` toggle. A
-terminal connection must not automatically expand the panel when Agent state is
-not attached.
+The mock panel is opened manually from the status bar `Show Agent Panel` /
+`Hide Agent Panel` toggle. A terminal connection must not automatically expand
+the panel when Agent state is not attached.
+
+The frontend may send xterm viewport snapshots as typed Agent context. Snapshot
+text is untrusted display data and must not be used as a control signal.
 
 ## Client-to-Server Events
 
@@ -106,6 +109,24 @@ Creates a mock `terminal_input` action. In `approval_pending` mode, the server
 emits an `agent_action_request`. In `direct_active` mode, the action is written
 through `AgentInputGate`.
 
+### `agent_provider_run_request`
+
+Payload:
+
+```json
+{ "terminal_id": "main" }
+```
+
+Runs the current backend mock provider against the internal Agent context
+builder. The context builder can read the latest same-browser-sid viewport
+snapshot, sanitized transcript events, and minimized human input metadata. The
+current mock provider emits a fixed `terminal_input` proposal for local contract
+testing; it is not an external LLM provider.
+
+In `approval_pending` mode, the resulting action is emitted as
+`agent_action_request`. In `direct_active` mode, it is written only through
+`AgentInputGate`.
+
 ### `agent_action_approve`
 
 Payload:
@@ -126,6 +147,29 @@ Payload:
 ```
 
 Rejects a pending action for this exact sid and terminal.
+
+### `agent_viewport_snapshot`
+
+Payload:
+
+```json
+{
+  "terminal_id": "main",
+  "cols": 80,
+  "rows": 24,
+  "viewport_y": 120,
+  "base_y": 120,
+  "snapshot_seq": 7,
+  "captured_at": "2026-05-22T00:00:00.000Z",
+  "lines": ["visible terminal line", "..."]
+}
+```
+
+Stores the current xterm viewport for future Agent context. The snapshot is
+scoped to the current browser sid, session token, and terminal id. The backend
+accepts it only when the sid is currently attached to that terminal, validates
+cols, rows, line count, monotonic `snapshot_seq`, and total byte limits, and
+clears stored snapshots on terminal close, session close, or sid disconnect.
 
 ## Server-to-Client Events
 
@@ -185,6 +229,25 @@ Payload:
 
 `error_code` is present for failed or cancelled operations.
 
+### `agent_viewport_snapshot_result`
+
+Payload:
+
+```json
+{
+  "terminal_id": "main",
+  "status": "accepted",
+  "snapshot_seq": 7,
+  "cols": 80,
+  "rows": 24,
+  "line_count": 24,
+  "byte_length": 1024
+}
+```
+
+Rejected snapshots use `status: "failed"` or `status: "stale"` and include an
+explicit `error_code`.
+
 ## Important Error Codes
 
 - `agent_not_attached`
@@ -197,6 +260,9 @@ Payload:
 - `agent_invalid_mode`
 - `agent_mode_not_writable`
 - `agent_action_not_pending`
+- `agent_snapshot_invalid`
+- `agent_snapshot_too_large`
+- `agent_snapshot_stale`
 
 ## Transcript Boundary
 
@@ -219,3 +285,11 @@ timestamp, terminal id, byte length, line count, whether control characters were
 present, and a short escaped preview only when the payload has no unsafe control
 characters. It does not store SSH password form values, access tokens, browser
 authorization data, DOM/app state, or the full input payload.
+
+## Viewport Snapshot Boundary
+
+The viewport snapshot store is separate from terminal transcript and input
+metadata stores. It is keyed by `session_token + terminal_id + browser sid`,
+bounded by row, column, line-byte, total-byte, and TTL limits, and stores the
+latest accepted snapshot only for that sid. Snapshot lines are terminal display
+payload and remain data only.

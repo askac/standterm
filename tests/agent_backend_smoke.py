@@ -34,6 +34,7 @@ def reset_state():
     webssh.agent_states.clear()
     webssh.agent_transcript_store.clear()
     webssh.agent_user_input_metadata_store.clear()
+    webssh.agent_viewport_snapshot_store.clear()
 
 
 def make_client():
@@ -45,9 +46,31 @@ def make_client():
     return socket_client
 
 
+def make_flask_client():
+    flask_client = webssh.app.test_client()
+    response = flask_client.get('/?token=' + webssh.ACCESS_TOKEN)
+    assert response.status_code == 200, response.status_code
+    return flask_client
+
+
+def make_socket_client(flask_client):
+    socket_client = webssh.socketio.test_client(webssh.app, flask_test_client=flask_client)
+    assert socket_client.is_connected()
+    return socket_client
+
+
 def current_session_token():
     assert webssh.socket_session_tokens
     return next(reversed(webssh.socket_session_tokens.values()))
+
+
+def current_sid_for_session(session_token):
+    matches = [
+        sid for sid, token in webssh.socket_session_tokens.items()
+        if token == session_token
+    ]
+    assert matches
+    return matches[-1]
 
 
 def received_events(client, name):
@@ -64,6 +87,19 @@ def add_dummy_bridge(session_token):
     bridge = DummyBridge(session_token, webssh.TERMINAL_ID_MAIN)
     webssh.set_bridge(session_token, webssh.TERMINAL_ID_MAIN, bridge)
     return bridge
+
+
+def valid_viewport_snapshot(seq=1, rows=2, cols=4, fill='line'):
+    return {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'cols': cols,
+        'rows': rows,
+        'viewport_y': 0,
+        'base_y': 0,
+        'snapshot_seq': seq,
+        'captured_at': '2026-05-22T00:00:00.000Z',
+        'lines': [fill for _ in range(rows)],
+    }
 
 
 def test_pause_blocks_pending_approval():
@@ -132,6 +168,47 @@ def test_approval_and_direct_writes_use_gate():
         'mock_input': 'direct\n',
     })
     assert ''.join(bridge.writes) == 'approved\ndirect\n'
+    assert last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)['status'] == webssh.AGENT_STATUS_COMPLETED
+
+    client.disconnect()
+
+
+def test_provider_run_uses_agent_gate():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot())
+    assert last_payload(client, webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)['status'] == 'accepted'
+
+    client.emit(webssh.AGENT_EVENT_MODE_SET, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'mode': 'approval',
+    })
+    client.emit(webssh.AGENT_EVENT_PROVIDER_RUN_REQUEST, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    })
+    action = last_payload(client, webssh.AGENT_EVENT_ACTION_REQUEST)
+    assert action['requires_approval'] is True
+    assert action['escaped_preview'] == 'pwd\\n'
+    assert bridge.writes == []
+
+    client.emit(webssh.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'action_id': action['action_id'],
+    })
+    assert ''.join(bridge.writes) == 'pwd\n'
+
+    client.emit(webssh.AGENT_EVENT_MODE_SET, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'mode': 'direct',
+    })
+    client.emit(webssh.AGENT_EVENT_PROVIDER_RUN_REQUEST, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    })
+    assert ''.join(bridge.writes) == 'pwd\npwd\n'
     assert last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)['status'] == webssh.AGENT_STATUS_COMPLETED
 
     client.disconnect()
@@ -363,10 +440,119 @@ def test_ssh_input_does_not_record_invalid_or_oversized_metadata():
     client.disconnect()
 
 
+def test_viewport_snapshot_is_sid_scoped():
+    flask_client = make_flask_client()
+    client_a = make_socket_client(flask_client)
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+    client_b = make_socket_client(flask_client)
+
+    client_a.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    assert bridge.attached_sids
+
+    client_b.emit(webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot())
+    result = last_payload(client_b, webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)
+    assert result['error_code'] == webssh.AGENT_ERROR_NOT_ATTACHED
+    assert webssh.agent_viewport_snapshot_store._entries == {}
+
+    client_a.disconnect()
+    client_b.disconnect()
+
+
+def test_viewport_snapshot_accepts_attached_sid():
+    client = make_client()
+    session_token = current_session_token()
+    add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+
+    client.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot(seq=1))
+    result = last_payload(client, webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)
+    assert result['status'] == 'accepted'
+    assert result['snapshot_seq'] == 1
+    assert result['line_count'] == 2
+    assert result['byte_length'] == len('lineline'.encode('utf-8'))
+
+    stored = webssh.agent_viewport_snapshot_store.get_latest(
+        session_token,
+        webssh.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert stored is not None
+    assert stored['lines'] == ['line', 'line']
+    assert stored['untrusted'] is True
+
+    client.disconnect()
+
+
+def test_viewport_snapshot_rejects_oversized_payload():
+    client = make_client()
+    session_token = current_session_token()
+    add_dummy_bridge(session_token)
+
+    client.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    oversized = valid_viewport_snapshot()
+    oversized['lines'][0] = 'x' * (webssh.AGENT_VIEWPORT_SNAPSHOT_MAX_LINE_BYTES + 1)
+    client.emit(webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT, oversized)
+
+    result = last_payload(client, webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)
+    assert result['error_code'] == webssh.AGENT_ERROR_SNAPSHOT_TOO_LARGE
+    assert webssh.agent_viewport_snapshot_store._entries == {}
+
+    client.disconnect()
+
+
+def test_viewport_snapshot_stale_sequence_is_rejected():
+    client = make_client()
+    session_token = current_session_token()
+    add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+
+    client.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot(seq=2, fill='new'))
+    assert last_payload(client, webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)['status'] == 'accepted'
+    client.emit(webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot(seq=1, fill='old'))
+
+    result = last_payload(client, webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)
+    assert result['status'] == 'stale'
+    assert result['error_code'] == webssh.AGENT_ERROR_SNAPSHOT_STALE
+    stored = webssh.agent_viewport_snapshot_store.get_latest(
+        session_token,
+        webssh.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert stored['lines'] == ['new', 'new']
+
+    client.disconnect()
+
+
+def test_viewport_snapshot_context_clears_on_terminal_close_and_disconnect():
+    client = make_client()
+    session_token = current_session_token()
+    add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+
+    client.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot())
+    assert webssh.agent_viewport_snapshot_store.get_latest(session_token, webssh.TERMINAL_ID_MAIN, sid)
+
+    client.emit('close_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    assert webssh.agent_viewport_snapshot_store.get_latest(session_token, webssh.TERMINAL_ID_MAIN, sid) is None
+
+    add_dummy_bridge(session_token)
+    client.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot(seq=2))
+    assert webssh.agent_viewport_snapshot_store.get_latest(session_token, webssh.TERMINAL_ID_MAIN, sid)
+
+    client.disconnect()
+    assert webssh.agent_viewport_snapshot_store.get_latest(session_token, webssh.TERMINAL_ID_MAIN, sid) is None
+
+
 def main():
     tests = [
         test_pause_blocks_pending_approval,
         test_approval_and_direct_writes_use_gate,
+        test_provider_run_uses_agent_gate,
         test_wrong_sid_cannot_approve_action,
         test_mode_change_cancels_pending_action,
         test_terminal_close_invalidates_pending_action,
@@ -376,6 +562,11 @@ def main():
         test_ssh_input_records_agent_metadata_after_validation,
         test_agent_input_metadata_bounds_and_sanitized_preview,
         test_ssh_input_does_not_record_invalid_or_oversized_metadata,
+        test_viewport_snapshot_is_sid_scoped,
+        test_viewport_snapshot_accepts_attached_sid,
+        test_viewport_snapshot_rejects_oversized_payload,
+        test_viewport_snapshot_stale_sequence_is_rejected,
+        test_viewport_snapshot_context_clears_on_terminal_close_and_disconnect,
     ]
     for test in tests:
         reset_state()
