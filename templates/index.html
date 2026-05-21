@@ -415,6 +415,11 @@
     <script>
         // --- Official Windows Terminal Color Schemes Replicated ---
         const INITIAL_TERMINAL_POLICY = {{ terminal_policy|tojson }};
+        const initialUrl = new URL(window.location.href);
+        if (initialUrl.searchParams.has('token')) {
+            initialUrl.searchParams.delete('token');
+            history.replaceState(null, document.title, `${initialUrl.pathname}${initialUrl.search}${initialUrl.hash}`);
+        }
         const CONNECTION_LABELS = {
             ssh: 'SSH',
             local_shell: 'Local Shell',
@@ -1221,7 +1226,7 @@
             updateActiveTerminalUi();
             requestAnimationFrame(fitAndNotifyResize);
 
-            socket = io({ transports: ['websocket'], reconnectionAttempts: 5 });
+            socket = io({ transports: ['polling', 'websocket'], reconnectionAttempts: 5 });
             socket.on('connect', () => {
                 socketStatusEl.innerText = "Connected";
                 socketStatusEl.style.color = "#34c759";

@@ -68,6 +68,12 @@ Local Shell is selected by default when the browser is local or authorized, but
 WebSSH does not automatically start a shell. Click **Connect to Local Shell** to
 open the session.
 
+For multiple Windows browsers connecting to WSL, open the full Access URL printed
+by `run.sh` in each browser, including `?token=...`. The loaded WebSSH page
+redirects to `/` after creating that browser's session cookie, so copying the
+post-redirect URL from Chrome to Edge will not carry access. Each browser may
+also show its own HTTPS trust warning until the WebSSH CA is trusted.
+
 To authorize a browser from the WSL IP URL:
 
 1. Open the HTTPS Access URL printed by `run.sh`.

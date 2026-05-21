@@ -71,12 +71,17 @@ if [ ! -d "$VENV_DIR" ]; then
 fi
 
 # 2. Activate virtual environment
+echo "[*] Using Python virtual environment: $VENV_DIR"
+echo "[*] Activating virtual environment..."
 source "$VENV_DIR/bin/activate"
 
+echo "[*] Checking Python dependencies..."
 if ! python -c "import serial" >/dev/null 2>&1; then
+    echo "[*] pyserial is missing or unavailable; dependency check will run."
     FORCE_RECHECK=true
 fi
 if ! python -c "import cryptography" >/dev/null 2>&1; then
+    echo "[*] cryptography is missing or unavailable; dependency check will run."
     FORCE_RECHECK=true
 fi
 
@@ -122,6 +127,7 @@ ensure_wsl_windows_uart_helper() {
         }
     fi
 
+    echo "[*] WSL UART note: checking Windows COM bridge dependencies..."
     if ! "$WIN_UART_VENV_DIR/Scripts/python.exe" -c "import serial" >/dev/null 2>&1; then
         echo "[*] WSL UART note: installing pyserial in Windows helper venv..."
         "$WIN_UART_VENV_DIR/Scripts/python.exe" -m pip install -q pyserial >/dev/null 2>&1 || {

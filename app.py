@@ -1739,6 +1739,29 @@ def add_common_headers(response):
     response.headers['X-Content-Type-Options'] = 'nosniff'
     return response
 
+def build_access_required_response():
+    response = make_response('''
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WebSSH Access Required</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 3rem; line-height: 1.5; color: #1f2937; }
+    code { background: #f3f4f6; padding: 0.1rem 0.3rem; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>WebSSH access required</h1>
+  <p>Open the full Access URL printed by the launcher, including <code>?token=...</code>.</p>
+  <p>If you copied the URL from another browser after it loaded, copy the launcher URL again instead.</p>
+  <p>For Windows browsers connecting to a WSL IP over HTTPS, the browser may also require trusting the WebSSH local CA.</p>
+</body>
+</html>
+''', 403)
+    return add_common_headers(response)
+
 def close_bridge(bridge):
     if not bridge:
         return
@@ -2008,13 +2031,18 @@ def build_session_response():
     ensure_session_cleanup_task()
     session_token = secrets.token_urlsafe(32)
     active_sessions[session_token] = time.time() + SESSION_COOKIE_MAX_AGE
-    response = redirect('/')
+    response = make_response(render_template(
+        'index.html',
+        ssh_term=SSH_TERM,
+        terminal_policy=build_terminal_policy(),
+    ))
     response.set_cookie(
         SESSION_COOKIE_NAME,
         session_token,
         max_age=SESSION_COOKIE_MAX_AGE,
         httponly=True,
         samesite='Strict',
+        secure=HTTPS_ENABLED,
     )
     return add_common_headers(response)
 
@@ -2036,7 +2064,7 @@ def index():
         return build_session_response()
 
     if not is_valid_session(request.cookies.get(SESSION_COOKIE_NAME)):
-        return abort(403, description="Invalid or missing access token.")
+        return build_access_required_response()
 
     response = make_response(render_template(
         'index.html',
