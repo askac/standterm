@@ -97,6 +97,7 @@ def valid_viewport_snapshot(seq=1, rows=2, cols=4, fill='line'):
         'viewport_y': 0,
         'base_y': 0,
         'snapshot_seq': seq,
+        'output_seq': 0,
         'captured_at': '2026-05-22T00:00:00.000Z',
         'lines': [fill for _ in range(rows)],
     }
@@ -363,6 +364,29 @@ def test_transcript_store_sanitizes_terminal_output():
     assert transcript[0]['untrusted'] is True
 
 
+def test_terminal_bridge_tracks_shared_session_metadata():
+    session_token = 'session-a'
+    bridge = add_dummy_bridge(session_token)
+    bridge.update_terminal_size(132, 43)
+
+    bridge.emit_output({
+        'message_type': 'terminal',
+        'data': 'first\n',
+    })
+    bridge.emit_output({
+        'message_type': 'terminal',
+        'data': 'second\n',
+    })
+
+    assert bridge.output_seq == 2
+    assert bridge.replay_buffer[0]['output_seq'] == 1
+    assert bridge.replay_buffer[1]['output_seq'] == 2
+    metadata = bridge.session_metadata()
+    assert metadata['cols'] == 132
+    assert metadata['rows'] == 43
+    assert metadata['output_seq'] == 2
+
+
 def test_ssh_input_records_agent_metadata_after_validation():
     client = make_client()
     session_token = current_session_token()
@@ -462,11 +486,17 @@ def test_viewport_snapshot_is_sid_scoped():
 def test_viewport_snapshot_accepts_attached_sid():
     client = make_client()
     session_token = current_session_token()
-    add_dummy_bridge(session_token)
+    bridge = add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
+    bridge.emit_output({
+        'message_type': 'terminal',
+        'data': 'screen\n',
+    })
 
     client.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot(seq=1))
+    snapshot = valid_viewport_snapshot(seq=1)
+    snapshot['output_seq'] = bridge.output_seq
+    client.emit(webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT, snapshot)
     result = last_payload(client, webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)
     assert result['status'] == 'accepted'
     assert result['snapshot_seq'] == 1
@@ -481,6 +511,13 @@ def test_viewport_snapshot_accepts_attached_sid():
     assert stored is not None
     assert stored['lines'] == ['line', 'line']
     assert stored['untrusted'] is True
+    assert stored['output_seq'] == 1
+
+    context = webssh.build_agent_context(session_token, webssh.TERMINAL_ID_MAIN, sid)
+    assert context['terminal_session']['output_seq'] == 1
+    assert context['active_screen']['source'] == 'browser_viewport_snapshot'
+    assert context['active_screen']['provisional'] is True
+    assert context['active_screen']['output_seq'] == 1
 
     client.disconnect()
 
@@ -559,6 +596,7 @@ def main():
         test_disconnect_invalidates_agent_state,
         test_stale_epoch_write_is_rejected,
         test_transcript_store_sanitizes_terminal_output,
+        test_terminal_bridge_tracks_shared_session_metadata,
         test_ssh_input_records_agent_metadata_after_validation,
         test_agent_input_metadata_bounds_and_sanitized_preview,
         test_ssh_input_does_not_record_invalid_or_oversized_metadata,

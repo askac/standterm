@@ -12,6 +12,18 @@ Agent state is scoped to:
 session_token + terminal_id + browser sid
 ```
 
+The target architecture follows a `screen -x` style shared terminal model:
+
+- one PTY / terminal session;
+- one authoritative terminal size;
+- one terminal output stream with monotonically increasing `output_seq`;
+- multiple viewers;
+- multiple input producers.
+
+Human input may write directly to the terminal bridge after existing validation.
+Agent input must always be a typed action proposal and must pass the
+approval/direct/pause gate before it can write to the terminal.
+
 Terminal output and browser-visible text are display data only. They must not
 create, approve, reject, pause, resume, or upgrade Agent actions.
 
@@ -31,8 +43,12 @@ The mock panel is opened manually from the status bar `Show Agent Panel` /
 `Hide Agent Panel` toggle. A terminal connection must not automatically expand
 the panel when Agent state is not attached.
 
-The frontend may send xterm viewport snapshots as typed Agent context. Snapshot
-text is untrusted display data and must not be used as a control signal.
+The frontend may send xterm viewport snapshots as typed Agent context. The
+current browser viewport snapshot path is a provisional Agent terminal mirror
+adapter, not the final source of truth. Snapshot text is untrusted display data
+and must not be used as a control signal. Future implementations should replace
+or supplement this adapter with a dedicated hidden xterm mirror or a backend
+headless terminal parser that consumes the same terminal output stream.
 
 ## Client-to-Server Events
 
@@ -160,6 +176,7 @@ Payload:
   "viewport_y": 120,
   "base_y": 120,
   "snapshot_seq": 7,
+  "output_seq": 42,
   "captured_at": "2026-05-22T00:00:00.000Z",
   "lines": ["visible terminal line", "..."]
 }
@@ -168,8 +185,9 @@ Payload:
 Stores the current xterm viewport for future Agent context. The snapshot is
 scoped to the current browser sid, session token, and terminal id. The backend
 accepts it only when the sid is currently attached to that terminal, validates
-cols, rows, line count, monotonic `snapshot_seq`, and total byte limits, and
-clears stored snapshots on terminal close, session close, or sid disconnect.
+cols, rows, line count, monotonic `snapshot_seq`, non-negative `output_seq`,
+and total byte limits, and clears stored snapshots on terminal close, session
+close, or sid disconnect.
 
 ## Server-to-Client Events
 
@@ -293,3 +311,19 @@ metadata stores. It is keyed by `session_token + terminal_id + browser sid`,
 bounded by row, column, line-byte, total-byte, and TTL limits, and stores the
 latest accepted snapshot only for that sid. Snapshot lines are terminal display
 payload and remain data only.
+
+## Agent Terminal Mirror Direction
+
+The browser viewport snapshot currently implements the first
+`AgentTerminalMirror` adapter:
+
+```text
+TerminalMirror.get_active_screen(session_token, terminal_id, viewer_sid)
+```
+
+The adapter returns the latest same-browser-sid snapshot plus metadata such as
+`cols`, `rows`, `snapshot_seq`, and `output_seq`. It is intentionally marked
+provisional because it depends on a browser tab. The planned replacement is a
+dedicated mirror that consumes the same terminal output stream as human viewers,
+uses the authoritative PTY size, and is not affected by human scroll position or
+DOM selection.

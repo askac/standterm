@@ -1001,6 +1001,7 @@
                     rows,
                     viewport_y: viewportY,
                     base_y: baseY,
+                    output_seq: state.lastOutputSeq || 0,
                     snapshot_seq: state.agent.snapshotSeq,
                     captured_at: new Date().toISOString(),
                     lines
@@ -1530,6 +1531,7 @@
                     connectedAt: null,
                     termName: '{{ ssh_term }}',
                     lastNotifiedSize: { cols: null, rows: null },
+                    lastOutputSeq: 0,
                     needsReplay: true,
                     agent: createAgentClientState(),
                     container,
@@ -2070,6 +2072,9 @@
                         }
                         break;
                     case 'terminal':
+                        if (typeof data.output_seq === 'number') {
+                            state.lastOutputSeq = data.output_seq;
+                        }
                         if (typeof data.data === 'string') {
                             state.term.write(data.data, () => scheduleAgentViewportSnapshot(state));
                         }

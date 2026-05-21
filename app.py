@@ -901,10 +901,15 @@ class TerminalBridge:
         self.attached_sids = set()
         self.sid = None
         self.closing = False
+        self.cols = 80
+        self.rows = 24
+        self.output_seq = 0
         self.replay_buffer = deque()
         self.replay_buffer_bytes = 0
 
-    def metadata(self, cols=80, rows=24):
+    def metadata(self, cols=None, rows=None):
+        cols = self.cols if cols is None else cols
+        rows = self.rows if rows is None else rows
         return build_terminal_metadata(
             self.connection_type,
             self.terminal_id,
@@ -913,6 +918,22 @@ class TerminalBridge:
             cols,
             rows,
         )
+
+    def session_metadata(self):
+        return {
+            'session_token': self.owner_session,
+            'terminal_id': self.terminal_id,
+            'connection_type': self.connection_type,
+            'terminal_kind': self.terminal_kind,
+            'terminal_label': self.terminal_label,
+            'cols': self.cols,
+            'rows': self.rows,
+            'output_seq': self.output_seq,
+        }
+
+    def update_terminal_size(self, cols, rows):
+        self.cols = cols
+        self.rows = rows
 
     def attach(self, sid):
         self.sid = sid
@@ -928,6 +949,8 @@ class TerminalBridge:
         payload.setdefault('connection_type', self.connection_type)
         payload.setdefault('terminal_id', self.terminal_id)
         if payload.get('message_type') == 'terminal':
+            self.output_seq += 1
+            payload.setdefault('output_seq', self.output_seq)
             self._remember_terminal_payload(payload)
             agent_transcript_store.append_terminal_output(
                 self.owner_session,
@@ -2235,13 +2258,14 @@ def validate_agent_viewport_snapshot_payload(data):
         viewport_y = int(data.get('viewport_y'))
         base_y = int(data.get('base_y'))
         snapshot_seq = int(data.get('snapshot_seq'))
+        output_seq = int(data.get('output_seq', 0))
     except (TypeError, ValueError):
         return None, AGENT_ERROR_SNAPSHOT_INVALID
     if not (MIN_TERMINAL_COLS <= cols <= MAX_TERMINAL_COLS):
         return None, AGENT_ERROR_SNAPSHOT_INVALID
     if not (MIN_TERMINAL_ROWS <= rows <= MAX_TERMINAL_ROWS):
         return None, AGENT_ERROR_SNAPSHOT_INVALID
-    if viewport_y < 0 or base_y < 0 or snapshot_seq < 1:
+    if viewport_y < 0 or base_y < 0 or snapshot_seq < 1 or output_seq < 0:
         return None, AGENT_ERROR_SNAPSHOT_INVALID
     lines = data.get('lines')
     if not isinstance(lines, list) or len(lines) != rows:
@@ -2265,6 +2289,7 @@ def validate_agent_viewport_snapshot_payload(data):
         'viewport_y': viewport_y,
         'base_y': base_y,
         'snapshot_seq': snapshot_seq,
+        'output_seq': output_seq,
         'captured_at': data.get('captured_at') if isinstance(data.get('captured_at'), str) else None,
         'line_count': len(normalized_lines),
         'byte_length': total_bytes,
@@ -2318,9 +2343,42 @@ class MockAgentBridge:
 
 AGENT_BRIDGE = MockAgentBridge()
 
+class BrowserViewportMirrorAdapter:
+    source = 'browser_viewport_snapshot'
+    provisional = True
+
+    def get_active_screen(self, session_token, terminal_id, sid):
+        snapshot = agent_viewport_snapshot_store.get_latest(session_token, terminal_id, sid)
+        if not snapshot:
+            return None
+        return {
+            'source': self.source,
+            'provisional': self.provisional,
+            'terminal_id': terminal_id,
+            'cols': snapshot.get('cols'),
+            'rows': snapshot.get('rows'),
+            'viewport_y': snapshot.get('viewport_y'),
+            'base_y': snapshot.get('base_y'),
+            'snapshot_seq': snapshot.get('snapshot_seq'),
+            'output_seq': snapshot.get('output_seq'),
+            'captured_at': snapshot.get('captured_at'),
+            'line_count': snapshot.get('line_count'),
+            'byte_length': snapshot.get('byte_length'),
+            'lines': list(snapshot.get('lines') or []),
+        }
+
+AGENT_TERMINAL_MIRROR = BrowserViewportMirrorAdapter()
+
 def build_agent_context(session_token, terminal_id, sid):
+    bridge = get_bridge(session_token, terminal_id)
+    session_metadata = bridge.session_metadata() if bridge else {
+        'session_token': session_token,
+        'terminal_id': terminal_id,
+    }
     return {
         'terminal_id': terminal_id,
+        'terminal_session': session_metadata,
+        'active_screen': AGENT_TERMINAL_MIRROR.get_active_screen(session_token, terminal_id, sid),
         'viewport_snapshot': agent_viewport_snapshot_store.get_latest(session_token, terminal_id, sid),
         'transcript_events': agent_transcript_store.get_recent(session_token, terminal_id),
         'human_input_metadata': agent_user_input_metadata_store.get_recent(session_token, terminal_id),
@@ -3514,9 +3572,10 @@ def on_start_ssh(data):
 
     if success:
         close_terminal_bridge(session_token, terminal_id)
+        bridge.update_terminal_size(cols, rows)
         set_bridge(session_token, terminal_id, bridge)
         connected_payload = {'message_type': 'ssh_connected'}
-        connected_payload.update(bridge.metadata(cols=cols, rows=rows))
+        connected_payload.update(bridge.metadata())
         bridge.emit_output(connected_payload)
         socketio.start_background_task(target=bridge.read_loop)
         return
@@ -3602,6 +3661,7 @@ def on_resize(data):
     size = parse_terminal_size(data)
     if bridge and size:
         cols, rows = size
+        bridge.update_terminal_size(cols, rows)
         bridge.resize(cols, rows)
 
 @socketio.on('close_terminal')
