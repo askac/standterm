@@ -1,0 +1,1 @@
+請閱讀 /mnt/d/workspace/github/webssh/handover_20260521a.md。本次修復 MIBCRK WebSSH 在 Windows 瀏覽器連 WSL HTTPS 時的 Edge/多瀏覽器連線穩定性，main commit `5406892`、MIBCRK commit `558c462`；下一步建議重啟 MIBCRK WebSSH 後用 Chrome/Edge 實測 WSL IP Access URL 與 WSL COM UART。
