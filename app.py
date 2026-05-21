@@ -15,6 +15,7 @@ import ipaddress
 import json
 import hmac
 import hashlib
+import threading
 from collections import deque
 from pathlib import Path
 from flask import Flask, render_template, request, abort, make_response, redirect, send_file
@@ -95,6 +96,25 @@ MAX_TERMINAL_ID_LENGTH = 64
 MAX_TERMINALS_PER_CLIENT = 12
 MAX_TERMINAL_REPLAY_EVENTS = 1000
 MAX_TERMINAL_REPLAY_BYTES = 200000
+AGENT_MODE_DISABLED = 'disabled'
+AGENT_MODE_OBSERVE = 'observe'
+AGENT_MODE_APPROVAL_PENDING = 'approval_pending'
+AGENT_MODE_DIRECT_ACTIVE = 'direct_active'
+AGENT_MODE_PAUSED = 'paused'
+AGENT_CLIENT_MODE_MAP = {
+    'disabled': AGENT_MODE_DISABLED,
+    'observe': AGENT_MODE_OBSERVE,
+    'approval': AGENT_MODE_APPROVAL_PENDING,
+    'approval_pending': AGENT_MODE_APPROVAL_PENDING,
+    'direct': AGENT_MODE_DIRECT_ACTIVE,
+    'direct_active': AGENT_MODE_DIRECT_ACTIVE,
+}
+AGENT_ACTION_TERMINAL_INPUT = 'terminal_input'
+AGENT_ACTION_STATUSES_WRITABLE = {'approved', 'direct_pending'}
+AGENT_MAX_INPUT_BYTES = 4096
+AGENT_INPUT_CHUNK_BYTES = 256
+AGENT_AUDIT_EVENTS = 200
+AGENT_PREVIEW_CHARS = 160
 MAX_UART_PORT_LENGTH = 128
 DEFAULT_UART_BAUD_RATE = 115200
 MIN_UART_BAUD_RATE = 300
@@ -1944,7 +1964,272 @@ socket_client_ips = {}
 socket_browser_identities = {}
 socket_browser_authorized = {}
 socket_browser_auth_challenges = {}
+agent_states = {}
+agent_lock = threading.RLock()
 session_cleanup_task_started = False
+
+class AgentControlState:
+    def __init__(self, session_token, terminal_id, sid):
+        self.session_token = session_token
+        self.terminal_id = terminal_id
+        self.sid = sid
+        self.mode = AGENT_MODE_DISABLED
+        self.paused = False
+        self.control_epoch = 0
+        self.run_id = None
+        self.pending_actions = {}
+        self.audit_ring = deque(maxlen=AGENT_AUDIT_EVENTS)
+
+    def public_state(self):
+        return {
+            'terminal_id': self.terminal_id,
+            'mode': self.mode,
+            'paused': self.paused,
+            'control_epoch': self.control_epoch,
+            'run_id': self.run_id,
+            'pending_actions': len([
+                action for action in self.pending_actions.values()
+                if action.get('status') in {'pending_approval', 'direct_pending', 'approved'}
+            ]),
+        }
+
+class MockAgentBridge:
+    def create_terminal_input_action(self, state, request_payload):
+        data = ''
+        if isinstance(request_payload, dict) and isinstance(request_payload.get('mock_input'), str):
+            data = request_payload['mock_input']
+        return {
+            'action_type': AGENT_ACTION_TERMINAL_INPUT,
+            'terminal_id': state.terminal_id,
+            'data': data,
+        }
+
+AGENT_BRIDGE = MockAgentBridge()
+
+def agent_state_key(session_token, terminal_id, sid):
+    return (session_token, terminal_id, sid)
+
+def normalize_agent_mode(value):
+    if not isinstance(value, str):
+        return None
+    return AGENT_CLIENT_MODE_MAP.get(value.strip().lower().replace('-', '_'))
+
+def get_agent_state(session_token, terminal_id, sid):
+    return agent_states.get(agent_state_key(session_token, terminal_id, sid))
+
+def get_or_create_agent_state(session_token, terminal_id, sid):
+    key = agent_state_key(session_token, terminal_id, sid)
+    state = agent_states.get(key)
+    if not state:
+        state = AgentControlState(session_token, terminal_id, sid)
+        agent_states[key] = state
+    return state
+
+def escape_agent_preview(value):
+    return value.encode('unicode_escape', errors='backslashreplace').decode('ascii')
+
+def has_agent_control_chars(value):
+    return any(ord(ch) < 32 and ch not in '\r\n\t' for ch in value)
+
+def summarize_agent_input(value):
+    encoded = value.encode('utf-8', errors='ignore')
+    preview = escape_agent_preview(value)
+    if len(preview) > AGENT_PREVIEW_CHARS:
+        preview = preview[:AGENT_PREVIEW_CHARS] + '...'
+    return {
+        'byte_length': len(encoded),
+        'line_count': value.count('\n') + (1 if value and not value.endswith('\n') else 0),
+        'contains_control_chars': has_agent_control_chars(value),
+        'ends_with_newline': value.endswith('\n') or value.endswith('\r'),
+        'escaped_preview': preview,
+    }
+
+def build_agent_action(state, proposal, requires_approval):
+    action_data = proposal.get('data')
+    if not isinstance(action_data, str):
+        return None, 'agent_action_invalid_data'
+    if len(action_data.encode('utf-8', errors='ignore')) > AGENT_MAX_INPUT_BYTES:
+        return None, 'agent_action_too_large'
+    action_id = secrets.token_urlsafe(12)
+    run_id = state.run_id or secrets.token_urlsafe(12)
+    action = {
+        'action_id': action_id,
+        'action_type': AGENT_ACTION_TERMINAL_INPUT,
+        'terminal_id': state.terminal_id,
+        'data': action_data,
+        'requires_approval': requires_approval,
+        'status': 'pending_approval' if requires_approval else 'direct_pending',
+        'created_at': time.time(),
+        'control_epoch': state.control_epoch,
+        'run_id': run_id,
+    }
+    action.update(summarize_agent_input(action_data))
+    state.pending_actions[action_id] = action
+    state.run_id = run_id
+    record_agent_audit(state, action, action['status'])
+    return action, None
+
+def public_agent_action(action):
+    return {
+        'action_id': action.get('action_id'),
+        'action_type': action.get('action_type'),
+        'terminal_id': action.get('terminal_id'),
+        'requires_approval': action.get('requires_approval'),
+        'status': action.get('status'),
+        'control_epoch': action.get('control_epoch'),
+        'run_id': action.get('run_id'),
+        'byte_length': action.get('byte_length'),
+        'line_count': action.get('line_count'),
+        'contains_control_chars': action.get('contains_control_chars'),
+        'ends_with_newline': action.get('ends_with_newline'),
+        'escaped_preview': action.get('escaped_preview'),
+    }
+
+def record_agent_audit(state, action, status, error_code=None):
+    entry = public_agent_action(action)
+    entry.update({
+        'status': status,
+        'recorded_at': time.time(),
+        'sid': state.sid,
+    })
+    if error_code:
+        entry['error_code'] = error_code
+    state.audit_ring.append(entry)
+
+def emit_agent_state(sid, state):
+    socketio.emit('agent_state', state.public_state(), room=sid)
+
+def emit_agent_action_result(sid, action, status, error_code=None):
+    payload = public_agent_action(action)
+    payload['status'] = status
+    if error_code:
+        payload['error_code'] = error_code
+    socketio.emit('agent_action_result', payload, room=sid)
+
+def emit_agent_error(sid, terminal_id, error_code, message=None):
+    payload = {
+        'terminal_id': terminal_id,
+        'status': 'failed',
+        'error_code': error_code,
+    }
+    if message:
+        payload['message'] = message
+    socketio.emit('agent_action_result', payload, room=sid)
+
+def cancel_agent_pending_actions(state, reason):
+    cancelled = []
+    for action in state.pending_actions.values():
+        if action.get('status') in {'pending_approval', 'direct_pending', 'approved'}:
+            action['status'] = reason
+            record_agent_audit(state, action, reason, error_code=reason)
+            cancelled.append(dict(action))
+    return cancelled
+
+def invalidate_agent_states(session_token, terminal_id=None, sid=None, reason='agent_invalidated'):
+    with agent_lock:
+        matching_keys = [
+            key for key, state in agent_states.items()
+            if state.session_token == session_token
+            and (terminal_id is None or state.terminal_id == terminal_id)
+            and (sid is None or state.sid == sid)
+        ]
+        invalidated = []
+        for key in matching_keys:
+            state = agent_states.pop(key)
+            state.paused = True
+            state.mode = AGENT_MODE_DISABLED
+            state.control_epoch += 1
+            invalidated.extend((state.sid, action) for action in cancel_agent_pending_actions(state, reason))
+        return invalidated
+
+def iter_text_chunks(value, max_chunk_bytes):
+    chunk = []
+    chunk_bytes = 0
+    for ch in value:
+        ch_bytes = len(ch.encode('utf-8', errors='ignore'))
+        if chunk and chunk_bytes + ch_bytes > max_chunk_bytes:
+            yield ''.join(chunk)
+            chunk = []
+            chunk_bytes = 0
+        chunk.append(ch)
+        chunk_bytes += ch_bytes
+    if chunk:
+        yield ''.join(chunk)
+
+def check_agent_write_allowed(session_token, terminal_id, sid, action_id, control_epoch):
+    state = get_agent_state(session_token, terminal_id, sid)
+    if not state:
+        return None, None, 'agent_not_attached'
+    if state.paused or state.mode == AGENT_MODE_PAUSED:
+        return state, None, 'agent_paused'
+    if state.control_epoch != control_epoch:
+        return state, None, 'agent_stale_epoch'
+    action = state.pending_actions.get(action_id)
+    if not action:
+        return state, None, 'agent_action_not_found'
+    if action.get('control_epoch') != control_epoch:
+        return state, action, 'agent_stale_action'
+    if action.get('status') not in AGENT_ACTION_STATUSES_WRITABLE:
+        return state, action, 'agent_action_not_writable'
+    if action.get('terminal_id') != terminal_id:
+        return state, action, 'agent_terminal_mismatch'
+    bridge = get_bridge(session_token, terminal_id)
+    if not bridge:
+        return state, action, 'terminal_not_found'
+    return state, action, None
+
+def write_agent_terminal_input(session_token, terminal_id, sid, action_id, control_epoch):
+    bytes_written = 0
+    while True:
+        with agent_lock:
+            state, action, error_code = check_agent_write_allowed(
+                session_token,
+                terminal_id,
+                sid,
+                action_id,
+                control_epoch,
+            )
+            if error_code:
+                if state and action:
+                    action['status'] = 'failed'
+                    record_agent_audit(state, action, 'failed', error_code=error_code)
+                return False, {'error_code': error_code, 'bytes_written': bytes_written}
+            data = action.get('data', '')
+            if not isinstance(data, str):
+                return False, {'error_code': 'agent_action_invalid_data', 'bytes_written': bytes_written}
+            chunks = list(iter_text_chunks(data, AGENT_INPUT_CHUNK_BYTES))
+            if not chunks:
+                action['status'] = 'completed'
+                record_agent_audit(state, action, 'completed')
+                return True, {'bytes_written': 0}
+            break
+
+    for chunk in chunks:
+        with agent_lock:
+            state, action, error_code = check_agent_write_allowed(
+                session_token,
+                terminal_id,
+                sid,
+                action_id,
+                control_epoch,
+            )
+            if error_code:
+                if state and action:
+                    action['status'] = 'failed'
+                    record_agent_audit(state, action, 'failed', error_code=error_code)
+                return False, {'error_code': error_code, 'bytes_written': bytes_written}
+            bridge = get_bridge(session_token, terminal_id)
+        bridge.write(chunk)
+        bytes_written += len(chunk.encode('utf-8', errors='ignore'))
+
+    with agent_lock:
+        state = get_agent_state(session_token, terminal_id, sid)
+        if state:
+            action = state.pending_actions.get(action_id)
+            if action:
+                action['status'] = 'completed'
+                record_agent_audit(state, action, 'completed')
+    return True, {'bytes_written': bytes_written}
 
 def is_valid_access_token(token):
     if not isinstance(token, str):
@@ -2057,12 +2342,15 @@ def unregister_terminal_bridge(session_token, terminal_id, bridge):
     if get_bridge(session_token, terminal_id) is not bridge:
         return
     pop_bridge(session_token, terminal_id)
+    invalidate_agent_states(session_token, terminal_id=terminal_id, reason='terminal_closed')
     close_bridge(bridge)
 
 def close_terminal_bridge(session_token, terminal_id):
+    invalidate_agent_states(session_token, terminal_id=terminal_id, reason='terminal_closed')
     close_bridge(pop_bridge(session_token, terminal_id))
 
 def close_all_terminal_bridges(session_token):
+    invalidate_agent_states(session_token, reason='terminal_closed')
     terminals = bridges.pop(session_token, {})
     for bridge in list(terminals.values()):
         close_bridge(bridge)
@@ -2496,6 +2784,258 @@ def on_replay_terminal(data):
         bridge.attach(request.sid)
         bridge.replay_to(request.sid)
 
+@socketio.on('agent_attach')
+def on_agent_attach(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    if not session_token or not terminal_id:
+        return
+    bridge = get_bridge(session_token, terminal_id)
+    if not bridge:
+        emit_agent_error(request.sid, terminal_id, 'terminal_not_found')
+        return
+    bridge.attach(request.sid)
+    with agent_lock:
+        state = get_or_create_agent_state(session_token, terminal_id, request.sid)
+        if state.mode == AGENT_MODE_DISABLED:
+            state.mode = AGENT_MODE_OBSERVE
+        emit_agent_state(request.sid, state)
+
+@socketio.on('agent_detach')
+def on_agent_detach(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    if not session_token or not terminal_id:
+        return
+    cancelled = invalidate_agent_states(
+        session_token,
+        terminal_id=terminal_id,
+        sid=request.sid,
+        reason='agent_detached',
+    )
+    for sid, action in cancelled:
+        emit_agent_action_result(sid, action, 'agent_detached', error_code='agent_detached')
+    socketio.emit(
+        'agent_state',
+        {
+            'terminal_id': terminal_id,
+            'mode': AGENT_MODE_DISABLED,
+            'paused': False,
+            'control_epoch': None,
+            'run_id': None,
+            'pending_actions': 0,
+        },
+        room=request.sid,
+    )
+
+@socketio.on('agent_mode_set')
+def on_agent_mode_set(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    if not session_token or not terminal_id or not isinstance(data, dict):
+        return
+    mode = normalize_agent_mode(data.get('mode'))
+    if not mode:
+        emit_agent_error(request.sid, terminal_id, 'agent_invalid_mode')
+        return
+    bridge = get_bridge(session_token, terminal_id)
+    if not bridge:
+        emit_agent_error(request.sid, terminal_id, 'terminal_not_found')
+        return
+    bridge.attach(request.sid)
+    with agent_lock:
+        state = get_or_create_agent_state(session_token, terminal_id, request.sid)
+        if state.paused and mode != AGENT_MODE_DISABLED:
+            emit_agent_error(request.sid, terminal_id, 'agent_paused')
+            emit_agent_state(request.sid, state)
+            return
+        if mode != state.mode:
+            state.control_epoch += 1
+            state.run_id = None
+            cancel_reason = 'agent_disabled' if mode == AGENT_MODE_DISABLED else 'agent_mode_changed'
+            for action in cancel_agent_pending_actions(state, cancel_reason):
+                emit_agent_action_result(request.sid, action, cancel_reason, error_code=cancel_reason)
+        state.mode = mode
+        state.paused = False
+        emit_agent_state(request.sid, state)
+
+@socketio.on('agent_pause')
+def on_agent_pause(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    if not session_token or not terminal_id:
+        return
+    if not get_bridge(session_token, terminal_id):
+        emit_agent_error(request.sid, terminal_id, 'terminal_not_found')
+        return
+    with agent_lock:
+        state = get_or_create_agent_state(session_token, terminal_id, request.sid)
+        state.paused = True
+        state.mode = AGENT_MODE_PAUSED
+        state.control_epoch += 1
+        state.run_id = None
+        cancelled = cancel_agent_pending_actions(state, 'agent_paused')
+        for action in cancelled:
+            emit_agent_action_result(request.sid, action, 'agent_paused', error_code='agent_paused')
+        emit_agent_state(request.sid, state)
+
+@socketio.on('agent_resume')
+def on_agent_resume(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    if not session_token or not terminal_id:
+        return
+    if not get_bridge(session_token, terminal_id):
+        emit_agent_error(request.sid, terminal_id, 'terminal_not_found')
+        return
+    target_mode = AGENT_MODE_OBSERVE
+    if isinstance(data, dict) and data.get('mode') is not None:
+        requested_mode = normalize_agent_mode(data.get('mode'))
+        if requested_mode in {AGENT_MODE_OBSERVE, AGENT_MODE_APPROVAL_PENDING, AGENT_MODE_DIRECT_ACTIVE}:
+            target_mode = requested_mode
+        else:
+            emit_agent_error(request.sid, terminal_id, 'agent_invalid_mode')
+            return
+    with agent_lock:
+        state = get_or_create_agent_state(session_token, terminal_id, request.sid)
+        state.paused = False
+        state.mode = target_mode
+        state.control_epoch += 1
+        state.run_id = secrets.token_urlsafe(12)
+        emit_agent_state(request.sid, state)
+
+@socketio.on('agent_suggestion_request')
+def on_agent_suggestion_request(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    if not session_token or not terminal_id or not isinstance(data, dict):
+        return
+    bridge = get_bridge(session_token, terminal_id)
+    if not bridge:
+        emit_agent_error(request.sid, terminal_id, 'terminal_not_found')
+        return
+    bridge.attach(request.sid)
+    with agent_lock:
+        state = get_agent_state(session_token, terminal_id, request.sid)
+        if not state:
+            emit_agent_error(request.sid, terminal_id, 'agent_not_attached')
+            return
+        if state.paused or state.mode == AGENT_MODE_PAUSED:
+            emit_agent_error(request.sid, terminal_id, 'agent_paused')
+            emit_agent_state(request.sid, state)
+            return
+        if state.mode not in {AGENT_MODE_APPROVAL_PENDING, AGENT_MODE_DIRECT_ACTIVE}:
+            emit_agent_error(request.sid, terminal_id, 'agent_mode_not_writable')
+            emit_agent_state(request.sid, state)
+            return
+        proposal = AGENT_BRIDGE.create_terminal_input_action(state, data)
+        if proposal.get('action_type') != AGENT_ACTION_TERMINAL_INPUT:
+            emit_agent_error(request.sid, terminal_id, 'agent_action_not_allowed')
+            return
+        requires_approval = state.mode != AGENT_MODE_DIRECT_ACTIVE
+        action, error_code = build_agent_action(state, proposal, requires_approval)
+        if error_code:
+            emit_agent_error(request.sid, terminal_id, error_code)
+            return
+        socketio.emit('agent_action_request', public_agent_action(action), room=request.sid)
+        emit_agent_state(request.sid, state)
+
+    if requires_approval:
+        return
+
+    ok, result = write_agent_terminal_input(
+        session_token,
+        terminal_id,
+        request.sid,
+        action['action_id'],
+        action['control_epoch'],
+    )
+    status = 'completed' if ok else 'failed'
+    if result.get('error_code'):
+        status = result['error_code']
+    emit_agent_action_result(request.sid, action, status, error_code=result.get('error_code'))
+    with agent_lock:
+        state = get_agent_state(session_token, terminal_id, request.sid)
+        if state:
+            emit_agent_state(request.sid, state)
+
+@socketio.on('agent_action_approve')
+def on_agent_action_approve(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    if not session_token or not terminal_id or not isinstance(data, dict):
+        return
+    action_id = data.get('action_id')
+    if not isinstance(action_id, str):
+        emit_agent_error(request.sid, terminal_id, 'agent_action_not_found')
+        return
+    with agent_lock:
+        state = get_agent_state(session_token, terminal_id, request.sid)
+        if not state:
+            emit_agent_error(request.sid, terminal_id, 'agent_not_attached')
+            return
+        action = state.pending_actions.get(action_id)
+        if not action:
+            emit_agent_error(request.sid, terminal_id, 'agent_action_not_found')
+            emit_agent_state(request.sid, state)
+            return
+        if state.paused or state.mode == AGENT_MODE_PAUSED:
+            emit_agent_action_result(request.sid, action, 'agent_paused', error_code='agent_paused')
+            emit_agent_state(request.sid, state)
+            return
+        if action.get('status') != 'pending_approval':
+            emit_agent_action_result(request.sid, action, 'agent_action_not_pending', error_code='agent_action_not_pending')
+            emit_agent_state(request.sid, state)
+            return
+        if action.get('control_epoch') != state.control_epoch:
+            emit_agent_action_result(request.sid, action, 'agent_stale_action', error_code='agent_stale_action')
+            emit_agent_state(request.sid, state)
+            return
+        action['status'] = 'approved'
+        record_agent_audit(state, action, 'approved')
+        control_epoch = state.control_epoch
+
+    ok, result = write_agent_terminal_input(
+        session_token,
+        terminal_id,
+        request.sid,
+        action_id,
+        control_epoch,
+    )
+    status = 'completed' if ok else 'failed'
+    if result.get('error_code'):
+        status = result['error_code']
+    emit_agent_action_result(request.sid, action, status, error_code=result.get('error_code'))
+    with agent_lock:
+        state = get_agent_state(session_token, terminal_id, request.sid)
+        if state:
+            emit_agent_state(request.sid, state)
+
+@socketio.on('agent_action_reject')
+def on_agent_action_reject(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    if not session_token or not terminal_id or not isinstance(data, dict):
+        return
+    action_id = data.get('action_id')
+    if not isinstance(action_id, str):
+        emit_agent_error(request.sid, terminal_id, 'agent_action_not_found')
+        return
+    with agent_lock:
+        state = get_agent_state(session_token, terminal_id, request.sid)
+        if not state:
+            emit_agent_error(request.sid, terminal_id, 'agent_not_attached')
+            return
+        action = state.pending_actions.get(action_id)
+        if not action:
+            emit_agent_error(request.sid, terminal_id, 'agent_action_not_found')
+            emit_agent_state(request.sid, state)
+            return
+        action['status'] = 'rejected'
+        record_agent_audit(state, action, 'rejected')
+        emit_agent_action_result(request.sid, action, 'rejected')
+        emit_agent_state(request.sid, state)
+
 
 @socketio.on('start_ssh')
 def on_start_ssh(data):
@@ -2694,6 +3234,7 @@ def on_disconnect(reason=None):
     socket_browser_authorized.pop(request.sid, None)
     socket_browser_auth_challenges.pop(request.sid, None)
     if session_token:
+        invalidate_agent_states(session_token, sid=request.sid, reason='agent_disconnected')
         detach_session_bridges(session_token, request.sid)
     print(f"[-] Client disconnected: {request.sid} from {client_ip}; reason={reason or 'unknown'}")
 
