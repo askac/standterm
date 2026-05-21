@@ -1,0 +1,1 @@
+請閱讀 /mnt/d/workspace/github/webssh/handover_20260521b.md。本次將 WebSSH 後端連線流程重構為內部 backend registry，main code commit `35c5b01`、MIBCRK commit `8d79d68`；MIBCRK 另有 Agent collaboration plan，下一步建議重啟 MIBCRK WebSSH 實測 Chrome/Edge WSL IP Access URL 與 WSL COM UART。
