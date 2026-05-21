@@ -76,6 +76,20 @@ MAX_TERMINAL_ROWS = 500
 CONNECTION_TYPE_SSH = 'ssh'
 CONNECTION_TYPE_LOCAL_SHELL = 'local_shell'
 CONNECTION_TYPE_UART = 'uart'
+CONNECTION_TYPES = (
+    CONNECTION_TYPE_SSH,
+    CONNECTION_TYPE_LOCAL_SHELL,
+    CONNECTION_TYPE_UART,
+)
+RESERVED_BACKEND_PAYLOAD_KEYS = {
+    'connection_type',
+    'terminal_id',
+    'owner_session',
+    'session_token',
+}
+ALLOWED_CONNECTION_ACTION_TYPES = {
+    'offer_localhost_key_setup',
+}
 TERMINAL_ID_MAIN = 'main'
 MAX_TERMINAL_ID_LENGTH = 64
 MAX_TERMINALS_PER_CLIENT = 12
@@ -111,7 +125,7 @@ def normalize_connection_type(value):
     if not isinstance(value, str):
         return None
     normalized = value.strip().lower().replace('-', '_')
-    if normalized in {CONNECTION_TYPE_SSH, CONNECTION_TYPE_LOCAL_SHELL, CONNECTION_TYPE_UART}:
+    if normalized in CONNECTION_TYPES:
         return normalized
     return None
 
@@ -257,19 +271,19 @@ finally:
 '''
 
 def build_terminal_policy(browser_authorized=False):
-    client_ip = get_request_client_ip()
-    local_shell_allowed = is_local_shell_allowed_for_client(client_ip, browser_authorized=browser_authorized)
-    uart_allowed = is_uart_allowed_for_client(client_ip, browser_authorized=browser_authorized)
-    uart_ports = detect_serial_ports() if uart_allowed else []
-
+    connection_options = TERMINAL_BACKEND_REGISTRY.build_policy_options(browser_authorized=browser_authorized)
     allowed_connections = {
-        CONNECTION_TYPE_SSH: True,
-        CONNECTION_TYPE_LOCAL_SHELL: local_shell_allowed,
-        CONNECTION_TYPE_UART: uart_allowed,
+        option['connection_type']: bool(option.get('allowed'))
+        for option in connection_options
     }
+    browser_authorization_required_for = [
+        option['connection_type']
+        for option in connection_options
+        if option.get('authorization_available')
+    ]
     default_connection = DEFAULT_CONNECTION_TYPE
     if not allowed_connections.get(default_connection):
-        default_connection = CONNECTION_TYPE_LOCAL_SHELL if local_shell_allowed else CONNECTION_TYPE_SSH
+        default_connection = TERMINAL_BACKEND_REGISTRY.get_default_connection(allowed_connections)
     force_connection = FORCE_CONNECTION_TYPE
     if force_connection and not allowed_connections.get(force_connection):
         force_connection = None
@@ -281,28 +295,12 @@ def build_terminal_policy(browser_authorized=False):
         'ca_download_url': '/download_ca' if HTTPS_ENABLED and not (CLI_ARGS.certfile and CLI_ARGS.keyfile) else None,
         'authorized_dir': str(AUTHORIZED_DIR),
         'localhost_access_url': get_localhost_access_url(DEFAULT_PORT) if is_wsl() else None,
-        'connection_options': [
-            {
-                'connection_type': CONNECTION_TYPE_SSH,
-                'label': 'SSH',
-                'allowed': True,
-            },
-            {
-                'connection_type': CONNECTION_TYPE_LOCAL_SHELL,
-                'label': 'Local Shell',
-                'allowed': local_shell_allowed,
-                'authorization_available': not local_shell_allowed,
-                'browser_authorized': bool(browser_authorized),
-            },
-            {
-                'connection_type': CONNECTION_TYPE_UART,
-                'label': 'UART',
-                'allowed': uart_allowed,
-                'available_ports': uart_ports,
-                'default_baud_rate': DEFAULT_UART_BAUD_RATE,
-                'baud_rates': UART_BAUD_RATES,
-            },
-        ],
+        'browser_authorization': {
+            'available': bool(browser_authorization_required_for),
+            'authorized': bool(browser_authorized),
+            'required_for': browser_authorization_required_for,
+        },
+        'connection_options': connection_options,
     }
 
 def build_terminal_metadata(connection_type, terminal_id, terminal_kind, terminal_label, cols, rows):
@@ -1666,6 +1664,278 @@ class UARTBridge(TerminalBridge):
             pass
         self.serial = None
 
+class TerminalBackendPlugin:
+    connection_type = None
+    label = None
+
+    def build_policy_option(self, browser_authorized=False):
+        return {
+            'connection_type': self.connection_type,
+            'label': self.label,
+            'allowed': True,
+        }
+
+    def validate_start_payload(self, data, terminal_id, client_ip, browser_authorized=False):
+        raise NotImplementedError
+
+    def create_bridge(self, session_token, terminal_id, payload):
+        raise NotImplementedError
+
+    def connect_bridge(self, bridge, payload, cols, rows):
+        raise NotImplementedError
+
+    def build_connection_failure(self, sid, bridge, payload, result):
+        message = 'Connection failed.'
+        error_code = None
+        if isinstance(result, dict):
+            message = result.get('message', message)
+            error_code = result.get('error_code')
+        elif result:
+            message = str(result)
+        return {
+            'message': message,
+            'error_code': error_code,
+            'action_type': None,
+            'action_message': None,
+            'action_question': None,
+            'action_id': None,
+        }
+
+class SSHBackendPlugin(TerminalBackendPlugin):
+    connection_type = CONNECTION_TYPE_SSH
+    label = 'SSH'
+
+    def validate_start_payload(self, data, terminal_id, client_ip, browser_authorized=False):
+        host = data.get('host', SSH_HOST)
+        if not isinstance(host, str):
+            return None, 'Host must be a string.'
+        host = host.strip()
+        if not host or len(host) > MAX_HOST_LENGTH:
+            return None, 'Host is empty or too long.'
+        if has_control_chars(host):
+            return None, 'Host contains invalid control characters.'
+
+        try:
+            port = int(data.get('port', SSH_PORT))
+        except (TypeError, ValueError):
+            return None, 'Port must be a number.'
+        if port < 1 or port > 65535:
+            return None, 'Port must be between 1 and 65535.'
+
+        user = data.get('username', SSH_USER)
+        if not isinstance(user, str):
+            return None, 'Username must be a string.'
+        user = user.strip()
+        if not user or len(user) > MAX_USERNAME_LENGTH:
+            return None, 'Username is empty or too long.'
+        if has_control_chars(user):
+            return None, 'Username contains invalid control characters.'
+
+        password = data.get('password') or ''
+        if not isinstance(password, str):
+            return None, 'Password must be a string.'
+        if len(password.encode('utf-8', errors='ignore')) > MAX_PASSWORD_BYTES:
+            return None, 'Password is too long.'
+
+        return {
+            'host': host,
+            'port': port,
+            'username': user,
+            'password': password,
+        }, None
+
+    def create_bridge(self, session_token, terminal_id, payload):
+        return SSHBridge(session_token, terminal_id)
+
+    def connect_bridge(self, bridge, payload, cols, rows):
+        return bridge.connect(
+            payload['host'],
+            payload['port'],
+            payload['username'],
+            payload['password'],
+            cols=cols,
+            rows=rows,
+        )
+
+    def build_connection_failure(self, sid, bridge, payload, result):
+        failure = super().build_connection_failure(sid, bridge, payload, result)
+        action_type = None
+        action_message = None
+        action_question = None
+
+        if isinstance(result, dict):
+            action_type = result.get('action_type')
+            action_message = result.get('action_message')
+            action_question = result.get('action_question')
+        if action_type not in ALLOWED_CONNECTION_ACTION_TYPES:
+            action_type = None
+            action_message = None
+            action_question = None
+
+        action_id = None
+        if action_type == 'offer_localhost_key_setup':
+            missing_entries = bridge._get_missing_local_public_keys()
+            if missing_entries:
+                action_id = secrets.token_urlsafe(16)
+                pending_localhost_key_setups[sid] = {
+                    'action_id': action_id,
+                    'host': payload['host'],
+                    'port': payload['port'],
+                    'username': payload['username'],
+                    'terminal_id': payload['terminal_id'],
+                    'key_entry': missing_entries[0],
+                    'expires_at': time.time() + LOCALHOST_KEY_SETUP_TTL_SECONDS,
+                }
+            else:
+                action_type = None
+                action_message = None
+                action_question = None
+
+        failure.update({
+            'action_type': action_type,
+            'action_message': action_message,
+            'action_question': action_question,
+            'action_id': action_id,
+        })
+        return failure
+
+class LocalShellBackendPlugin(TerminalBackendPlugin):
+    connection_type = CONNECTION_TYPE_LOCAL_SHELL
+    label = 'Local Shell'
+
+    def build_policy_option(self, browser_authorized=False):
+        client_ip = get_request_client_ip()
+        allowed = is_local_shell_allowed_for_client(client_ip, browser_authorized=browser_authorized)
+        return {
+            'connection_type': self.connection_type,
+            'label': self.label,
+            'allowed': allowed,
+            'authorization_available': not allowed,
+            'browser_authorized': bool(browser_authorized),
+        }
+
+    def validate_start_payload(self, data, terminal_id, client_ip, browser_authorized=False):
+        if not is_local_shell_allowed_for_client(client_ip, browser_authorized=browser_authorized):
+            return None, {
+                'message': 'Local Shell is not available for this client.',
+                'error_code': 'local_shell_unavailable_for_client',
+            }
+        return {}, None
+
+    def create_bridge(self, session_token, terminal_id, payload):
+        return LocalShellBridge(session_token, terminal_id)
+
+    def connect_bridge(self, bridge, payload, cols, rows):
+        return bridge.connect(cols=cols, rows=rows)
+
+class UARTBackendPlugin(TerminalBackendPlugin):
+    connection_type = CONNECTION_TYPE_UART
+    label = 'UART'
+
+    def build_policy_option(self, browser_authorized=False):
+        client_ip = get_request_client_ip()
+        allowed = is_uart_allowed_for_client(client_ip, browser_authorized=browser_authorized)
+        return {
+            'connection_type': self.connection_type,
+            'label': self.label,
+            'allowed': allowed,
+            'authorization_available': not allowed,
+            'browser_authorized': bool(browser_authorized),
+            'available_ports': detect_serial_ports() if allowed else [],
+            'default_baud_rate': DEFAULT_UART_BAUD_RATE,
+            'baud_rates': UART_BAUD_RATES,
+        }
+
+    def validate_start_payload(self, data, terminal_id, client_ip, browser_authorized=False):
+        if not is_uart_allowed_for_client(client_ip, browser_authorized=browser_authorized):
+            return None, {
+                'message': 'UART is not available for this client.',
+                'error_code': 'uart_unavailable_for_client',
+            }
+
+        port_info = get_detected_serial_port(data.get('serial_port'))
+        if not port_info:
+            return None, {
+                'message': 'Select an available UART port.',
+                'error_code': 'uart_port_unavailable',
+            }
+
+        try:
+            baud_rate = int(data.get('baud_rate', DEFAULT_UART_BAUD_RATE))
+        except (TypeError, ValueError):
+            return None, {
+                'message': 'UART baud rate must be a number.',
+                'error_code': 'uart_invalid_baud_rate',
+            }
+        if baud_rate < MIN_UART_BAUD_RATE or baud_rate > MAX_UART_BAUD_RATE:
+            return None, {
+                'message': 'UART baud rate is outside the supported range.',
+                'error_code': 'uart_invalid_baud_rate',
+            }
+
+        return {
+            'serial_port': port_info['device'],
+            'serial_port_info': port_info,
+            'baud_rate': baud_rate,
+        }, None
+
+    def create_bridge(self, session_token, terminal_id, payload):
+        return UARTBridge(
+            session_token,
+            terminal_id,
+            payload['serial_port_info'],
+            payload['baud_rate'],
+        )
+
+    def connect_bridge(self, bridge, payload, cols, rows):
+        return bridge.connect(cols=cols, rows=rows)
+
+class TerminalBackendRegistry:
+    def __init__(self, plugins):
+        self._plugins = {}
+        for plugin in plugins:
+            connection_type = getattr(plugin, 'connection_type', None)
+            label = getattr(plugin, 'label', None)
+            if not isinstance(connection_type, str) or normalize_connection_type(connection_type) != connection_type:
+                raise ValueError(f'Invalid terminal backend connection type: {connection_type!r}')
+            if connection_type in self._plugins:
+                raise ValueError(f'Duplicate terminal backend connection type: {connection_type}')
+            if not isinstance(label, str) or not label:
+                raise ValueError(f'Invalid terminal backend label for {connection_type}')
+            self._plugins[connection_type] = plugin
+
+    def get(self, connection_type):
+        return self._plugins.get(connection_type)
+
+    def build_policy_options(self, browser_authorized=False):
+        options = []
+        for plugin in self._plugins.values():
+            option = plugin.build_policy_option(browser_authorized=browser_authorized)
+            if not isinstance(option, dict):
+                raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid policy option.')
+            if option.get('connection_type') != plugin.connection_type:
+                raise ValueError(f'Terminal backend {plugin.connection_type} returned mismatched policy option.')
+            if not isinstance(option.get('allowed'), bool):
+                raise ValueError(f'Terminal backend {plugin.connection_type} returned non-bool allowed flag.')
+            options.append(option)
+        return options
+
+    def get_default_connection(self, allowed_connections):
+        if allowed_connections.get(CONNECTION_TYPE_LOCAL_SHELL):
+            return CONNECTION_TYPE_LOCAL_SHELL
+        if allowed_connections.get(CONNECTION_TYPE_SSH):
+            return CONNECTION_TYPE_SSH
+        for connection_type, allowed in allowed_connections.items():
+            if allowed:
+                return connection_type
+        return CONNECTION_TYPE_SSH
+
+TERMINAL_BACKEND_REGISTRY = TerminalBackendRegistry([
+    SSHBackendPlugin(),
+    LocalShellBackendPlugin(),
+    UARTBackendPlugin(),
+])
+
 bridges = {}
 pending_localhost_key_setups = {}
 active_sessions = {}
@@ -1920,6 +2190,9 @@ def validate_start_ssh_payload(data, client_ip, browser_authorized=False):
     connection_type = normalize_connection_type(data.get('connection_type', DEFAULT_CONNECTION_TYPE))
     if not connection_type:
         return None, 'Connection type must be ssh, local_shell, or uart.'
+    plugin = TERMINAL_BACKEND_REGISTRY.get(connection_type)
+    if not plugin:
+        return None, 'Connection type must be ssh, local_shell, or uart.'
     if FORCE_CONNECTION_TYPE and connection_type != FORCE_CONNECTION_TYPE:
         return None, f'Connection type is locked to {FORCE_CONNECTION_TYPE}.'
 
@@ -1927,91 +2200,33 @@ def validate_start_ssh_payload(data, client_ip, browser_authorized=False):
     if not terminal_id:
         return None, 'Invalid terminal id.'
 
-    if connection_type == CONNECTION_TYPE_LOCAL_SHELL:
-        if not is_local_shell_allowed_for_client(client_ip, browser_authorized=browser_authorized):
-            return None, {
-                'message': 'Local Shell is not available for this client.',
-                'error_code': 'local_shell_unavailable_for_client',
-            }
-        return {
-            'connection_type': connection_type,
-            'terminal_id': terminal_id,
-        }, None
-
-    if connection_type == CONNECTION_TYPE_UART:
-        if not is_uart_allowed_for_client(client_ip, browser_authorized=browser_authorized):
-            return None, {
-                'message': 'UART is not available for this client.',
-                'error_code': 'uart_unavailable_for_client',
-            }
-
-        port_info = get_detected_serial_port(data.get('serial_port'))
-        if not port_info:
-            return None, {
-                'message': 'Select an available UART port.',
-                'error_code': 'uart_port_unavailable',
-            }
-
-        try:
-            baud_rate = int(data.get('baud_rate', DEFAULT_UART_BAUD_RATE))
-        except (TypeError, ValueError):
-            return None, {
-                'message': 'UART baud rate must be a number.',
-                'error_code': 'uart_invalid_baud_rate',
-            }
-        if baud_rate < MIN_UART_BAUD_RATE or baud_rate > MAX_UART_BAUD_RATE:
-            return None, {
-                'message': 'UART baud rate is outside the supported range.',
-                'error_code': 'uart_invalid_baud_rate',
-            }
-
-        return {
-            'connection_type': connection_type,
-            'terminal_id': terminal_id,
-            'serial_port': port_info['device'],
-            'serial_port_info': port_info,
-            'baud_rate': baud_rate,
-        }, None
-
-    host = data.get('host', SSH_HOST)
-    if not isinstance(host, str):
-        return None, 'Host must be a string.'
-    host = host.strip()
-    if not host or len(host) > MAX_HOST_LENGTH:
-        return None, 'Host is empty or too long.'
-    if has_control_chars(host):
-        return None, 'Host contains invalid control characters.'
-
-    try:
-        port = int(data.get('port', SSH_PORT))
-    except (TypeError, ValueError):
-        return None, 'Port must be a number.'
-    if port < 1 or port > 65535:
-        return None, 'Port must be between 1 and 65535.'
-
-    user = data.get('username', SSH_USER)
-    if not isinstance(user, str):
-        return None, 'Username must be a string.'
-    user = user.strip()
-    if not user or len(user) > MAX_USERNAME_LENGTH:
-        return None, 'Username is empty or too long.'
-    if has_control_chars(user):
-        return None, 'Username contains invalid control characters.'
-
-    password = data.get('password') or ''
-    if not isinstance(password, str):
-        return None, 'Password must be a string.'
-    if len(password.encode('utf-8', errors='ignore')) > MAX_PASSWORD_BYTES:
-        return None, 'Password is too long.'
-
-    return {
+    plugin_payload, validation_error = plugin.validate_start_payload(
+        data,
+        terminal_id,
+        client_ip,
+        browser_authorized=browser_authorized,
+    )
+    if validation_error:
+        return None, validation_error
+    if plugin_payload is None:
+        plugin_payload = {}
+    if not isinstance(plugin_payload, dict):
+        return None, {
+            'message': 'Backend payload is invalid.',
+            'error_code': 'invalid_backend_payload',
+        }
+    reserved_keys = RESERVED_BACKEND_PAYLOAD_KEYS.intersection(plugin_payload)
+    if reserved_keys:
+        return None, {
+            'message': 'Backend payload used reserved fields.',
+            'error_code': 'backend_payload_reserved_fields',
+        }
+    payload = {
         'connection_type': connection_type,
         'terminal_id': terminal_id,
-        'host': host,
-        'port': port,
-        'username': user,
-        'password': password,
-    }, None
+    }
+    payload.update(plugin_payload)
+    return payload, None
 
 def parse_terminal_size(data):
     if not isinstance(data, dict):
@@ -2158,7 +2373,7 @@ def on_browser_auth_signature(data):
             'browser_authorization_status',
             {
                 'status': 'authorized',
-                'message': 'Browser authorized for Local Shell.',
+                'message': 'Browser authorized for local resources.',
             },
             room=request.sid,
         )
@@ -2318,29 +2533,36 @@ def on_start_ssh(data):
         return
 
     connection_type = payload['connection_type']
+    plugin = TERMINAL_BACKEND_REGISTRY.get(connection_type)
+    if not plugin:
+        emit_connection_error(
+            request.sid,
+            'Connection type must be ssh, local_shell, or uart.',
+            error_code='invalid_start_ssh_payload',
+            terminal_id=terminal_id,
+        )
+        return
     cols = 80
     rows = 24
-    if connection_type == CONNECTION_TYPE_LOCAL_SHELL:
-        bridge = LocalShellBridge(session_token, terminal_id)
+    bridge = None
+    try:
+        bridge = plugin.create_bridge(session_token, terminal_id, payload)
+        if not isinstance(bridge, TerminalBridge):
+            raise TypeError('Backend did not return a terminal bridge.')
+        if bridge.connection_type != connection_type:
+            raise ValueError('Backend returned a bridge with a mismatched connection type.')
         bridge.attach(request.sid)
-        success, result = bridge.connect(cols=cols, rows=rows)
-    elif connection_type == CONNECTION_TYPE_UART:
-        bridge = UARTBridge(
-            session_token,
-            terminal_id,
-            payload['serial_port_info'],
-            payload['baud_rate'],
+        success, result = plugin.connect_bridge(bridge, payload, cols, rows)
+    except Exception as exc:
+        print(f"[!] Backend start error for {connection_type}: {exc}")
+        close_bridge(bridge)
+        emit_connection_error(
+            request.sid,
+            'Connection failed.',
+            error_code='backend_start_failed',
+            terminal_id=terminal_id,
         )
-        bridge.attach(request.sid)
-        success, result = bridge.connect(cols=cols, rows=rows)
-    else:
-        host = payload['host']
-        port = payload['port']
-        user = payload['username']
-        password = payload['password']
-        bridge = SSHBridge(session_token, terminal_id)
-        bridge.attach(request.sid)
-        success, result = bridge.connect(host, port, user, password, cols=cols, rows=rows)
+        return
 
     if success:
         close_terminal_bridge(session_token, terminal_id)
@@ -2351,70 +2573,16 @@ def on_start_ssh(data):
         socketio.start_background_task(target=bridge.read_loop)
         return
 
-    if connection_type in {CONNECTION_TYPE_LOCAL_SHELL, CONNECTION_TYPE_UART}:
-        message = 'Connection failed.'
-        error_code = None
-        if isinstance(result, dict):
-            message = result.get('message', message)
-            error_code = result.get('error_code')
-        elif result:
-            message = str(result)
-
-        close_bridge(bridge)
-        emit_connection_error(
-            request.sid,
-            message,
-            error_code=error_code,
-            terminal_id=terminal_id,
-        )
-        return
-
-    host = payload['host']
-    port = payload['port']
-    user = payload['username']
-    password = payload['password']
-    message = 'Connection failed.'
-    error_code = None
-    action_type = None
-    action_message = None
-    action_question = None
-    if isinstance(result, dict):
-        message = result.get('message', message)
-        error_code = result.get('error_code')
-        action_type = result.get('action_type')
-        action_message = result.get('action_message')
-        action_question = result.get('action_question')
-    elif result:
-        message = str(result)
-
-    action_id = None
-    if action_type == 'offer_localhost_key_setup':
-        missing_entries = bridge._get_missing_local_public_keys()
-        if missing_entries:
-            action_id = secrets.token_urlsafe(16)
-            pending_localhost_key_setups[request.sid] = {
-                'action_id': action_id,
-                'host': host,
-                'port': port,
-                'username': user,
-                'terminal_id': terminal_id,
-                'key_entry': missing_entries[0],
-                'expires_at': time.time() + LOCALHOST_KEY_SETUP_TTL_SECONDS,
-            }
-        else:
-            action_type = None
-            action_message = None
-            action_question = None
-
+    failure = plugin.build_connection_failure(request.sid, bridge, payload, result)
     close_bridge(bridge)
     emit_connection_error(
         request.sid,
-        message,
-        error_code=error_code,
-        action_type=action_type,
-        action_message=action_message,
-        action_question=action_question,
-        action_id=action_id,
+        failure['message'],
+        error_code=failure.get('error_code'),
+        action_type=failure.get('action_type'),
+        action_message=failure.get('action_message'),
+        action_question=failure.get('action_question'),
+        action_id=failure.get('action_id'),
         terminal_id=terminal_id,
     )
 
