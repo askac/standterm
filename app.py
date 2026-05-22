@@ -3781,6 +3781,10 @@ def on_agent_action_approve(data):
             emit_agent_error(request.sid, terminal_id, AGENT_ERROR_STALE_MODE_VERSION)
             emit_agent_state(request.sid, state)
             return
+        if data.get('privacy_version') is not None and data.get('privacy_version') != state.privacy_version:
+            emit_agent_error(request.sid, terminal_id, AGENT_ERROR_STALE_PROPOSAL)
+            emit_agent_state(request.sid, state)
+            return
         action = state.pending_actions.get(action_id) if isinstance(action_id, str) else None
         if not action and isinstance(proposal_id, str):
             action = next(

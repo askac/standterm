@@ -188,13 +188,14 @@ Payload:
   "session_id": "ags_...",
   "viewer_id": "agv_...",
   "agent_binding_id": "agb_...",
-  "mode_version": 1
+  "mode_version": 1,
+  "privacy_version": 0
 }
 ```
 
 Approves a pending action for this exact sid, terminal, and current
-`control_epoch`/`mode_version`. Approved input is written only through
-`AgentInputGate`.
+`control_epoch`/`mode_version`/`privacy_version`. Approved input is written only
+through `AgentInputGate`.
 
 ### `agent_action_reject`
 

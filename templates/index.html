@@ -1787,12 +1787,96 @@
                 terminals.forEach(configureWebLinks);
             }
 
+            function cloneForTest(value) {
+                if (value === undefined) return null;
+                try {
+                    return JSON.parse(JSON.stringify(value));
+                } catch (e) {
+                    return null;
+                }
+            }
+
+            function serializeAgentForTest(state) {
+                if (!state || !state.agent) return null;
+                return {
+                    terminal_id: state.id,
+                    connected: !!state.connected,
+                    label: state.label || null,
+                    mode: state.agent.mode,
+                    paused: !!state.agent.paused,
+                    session_id: state.agent.sessionId,
+                    viewer_id: state.agent.viewerId,
+                    agent_binding_id: state.agent.agentBindingId,
+                    mode_version: state.agent.modeVersion,
+                    privacy_state: state.agent.privacyState,
+                    privacy_version: state.agent.privacyVersion,
+                    pending_actions: state.agent.pendingActions,
+                    pending_action: cloneForTest(state.agent.pendingAction),
+                    last_action: cloneForTest(state.agent.lastAction),
+                    last_snapshot_result: cloneForTest(state.agent.lastSnapshotResult)
+                };
+            }
+
+            function installWebsshBrowserTestHook() {
+                if (!debugEnabled || !socket || window.websshTest) return;
+                const emitted = [];
+                const originalEmit = socket.emit.bind(socket);
+                socket.emit = (eventName, ...args) => {
+                    emitted.push({
+                        event: eventName,
+                        args: cloneForTest(args),
+                        at: new Date().toISOString()
+                    });
+                    if (emitted.length > 100) emitted.shift();
+                    return originalEmit(eventName, ...args);
+                };
+                window.websshTest = {
+                    clearEmitted() {
+                        emitted.length = 0;
+                    },
+                    getEmitted() {
+                        return cloneForTest(emitted);
+                    },
+                    getActiveAgentState() {
+                        return serializeAgentForTest(getActiveTerminalState());
+                    },
+                    getMirrorSnapshot() {
+                        return cloneForTest(buildAgentViewportSnapshot(getActiveTerminalState()));
+                    },
+                    sendAgentSnapshot() {
+                        sendAgentViewportSnapshot(getActiveTerminalState());
+                    },
+                    setPrivacy(privacyState) {
+                        emitAgentPrivacyState(getActiveTerminalState(), privacyState);
+                    },
+                    emitSocket(eventName, payload) {
+                        socket.emit(eventName, payload);
+                    },
+                    writeTerminalOutput(data, outputSeq) {
+                        writeTerminalOutput(getActiveTerminalState(), data, outputSeq);
+                    },
+                    scrollVisibleTerminal(lines) {
+                        const state = getActiveTerminalState();
+                        if (state && state.term && Number.isFinite(Number(lines))) {
+                            state.term.scrollLines(Number(lines));
+                        }
+                    },
+                    startPasteReview(text) {
+                        return startPasteReview(getActiveTerminalState(), text);
+                    },
+                    handleSshOutput(payload) {
+                        handleSshOutputPayload(payload);
+                    }
+                };
+            }
+
             const initialState = createTerminalTab(INITIAL_TERMINAL_ID, 'Terminal 1');
             initialState.container.classList.add('active');
             updateActiveTerminalUi();
             requestAnimationFrame(fitAndNotifyResize);
 
             socket = io({ transports: ['polling', 'websocket'], reconnectionAttempts: 5 });
+            installWebsshBrowserTestHook();
             socket.on('connect', () => {
                 socketStatusEl.innerText = "Connected";
                 socketStatusEl.style.color = "#34c759";
@@ -2112,7 +2196,8 @@
                     ['session_id', action.session_id ?? state.agent.sessionId],
                     ['viewer_id', action.viewer_id ?? state.agent.viewerId],
                     ['agent_binding_id', action.agent_binding_id ?? state.agent.agentBindingId],
-                    ['mode_version', action.mode_version ?? state.agent.modeVersion]
+                    ['mode_version', action.mode_version ?? state.agent.modeVersion],
+                    ['privacy_version', action.privacy_version ?? state.agent.privacyVersion]
                 ].forEach(([key, value]) => {
                     if (value !== null && value !== undefined && value !== '') payload[key] = value;
                 });
@@ -2185,7 +2270,7 @@
                 const scheduleAfterMirror = writeAgentTerminalMirror(state, data, outputSeq, () => scheduleAgentViewportSnapshot(state));
                 state.term.write(data, scheduleAfterMirror ? undefined : () => scheduleAgentViewportSnapshot(state));
             }
-            socket.on('ssh_output', data => {
+            function handleSshOutputPayload(data) {
                 if (!data || typeof data !== 'object') return;
                 const messageType = data.message_type;
                 const allowedTypes = ['terminal', 'connection_error', 'setup_result', 'ssh_connected', 'ssh_closed'];
@@ -2288,7 +2373,8 @@
                         }
                         break;
                     }
-            });
+            }
+            socket.on('ssh_output', handleSshOutputPayload);
 
             const contextMenu = document.getElementById('context-menu');
             const urlOverlay = document.getElementById('url-overlay');

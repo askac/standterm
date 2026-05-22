@@ -161,6 +161,7 @@ def test_approval_and_direct_writes_use_gate():
     assert action['proposal_id'].startswith('agp_')
     assert action['mode_version'] == state['mode_version']
     assert action['privacy_state'] == webssh.AGENT_PRIVACY_NORMAL
+    assert action['privacy_version'] == state['privacy_version']
     assert action['escaped_preview'] == 'approved\\n'
 
     client.emit(webssh.AGENT_EVENT_ACTION_APPROVE, {
@@ -171,6 +172,7 @@ def test_approval_and_direct_writes_use_gate():
         'viewer_id': action['viewer_id'],
         'agent_binding_id': action['agent_binding_id'],
         'mode_version': action['mode_version'],
+        'privacy_version': action['privacy_version'],
     })
     assert ''.join(bridge.writes) == 'approved\n'
     assert last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)['status'] == webssh.AGENT_STATUS_COMPLETED
@@ -343,6 +345,40 @@ def test_stale_mode_version_cannot_approve_action():
         'mode_version': action['mode_version'],
     })
     assert bridge.writes == ['versioned\n']
+
+    client.disconnect()
+
+
+def test_stale_privacy_version_cannot_approve_action():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(webssh.AGENT_EVENT_MODE_SET, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'mode': 'approval',
+    })
+    client.emit(webssh.AGENT_EVENT_SUGGESTION_REQUEST, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'mock_input': 'privacy-versioned\n',
+    })
+    action = last_payload(client, webssh.AGENT_EVENT_ACTION_REQUEST)
+
+    client.emit(webssh.AGENT_EVENT_PRIVACY_SET, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'privacy_state': webssh.AGENT_PRIVACY_PRIVATE_INPUT,
+    })
+    assert last_payload(client, webssh.AGENT_EVENT_STATE)['privacy_version'] == action['privacy_version'] + 1
+
+    client.emit(webssh.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'proposal_id': action['proposal_id'],
+        'mode_version': action['mode_version'],
+        'privacy_version': action['privacy_version'],
+    })
+    assert bridge.writes == []
+    assert last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)['error_code'] == webssh.AGENT_ERROR_STALE_PROPOSAL
 
     client.disconnect()
 
@@ -745,6 +781,7 @@ def main():
         test_agent_audit_records_typed_events_without_raw_action_data,
         test_wrong_sid_cannot_approve_action,
         test_stale_mode_version_cannot_approve_action,
+        test_stale_privacy_version_cannot_approve_action,
         test_mode_change_cancels_pending_action,
         test_terminal_close_invalidates_pending_action,
         test_disconnect_invalidates_agent_state,
