@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -1317,39 +1318,45 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
     })
     state = last_payload(client, webssh.AGENT_EVENT_STATE)
 
-    response = flask_client.post('/agent/external/token', json={
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
-        'viewer_id': state['viewer_id'],
-        'agent_binding_id': state['agent_binding_id'],
-        'mode_version': state['mode_version'],
-        'privacy_version': state['privacy_version'],
-    })
-    assert response.status_code == 200
-    token_payload = response.get_json()
-    assert token_payload['status'] == 'ok'
-    assert token_payload['token'].startswith('agt_')
-    assert token_payload['handoff_schema'] == 'webssh_external_agent_handoff'
-    assert token_payload['schema_version'] == 1
-    assert token_payload['protocol_version'] == webssh.EXTERNAL_AGENT_PROTOCOL_VERSION
-    assert 'render' in token_payload['capabilities']
-    assert token_payload['transport']['type'] == 'loopback_http_json'
-    assert token_payload['transport']['loopback_only'] is True
-    assert token_payload['operations']['render']['op'] == 'render'
-    assert token_payload['operations']['tail']['wait_ms'] == webssh.AGENT_EXTERNAL_TAIL_MAX_WAIT_MS
-    assert token_payload['security']['remote_use_requires_loopback_tunnel'] is True
-    assert token_payload['cli_command'].endswith("send --text 'pwd\n'")
-    assert token_payload['cli_commands']['hello'].endswith('hello')
-    assert token_payload['cli_commands']['render'].endswith('render')
-    assert 'scripts/webssh_agent_repl.py' in token_payload['cli_commands']['repl']
-    handoff = Path(token_payload['handoff_path'])
-    assert handoff == webssh.EXTERNAL_AGENT_HANDOFF_PATH
-    assert handoff.parent == webssh.APP_DIR
-    assert handoff.is_file()
-    handoff_payload = webssh.json.loads(handoff.read_text(encoding='utf-8'))
-    assert handoff_payload['token'] == token_payload['token']
-    assert handoff_payload['cli_command'] == token_payload['cli_command']
-    assert handoff_payload['capabilities'] == token_payload['capabilities']
-    assert handoff_payload['cli_commands']['render'] == token_payload['cli_commands']['render']
+    original_handoff_path = webssh.EXTERNAL_AGENT_HANDOFF_PATH
+    with tempfile.TemporaryDirectory(prefix='webssh-agent-smoke-') as handoff_dir:
+        webssh.EXTERNAL_AGENT_HANDOFF_PATH = Path(handoff_dir) / 'webssh_external_agent_handoff.json'
+        try:
+            response = flask_client.post('/agent/external/token', json={
+                'terminal_id': webssh.TERMINAL_ID_MAIN,
+                'viewer_id': state['viewer_id'],
+                'agent_binding_id': state['agent_binding_id'],
+                'mode_version': state['mode_version'],
+                'privacy_version': state['privacy_version'],
+            })
+            assert response.status_code == 200
+            token_payload = response.get_json()
+            assert token_payload['status'] == 'ok'
+            assert token_payload['token'].startswith('agt_')
+            assert token_payload['handoff_schema'] == 'webssh_external_agent_handoff'
+            assert token_payload['schema_version'] == 1
+            assert token_payload['protocol_version'] == webssh.EXTERNAL_AGENT_PROTOCOL_VERSION
+            assert 'render' in token_payload['capabilities']
+            assert token_payload['transport']['type'] == 'loopback_http_json'
+            assert token_payload['transport']['loopback_only'] is True
+            assert token_payload['operations']['render']['op'] == 'render'
+            assert token_payload['operations']['tail']['wait_ms'] == webssh.AGENT_EXTERNAL_TAIL_MAX_WAIT_MS
+            assert token_payload['security']['remote_use_requires_loopback_tunnel'] is True
+            assert token_payload['cli_command'].endswith("send --text 'pwd\n'")
+            assert token_payload['cli_commands']['hello'].endswith('hello')
+            assert token_payload['cli_commands']['render'].endswith('render')
+            assert 'scripts/webssh_agent_repl.py' in token_payload['cli_commands']['repl']
+            handoff = Path(token_payload['handoff_path'])
+            assert handoff == webssh.EXTERNAL_AGENT_HANDOFF_PATH
+            assert handoff.parent == Path(handoff_dir)
+            assert handoff.is_file()
+            handoff_payload = webssh.json.loads(handoff.read_text(encoding='utf-8'))
+            assert handoff_payload['token'] == token_payload['token']
+            assert handoff_payload['cli_command'] == token_payload['cli_command']
+            assert handoff_payload['capabilities'] == token_payload['capabilities']
+            assert handoff_payload['cli_commands']['render'] == token_payload['cli_commands']['render']
+        finally:
+            webssh.EXTERNAL_AGENT_HANDOFF_PATH = original_handoff_path
 
     response = flask_client.post('/agent/external/command', json={
         'op': 'send',
