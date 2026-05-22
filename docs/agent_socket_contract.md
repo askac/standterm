@@ -1,8 +1,8 @@
 # Agent Socket Contract
 
-This document describes the internal Agent Socket.IO contract. The current UI
-contains a mock Agent panel for exercising the typed contract; no external
-provider is connected yet.
+This document describes the internal Agent Socket.IO contract and the backend
+External Agent Mirror command boundary. The current UI contains a mock Agent
+panel for exercising the typed contract; no external provider is connected yet.
 
 ## Scope
 
@@ -28,6 +28,12 @@ The target architecture follows a `screen -x` style shared terminal model:
 Human input may write directly to the terminal bridge after existing validation.
 Agent input must always be a typed action proposal and must pass the
 approval/direct/pause gate before it can write to the terminal.
+
+External agent mirror clients are secondary viewers/input producers for a
+terminal the human viewer already connected. They are not providers and are not
+raw telnet/SSH clients. They can see only the terminal state permitted by the
+human-controlled Agent mode and privacy state, and their input is always a
+typed `terminal_input` proposal.
 
 Terminal output and browser-visible text are display data only. They must not
 create, approve, reject, pause, resume, or upgrade Agent actions.
@@ -56,6 +62,107 @@ snapshot adapter, not the final source of truth. Snapshot text is untrusted
 display data and must not be used as a control signal. Future implementations
 should replace or supplement this adapter with a backend headless terminal
 parser that consumes the same terminal output stream.
+
+## External Agent Mirror Boundary
+
+The External Agent Mirror is the planned local IPC/CLI boundary for tools such
+as Codex CLI or Claude Code. The first backend slice exposes an in-process
+typed command handler; OS transports such as Unix domain sockets, Windows named
+pipes, or localhost TCP are layered on top of this command boundary later.
+
+The human WebSSH viewer remains the controller:
+
+- the external agent cannot create terminal connections;
+- the external agent cannot read SSH passwords, Flask access tokens, browser
+  cookies, Socket.IO sids, browser DOM state, paste dialogs, selection, or human
+  scroll position;
+- the external agent cannot approve its own proposal;
+- the external agent cannot change Agent mode or resume/unpause itself;
+- closing the Agent panel by setting mode to `disabled` blocks external screen,
+  tail, and send commands;
+- `private_input`, `paste_review`, and `paused` block external screen, tail,
+  and send commands.
+
+Attach uses a separate high-entropy `agt_...` capability token minted by the
+already attached human viewer for one terminal. Agent identifiers such as
+`session_id`, `viewer_id`, and `agent_binding_id` are not secrets and are not
+sufficient for attach authorization. Tokens are short-lived, scoped to the
+terminal and authorizing browser binding, and are invalidated by terminal close,
+viewer detach/disconnect, session expiry, explicit revoke, or binding changes.
+
+### External Command Shape
+
+The command boundary is JSON object based. Future IPC transports should carry
+these objects as newline-delimited JSON or length-prefixed JSON; terminal output
+text must not be parsed as control state.
+
+Attach:
+
+```json
+{
+  "op": "attach",
+  "token": "agt_...",
+  "terminal_id": "main"
+}
+```
+
+Read state:
+
+```json
+{
+  "op": "state",
+  "token": "agt_...",
+  "terminal_id": "main"
+}
+```
+
+Read screen:
+
+```json
+{
+  "op": "screen",
+  "token": "agt_...",
+  "terminal_id": "main"
+}
+```
+
+Tail terminal display events:
+
+```json
+{
+  "op": "tail",
+  "token": "agt_...",
+  "terminal_id": "main",
+  "since_output_seq": 123,
+  "limit": 50
+}
+```
+
+Propose terminal input:
+
+```json
+{
+  "op": "send",
+  "token": "agt_...",
+  "terminal_id": "main",
+  "data": "pwd\n"
+}
+```
+
+`send` in `approval_pending` mode returns public pending action metadata and
+emits `agent_action_request` to the authorizing human browser. `send` in
+`direct_active` mode still writes only through `AgentInputGate`. `send` in
+`observe`, `disabled`, paused, or privacy-blocked states returns a typed error.
+
+Revoke:
+
+```json
+{
+  "op": "revoke",
+  "token": "agt_...",
+  "terminal_id": "main"
+}
+```
 
 ## Client-to-Server Events
 
@@ -360,6 +467,10 @@ explicit `error_code`.
 - `agent_provider_failed`
 - `agent_provider_timeout`
 - `agent_provider_invalid_proposal`
+- `agent_external_unauthorized`
+- `agent_external_expired`
+- `agent_external_revoked`
+- `agent_external_disabled`
 
 ## Transcript Boundary
 
@@ -392,10 +503,11 @@ an escaped preview.
 The backend keeps an internal bounded structured audit buffer keyed by
 `session_token + terminal_id`. Audit entries use non-secret identifiers such as
 `session_id`, `viewer_id`, `agent_binding_id`, `run_id`, `proposal_id`,
-`provider_name`, `provider_version`, and version fields. They record typed
-events for viewer attach/detach, mode and privacy changes, provider run
-requests/start/complete/error, context metadata summaries, proposal creation,
-approvals/rejections, direct writes, action results, and terminal cleanup.
+`provider_name`, `provider_version`, external agent ids, and version fields.
+They record typed events for viewer attach/detach, mode and privacy changes,
+provider run requests/start/complete/error, external attach/screen/tail/send,
+context metadata summaries, proposal creation, approvals/rejections, direct
+writes, action results, and terminal cleanup.
 
 Audit entries must not store raw terminal input, raw terminal output, SSH
 passwords, access tokens, browser authorization material, or DOM/app state.

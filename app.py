@@ -164,6 +164,10 @@ AGENT_ERROR_PROVIDER_UNAVAILABLE = 'agent_provider_unavailable'
 AGENT_ERROR_PROVIDER_FAILED = 'agent_provider_failed'
 AGENT_ERROR_PROVIDER_TIMEOUT = 'agent_provider_timeout'
 AGENT_ERROR_PROVIDER_INVALID_PROPOSAL = 'agent_provider_invalid_proposal'
+AGENT_ERROR_EXTERNAL_AGENT_UNAUTHORIZED = 'agent_external_unauthorized'
+AGENT_ERROR_EXTERNAL_AGENT_EXPIRED = 'agent_external_expired'
+AGENT_ERROR_EXTERNAL_AGENT_REVOKED = 'agent_external_revoked'
+AGENT_ERROR_EXTERNAL_AGENT_DISABLED = 'agent_external_disabled'
 AGENT_REASON_DETACHED = 'agent_detached'
 AGENT_REASON_DISABLED = 'agent_disabled'
 AGENT_REASON_MODE_CHANGED = 'agent_mode_changed'
@@ -206,6 +210,8 @@ AGENT_CONTEXT_BLOCKING_PRIVACY_STATES = {
 AGENT_VIEWPORT_SNAPSHOT_TTL_SECONDS = 5 * 60
 AGENT_VIEWPORT_SNAPSHOT_MAX_BYTES = 120000
 AGENT_VIEWPORT_SNAPSHOT_MAX_LINE_BYTES = 4096
+AGENT_EXTERNAL_ATTACH_TOKEN_TTL_SECONDS = 5 * 60
+AGENT_EXTERNAL_TAIL_MAX_EVENTS = 200
 AGENT_AUDIT_VIEWER_ATTACH = 'viewer_attach'
 AGENT_AUDIT_VIEWER_DETACH = 'viewer_detach'
 AGENT_AUDIT_MODE_SET = 'mode_set'
@@ -216,6 +222,12 @@ AGENT_AUDIT_PROVIDER_RUN_REQUEST = 'provider_run_request'
 AGENT_AUDIT_PROVIDER_RUN_START = 'provider_run_start'
 AGENT_AUDIT_PROVIDER_RUN_COMPLETE = 'provider_run_complete'
 AGENT_AUDIT_PROVIDER_RUN_ERROR = 'provider_run_error'
+AGENT_AUDIT_EXTERNAL_AGENT_TOKEN_CREATED = 'external_agent_token_created'
+AGENT_AUDIT_EXTERNAL_AGENT_ATTACHED = 'external_agent_attached'
+AGENT_AUDIT_EXTERNAL_AGENT_REVOKED = 'external_agent_revoked'
+AGENT_AUDIT_EXTERNAL_AGENT_SCREEN = 'external_agent_screen'
+AGENT_AUDIT_EXTERNAL_AGENT_TAIL = 'external_agent_tail'
+AGENT_AUDIT_EXTERNAL_AGENT_SEND = 'external_agent_send'
 AGENT_AUDIT_CONTEXT_BUILT = 'context_built'
 AGENT_AUDIT_PROPOSAL_CREATED = 'proposal_created'
 AGENT_AUDIT_ACTION_APPROVE = 'action_approve'
@@ -2109,6 +2121,7 @@ agent_states = {}
 agent_session_ids = {}
 agent_viewer_ids = {}
 agent_lock = threading.RLock()
+external_agent_lock = threading.RLock()
 session_cleanup_task_started = False
 
 class AgentAuditStore:
@@ -2409,6 +2422,84 @@ def validate_agent_viewport_snapshot_payload(data):
 
 agent_viewport_snapshot_store = AgentViewportSnapshotStore()
 
+def hash_external_agent_token(token):
+    return hashlib.sha256(token.encode('utf-8')).hexdigest()
+
+class ExternalAgentAttachStore:
+    def __init__(self):
+        self._tokens = {}
+
+    def create(self, state, ttl_seconds=AGENT_EXTERNAL_ATTACH_TOKEN_TTL_SECONDS):
+        if not state:
+            return None
+        token = 'agt_' + secrets.token_urlsafe(24)
+        now = time.time()
+        token_hash = hash_external_agent_token(token)
+        self._tokens[token_hash] = {
+            'token_hash': token_hash,
+            'session_token': state.session_token,
+            'terminal_id': state.terminal_id,
+            'sid': state.sid,
+            'session_id': state.session_id,
+            'viewer_id': state.viewer_id,
+            'agent_binding_id': state.agent_binding_id,
+            'created_at': now,
+            'expires_at': now + ttl_seconds,
+            'revoked': False,
+            'attached': False,
+            'external_agent_id': 'exa_' + secrets.token_urlsafe(12),
+        }
+        return token, dict(self._tokens[token_hash])
+
+    def validate(self, token, terminal_id=None):
+        if not isinstance(token, str) or not token.startswith('agt_'):
+            return None, AGENT_ERROR_EXTERNAL_AGENT_UNAUTHORIZED
+        token_hash = hash_external_agent_token(token)
+        record = self._tokens.get(token_hash)
+        if not record:
+            return None, AGENT_ERROR_EXTERNAL_AGENT_UNAUTHORIZED
+        if record.get('revoked'):
+            return None, AGENT_ERROR_EXTERNAL_AGENT_REVOKED
+        if record.get('expires_at', 0) < time.time():
+            return None, AGENT_ERROR_EXTERNAL_AGENT_EXPIRED
+        if terminal_id is not None and record.get('terminal_id') != terminal_id:
+            return None, AGENT_ERROR_TERMINAL_MISMATCH
+        return dict(record), None
+
+    def mark_attached(self, token):
+        record, error_code = self.validate(token)
+        if error_code:
+            return None, error_code
+        stored = self._tokens.get(record['token_hash'])
+        if stored:
+            stored['attached'] = True
+            stored['attached_at'] = time.time()
+            return dict(stored), None
+        return None, AGENT_ERROR_EXTERNAL_AGENT_UNAUTHORIZED
+
+    def revoke(self, token):
+        record, error_code = self.validate(token)
+        if error_code:
+            return None, error_code
+        stored = self._tokens.get(record['token_hash'])
+        if stored:
+            stored['revoked'] = True
+            stored['revoked_at'] = time.time()
+            return dict(stored), None
+        return None, AGENT_ERROR_EXTERNAL_AGENT_UNAUTHORIZED
+
+    def discard(self, session_token, terminal_id=None, sid=None):
+        for token_hash, record in list(self._tokens.items()):
+            if record.get('session_token') == session_token \
+                    and (terminal_id is None or record.get('terminal_id') == terminal_id) \
+                    and (sid is None or record.get('sid') == sid):
+                self._tokens.pop(token_hash, None)
+
+    def clear(self):
+        self._tokens.clear()
+
+external_agent_attach_store = ExternalAgentAttachStore()
+
 def get_agent_session_id(session_token):
     if not session_token:
         return None
@@ -2665,6 +2756,112 @@ def get_or_create_agent_state(session_token, terminal_id, sid):
         agent_states[key] = state
     return state
 
+def external_agent_error(error_code, terminal_id=None):
+    payload = {
+        'status': AGENT_STATUS_FAILED,
+        'error_code': error_code,
+    }
+    if terminal_id:
+        payload['terminal_id'] = terminal_id
+    return payload
+
+def is_external_agent_state_visible(state):
+    return (
+        state
+        and not state.paused
+        and state.mode != AGENT_MODE_DISABLED
+        and state.mode != AGENT_MODE_PAUSED
+    )
+
+def get_external_agent_authorized_state(record):
+    if not isinstance(record, dict):
+        return None, AGENT_ERROR_EXTERNAL_AGENT_UNAUTHORIZED
+    state = get_agent_state(
+        record.get('session_token'),
+        record.get('terminal_id'),
+        record.get('sid'),
+    )
+    if not state:
+        return None, AGENT_ERROR_NOT_ATTACHED
+    if state.session_id != record.get('session_id') \
+            or state.viewer_id != record.get('viewer_id') \
+            or state.agent_binding_id != record.get('agent_binding_id'):
+        return state, AGENT_ERROR_STALE_PROPOSAL
+    if not is_external_agent_state_visible(state):
+        return state, AGENT_ERROR_EXTERNAL_AGENT_DISABLED
+    return state, None
+
+def mint_external_agent_attach_token(session_token, terminal_id, sid,
+                                     ttl_seconds=AGENT_EXTERNAL_ATTACH_TOKEN_TTL_SECONDS):
+    with agent_lock:
+        if not get_bridge(session_token, terminal_id):
+            return None, None, AGENT_ERROR_TERMINAL_NOT_FOUND
+        state = get_agent_state(session_token, terminal_id, sid)
+        if not state:
+            return None, None, AGENT_ERROR_NOT_ATTACHED
+        if not is_external_agent_state_visible(state):
+            return None, None, AGENT_ERROR_EXTERNAL_AGENT_DISABLED
+        with external_agent_lock:
+            token, record = external_agent_attach_store.create(state, ttl_seconds=ttl_seconds)
+        record_agent_audit_event(
+            state,
+            AGENT_AUDIT_EXTERNAL_AGENT_TOKEN_CREATED,
+            external_agent_id=record.get('external_agent_id'),
+            expires_at=record.get('expires_at'),
+        )
+        return token, record, None
+
+def validate_external_agent_command_token(command, require_terminal=True):
+    if not isinstance(command, dict):
+        return None, None, None, AGENT_ERROR_ACTION_INVALID_DATA
+    terminal_id = command.get('terminal_id')
+    if require_terminal and not validate_terminal_id_payload(command):
+        return None, None, terminal_id if isinstance(terminal_id, str) else None, AGENT_ERROR_ACTION_INVALID_DATA
+    if require_terminal:
+        terminal_id = validate_terminal_id_payload(command)
+    token = command.get('token')
+    with external_agent_lock:
+        record, error_code = external_agent_attach_store.validate(token, terminal_id=terminal_id)
+    if error_code:
+        return None, None, terminal_id, error_code
+    with agent_lock:
+        state, error_code = get_external_agent_authorized_state(record)
+        if error_code:
+            return record, state, terminal_id, error_code
+    return record, state, terminal_id, None
+
+def build_external_agent_state_payload(record, state):
+    payload = state.public_state()
+    payload['external_agent_id'] = record.get('external_agent_id')
+    payload['status'] = 'ok'
+    return payload
+
+def get_external_agent_tail_events(bridge, since_output_seq=None, limit=AGENT_EXTERNAL_TAIL_MAX_EVENTS):
+    try:
+        since_output_seq = int(since_output_seq if since_output_seq is not None else 0)
+    except (TypeError, ValueError):
+        since_output_seq = 0
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = AGENT_EXTERNAL_TAIL_MAX_EVENTS
+    limit = max(1, min(limit, AGENT_EXTERNAL_TAIL_MAX_EVENTS))
+    events = [
+        dict(payload) for payload in list(bridge.replay_buffer)
+        if isinstance(payload.get('output_seq'), int)
+        and payload.get('output_seq') > since_output_seq
+    ]
+    return events[-limit:]
+
+def external_agent_build_terminal_input_action(state, data):
+    return {
+        'action_type': AGENT_ACTION_TERMINAL_INPUT,
+        'terminal_id': state.terminal_id,
+        'data': data,
+        'provider_name': 'external_agent',
+        'provider_version': '1',
+    }
+
 def escape_agent_preview(value):
     return value.encode('unicode_escape', errors='backslashreplace').decode('ascii')
 
@@ -2863,6 +3060,8 @@ def invalidate_agent_states(session_token, terminal_id=None, sid=None, reason=AG
             state.mode = AGENT_MODE_DISABLED
             set_agent_privacy_state(state, AGENT_PRIVACY_PAUSED)
             bump_agent_mode_version(state)
+            with external_agent_lock:
+                external_agent_attach_store.discard(state.session_token, state.terminal_id, state.sid)
             invalidated.extend((state.sid, action) for action in cancel_agent_pending_actions(state, reason))
         return invalidated
 
@@ -3862,6 +4061,168 @@ def process_agent_terminal_input_proposal(data, proposal_builder,
         state = get_agent_state(session_token, terminal_id, request.sid)
         if state:
             emit_agent_state(request.sid, state)
+
+
+def process_external_agent_command(command):
+    if not isinstance(command, dict):
+        return external_agent_error(AGENT_ERROR_ACTION_INVALID_DATA)
+    op = command.get('op')
+    if not isinstance(op, str):
+        return external_agent_error(AGENT_ERROR_ACTION_INVALID_DATA)
+    op = op.strip().lower()
+
+    if op == 'hello':
+        record, state, terminal_id, error_code = validate_external_agent_command_token(
+            command,
+            require_terminal=False,
+        )
+        if error_code:
+            return external_agent_error(error_code, terminal_id=terminal_id)
+        return {
+            'status': 'ok',
+            'version': 1,
+            'external_agent_id': record.get('external_agent_id'),
+            'terminal_id': record.get('terminal_id'),
+            'capabilities': ['state', 'screen', 'tail', 'send', 'revoke'],
+            'state': state.public_state(),
+        }
+
+    if op == 'attach':
+        record, state, terminal_id, error_code = validate_external_agent_command_token(command)
+        if error_code:
+            return external_agent_error(error_code, terminal_id=terminal_id)
+        with external_agent_lock:
+            record, error_code = external_agent_attach_store.mark_attached(command.get('token'))
+        if error_code:
+            return external_agent_error(error_code, terminal_id=terminal_id)
+        record_agent_audit_event(
+            state,
+            AGENT_AUDIT_EXTERNAL_AGENT_ATTACHED,
+            external_agent_id=record.get('external_agent_id'),
+        )
+        return build_external_agent_state_payload(record, state)
+
+    if op == 'revoke':
+        record, state, terminal_id, error_code = validate_external_agent_command_token(command)
+        if error_code:
+            return external_agent_error(error_code, terminal_id=terminal_id)
+        with external_agent_lock:
+            record, error_code = external_agent_attach_store.revoke(command.get('token'))
+        if error_code:
+            return external_agent_error(error_code, terminal_id=terminal_id)
+        record_agent_audit_event(
+            state,
+            AGENT_AUDIT_EXTERNAL_AGENT_REVOKED,
+            external_agent_id=record.get('external_agent_id'),
+        )
+        return {
+            'status': 'ok',
+            'terminal_id': terminal_id,
+            'external_agent_id': record.get('external_agent_id'),
+            'revoked': True,
+        }
+
+    record, state, terminal_id, error_code = validate_external_agent_command_token(command)
+    if error_code:
+        return external_agent_error(error_code, terminal_id=terminal_id)
+
+    if op == 'state':
+        return build_external_agent_state_payload(record, state)
+
+    if op in {'screen', 'tail'}:
+        if not is_agent_context_allowed(state):
+            return external_agent_error(AGENT_ERROR_PRIVACY_BLOCKED, terminal_id=terminal_id)
+        bridge = get_bridge(record.get('session_token'), terminal_id)
+        if not bridge:
+            return external_agent_error(AGENT_ERROR_TERMINAL_NOT_FOUND, terminal_id=terminal_id)
+        if op == 'screen':
+            context = build_agent_context(record.get('session_token'), terminal_id, record.get('sid'))
+            active_screen = context.get('active_screen')
+            record_agent_audit_event(
+                state,
+                AGENT_AUDIT_EXTERNAL_AGENT_SCREEN,
+                external_agent_id=record.get('external_agent_id'),
+                context=summarize_agent_context_for_audit(context),
+            )
+            return {
+                'status': 'ok',
+                'terminal_id': terminal_id,
+                'external_agent_id': record.get('external_agent_id'),
+                'output_seq': bridge.output_seq,
+                'state': state.public_state(),
+                'screen': active_screen,
+            }
+        events = get_external_agent_tail_events(
+            bridge,
+            since_output_seq=command.get('since_output_seq'),
+            limit=command.get('limit', AGENT_EXTERNAL_TAIL_MAX_EVENTS),
+        )
+        record_agent_audit_event(
+            state,
+            AGENT_AUDIT_EXTERNAL_AGENT_TAIL,
+            external_agent_id=record.get('external_agent_id'),
+            event_count=len(events),
+            output_seq=bridge.output_seq,
+        )
+        return {
+            'status': 'ok',
+            'terminal_id': terminal_id,
+            'external_agent_id': record.get('external_agent_id'),
+            'output_seq': bridge.output_seq,
+            'events': events,
+        }
+
+    if op == 'send':
+        if state.paused or state.mode == AGENT_MODE_PAUSED:
+            return external_agent_error(AGENT_ERROR_PAUSED, terminal_id=terminal_id)
+        if not is_agent_context_allowed(state):
+            return external_agent_error(AGENT_ERROR_PRIVACY_BLOCKED, terminal_id=terminal_id)
+        if state.mode not in {AGENT_MODE_APPROVAL_PENDING, AGENT_MODE_DIRECT_ACTIVE}:
+            return external_agent_error(AGENT_ERROR_MODE_NOT_WRITABLE, terminal_id=terminal_id)
+        data = command.get('data')
+        proposal = external_agent_build_terminal_input_action(state, data)
+        requires_approval = state.mode != AGENT_MODE_DIRECT_ACTIVE
+        with agent_lock:
+            action, error_code = build_agent_action(state, proposal, requires_approval)
+            if error_code:
+                return external_agent_error(error_code, terminal_id=terminal_id)
+            record_agent_audit_event(
+                state,
+                AGENT_AUDIT_EXTERNAL_AGENT_SEND,
+                action=action,
+                external_agent_id=record.get('external_agent_id'),
+            )
+            socketio.emit(AGENT_EVENT_ACTION_REQUEST, public_agent_action(action), room=state.sid)
+            emit_agent_state(state.sid, state)
+        if requires_approval:
+            payload = public_agent_action(action)
+            payload['status'] = AGENT_STATUS_PENDING_APPROVAL
+            return payload
+        ok, result = write_agent_terminal_input(
+            record.get('session_token'),
+            terminal_id,
+            state.sid,
+            action['action_id'],
+            action['control_epoch'],
+            mode_version=action['mode_version'],
+            proposal_id=action['proposal_id'],
+        )
+        status = AGENT_STATUS_COMPLETED if ok else AGENT_STATUS_FAILED
+        if result.get('error_code'):
+            status = result['error_code']
+        emit_agent_action_result(state.sid, action, status, error_code=result.get('error_code'))
+        with agent_lock:
+            current_state = get_agent_state(record.get('session_token'), terminal_id, state.sid)
+            if current_state:
+                emit_agent_state(state.sid, current_state)
+        payload = public_agent_action(action)
+        payload['status'] = status
+        if result.get('error_code'):
+            payload['error_code'] = result.get('error_code')
+        payload['bytes_written'] = result.get('bytes_written', 0)
+        return payload
+
+    return external_agent_error(AGENT_ERROR_ACTION_NOT_ALLOWED, terminal_id=terminal_id)
 
 
 @socketio.on(AGENT_EVENT_SUGGESTION_REQUEST)

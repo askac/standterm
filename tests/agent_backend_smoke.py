@@ -77,6 +77,7 @@ def reset_state():
     webssh.agent_transcript_store.clear()
     webssh.agent_user_input_metadata_store.clear()
     webssh.agent_viewport_snapshot_store.clear()
+    webssh.external_agent_attach_store.clear()
     webssh.set_agent_provider_for_test(webssh.MockAgentProvider())
 
 
@@ -418,6 +419,340 @@ def test_invalid_provider_proposal_is_rejected_before_action_creation():
         event for event in audit_events
         if event['event_type'] == webssh.AGENT_AUDIT_PROPOSAL_CREATED
     ]
+
+    client.disconnect()
+
+
+def test_external_agent_token_requires_enabled_agent_panel():
+    client = make_client()
+    session_token = current_session_token()
+    add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+
+    token, record, error_code = webssh.mint_external_agent_attach_token(
+        session_token,
+        webssh.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert token is None
+    assert record is None
+    assert error_code == webssh.AGENT_ERROR_NOT_ATTACHED
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(webssh.AGENT_EVENT_MODE_SET, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'mode': 'disabled',
+    })
+    token, record, error_code = webssh.mint_external_agent_attach_token(
+        session_token,
+        webssh.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert token is None
+    assert record is None
+    assert error_code == webssh.AGENT_ERROR_EXTERNAL_AGENT_DISABLED
+
+    client.disconnect()
+
+
+def test_external_agent_can_attach_and_read_authorized_screen():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot(fill='screen'))
+    assert last_payload(client, webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)['status'] == 'accepted'
+    bridge.emit_output({
+        'message_type': 'terminal',
+        'data': 'terminal-output\n',
+    })
+
+    token, record, error_code = webssh.mint_external_agent_attach_token(
+        session_token,
+        webssh.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert error_code is None
+    attach = webssh.process_external_agent_command({
+        'op': 'attach',
+        'token': token,
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    })
+    assert attach['status'] == 'ok'
+    assert attach['external_agent_id'] == record['external_agent_id']
+    assert attach['mode'] == webssh.AGENT_MODE_OBSERVE
+
+    screen = webssh.process_external_agent_command({
+        'op': 'screen',
+        'token': token,
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    })
+    assert screen['status'] == 'ok'
+    assert screen['screen']['lines'] == ['screen', 'screen']
+    assert screen['state']['session_id'] == attach['session_id']
+
+    tail = webssh.process_external_agent_command({
+        'op': 'tail',
+        'token': token,
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'since_output_seq': 0,
+    })
+    assert tail['status'] == 'ok'
+    assert tail['events'][-1]['data'] == 'terminal-output\n'
+
+    audit_events = webssh.agent_audit_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    event_types = [event['event_type'] for event in audit_events]
+    assert webssh.AGENT_AUDIT_EXTERNAL_AGENT_TOKEN_CREATED in event_types
+    assert webssh.AGENT_AUDIT_EXTERNAL_AGENT_ATTACHED in event_types
+    assert webssh.AGENT_AUDIT_EXTERNAL_AGENT_SCREEN in event_types
+    assert webssh.AGENT_AUDIT_EXTERNAL_AGENT_TAIL in event_types
+    for event in audit_events:
+        assert 'token' not in event
+        assert 'token_hash' not in event
+
+    client.disconnect()
+
+
+def test_external_agent_observe_cannot_send():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    token, _record, error_code = webssh.mint_external_agent_attach_token(
+        session_token,
+        webssh.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert error_code is None
+
+    result = webssh.process_external_agent_command({
+        'op': 'send',
+        'token': token,
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'data': 'blocked\n',
+    })
+    assert result['error_code'] == webssh.AGENT_ERROR_MODE_NOT_WRITABLE
+    assert bridge.writes == []
+
+    client.disconnect()
+
+
+def test_external_agent_approval_send_waits_for_human_approval():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(webssh.AGENT_EVENT_MODE_SET, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'mode': 'approval',
+    })
+    token, _record, error_code = webssh.mint_external_agent_attach_token(
+        session_token,
+        webssh.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert error_code is None
+
+    result = webssh.process_external_agent_command({
+        'op': 'send',
+        'token': token,
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'data': 'approved-external\n',
+    })
+    assert result['status'] == webssh.AGENT_STATUS_PENDING_APPROVAL
+    assert result['requires_approval'] is True
+    assert result['provider_name'] == 'external_agent'
+    assert bridge.writes == []
+    action = last_payload(client, webssh.AGENT_EVENT_ACTION_REQUEST)
+    assert action['proposal_id'] == result['proposal_id']
+
+    client.emit(webssh.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'action_id': action['action_id'],
+        'proposal_id': action['proposal_id'],
+        'session_id': action['session_id'],
+        'viewer_id': action['viewer_id'],
+        'agent_binding_id': action['agent_binding_id'],
+        'mode_version': action['mode_version'],
+        'privacy_version': action['privacy_version'],
+    })
+    assert ''.join(bridge.writes) == 'approved-external\n'
+
+    client.disconnect()
+
+
+def test_external_agent_direct_send_uses_agent_gate():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(webssh.AGENT_EVENT_MODE_SET, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'mode': 'direct',
+    })
+    token, _record, error_code = webssh.mint_external_agent_attach_token(
+        session_token,
+        webssh.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert error_code is None
+
+    result = webssh.process_external_agent_command({
+        'op': 'send',
+        'token': token,
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'data': 'direct-external\n',
+    })
+    assert result['status'] == webssh.AGENT_STATUS_COMPLETED
+    assert result['bytes_written'] == len('direct-external\n')
+    assert ''.join(bridge.writes) == 'direct-external\n'
+    action_result = last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)
+    assert action_result['proposal_id'] == result['proposal_id']
+
+    client.disconnect()
+
+
+def test_external_agent_privacy_and_disabled_state_block_visibility_and_send():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(webssh.AGENT_EVENT_MODE_SET, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'mode': 'approval',
+    })
+    token, _record, error_code = webssh.mint_external_agent_attach_token(
+        session_token,
+        webssh.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert error_code is None
+
+    client.emit(webssh.AGENT_EVENT_PRIVACY_SET, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'privacy_state': webssh.AGENT_PRIVACY_PRIVATE_INPUT,
+    })
+    screen = webssh.process_external_agent_command({
+        'op': 'screen',
+        'token': token,
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    })
+    send = webssh.process_external_agent_command({
+        'op': 'send',
+        'token': token,
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'data': 'blocked\n',
+    })
+    assert screen['error_code'] == webssh.AGENT_ERROR_PRIVACY_BLOCKED
+    assert send['error_code'] == webssh.AGENT_ERROR_PRIVACY_BLOCKED
+    assert bridge.writes == []
+
+    client.emit(webssh.AGENT_EVENT_PRIVACY_SET, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'privacy_state': webssh.AGENT_PRIVACY_NORMAL,
+    })
+    client.emit(webssh.AGENT_EVENT_MODE_SET, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'mode': 'disabled',
+    })
+    result = webssh.process_external_agent_command({
+        'op': 'screen',
+        'token': token,
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    })
+    assert result['error_code'] == webssh.AGENT_ERROR_EXTERNAL_AGENT_DISABLED
+
+    client.disconnect()
+
+
+def test_external_agent_token_revoke_and_terminal_close_invalidate_access():
+    client = make_client()
+    session_token = current_session_token()
+    add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    token, _record, error_code = webssh.mint_external_agent_attach_token(
+        session_token,
+        webssh.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert error_code is None
+
+    revoked = webssh.process_external_agent_command({
+        'op': 'revoke',
+        'token': token,
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    })
+    assert revoked['status'] == 'ok'
+    result = webssh.process_external_agent_command({
+        'op': 'state',
+        'token': token,
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    })
+    assert result['error_code'] == webssh.AGENT_ERROR_EXTERNAL_AGENT_REVOKED
+
+    token, _record, error_code = webssh.mint_external_agent_attach_token(
+        session_token,
+        webssh.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert error_code is None
+    client.emit('close_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    result = webssh.process_external_agent_command({
+        'op': 'state',
+        'token': token,
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    })
+    assert result['error_code'] == webssh.AGENT_ERROR_EXTERNAL_AGENT_UNAUTHORIZED
+
+    client.disconnect()
+
+
+def test_external_agent_expired_and_wrong_terminal_tokens_are_rejected():
+    client = make_client()
+    session_token = current_session_token()
+    add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    token, _record, error_code = webssh.mint_external_agent_attach_token(
+        session_token,
+        webssh.TERMINAL_ID_MAIN,
+        sid,
+        ttl_seconds=-1,
+    )
+    assert error_code is None
+    result = webssh.process_external_agent_command({
+        'op': 'state',
+        'token': token,
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    })
+    assert result['error_code'] == webssh.AGENT_ERROR_EXTERNAL_AGENT_EXPIRED
+
+    token, _record, error_code = webssh.mint_external_agent_attach_token(
+        session_token,
+        webssh.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert error_code is None
+    result = webssh.process_external_agent_command({
+        'op': 'state',
+        'token': token,
+        'terminal_id': 'other',
+    })
+    assert result['error_code'] == webssh.AGENT_ERROR_TERMINAL_MISMATCH
 
     client.disconnect()
 
@@ -972,6 +1307,14 @@ def main():
         test_static_env_provider_is_explicit_adapter,
         test_provider_failure_is_typed_and_does_not_write,
         test_invalid_provider_proposal_is_rejected_before_action_creation,
+        test_external_agent_token_requires_enabled_agent_panel,
+        test_external_agent_can_attach_and_read_authorized_screen,
+        test_external_agent_observe_cannot_send,
+        test_external_agent_approval_send_waits_for_human_approval,
+        test_external_agent_direct_send_uses_agent_gate,
+        test_external_agent_privacy_and_disabled_state_block_visibility_and_send,
+        test_external_agent_token_revoke_and_terminal_close_invalidate_access,
+        test_external_agent_expired_and_wrong_terminal_tokens_are_rejected,
         test_agent_audit_records_typed_events_without_raw_action_data,
         test_wrong_sid_cannot_approve_action,
         test_stale_mode_version_cannot_approve_action,
