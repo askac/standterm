@@ -87,6 +87,7 @@ def parse_args():
     parser.add_argument('--token', help='External agent attach token. Omit only on dev servers with WEBSSH_AGENT_DEV_TOKEN=1.')
     parser.add_argument('--terminal', default='main', help='Terminal id')
     parser.add_argument('--poll-ms', type=int, default=150, help='Tail polling interval in milliseconds')
+    parser.add_argument('--tail-wait-ms', type=int, default=25000, help='Server-side long-poll wait for tail output in milliseconds')
     parser.add_argument('--limit', type=int, default=200, help='Maximum tail events per poll')
     parser.add_argument('--coalesce-ms', type=int, default=20, help='Input coalescing window in milliseconds')
     parser.add_argument('--enter', choices=('cr', 'lf', 'crlf'), default='cr', help='Bytes sent when local Enter is pressed')
@@ -174,9 +175,14 @@ def warn_tail_gap(result, last_seq):
         stderr_line(f"[webssh-agent] warning: output gap {last_seq + 1}..{first_seq - 1}")
 
 
-def tail_worker(client, last_seq, stop_event, poll_seconds, limit):
+def tail_worker(client, last_seq, stop_event, poll_seconds, limit, tail_wait_ms):
     while not stop_event.is_set():
-        _status, result = client.request('tail', since_output_seq=last_seq, limit=limit)
+        _status, result = client.request(
+            'tail',
+            since_output_seq=last_seq,
+            limit=limit,
+            wait_ms=tail_wait_ms,
+        )
         if result.get('status') == 'failed':
             error_code = result.get('error_code') or 'tail failed'
             stderr_line(f"[webssh-agent] tail failed: {error_code}")
@@ -197,7 +203,8 @@ def tail_worker(client, last_seq, stop_event, poll_seconds, limit):
         output_seq = result.get('output_seq')
         if isinstance(output_seq, int):
             last_seq = max(last_seq, output_seq if not events else last_seq)
-        time.sleep(poll_seconds)
+        if tail_wait_ms <= 0:
+            time.sleep(poll_seconds)
 
 
 def handle_send_result(result, stop_event):
@@ -306,10 +313,11 @@ def run_repl(args):
     input_queue = queue.Queue()
     poll_seconds = max(args.poll_ms, 20) / 1000.0
     coalesce_seconds = max(args.coalesce_ms, 0) / 1000.0
+    tail_wait_ms = max(args.tail_wait_ms, 0)
 
     tail_thread = threading.Thread(
         target=tail_worker,
-        args=(client, last_seq, stop_event, poll_seconds, args.limit),
+        args=(client, last_seq, stop_event, poll_seconds, args.limit, tail_wait_ms),
         daemon=True,
     )
     sender_thread = threading.Thread(

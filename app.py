@@ -216,6 +216,7 @@ AGENT_VIEWPORT_SNAPSHOT_MAX_BYTES = 120000
 AGENT_VIEWPORT_SNAPSHOT_MAX_LINE_BYTES = 4096
 AGENT_EXTERNAL_ATTACH_TOKEN_TTL_SECONDS = 5 * 60
 AGENT_EXTERNAL_TAIL_MAX_EVENTS = 200
+AGENT_EXTERNAL_TAIL_MAX_WAIT_MS = 30000
 AGENT_HUMAN_INPUT_LEASE_SECONDS = 2.0
 AGENT_AUDIT_VIEWER_ATTACH = 'viewer_attach'
 AGENT_AUDIT_VIEWER_DETACH = 'viewer_detach'
@@ -972,6 +973,7 @@ class TerminalBridge:
         self.replay_buffer = deque()
         self.replay_buffer_bytes = 0
         self.input_lock = threading.RLock()
+        self.output_condition = threading.Condition(threading.RLock())
 
     def metadata(self, cols=None, rows=None):
         cols = self.cols if cols is None else cols
@@ -1015,14 +1017,16 @@ class TerminalBridge:
         payload.setdefault('connection_type', self.connection_type)
         payload.setdefault('terminal_id', self.terminal_id)
         if payload.get('message_type') == 'terminal':
-            self.output_seq += 1
-            payload.setdefault('output_seq', self.output_seq)
-            self._remember_terminal_payload(payload)
-            agent_transcript_store.append_terminal_output(
-                self.owner_session,
-                self.terminal_id,
-                payload.get('data'),
-            )
+            with self.output_condition:
+                self.output_seq += 1
+                payload.setdefault('output_seq', self.output_seq)
+                self._remember_terminal_payload(payload)
+                agent_transcript_store.append_terminal_output(
+                    self.owner_session,
+                    self.terminal_id,
+                    payload.get('data'),
+                )
+                self.output_condition.notify_all()
         for sid in list(self.attached_sids):
             socketio.emit('ssh_output', payload, room=sid)
 
@@ -2903,10 +2907,12 @@ def build_external_agent_tail_payload(bridge, since_output_seq=None, limit=AGENT
     except (TypeError, ValueError):
         limit = AGENT_EXTERNAL_TAIL_MAX_EVENTS
     limit = max(1, min(limit, AGENT_EXTERNAL_TAIL_MAX_EVENTS))
-    replay_events = [
-        dict(payload) for payload in list(bridge.replay_buffer)
-        if isinstance(payload.get('output_seq'), int)
-    ]
+    with bridge.output_condition:
+        output_seq = bridge.output_seq
+        replay_events = [
+            dict(payload) for payload in list(bridge.replay_buffer)
+            if isinstance(payload.get('output_seq'), int)
+        ]
     events = [
         payload for payload in replay_events
         if payload.get('output_seq') > since_output_seq
@@ -2914,11 +2920,11 @@ def build_external_agent_tail_payload(bridge, since_output_seq=None, limit=AGENT
     first_available_output_seq = None
     if replay_events:
         first_available_output_seq = replay_events[0].get('output_seq')
-    elif bridge.output_seq > 0:
-        first_available_output_seq = bridge.output_seq + 1
+    elif output_seq > 0:
+        first_available_output_seq = output_seq + 1
     dropped_before_output_seq = max(0, (first_available_output_seq or 1) - 1)
     gap_detected = (
-        bridge.output_seq > 0
+        output_seq > 0
         and first_available_output_seq is not None
         and since_output_seq < first_available_output_seq - 1
     )
@@ -2929,6 +2935,7 @@ def build_external_agent_tail_payload(bridge, since_output_seq=None, limit=AGENT
         'missing_count': dropped_before_output_seq - since_output_seq if gap_detected else 0,
     }
     return {
+        'output_seq': output_seq,
         'since_output_seq': since_output_seq,
         'limit': limit,
         'first_available_output_seq': first_available_output_seq,
@@ -2936,6 +2943,46 @@ def build_external_agent_tail_payload(bridge, since_output_seq=None, limit=AGENT
         'gap': gap,
         'events': events[:limit],
     }
+
+def parse_external_agent_tail_wait_ms(value):
+    try:
+        wait_ms = int(value if value is not None else 0)
+    except (TypeError, ValueError):
+        wait_ms = 0
+    return max(0, min(wait_ms, AGENT_EXTERNAL_TAIL_MAX_WAIT_MS))
+
+def build_external_agent_tail_payload_waiting(bridge, state, since_output_seq=None,
+                                              limit=AGENT_EXTERNAL_TAIL_MAX_EVENTS,
+                                              wait_ms=0):
+    tail = build_external_agent_tail_payload(
+        bridge,
+        since_output_seq=since_output_seq,
+        limit=limit,
+    )
+    wait_ms = parse_external_agent_tail_wait_ms(wait_ms)
+    if wait_ms <= 0 or tail['events'] or tail['gap']['detected']:
+        return tail, None
+
+    deadline = time.monotonic() + wait_ms / 1000.0
+    while True:
+        if state.paused or state.mode == AGENT_MODE_PAUSED:
+            return None, AGENT_ERROR_PAUSED
+        if state.mode == AGENT_MODE_DISABLED:
+            return None, AGENT_ERROR_EXTERNAL_AGENT_DISABLED
+        if not is_agent_context_allowed(state):
+            return None, AGENT_ERROR_PRIVACY_BLOCKED
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return tail, None
+        with bridge.output_condition:
+            bridge.output_condition.wait(timeout=min(remaining, 0.25))
+        tail = build_external_agent_tail_payload(
+            bridge,
+            since_output_seq=tail['since_output_seq'],
+            limit=tail['limit'],
+        )
+        if tail['events'] or tail['gap']['detected']:
+            return tail, None
 
 def external_agent_build_terminal_input_action(state, data):
     return {
@@ -4423,26 +4470,32 @@ def process_external_agent_command(command):
                 'state': state.public_state(),
                 'screen': active_screen,
             }
-        tail = build_external_agent_tail_payload(
+        tail, error_code = build_external_agent_tail_payload_waiting(
             bridge,
+            state,
             since_output_seq=command.get('since_output_seq'),
             limit=command.get('limit', AGENT_EXTERNAL_TAIL_MAX_EVENTS),
+            wait_ms=command.get('wait_ms'),
         )
+        if error_code:
+            return external_agent_error(error_code, terminal_id=terminal_id)
         record_agent_audit_event(
             state,
             AGENT_AUDIT_EXTERNAL_AGENT_TAIL,
             external_agent_id=record.get('external_agent_id'),
             event_count=len(tail['events']),
-            output_seq=bridge.output_seq,
+            output_seq=tail['output_seq'],
+            wait_ms=parse_external_agent_tail_wait_ms(command.get('wait_ms')),
             gap=tail['gap'],
         )
         return {
             'status': 'ok',
             'terminal_id': terminal_id,
             'external_agent_id': record.get('external_agent_id'),
-            'output_seq': bridge.output_seq,
+            'output_seq': tail['output_seq'],
             'since_output_seq': tail['since_output_seq'],
             'limit': tail['limit'],
+            'wait_ms': parse_external_agent_tail_wait_ms(command.get('wait_ms')),
             'first_available_output_seq': tail['first_available_output_seq'],
             'dropped_before_output_seq': tail['dropped_before_output_seq'],
             'gap': tail['gap'],

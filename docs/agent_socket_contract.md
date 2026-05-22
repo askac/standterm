@@ -123,9 +123,10 @@ tools/.venv_wsl/bin/python scripts/webssh_agent_repl.py \
 ```
 
 The REPL keeps one local process alive, coalesces local keyboard input before
-calling `send`, and renders remote output from `tail` using `output_seq` as its
-cursor. `screen` is only a provisional initial viewport/debug source; it is not
-the authoritative terminal stream. The local detach key is `Ctrl-]`. In dev
+calling `send`, and renders remote output from long-poll `tail` using
+`output_seq` as its cursor. `screen` is only a provisional initial
+viewport/debug source; it is not the authoritative terminal stream. The local
+detach key is `Ctrl-]`. In dev
 servers started with `WEBSSH_AGENT_DEV_TOKEN=1`, the REPL may omit `--token` and
 use the loopback-only dev command endpoint. `--enter cr` is the default because
 PTY-style interactive programs generally expect carriage return for Enter; use
@@ -182,7 +183,8 @@ Tail terminal display events:
   "token": "agt_...",
   "terminal_id": "main",
   "since_output_seq": 123,
-  "limit": 50
+  "limit": 50,
+  "wait_ms": 25000
 }
 ```
 
@@ -196,6 +198,7 @@ Tail returns a structured cursor and retention contract:
   "output_seq": 130,
   "since_output_seq": 123,
   "limit": 50,
+  "wait_ms": 25000,
   "first_available_output_seq": 81,
   "dropped_before_output_seq": 80,
   "gap": {
@@ -213,7 +216,10 @@ is `true` and the `from_output_seq` / `to_output_seq` range describes terminal
 events that are no longer available. When more than `limit` events are available,
 tail returns the earliest page after `since_output_seq`, so clients can advance
 from the last returned event and call `tail` again without skipping retained
-events. Clients must not infer control state from terminal text.
+events. `wait_ms` is optional. When it is positive and no retained events are
+available yet, the server may hold the request until new terminal output arrives
+or the wait expires. The response payload shape is identical for immediate and
+long-poll tail calls. Clients must not infer control state from terminal text.
 
 Propose terminal input:
 

@@ -1,4 +1,6 @@
 import sys
+import threading
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -618,6 +620,119 @@ def test_external_agent_tail_limit_preserves_cursor_order():
     assert second_page['status'] == 'ok'
     assert second_page['gap']['detected'] is False
     assert [event['output_seq'] for event in second_page['events']] == [3, 4]
+
+    client.disconnect()
+
+
+def test_external_agent_tail_wait_returns_after_new_output():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    token, _record, error_code = webssh.mint_external_agent_attach_token(
+        session_token,
+        webssh.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert error_code is None
+
+    result_box = {}
+
+    def request_tail():
+        result_box['tail'] = webssh.process_external_agent_command({
+            'op': 'tail',
+            'token': token,
+            'terminal_id': webssh.TERMINAL_ID_MAIN,
+            'since_output_seq': 0,
+            'limit': 10,
+            'wait_ms': 1000,
+        })
+
+    thread = threading.Thread(target=request_tail)
+    thread.start()
+    time.sleep(0.05)
+    bridge.emit_output({
+        'message_type': 'terminal',
+        'data': 'waited-line\n',
+    })
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    tail = result_box['tail']
+    assert tail['status'] == 'ok'
+    assert tail['wait_ms'] == 1000
+    assert [event['data'] for event in tail['events']] == ['waited-line\n']
+
+    client.disconnect()
+
+
+def test_external_agent_tail_wait_times_out_without_output():
+    client = make_client()
+    session_token = current_session_token()
+    add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    token, _record, error_code = webssh.mint_external_agent_attach_token(
+        session_token,
+        webssh.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert error_code is None
+
+    started = time.monotonic()
+    tail = webssh.process_external_agent_command({
+        'op': 'tail',
+        'token': token,
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'since_output_seq': 0,
+        'limit': 10,
+        'wait_ms': 20,
+    })
+    elapsed = time.monotonic() - started
+    assert tail['status'] == 'ok'
+    assert tail['wait_ms'] == 20
+    assert tail['events'] == []
+    assert elapsed < 0.5
+
+    client.disconnect()
+
+
+def test_external_agent_tail_wait_stops_on_pause():
+    client = make_client()
+    session_token = current_session_token()
+    add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    token, _record, error_code = webssh.mint_external_agent_attach_token(
+        session_token,
+        webssh.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert error_code is None
+
+    result_box = {}
+
+    def request_tail():
+        result_box['tail'] = webssh.process_external_agent_command({
+            'op': 'tail',
+            'token': token,
+            'terminal_id': webssh.TERMINAL_ID_MAIN,
+            'since_output_seq': 0,
+            'limit': 10,
+            'wait_ms': 1000,
+        })
+
+    thread = threading.Thread(target=request_tail)
+    thread.start()
+    time.sleep(0.05)
+    client.emit(webssh.AGENT_EVENT_PAUSE, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert result_box['tail']['status'] == webssh.AGENT_STATUS_FAILED
+    assert result_box['tail']['error_code'] == webssh.AGENT_ERROR_PAUSED
 
     client.disconnect()
 
@@ -1672,6 +1787,9 @@ def main():
         test_external_agent_can_attach_and_read_authorized_screen,
         test_external_agent_tail_reports_gap_metadata,
         test_external_agent_tail_limit_preserves_cursor_order,
+        test_external_agent_tail_wait_returns_after_new_output,
+        test_external_agent_tail_wait_times_out_without_output,
+        test_external_agent_tail_wait_stops_on_pause,
         test_external_agent_observe_cannot_send,
         test_external_agent_approval_send_waits_for_human_approval,
         test_external_agent_direct_send_uses_agent_gate,

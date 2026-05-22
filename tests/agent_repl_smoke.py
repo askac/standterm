@@ -98,9 +98,9 @@ def test_tail_worker_stops_on_not_attached_error():
         {'status': 'failed', 'error_code': 'agent_not_attached'},
     ])
     stop_event = threading.Event()
-    repl.tail_worker(client, 0, stop_event, poll_seconds=0, limit=10)
+    repl.tail_worker(client, 0, stop_event, poll_seconds=0, limit=10, tail_wait_ms=25000)
     assert client.requests == [
-        ('tail', {'since_output_seq': 0, 'limit': 10}),
+        ('tail', {'since_output_seq': 0, 'limit': 10, 'wait_ms': 25000}),
     ]
     assert stop_event.is_set() is True
 
