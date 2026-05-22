@@ -38,6 +38,8 @@ If the user only provides this skill prompt and asks you to operate WebSSH:
    token. For `agent_external_disabled`, `agent_not_attached`, or
    `terminal_not_found`, first fix the browser Agent panel, external access
    state, or terminal lifecycle, then mint a new token.
+   External tokens use a sliding idle timeout; active `hello`, `tail`, `render`,
+   `send`, or REPL traffic keeps the current token alive.
 6. For `agent_external_unauthorized` with a non-expired-looking handoff, assume
    the file may be stale, test-generated, or from another server process. Ask
    the user to mint a fresh token from the live browser Agent UI.

@@ -89,9 +89,11 @@ The human WebSSH viewer remains the controller:
 Attach uses a separate high-entropy `agt_...` capability token minted by the
 already attached human viewer for one terminal. Agent identifiers such as
 `session_id`, `viewer_id`, and `agent_binding_id` are not secrets and are not
-sufficient for attach authorization. Tokens are short-lived, scoped to the
-terminal and authorizing browser binding, and are invalidated by terminal close,
-viewer detach/disconnect, session expiry, explicit revoke, or binding changes.
+sufficient for attach authorization. Tokens use a sliding idle timeout, scoped
+to the terminal and authorizing browser binding, and are invalidated by terminal
+close, viewer detach/disconnect, session expiry, explicit revoke, or binding
+changes. The default idle timeout is five minutes and can be changed with
+`WEBSSH_AGENT_EXTERNAL_IDLE_TIMEOUT_SECONDS`.
 
 The browser mints tokens through `POST /agent/external/token` using the current
 authenticated WebSSH session cookie and public Agent state fields for the active

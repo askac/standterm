@@ -489,6 +489,8 @@ def test_external_agent_can_attach_and_read_authorized_screen():
         sid,
     )
     assert error_code is None
+    assert record['idle_timeout_seconds'] == webssh.AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS
+    assert record['expires_at'] > webssh.time.time()
     attach = webssh.process_external_agent_command({
         'op': 'attach',
         'token': token,
@@ -1279,7 +1281,7 @@ def test_external_agent_expired_and_wrong_terminal_tokens_are_rejected():
         session_token,
         webssh.TERMINAL_ID_MAIN,
         sid,
-        ttl_seconds=-1,
+        idle_timeout_seconds=-1,
     )
     assert error_code is None
     result = webssh.process_external_agent_command({
@@ -1288,6 +1290,24 @@ def test_external_agent_expired_and_wrong_terminal_tokens_are_rejected():
         'terminal_id': webssh.TERMINAL_ID_MAIN,
     })
     assert result['error_code'] == webssh.AGENT_ERROR_EXTERNAL_AGENT_EXPIRED
+
+    token, record, error_code = webssh.mint_external_agent_attach_token(
+        session_token,
+        webssh.TERMINAL_ID_MAIN,
+        sid,
+        idle_timeout_seconds=60,
+    )
+    assert error_code is None
+    first_expires_at = record['expires_at']
+    stored = webssh.external_agent_attach_store._tokens[record['token_hash']]
+    stored['expires_at'] = webssh.time.time() + 1
+    result = webssh.process_external_agent_command({
+        'op': 'state',
+        'token': token,
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    })
+    assert result['status'] == 'ok'
+    assert stored['expires_at'] > first_expires_at
 
     token, _record, error_code = webssh.mint_external_agent_attach_token(
         session_token,
@@ -1341,6 +1361,11 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             assert token_payload['transport']['loopback_only'] is True
             assert token_payload['operations']['render']['op'] == 'render'
             assert token_payload['operations']['tail']['wait_ms'] == webssh.AGENT_EXTERNAL_TAIL_MAX_WAIT_MS
+            assert token_payload['expires_at'] > webssh.time.time()
+            assert token_payload['security']['token_lifetime'] == 'idle_timeout'
+            assert token_payload['security']['idle_timeout_seconds'] == (
+                webssh.AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS
+            )
             assert token_payload['security']['remote_use_requires_loopback_tunnel'] is True
             assert token_payload['cli_command'].endswith("send --text 'pwd\n'")
             assert token_payload['cli_commands']['hello'].endswith('hello')

@@ -177,8 +177,11 @@ directory:
 webssh_external_agent_handoff.json
 ```
 
-This file contains a short-lived bearer token. Do not commit it, paste it into
-logs, or expose it outside the WebSSH host.
+This file contains a bearer token with a sliding idle timeout. By default, each
+valid external-agent command extends access for another five idle minutes; the
+token is still invalidated by terminal close, browser Agent detach/disconnect,
+server restart, or explicit revoke. Do not commit it, paste it into logs, or
+expose it outside the WebSSH host.
 
 The handoff file is a convenience for the latest minted token. For
 multi-terminal checks, pass explicit `--url`, `--token`, and `--terminal` values
@@ -249,6 +252,7 @@ Common settings:
 | `WEBSSH_AGENT_PROVIDER=static_env` | Use the static test Agent provider. |
 | `WEBSSH_AGENT_STATIC_INPUT` | Input text for the static test Agent provider. |
 | `WEBSSH_AGENT_DEV_TOKEN=1` | Enable loopback-only dev token endpoints. Do not use for normal operation. |
+| `WEBSSH_AGENT_EXTERNAL_IDLE_TIMEOUT_SECONDS` | External-agent bearer token idle timeout. Default `300`; set `session` to rely only on disconnect/revoke. |
 
 Add `&debug=1` to the WebSSH URL to show an on-screen policy overlay.
 

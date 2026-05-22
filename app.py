@@ -63,6 +63,23 @@ SSH_USER = os.getenv('USER', 'aska')
 DEFAULT_BIND_HOST = os.getenv('WEBSSH_HOST', '').strip()
 DEFAULT_PORT = int(os.getenv('WEBSSH_PORT', '5000'))
 AGENT_EXTERNAL_DEV_TOKEN_ENABLED = os.getenv('WEBSSH_AGENT_DEV_TOKEN', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+
+def parse_optional_seconds_env(name, default=None):
+    raw_value = os.getenv(name, '').strip().lower()
+    if not raw_value:
+        return default
+    if raw_value in {'0', 'none', 'session', 'disconnect', 'off'}:
+        return None
+    try:
+        seconds = int(raw_value)
+    except ValueError:
+        print(f"[!] Ignoring invalid {name}={raw_value!r}; expected seconds or 'session'.", file=sys.stderr)
+        return default
+    if seconds < 0:
+        print(f"[!] Ignoring invalid {name}={raw_value!r}; expected a non-negative value.", file=sys.stderr)
+        return default
+    return seconds
+
 SSH_TERM = 'xterm-256color'
 MAX_SSH_INPUT_BYTES = 65536
 MAX_PASSWORD_BYTES = 4096
@@ -232,7 +249,10 @@ AGENT_VIEWPORT_RENDER_WAIT_MS = 3000
 AGENT_VIEWPORT_RENDER_MAX_WAIT_MS = 10000
 AGENT_VIEWPORT_RENDER_MAX_IMAGE_BYTES = 1024 * 1024
 AGENT_VIEWPORT_RENDER_MAX_PIXELS = 4096 * 4096
-AGENT_EXTERNAL_ATTACH_TOKEN_TTL_SECONDS = 5 * 60
+AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS = parse_optional_seconds_env(
+    'WEBSSH_AGENT_EXTERNAL_IDLE_TIMEOUT_SECONDS',
+    default=5 * 60,
+)
 AGENT_EXTERNAL_TAIL_MAX_EVENTS = 200
 AGENT_EXTERNAL_TAIL_MAX_WAIT_MS = 30000
 AGENT_HUMAN_INPUT_LEASE_SECONDS = 2.0
@@ -2755,11 +2775,12 @@ class ExternalAgentAttachStore:
     def __init__(self):
         self._tokens = {}
 
-    def create(self, state, ttl_seconds=AGENT_EXTERNAL_ATTACH_TOKEN_TTL_SECONDS):
+    def create(self, state, idle_timeout_seconds=AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS):
         if not state:
             return None
         token = 'agt_' + secrets.token_urlsafe(24)
         now = time.time()
+        expires_at = None if idle_timeout_seconds is None else now + idle_timeout_seconds
         token_hash = hash_external_agent_token(token)
         self._tokens[token_hash] = {
             'token_hash': token_hash,
@@ -2770,7 +2791,9 @@ class ExternalAgentAttachStore:
             'viewer_id': state.viewer_id,
             'agent_binding_id': state.agent_binding_id,
             'created_at': now,
-            'expires_at': now + ttl_seconds,
+            'last_used_at': now,
+            'idle_timeout_seconds': idle_timeout_seconds,
+            'expires_at': expires_at,
             'revoked': False,
             'attached': False,
             'external_agent_id': 'exa_' + secrets.token_urlsafe(12),
@@ -2786,10 +2809,17 @@ class ExternalAgentAttachStore:
             return None, AGENT_ERROR_EXTERNAL_AGENT_UNAUTHORIZED
         if record.get('revoked'):
             return None, AGENT_ERROR_EXTERNAL_AGENT_REVOKED
-        if record.get('expires_at', 0) < time.time():
+        expires_at = record.get('expires_at')
+        if expires_at is not None and expires_at < time.time():
             return None, AGENT_ERROR_EXTERNAL_AGENT_EXPIRED
         if terminal_id is not None and record.get('terminal_id') != terminal_id:
             return None, AGENT_ERROR_TERMINAL_MISMATCH
+        stored = self._tokens.get(token_hash)
+        if stored and stored.get('idle_timeout_seconds') is not None:
+            now = time.time()
+            stored['last_used_at'] = now
+            stored['expires_at'] = now + stored['idle_timeout_seconds']
+            record = dict(stored)
         return dict(record), None
 
     def mark_attached(self, token):
@@ -3146,7 +3176,7 @@ def get_external_agent_authorized_state(record):
     return state, None
 
 def mint_external_agent_attach_token(session_token, terminal_id, sid,
-                                     ttl_seconds=AGENT_EXTERNAL_ATTACH_TOKEN_TTL_SECONDS):
+                                     idle_timeout_seconds=AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS):
     with agent_lock:
         if not get_bridge(session_token, terminal_id):
             return None, None, AGENT_ERROR_TERMINAL_NOT_FOUND
@@ -3156,7 +3186,10 @@ def mint_external_agent_attach_token(session_token, terminal_id, sid,
         if not is_external_agent_state_visible(state):
             return None, None, AGENT_ERROR_EXTERNAL_AGENT_DISABLED
         with external_agent_lock:
-            token, record = external_agent_attach_store.create(state, ttl_seconds=ttl_seconds)
+            token, record = external_agent_attach_store.create(
+                state,
+                idle_timeout_seconds=idle_timeout_seconds,
+            )
         record_agent_audit_event(
             state,
             AGENT_AUDIT_EXTERNAL_AGENT_TOKEN_CREATED,
@@ -4135,6 +4168,8 @@ def build_external_agent_discovery_payload(base_url, token, terminal_id):
         'security': {
             'token_prefix': 'agt_',
             'token_is_secret': True,
+            'token_lifetime': 'session' if AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS is None else 'idle_timeout',
+            'idle_timeout_seconds': AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS,
             'remote_use_requires_loopback_tunnel': True,
             'image_bytes_in_audit': False,
         },
