@@ -1342,6 +1342,8 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
     assert token_payload['cli_commands']['render'].endswith('render')
     assert 'scripts/webssh_agent_repl.py' in token_payload['cli_commands']['repl']
     handoff = Path(token_payload['handoff_path'])
+    assert handoff == webssh.EXTERNAL_AGENT_HANDOFF_PATH
+    assert handoff.parent == webssh.APP_DIR
     assert handoff.is_file()
     handoff_payload = webssh.json.loads(handoff.read_text(encoding='utf-8'))
     assert handoff_payload['token'] == token_payload['token']

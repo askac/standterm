@@ -16,7 +16,6 @@ import json
 import hmac
 import hashlib
 import threading
-import tempfile
 import shlex
 from collections import deque
 from pathlib import Path
@@ -354,6 +353,7 @@ HTTPS_REQUESTED = CLI_ARGS.https or os.getenv('WEBSSH_HTTPS') == '1' or bool(CLI
 HTTPS_ENABLED = HTTPS_REQUESTED
 HTTPS_AUTO_DISABLED = os.getenv('WEBSSH_DISABLE_AUTO_HTTPS') == '1'
 APP_DIR = Path(__file__).resolve().parent
+EXTERNAL_AGENT_HANDOFF_PATH = APP_DIR / 'webssh_external_agent_handoff.json'
 AUTHORIZED_DIR = APP_DIR / 'authorized'
 AUTHORIZED_BROWSERS_PATH = AUTHORIZED_DIR / 'browsers.json'
 
@@ -4026,7 +4026,7 @@ def build_external_agent_discovery_payload(base_url, token, terminal_id):
     }
 
 def write_external_agent_handoff(payload):
-    handoff_path = Path(tempfile.gettempdir()) / 'webssh_external_agent_handoff.json'
+    handoff_path = EXTERNAL_AGENT_HANDOFF_PATH
     tmp_path = handoff_path.with_suffix('.json.tmp')
     tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
     try:

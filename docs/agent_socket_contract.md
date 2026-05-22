@@ -98,12 +98,13 @@ authenticated WebSSH session cookie and public Agent state fields for the active
 terminal. External clients submit commands through `POST /agent/external/command`,
 which is accepted only from loopback clients and still requires the `agt_...`
 token. When a token is minted, the server also writes the latest local handoff
-JSON to the platform temp directory as `webssh_external_agent_handoff.json`.
-This file is only a local convenience for CLI agents on the WebSSH host; it does
-not bypass the short-lived token, loopback-only command endpoint, or Agent panel
-mode gates. It is also the machine-readable discovery document for non-WebSSH
-agents. It includes `handoff_schema`, `schema_version`, `protocol_version`,
-`transport`, `capabilities`, operation templates, and ready-to-run CLI commands.
+JSON to `webssh_external_agent_handoff.json` in the WebSSH launch directory.
+This ignored local file is only a convenience for CLI agents on the WebSSH host;
+it does not bypass the short-lived token, loopback-only command endpoint, or
+Agent panel mode gates. It is also the machine-readable discovery document for
+non-WebSSH agents. It includes `handoff_schema`, `schema_version`,
+`protocol_version`, `transport`, `capabilities`, operation templates, and
+ready-to-run CLI commands.
 Agents should call `hello` first when possible and branch only on the typed
 `capabilities` field, not on displayed terminal text.
 
@@ -117,7 +118,7 @@ It can read the generated handoff file directly:
 
 ```bash
 tools/.venv_wsl/bin/python scripts/webssh_agent_cli.py \
-  --handoff /tmp/webssh_external_agent_handoff.json \
+  --handoff webssh_external_agent_handoff.json \
   hello
 ```
 
@@ -136,7 +137,7 @@ starting one CLI process per line:
 
 ```bash
 tools/.venv_wsl/bin/python scripts/webssh_agent_repl.py \
-  --handoff /tmp/webssh_external_agent_handoff.json \
+  --handoff webssh_external_agent_handoff.json \
   --enter cr
 ```
 
