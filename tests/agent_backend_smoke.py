@@ -79,6 +79,7 @@ def reset_state():
     webssh.agent_transcript_store.clear()
     webssh.agent_user_input_metadata_store.clear()
     webssh.agent_viewport_snapshot_store.clear()
+    webssh.agent_viewport_render_request_store.clear()
     webssh.external_agent_attach_store.clear()
     webssh.set_agent_provider_for_test(webssh.MockAgentProvider())
 
@@ -127,6 +128,15 @@ def last_payload(client, name):
     events = received_events(client, name)
     assert events, name
     return events[-1]['args'][0]
+
+def wait_for_event(client, name, timeout=2):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        events = received_events(client, name)
+        if events:
+            return events[-1]
+        time.sleep(0.01)
+    raise AssertionError(name)
 
 
 def add_dummy_bridge(session_token):
@@ -518,6 +528,120 @@ def test_external_agent_can_attach_and_read_authorized_screen():
     for event in audit_events:
         assert 'token' not in event
         assert 'token_hash' not in event
+
+    client.disconnect()
+
+
+def test_external_agent_render_requests_browser_viewport_png():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+    one_pixel_png = (
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8'
+        '/x8AAwMCAO+/p9sAAAAASUVORK5CYII='
+    )
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    bridge.update_terminal_size(100, 30)
+    bridge.emit_output({
+        'message_type': 'terminal',
+        'data': 'render-source\n',
+    })
+    token, _record, error_code = webssh.mint_external_agent_attach_token(
+        session_token,
+        webssh.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert error_code is None
+    hello = webssh.process_external_agent_command({
+        'op': 'hello',
+        'token': token,
+    })
+    assert 'render' in hello['capabilities']
+
+    result_box = {}
+
+    def request_render():
+        result_box['render'] = webssh.process_external_agent_command({
+            'op': 'render',
+            'token': token,
+            'terminal_id': webssh.TERMINAL_ID_MAIN,
+            'wait_ms': 1000,
+        })
+
+    thread = threading.Thread(target=request_render)
+    thread.start()
+    request_event = wait_for_event(client, webssh.AGENT_EVENT_VIEWPORT_RENDER_REQUEST)
+    request_payload = request_event['args'][0]
+    assert request_payload['terminal_id'] == webssh.TERMINAL_ID_MAIN
+    assert request_payload['render_type'] == 'xterm_viewport'
+    assert request_payload['mime_type'] == 'image/png'
+    assert request_payload['cols'] == 100
+    assert request_payload['rows'] == 30
+    assert request_payload['output_seq'] == bridge.output_seq
+
+    client.emit(webssh.AGENT_EVENT_VIEWPORT_RENDER_RESULT, {
+        'request_id': request_payload['request_id'],
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'render_type': 'xterm_viewport',
+        'mime_type': 'image/png',
+        'image_base64': one_pixel_png,
+        'cols': 100,
+        'rows': 30,
+        'pixel_width': 1,
+        'pixel_height': 1,
+        'output_seq': bridge.output_seq,
+        'captured_at': '2026-05-22T00:00:00.000Z',
+    })
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+
+    result = result_box['render']
+    assert result['status'] == 'ok'
+    assert result['render']['request_id'] == request_payload['request_id']
+    assert result['render']['render_type'] == 'xterm_viewport'
+    assert result['render']['mime_type'] == 'image/png'
+    assert result['render']['image_base64'] == one_pixel_png
+    assert result['render']['image_byte_length'] > 0
+    assert result['render']['output_seq'] == bridge.output_seq
+
+    audit_events = webssh.agent_audit_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    render_audit = [
+        event for event in audit_events
+        if event['event_type'] == webssh.AGENT_AUDIT_EXTERNAL_AGENT_RENDER
+    ][-1]
+    assert render_audit['request_id'] == request_payload['request_id']
+    assert render_audit['image_byte_length'] == result['render']['image_byte_length']
+    assert 'image_base64' not in render_audit
+
+    client.disconnect()
+
+
+def test_external_agent_render_timeout_is_typed():
+    client = make_client()
+    session_token = current_session_token()
+    add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    token, _record, error_code = webssh.mint_external_agent_attach_token(
+        session_token,
+        webssh.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert error_code is None
+
+    result = webssh.process_external_agent_command({
+        'op': 'render',
+        'token': token,
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'wait_ms': 10,
+    })
+    assert result['status'] == webssh.AGENT_STATUS_FAILED
+    assert result['error_code'] == webssh.AGENT_ERROR_RENDER_TIMEOUT
 
     client.disconnect()
 
@@ -1064,6 +1188,12 @@ def test_external_agent_privacy_and_disabled_state_block_visibility_and_send():
         'token': token,
         'terminal_id': webssh.TERMINAL_ID_MAIN,
     })
+    render = webssh.process_external_agent_command({
+        'op': 'render',
+        'token': token,
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'wait_ms': 10,
+    })
     send = webssh.process_external_agent_command({
         'op': 'send',
         'token': token,
@@ -1071,6 +1201,7 @@ def test_external_agent_privacy_and_disabled_state_block_visibility_and_send():
         'data': 'blocked\n',
     })
     assert screen['error_code'] == webssh.AGENT_ERROR_PRIVACY_BLOCKED
+    assert render['error_code'] == webssh.AGENT_ERROR_PRIVACY_BLOCKED
     assert send['error_code'] == webssh.AGENT_ERROR_PRIVACY_BLOCKED
     assert bridge.writes == []
 
@@ -1197,12 +1328,26 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
     token_payload = response.get_json()
     assert token_payload['status'] == 'ok'
     assert token_payload['token'].startswith('agt_')
+    assert token_payload['handoff_schema'] == 'webssh_external_agent_handoff'
+    assert token_payload['schema_version'] == 1
+    assert token_payload['protocol_version'] == webssh.EXTERNAL_AGENT_PROTOCOL_VERSION
+    assert 'render' in token_payload['capabilities']
+    assert token_payload['transport']['type'] == 'loopback_http_json'
+    assert token_payload['transport']['loopback_only'] is True
+    assert token_payload['operations']['render']['op'] == 'render'
+    assert token_payload['operations']['tail']['wait_ms'] == webssh.AGENT_EXTERNAL_TAIL_MAX_WAIT_MS
+    assert token_payload['security']['remote_use_requires_loopback_tunnel'] is True
     assert token_payload['cli_command'].endswith("send --text 'pwd\n'")
+    assert token_payload['cli_commands']['hello'].endswith('hello')
+    assert token_payload['cli_commands']['render'].endswith('render')
+    assert 'scripts/webssh_agent_repl.py' in token_payload['cli_commands']['repl']
     handoff = Path(token_payload['handoff_path'])
     assert handoff.is_file()
     handoff_payload = webssh.json.loads(handoff.read_text(encoding='utf-8'))
     assert handoff_payload['token'] == token_payload['token']
     assert handoff_payload['cli_command'] == token_payload['cli_command']
+    assert handoff_payload['capabilities'] == token_payload['capabilities']
+    assert handoff_payload['cli_commands']['render'] == token_payload['cli_commands']['render']
 
     response = flask_client.post('/agent/external/command', json={
         'op': 'send',
@@ -1785,6 +1930,8 @@ def main():
         test_invalid_provider_proposal_is_rejected_before_action_creation,
         test_external_agent_token_requires_enabled_agent_panel,
         test_external_agent_can_attach_and_read_authorized_screen,
+        test_external_agent_render_requests_browser_viewport_png,
+        test_external_agent_render_timeout_is_typed,
         test_external_agent_tail_reports_gap_metadata,
         test_external_agent_tail_limit_preserves_cursor_order,
         test_external_agent_tail_wait_returns_after_new_output,

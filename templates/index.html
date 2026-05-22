@@ -585,6 +585,8 @@
         const AGENT_OPEN_ACTION_STATUSES = new Set(['pending_approval', 'direct_pending', 'approved']);
         const AGENT_VIEWPORT_SNAPSHOT_DEBOUNCE_MS = 250;
         const AGENT_SNAPSHOT_BLOCKED_PRIVACY_STATES = new Set(['private_input', 'paste_review', 'paused']);
+        const AGENT_VIEWPORT_RENDER_MAX_PIXELS = 4096 * 4096;
+        const AGENT_VIEWPORT_RENDER_MAX_IMAGE_BYTES = 1024 * 1024;
         const PASTE_REVIEW_MIN_LENGTH = 256;
         const SCHEMES = {
             ibm5153: { background: '#000000', foreground: '#aaaaaa', black: '#000000', red: '#aa0000', green: '#00aa00', yellow: '#aa5500', blue: '#0000aa', magenta: '#aa00aa', cyan: '#00aaaa', white: '#aaaaaa', brightBlack: '#555555', brightRed: '#ff5555', brightGreen: '#55ff55', brightYellow: '#ffff55', brightBlue: '#5555ff', brightMagenta: '#ff55ff', brightCyan: '#55ffff', brightWhite: '#ffffff', cursor: '#aaaaaa' },
@@ -931,7 +933,8 @@
                     pendingAction: null,
                     snapshotSeq: 0,
                     snapshotTimer: null,
-                    lastSnapshotResult: null
+                    lastSnapshotResult: null,
+                    lastRenderResult: null
                 };
             }
 
@@ -1127,6 +1130,174 @@
                 if (!snapshot) return;
                 socket.emit('agent_viewport_snapshot', snapshot);
                 updateAgentDebugState('agent.viewport_snapshot_sent', state);
+            }
+
+            function shouldRenderAgentViewport(state) {
+                return !!(
+                    socket &&
+                    socket.connected &&
+                    state &&
+                    state.connected &&
+                    state.agent &&
+                    state.agent.attached &&
+                    !AGENT_SNAPSHOT_BLOCKED_PRIVACY_STATES.has(state.agent.privacyState)
+                );
+            }
+
+            function inlineComputedStyles(source, target) {
+                if (!source || !target || source.nodeType !== Node.ELEMENT_NODE || target.nodeType !== Node.ELEMENT_NODE) return;
+                const computed = window.getComputedStyle(source);
+                for (let index = 0; index < computed.length; index += 1) {
+                    const property = computed[index];
+                    target.style.setProperty(property, computed.getPropertyValue(property), computed.getPropertyPriority(property));
+                }
+                const sourceChildren = Array.from(source.children || []);
+                const targetChildren = Array.from(target.children || []);
+                for (let index = 0; index < sourceChildren.length; index += 1) {
+                    inlineComputedStyles(sourceChildren[index], targetChildren[index]);
+                }
+            }
+
+            function inlineCanvasLayers(source, target) {
+                if (!source || !target) return;
+                const sourceCanvases = Array.from(source.querySelectorAll('canvas'));
+                const targetCanvases = Array.from(target.querySelectorAll('canvas'));
+                sourceCanvases.forEach((sourceCanvas, index) => {
+                    const targetCanvas = targetCanvases[index];
+                    if (!targetCanvas) return;
+                    try {
+                        const image = document.createElement('img');
+                        image.src = sourceCanvas.toDataURL('image/png');
+                        image.width = sourceCanvas.width;
+                        image.height = sourceCanvas.height;
+                        image.style.cssText = targetCanvas.style.cssText;
+                        image.style.width = `${sourceCanvas.clientWidth || sourceCanvas.width}px`;
+                        image.style.height = `${sourceCanvas.clientHeight || sourceCanvas.height}px`;
+                        targetCanvas.replaceWith(image);
+                    } catch (e) {
+                        // Ignore tainted or unavailable canvas layers; xterm text layers may still render.
+                    }
+                });
+            }
+
+            function dataUrlToBase64(dataUrl) {
+                const marker = 'base64,';
+                const index = typeof dataUrl === 'string' ? dataUrl.indexOf(marker) : -1;
+                return index >= 0 ? dataUrl.slice(index + marker.length) : '';
+            }
+
+            function estimateBase64Bytes(base64Value) {
+                if (typeof base64Value !== 'string') return 0;
+                const padding = base64Value.endsWith('==') ? 2 : (base64Value.endsWith('=') ? 1 : 0);
+                return Math.floor(base64Value.length * 3 / 4) - padding;
+            }
+
+            function renderElementToPngBase64(element, pixelWidth, pixelHeight) {
+                return new Promise((resolve, reject) => {
+                    const clone = element.cloneNode(true);
+                    inlineComputedStyles(element, clone);
+                    inlineCanvasLayers(element, clone);
+                    const wrapper = document.createElement('div');
+                    wrapper.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+                    wrapper.style.width = `${pixelWidth}px`;
+                    wrapper.style.height = `${pixelHeight}px`;
+                    wrapper.style.overflow = 'hidden';
+                    wrapper.style.margin = '0';
+                    wrapper.style.background = window.getComputedStyle(element).backgroundColor || '#000';
+                    clone.style.margin = '0';
+                    wrapper.appendChild(clone);
+                    const serialized = new XMLSerializer().serializeToString(wrapper);
+                    const svg = [
+                        `<svg xmlns="http://www.w3.org/2000/svg" width="${pixelWidth}" height="${pixelHeight}">`,
+                        `<foreignObject x="0" y="0" width="100%" height="100%">`,
+                        serialized,
+                        '</foreignObject></svg>'
+                    ].join('');
+                    const image = new Image();
+                    image.onload = () => {
+                        try {
+                            const canvas = document.createElement('canvas');
+                            canvas.width = pixelWidth;
+                            canvas.height = pixelHeight;
+                            const context = canvas.getContext('2d');
+                            context.drawImage(image, 0, 0);
+                            resolve(dataUrlToBase64(canvas.toDataURL('image/png')));
+                        } catch (e) {
+                            reject(e);
+                        }
+                    };
+                    image.onerror = () => reject(new Error('render image load failed'));
+                    image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+                });
+            }
+
+            async function buildAgentViewportRenderResult(state, requestPayload) {
+                const requestId = getAgentStringField(requestPayload, 'request_id');
+                const terminalId = getAgentStringField(requestPayload, 'terminal_id') || (state ? state.id : null);
+                const result = {
+                    request_id: requestId,
+                    terminal_id: terminalId,
+                    render_type: 'xterm_viewport',
+                    mime_type: 'image/png',
+                    status: 'failed'
+                };
+                if (!requestId || !terminalId || !state || state.id !== terminalId || !shouldRenderAgentViewport(state)) {
+                    result.error_code = 'agent_render_invalid';
+                    return result;
+                }
+                const terminalElement = state.term && state.term.element;
+                const renderElement = terminalElement ? (terminalElement.querySelector('.xterm-screen') || terminalElement) : null;
+                if (!renderElement) {
+                    result.error_code = 'agent_render_invalid';
+                    return result;
+                }
+                state.term.refresh(0, Math.max(0, state.term.rows - 1));
+                const rect = renderElement.getBoundingClientRect();
+                const pixelRatio = 1;
+                const pixelWidth = Math.max(1, Math.ceil(rect.width * pixelRatio));
+                const pixelHeight = Math.max(1, Math.ceil(rect.height * pixelRatio));
+                if (pixelWidth * pixelHeight > AGENT_VIEWPORT_RENDER_MAX_PIXELS) {
+                    result.error_code = 'agent_render_too_large';
+                    return result;
+                }
+                try {
+                    const imageBase64 = await renderElementToPngBase64(renderElement, pixelWidth, pixelHeight);
+                    if (!imageBase64 || estimateBase64Bytes(imageBase64) > AGENT_VIEWPORT_RENDER_MAX_IMAGE_BYTES) {
+                        result.error_code = 'agent_render_too_large';
+                        return result;
+                    }
+                    result.status = 'ok';
+                    result.image_base64 = imageBase64;
+                    result.cols = state.term.cols;
+                    result.rows = state.term.rows;
+                    result.pixel_width = pixelWidth;
+                    result.pixel_height = pixelHeight;
+                    result.output_seq = Math.max(state.lastOutputSeq || 0, state.agentTerminalMirrorOutputSeq || 0);
+                    result.captured_at = new Date().toISOString();
+                    delete result.error_code;
+                    return result;
+                } catch (e) {
+                    result.error_code = 'agent_render_invalid';
+                    return result;
+                }
+            }
+
+            async function handleAgentViewportRenderRequest(data) {
+                if (!data || typeof data.terminal_id !== 'string') return;
+                const state = terminals.get(data.terminal_id);
+                const result = await buildAgentViewportRenderResult(state, data);
+                if (state && state.agent) {
+                    state.agent.lastRenderResult = {
+                        status: result.status,
+                        errorCode: result.error_code || null,
+                        requestId: result.request_id || null,
+                        byteLength: estimateBase64Bytes(result.image_base64),
+                        pixelWidth: Number.isFinite(Number(result.pixel_width)) ? Number(result.pixel_width) : null,
+                        pixelHeight: Number.isFinite(Number(result.pixel_height)) ? Number(result.pixel_height) : null
+                    };
+                }
+                socket.emit('agent_viewport_render_result', result);
+                updateAgentDebugState('agent.viewport_render_result', state);
             }
 
             function scheduleAgentViewportSnapshot(state = getActiveTerminalState()) {
@@ -1820,7 +1991,8 @@
                     pending_actions: state.agent.pendingActions,
                     pending_action: cloneForTest(state.agent.pendingAction),
                     last_action: cloneForTest(state.agent.lastAction),
-                    last_snapshot_result: cloneForTest(state.agent.lastSnapshotResult)
+                    last_snapshot_result: cloneForTest(state.agent.lastSnapshotResult),
+                    last_render_result: cloneForTest(state.agent.lastRenderResult)
                 };
             }
 
@@ -1852,6 +2024,12 @@
                     },
                     sendAgentSnapshot() {
                         sendAgentViewportSnapshot(getActiveTerminalState());
+                    },
+                    buildViewportRenderResult(payload) {
+                        return buildAgentViewportRenderResult(getActiveTerminalState(), payload || {
+                            request_id: 'test-render',
+                            terminal_id: activeTerminalId
+                        });
                     },
                     setPrivacy(privacyState) {
                         emitAgentPrivacyState(getActiveTerminalState(), privacyState);
@@ -1992,6 +2170,9 @@
             });
             socket.on('agent_viewport_snapshot_result', data => {
                 applyAgentViewportSnapshotResult(data);
+            });
+            socket.on('agent_viewport_render_request', data => {
+                handleAgentViewportRenderRequest(data);
             });
             socket.on('disconnect', (r) => {
                 clearBrowserPairingResponseTimer();

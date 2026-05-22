@@ -8,14 +8,19 @@ import urllib.request
 
 def parse_args():
     parser = argparse.ArgumentParser(description='WebSSH external agent CLI')
-    parser.add_argument('--url', required=True, help='WebSSH base URL, for example http://127.0.0.1:5010')
+    parser.add_argument('--handoff', help='Read url, token, and terminal from a WebSSH external agent handoff JSON file')
+    parser.add_argument('--url', help='WebSSH base URL, for example http://127.0.0.1:5010')
     parser.add_argument('--token', help='External agent attach token. Omit only on dev servers with WEBSSH_AGENT_DEV_TOKEN=1.')
     parser.add_argument('--terminal', default='main', help='Terminal id')
     subparsers = parser.add_subparsers(dest='command', required=True)
 
+    subparsers.add_parser('hello')
     subparsers.add_parser('attach')
     subparsers.add_parser('state')
     subparsers.add_parser('screen')
+
+    render_parser = subparsers.add_parser('render')
+    render_parser.add_argument('--wait-ms', type=int, default=3000, help='Maximum browser render wait time')
 
     tail_parser = subparsers.add_parser('tail')
     tail_parser.add_argument('--since', type=int, default=0, help='Only return events after this output_seq')
@@ -27,7 +32,36 @@ def parse_args():
     input_group.add_argument('--stdin', action='store_true', help='Read text from stdin')
 
     subparsers.add_parser('revoke')
-    return parser.parse_args()
+    args = parser.parse_args()
+    apply_handoff(args)
+    if not args.url:
+        parser.error('--url is required unless --handoff provides url')
+    return args
+
+
+def load_handoff(path):
+    try:
+        with open(path, 'r', encoding='utf-8') as handle:
+            payload = json.load(handle)
+    except OSError as exc:
+        raise SystemExit(f'failed to read handoff: {exc}') from exc
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f'failed to parse handoff JSON: {exc}') from exc
+    if not isinstance(payload, dict):
+        raise SystemExit('handoff JSON must be an object')
+    return payload
+
+
+def apply_handoff(args):
+    if not args.handoff:
+        return
+    payload = load_handoff(args.handoff)
+    if not args.url:
+        args.url = payload.get('url')
+    if not args.token:
+        args.token = payload.get('token')
+    if args.terminal == 'main' and isinstance(payload.get('terminal_id'), str):
+        args.terminal = payload['terminal_id']
 
 
 def command_payload(args):
@@ -40,6 +74,8 @@ def command_payload(args):
     if args.command == 'tail':
         payload['since_output_seq'] = args.since
         payload['limit'] = args.limit
+    elif args.command == 'render':
+        payload['wait_ms'] = args.wait_ms
     elif args.command == 'send':
         payload['data'] = sys.stdin.read() if args.stdin else args.text
     return payload

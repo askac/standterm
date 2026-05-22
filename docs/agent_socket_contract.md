@@ -101,8 +101,27 @@ token. When a token is minted, the server also writes the latest local handoff
 JSON to the platform temp directory as `webssh_external_agent_handoff.json`.
 This file is only a local convenience for CLI agents on the WebSSH host; it does
 not bypass the short-lived token, loopback-only command endpoint, or Agent panel
-mode gates. The CLI wrapper is intentionally small and speaks this JSON command
-contract:
+mode gates. It is also the machine-readable discovery document for non-WebSSH
+agents. It includes `handoff_schema`, `schema_version`, `protocol_version`,
+`transport`, `capabilities`, operation templates, and ready-to-run CLI commands.
+Agents should call `hello` first when possible and branch only on the typed
+`capabilities` field, not on displayed terminal text.
+
+The command endpoint is loopback-only. If an external agent runs on another
+machine, route it through an SSH tunnel or equivalent loopback tunnel to the
+WebSSH host; do not expose the command endpoint or bearer token directly on a
+network interface.
+
+The CLI wrapper is intentionally small and speaks this JSON command contract.
+It can read the generated handoff file directly:
+
+```bash
+tools/.venv_wsl/bin/python scripts/webssh_agent_cli.py \
+  --handoff /tmp/webssh_external_agent_handoff.json \
+  hello
+```
+
+Or receive the connection fields explicitly:
 
 ```bash
 tools/.venv_wsl/bin/python scripts/webssh_agent_cli.py \
@@ -117,8 +136,7 @@ starting one CLI process per line:
 
 ```bash
 tools/.venv_wsl/bin/python scripts/webssh_agent_repl.py \
-  --url http://127.0.0.1:5012 \
-  --terminal main \
+  --handoff /tmp/webssh_external_agent_handoff.json \
   --enter cr
 ```
 
@@ -144,6 +162,20 @@ state.
 The command boundary is JSON object based. Future IPC transports should carry
 these objects as newline-delimited JSON or length-prefixed JSON; terminal output
 text must not be parsed as control state.
+
+Discover protocol/capabilities:
+
+```json
+{
+  "op": "hello",
+  "token": "agt_...",
+  "terminal_id": "main"
+}
+```
+
+`hello` returns `version`, `external_agent_id`, `terminal_id`, current public
+Agent state, and a typed `capabilities` array such as `state`, `screen`,
+`render`, `tail`, `send`, and `revoke`.
 
 Attach:
 
@@ -174,6 +206,52 @@ Read screen:
   "terminal_id": "main"
 }
 ```
+
+Read rendered xterm viewport:
+
+```json
+{
+  "op": "render",
+  "token": "agt_...",
+  "terminal_id": "main",
+  "wait_ms": 3000
+}
+```
+
+`render` asks the authorizing browser viewer for a typed in-memory PNG capture
+of the currently rendered xterm viewport. The server emits
+`agent_viewport_render_request` to that browser sid, waits up to `wait_ms`, then
+returns the browser's `agent_viewport_render_result`. The image bytes are
+returned only in the command response as `render.image_base64`; audit records
+store only metadata such as `request_id`, dimensions, byte length, `output_seq`,
+and status.
+
+```json
+{
+  "status": "ok",
+  "terminal_id": "main",
+  "external_agent_id": "exa_...",
+  "render": {
+    "request_id": "agrv_...",
+    "terminal_id": "main",
+    "render_type": "xterm_viewport",
+    "mime_type": "image/png",
+    "image_base64": "...",
+    "image_byte_length": 12345,
+    "cols": 80,
+    "rows": 24,
+    "pixel_width": 1024,
+    "pixel_height": 640,
+    "output_seq": 130,
+    "captured_at": "2026-05-22T00:00:00.000Z"
+  }
+}
+```
+
+`render` follows the same visibility and privacy gates as `screen` and `tail`:
+disabled, paused, `private_input`, and `paste_review` states block the request.
+The rendered image is display data only; clients must not parse image contents
+as control state.
 
 Tail terminal display events:
 
@@ -430,7 +508,59 @@ validates cols, rows, line count, monotonic `snapshot_seq`, non-negative
 `output_seq`, and total byte limits, and clears stored snapshots on terminal
 close, session close, or sid disconnect.
 
+### `agent_viewport_render_result`
+
+Payload:
+
+```json
+{
+  "request_id": "agrv_...",
+  "terminal_id": "main",
+  "render_type": "xterm_viewport",
+  "mime_type": "image/png",
+  "image_base64": "...",
+  "cols": 80,
+  "rows": 24,
+  "pixel_width": 1024,
+  "pixel_height": 640,
+  "output_seq": 42,
+  "captured_at": "2026-05-22T00:00:00.000Z"
+}
+```
+
+Sent by the browser only in response to a matching
+`agent_viewport_render_request`. The backend validates request id, terminal id,
+render type, MIME type, terminal dimensions, pixel limits, PNG base64 size, and
+current Agent privacy/mode gates before releasing the result to the waiting
+external command.
+
 ## Server-to-Client Events
+
+### `agent_viewport_render_request`
+
+Payload:
+
+```json
+{
+  "request_id": "agrv_...",
+  "terminal_id": "main",
+  "render_type": "xterm_viewport",
+  "mime_type": "image/png",
+  "session_id": "ags_...",
+  "viewer_id": "agv_...",
+  "agent_binding_id": "agb_...",
+  "mode_version": 1,
+  "privacy_version": 0,
+  "cols": 80,
+  "rows": 24,
+  "output_seq": 42,
+  "created_at": 1779465600.0
+}
+```
+
+Requests one browser-rendered xterm viewport PNG for a waiting external
+`render` command. The browser must answer with `agent_viewport_render_result`
+using the same `request_id`.
 
 ### `agent_state`
 

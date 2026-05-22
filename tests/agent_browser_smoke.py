@@ -302,6 +302,36 @@ def test_privacy_states_block_snapshots_and_agent_runs(browser, access_url):
         close_context(context)
 
 
+def test_rendered_viewport_snapshot_returns_png(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        attach_agent(page)
+        page.evaluate(
+            """payload => window.websshTest.writeTerminalOutput(payload.data, payload.output_seq)""",
+            {'data': 'rendered-viewport-check\\r\\n', 'output_seq': 321},
+        )
+        page.wait_for_function(
+            "() => window.websshTest.getMirrorSnapshot()?.output_seq === 321",
+            timeout=10000,
+        )
+        result = page.evaluate(
+            """async () => await window.websshTest.buildViewportRenderResult({
+                request_id: 'render-test-1',
+                terminal_id: 'main'
+            })"""
+        )
+        check(result['status'] == 'ok', f"render result failed: {result}")
+        check(result['request_id'] == 'render-test-1', 'render result used the wrong request id')
+        check(result['render_type'] == 'xterm_viewport', 'render result used the wrong render type')
+        check(result['mime_type'] == 'image/png', 'render result used the wrong MIME type')
+        check(result['image_base64'].startswith('iVBORw0KGgo'), 'render result is not a PNG')
+        check(result['pixel_width'] > 0 and result['pixel_height'] > 0, 'render result has invalid dimensions')
+        check(result['cols'] > 0 and result['rows'] > 0, 'render result has invalid terminal size')
+        check(result['output_seq'] == 321, 'render result did not preserve output_seq')
+    finally:
+        close_context(context)
+
+
 def test_paste_review_approve_and_cancel(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
@@ -409,6 +439,7 @@ def main():
     tests = [
         test_hidden_mirror_ignores_visible_scroll,
         test_privacy_states_block_snapshots_and_agent_runs,
+        test_rendered_viewport_snapshot_returns_png,
         test_paste_review_approve_and_cancel,
         test_approval_payload_and_stale_rejections,
         test_terminal_payload_text_is_not_control,

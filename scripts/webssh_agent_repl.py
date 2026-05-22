@@ -83,7 +83,8 @@ class AgentHttpClient:
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Interactive REPL for a WebSSH external agent terminal')
-    parser.add_argument('--url', required=True, help='WebSSH base URL, for example http://127.0.0.1:5012')
+    parser.add_argument('--handoff', help='Read url, token, and terminal from a WebSSH external agent handoff JSON file')
+    parser.add_argument('--url', help='WebSSH base URL, for example http://127.0.0.1:5012')
     parser.add_argument('--token', help='External agent attach token. Omit only on dev servers with WEBSSH_AGENT_DEV_TOKEN=1.')
     parser.add_argument('--terminal', default='main', help='Terminal id')
     parser.add_argument('--poll-ms', type=int, default=150, help='Tail polling interval in milliseconds')
@@ -96,7 +97,36 @@ def parse_args():
     parser.add_argument('--allow-non-direct', action='store_true', help='Allow running when Agent mode is not direct_active')
     parser.add_argument('--debug', action='store_true', help='Print command acknowledgements to stderr')
     parser.add_argument('--escape', default='ctrl-]', help='Local detach key. Only ctrl-] is supported for now.')
-    return parser.parse_args()
+    args = parser.parse_args()
+    apply_handoff(args)
+    if not args.url:
+        parser.error('--url is required unless --handoff provides url')
+    return args
+
+
+def load_handoff(path):
+    try:
+        with open(path, 'r', encoding='utf-8') as handle:
+            payload = json.load(handle)
+    except OSError as exc:
+        raise SystemExit(f'failed to read handoff: {exc}') from exc
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f'failed to parse handoff JSON: {exc}') from exc
+    if not isinstance(payload, dict):
+        raise SystemExit('handoff JSON must be an object')
+    return payload
+
+
+def apply_handoff(args):
+    if not args.handoff:
+        return
+    payload = load_handoff(args.handoff)
+    if not args.url:
+        args.url = payload.get('url')
+    if not args.token:
+        args.token = payload.get('token')
+    if args.terminal == 'main' and isinstance(payload.get('terminal_id'), str):
+        args.terminal = payload['terminal_id']
 
 
 def stderr_line(message):

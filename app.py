@@ -138,6 +138,8 @@ AGENT_EVENT_PROVIDER_RUN_REQUEST = 'agent_provider_run_request'
 AGENT_EVENT_ACTION_APPROVE = 'agent_action_approve'
 AGENT_EVENT_ACTION_REJECT = 'agent_action_reject'
 AGENT_EVENT_VIEWPORT_SNAPSHOT = 'agent_viewport_snapshot'
+AGENT_EVENT_VIEWPORT_RENDER_REQUEST = 'agent_viewport_render_request'
+AGENT_EVENT_VIEWPORT_RENDER_RESULT = 'agent_viewport_render_result'
 AGENT_EVENT_STATE = 'agent_state'
 AGENT_EVENT_ACTION_REQUEST = 'agent_action_request'
 AGENT_EVENT_ACTION_RESULT = 'agent_action_result'
@@ -160,6 +162,10 @@ AGENT_ERROR_ACTION_NOT_PENDING = 'agent_action_not_pending'
 AGENT_ERROR_SNAPSHOT_INVALID = 'agent_snapshot_invalid'
 AGENT_ERROR_SNAPSHOT_TOO_LARGE = 'agent_snapshot_too_large'
 AGENT_ERROR_SNAPSHOT_STALE = 'agent_snapshot_stale'
+AGENT_ERROR_RENDER_INVALID = 'agent_render_invalid'
+AGENT_ERROR_RENDER_TOO_LARGE = 'agent_render_too_large'
+AGENT_ERROR_RENDER_TIMEOUT = 'agent_render_timeout'
+AGENT_ERROR_RENDER_STALE = 'agent_render_stale'
 AGENT_ERROR_PRIVACY_BLOCKED = 'agent_privacy_blocked'
 AGENT_ERROR_STALE_MODE_VERSION = 'agent_stale_mode_version'
 AGENT_ERROR_STALE_PROPOSAL = 'agent_stale_proposal'
@@ -214,6 +220,11 @@ AGENT_CONTEXT_BLOCKING_PRIVACY_STATES = {
 AGENT_VIEWPORT_SNAPSHOT_TTL_SECONDS = 5 * 60
 AGENT_VIEWPORT_SNAPSHOT_MAX_BYTES = 120000
 AGENT_VIEWPORT_SNAPSHOT_MAX_LINE_BYTES = 4096
+AGENT_VIEWPORT_RENDER_REQUEST_TTL_SECONDS = 10
+AGENT_VIEWPORT_RENDER_WAIT_MS = 3000
+AGENT_VIEWPORT_RENDER_MAX_WAIT_MS = 10000
+AGENT_VIEWPORT_RENDER_MAX_IMAGE_BYTES = 1024 * 1024
+AGENT_VIEWPORT_RENDER_MAX_PIXELS = 4096 * 4096
 AGENT_EXTERNAL_ATTACH_TOKEN_TTL_SECONDS = 5 * 60
 AGENT_EXTERNAL_TAIL_MAX_EVENTS = 200
 AGENT_EXTERNAL_TAIL_MAX_WAIT_MS = 30000
@@ -232,6 +243,7 @@ AGENT_AUDIT_EXTERNAL_AGENT_TOKEN_CREATED = 'external_agent_token_created'
 AGENT_AUDIT_EXTERNAL_AGENT_ATTACHED = 'external_agent_attached'
 AGENT_AUDIT_EXTERNAL_AGENT_REVOKED = 'external_agent_revoked'
 AGENT_AUDIT_EXTERNAL_AGENT_SCREEN = 'external_agent_screen'
+AGENT_AUDIT_EXTERNAL_AGENT_RENDER = 'external_agent_render'
 AGENT_AUDIT_EXTERNAL_AGENT_TAIL = 'external_agent_tail'
 AGENT_AUDIT_EXTERNAL_AGENT_SEND = 'external_agent_send'
 AGENT_AUDIT_CONTEXT_BUILT = 'context_built'
@@ -242,6 +254,8 @@ AGENT_AUDIT_ACTION_RESULT = 'action_result'
 AGENT_AUDIT_DIRECT_WRITE = 'direct_write'
 AGENT_AUDIT_TERMINAL_CLEANUP = 'terminal_cleanup'
 AGENT_AUDIT_ERROR = 'error'
+EXTERNAL_AGENT_PROTOCOL_VERSION = 1
+EXTERNAL_AGENT_CAPABILITIES = ['state', 'screen', 'render', 'tail', 'send', 'revoke']
 ANSI_OSC_PATTERN = re.compile(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)')
 ANSI_CSI_PATTERN = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
 ANSI_ESCAPE_PATTERN = re.compile(r'\x1b[@-Z\\-_]')
@@ -2432,6 +2446,211 @@ def validate_agent_viewport_snapshot_payload(data):
 
 agent_viewport_snapshot_store = AgentViewportSnapshotStore()
 
+def parse_agent_viewport_render_wait_ms(value):
+    try:
+        wait_ms = int(value if value is not None else AGENT_VIEWPORT_RENDER_WAIT_MS)
+    except (TypeError, ValueError):
+        wait_ms = AGENT_VIEWPORT_RENDER_WAIT_MS
+    return max(0, min(wait_ms, AGENT_VIEWPORT_RENDER_MAX_WAIT_MS))
+
+def validate_agent_viewport_render_result_payload(data, expected_request):
+    if not isinstance(data, dict) or not isinstance(expected_request, dict):
+        return None, AGENT_ERROR_RENDER_INVALID
+    if data.get('request_id') != expected_request.get('request_id'):
+        return None, AGENT_ERROR_RENDER_STALE
+    terminal_id = validate_terminal_id_payload(data)
+    if not terminal_id or terminal_id != expected_request.get('terminal_id'):
+        return None, AGENT_ERROR_RENDER_INVALID
+    render_type = data.get('render_type')
+    mime_type = data.get('mime_type')
+    if render_type != 'xterm_viewport' or mime_type != 'image/png':
+        return None, AGENT_ERROR_RENDER_INVALID
+    try:
+        cols = int(data.get('cols'))
+        rows = int(data.get('rows'))
+        pixel_width = int(data.get('pixel_width'))
+        pixel_height = int(data.get('pixel_height'))
+        output_seq = int(data.get('output_seq', 0))
+    except (TypeError, ValueError):
+        return None, AGENT_ERROR_RENDER_INVALID
+    if not (MIN_TERMINAL_COLS <= cols <= MAX_TERMINAL_COLS):
+        return None, AGENT_ERROR_RENDER_INVALID
+    if not (MIN_TERMINAL_ROWS <= rows <= MAX_TERMINAL_ROWS):
+        return None, AGENT_ERROR_RENDER_INVALID
+    if pixel_width <= 0 or pixel_height <= 0:
+        return None, AGENT_ERROR_RENDER_INVALID
+    if pixel_width * pixel_height > AGENT_VIEWPORT_RENDER_MAX_PIXELS:
+        return None, AGENT_ERROR_RENDER_TOO_LARGE
+    if output_seq < 0:
+        return None, AGENT_ERROR_RENDER_INVALID
+    image_base64 = data.get('image_base64')
+    if not isinstance(image_base64, str) or not image_base64:
+        return None, AGENT_ERROR_RENDER_INVALID
+    try:
+        image_bytes = base64.b64decode(image_base64.encode('ascii'), validate=True)
+    except Exception:
+        return None, AGENT_ERROR_RENDER_INVALID
+    if not image_bytes.startswith(b'\x89PNG\r\n\x1a\n'):
+        return None, AGENT_ERROR_RENDER_INVALID
+    if len(image_bytes) > AGENT_VIEWPORT_RENDER_MAX_IMAGE_BYTES:
+        return None, AGENT_ERROR_RENDER_TOO_LARGE
+    return {
+        'request_id': expected_request.get('request_id'),
+        'terminal_id': terminal_id,
+        'render_type': render_type,
+        'mime_type': mime_type,
+        'image_base64': image_base64,
+        'image_byte_length': len(image_bytes),
+        'cols': cols,
+        'rows': rows,
+        'pixel_width': pixel_width,
+        'pixel_height': pixel_height,
+        'output_seq': output_seq,
+        'captured_at': data.get('captured_at') if isinstance(data.get('captured_at'), str) else None,
+    }, None
+
+class AgentViewportRenderRequestStore:
+    def __init__(self):
+        self._requests = {}
+        self._lock = threading.RLock()
+
+    def create(self, session_token, terminal_id, sid, state, bridge):
+        request_id = 'agrv_' + secrets.token_urlsafe(12)
+        now = time.time()
+        request_payload = {
+            'request_id': request_id,
+            'terminal_id': terminal_id,
+            'render_type': 'xterm_viewport',
+            'mime_type': 'image/png',
+            'session_id': state.session_id,
+            'viewer_id': state.viewer_id,
+            'agent_binding_id': state.agent_binding_id,
+            'mode_version': state.mode_version,
+            'privacy_version': state.privacy_version,
+            'cols': bridge.cols,
+            'rows': bridge.rows,
+            'output_seq': bridge.output_seq,
+            'created_at': now,
+        }
+        entry = {
+            'request': request_payload,
+            'session_token': session_token,
+            'terminal_id': terminal_id,
+            'sid': sid,
+            'created_at': now,
+            'expires_at': now + AGENT_VIEWPORT_RENDER_REQUEST_TTL_SECONDS,
+            'event': threading.Event(),
+            'result': None,
+            'error_code': None,
+        }
+        with self._lock:
+            self._trim(now)
+            self._requests[request_id] = entry
+        return dict(request_payload)
+
+    def resolve(self, session_token, terminal_id, sid, data):
+        if not isinstance(data, dict):
+            return None, AGENT_ERROR_RENDER_INVALID
+        request_id = data.get('request_id')
+        if not isinstance(request_id, str):
+            return None, AGENT_ERROR_RENDER_INVALID
+        with self._lock:
+            self._trim(time.time())
+            entry = self._requests.get(request_id)
+            if not entry:
+                return None, AGENT_ERROR_RENDER_STALE
+            if (
+                entry.get('session_token') != session_token
+                or entry.get('terminal_id') != terminal_id
+                or entry.get('sid') != sid
+            ):
+                return None, AGENT_ERROR_RENDER_STALE
+            client_error = data.get('error_code')
+            if data.get('status') == AGENT_STATUS_FAILED and isinstance(client_error, str):
+                if client_error not in {
+                    AGENT_ERROR_RENDER_INVALID,
+                    AGENT_ERROR_RENDER_TOO_LARGE,
+                    AGENT_ERROR_RENDER_TIMEOUT,
+                    AGENT_ERROR_RENDER_STALE,
+                    AGENT_ERROR_PRIVACY_BLOCKED,
+                    AGENT_ERROR_PAUSED,
+                    AGENT_ERROR_TERMINAL_NOT_FOUND,
+                    AGENT_ERROR_NOT_ATTACHED,
+                }:
+                    client_error = AGENT_ERROR_RENDER_INVALID
+                entry['result'] = None
+                entry['error_code'] = client_error
+                entry['event'].set()
+                return None, client_error
+            result, error_code = validate_agent_viewport_render_result_payload(
+                data,
+                entry.get('request'),
+            )
+            entry['result'] = result
+            entry['error_code'] = error_code
+            entry['event'].set()
+            return result, error_code
+
+    def fail(self, session_token, terminal_id, sid, request_id, error_code):
+        if not isinstance(request_id, str):
+            return AGENT_ERROR_RENDER_INVALID
+        with self._lock:
+            self._trim(time.time())
+            entry = self._requests.get(request_id)
+            if not entry:
+                return AGENT_ERROR_RENDER_STALE
+            if (
+                entry.get('session_token') != session_token
+                or entry.get('terminal_id') != terminal_id
+                or entry.get('sid') != sid
+            ):
+                return AGENT_ERROR_RENDER_STALE
+            entry['result'] = None
+            entry['error_code'] = error_code
+            entry['event'].set()
+            return error_code
+
+    def wait(self, request_id, wait_ms):
+        with self._lock:
+            entry = self._requests.get(request_id)
+        if not entry:
+            return None, AGENT_ERROR_RENDER_STALE
+        if not entry['event'].wait(wait_ms / 1000.0):
+            with self._lock:
+                self._requests.pop(request_id, None)
+            return None, AGENT_ERROR_RENDER_TIMEOUT
+        with self._lock:
+            entry = self._requests.pop(request_id, entry)
+        if entry.get('error_code'):
+            return None, entry.get('error_code')
+        return dict(entry.get('result') or {}), None
+
+    def discard(self, session_token, terminal_id=None, sid=None):
+        with self._lock:
+            for request_id, entry in list(self._requests.items()):
+                if entry.get('session_token') == session_token \
+                        and (terminal_id is None or entry.get('terminal_id') == terminal_id) \
+                        and (sid is None or entry.get('sid') == sid):
+                    entry['error_code'] = AGENT_ERROR_RENDER_STALE
+                    entry['event'].set()
+                    self._requests.pop(request_id, None)
+
+    def clear(self):
+        with self._lock:
+            for entry in self._requests.values():
+                entry['error_code'] = AGENT_ERROR_RENDER_STALE
+                entry['event'].set()
+            self._requests.clear()
+
+    def _trim(self, now):
+        for request_id, entry in list(self._requests.items()):
+            if entry.get('expires_at', 0) < now:
+                entry['error_code'] = AGENT_ERROR_RENDER_TIMEOUT
+                entry['event'].set()
+                self._requests.pop(request_id, None)
+
+agent_viewport_render_request_store = AgentViewportRenderRequestStore()
+
 def hash_external_agent_token(token):
     return hashlib.sha256(token.encode('utf-8')).hexdigest()
 
@@ -2984,6 +3203,24 @@ def build_external_agent_tail_payload_waiting(bridge, state, since_output_seq=No
         if tail['events'] or tail['gap']['detected']:
             return tail, None
 
+def build_external_agent_viewport_render_payload(record, state, terminal_id, bridge, wait_ms=None):
+    wait_ms = parse_agent_viewport_render_wait_ms(wait_ms)
+    request_payload = agent_viewport_render_request_store.create(
+        record.get('session_token'),
+        terminal_id,
+        record.get('sid'),
+        state,
+        bridge,
+    )
+    socketio.emit(AGENT_EVENT_VIEWPORT_RENDER_REQUEST, request_payload, room=state.sid)
+    result, error_code = agent_viewport_render_request_store.wait(
+        request_payload['request_id'],
+        wait_ms,
+    )
+    if error_code:
+        return None, error_code, request_payload, wait_ms
+    return result, None, request_payload, wait_ms
+
 def external_agent_build_terminal_input_action(state, data):
     return {
         'action_type': AGENT_ACTION_TERMINAL_INPUT,
@@ -3456,6 +3693,7 @@ def unregister_terminal_bridge(session_token, terminal_id, bridge):
     agent_transcript_store.discard(session_token, terminal_id)
     agent_user_input_metadata_store.discard(session_token, terminal_id)
     agent_viewport_snapshot_store.discard(session_token, terminal_id=terminal_id)
+    agent_viewport_render_request_store.discard(session_token, terminal_id=terminal_id)
     close_bridge(bridge)
 
 def close_terminal_bridge(session_token, terminal_id):
@@ -3464,6 +3702,7 @@ def close_terminal_bridge(session_token, terminal_id):
     agent_transcript_store.discard(session_token, terminal_id)
     agent_user_input_metadata_store.discard(session_token, terminal_id)
     agent_viewport_snapshot_store.discard(session_token, terminal_id=terminal_id)
+    agent_viewport_render_request_store.discard(session_token, terminal_id=terminal_id)
     close_bridge(pop_bridge(session_token, terminal_id))
 
 def close_all_terminal_bridges(session_token):
@@ -3473,6 +3712,7 @@ def close_all_terminal_bridges(session_token):
     agent_transcript_store.discard(session_token)
     agent_user_input_metadata_store.discard(session_token)
     agent_viewport_snapshot_store.discard(session_token)
+    agent_viewport_render_request_store.discard(session_token)
     terminals = bridges.pop(session_token, {})
     for bridge in list(terminals.values()):
         close_bridge(bridge)
@@ -3727,6 +3967,64 @@ def build_external_agent_cli_command(base_url, token, terminal_id, op='send', te
         args.append(op)
     return ' '.join(shlex.quote(arg) for arg in args)
 
+def build_external_agent_repl_command(base_url, token, terminal_id):
+    args = [
+        'tools/.venv_wsl/bin/python',
+        'scripts/webssh_agent_repl.py',
+        '--url',
+        base_url,
+        '--token',
+        token,
+        '--terminal',
+        terminal_id,
+    ]
+    return ' '.join(shlex.quote(arg) for arg in args)
+
+def build_external_agent_cli_commands(base_url, token, terminal_id):
+    return {
+        'hello': build_external_agent_cli_command(base_url, token, terminal_id, op='hello'),
+        'state': build_external_agent_cli_command(base_url, token, terminal_id, op='state'),
+        'screen': build_external_agent_cli_command(base_url, token, terminal_id, op='screen'),
+        'render': build_external_agent_cli_command(base_url, token, terminal_id, op='render'),
+        'tail': build_external_agent_cli_command(base_url, token, terminal_id, op='tail'),
+        'send_pwd': build_external_agent_cli_command(base_url, token, terminal_id, op='send', text='pwd\n'),
+        'repl': build_external_agent_repl_command(base_url, token, terminal_id),
+    }
+
+def build_external_agent_discovery_payload(base_url, token, terminal_id):
+    return {
+        'handoff_schema': 'webssh_external_agent_handoff',
+        'schema_version': 1,
+        'protocol_version': EXTERNAL_AGENT_PROTOCOL_VERSION,
+        'transport': {
+            'type': 'loopback_http_json',
+            'command_endpoint': base_url.rstrip('/') + '/agent/external/command',
+            'loopback_only': True,
+        },
+        'capabilities': list(EXTERNAL_AGENT_CAPABILITIES),
+        'operations': {
+            'hello': {'op': 'hello'},
+            'state': {'op': 'state'},
+            'screen': {'op': 'screen'},
+            'render': {'op': 'render', 'wait_ms': AGENT_VIEWPORT_RENDER_WAIT_MS},
+            'tail': {
+                'op': 'tail',
+                'since_output_seq': 0,
+                'limit': AGENT_EXTERNAL_TAIL_MAX_EVENTS,
+                'wait_ms': AGENT_EXTERNAL_TAIL_MAX_WAIT_MS,
+            },
+            'send': {'op': 'send', 'data': 'pwd\n'},
+            'revoke': {'op': 'revoke'},
+        },
+        'cli_commands': build_external_agent_cli_commands(base_url, token, terminal_id),
+        'security': {
+            'token_prefix': 'agt_',
+            'token_is_secret': True,
+            'remote_use_requires_loopback_tunnel': True,
+            'image_bytes_in_audit': False,
+        },
+    }
+
 def write_external_agent_handoff(payload):
     handoff_path = Path(tempfile.gettempdir()) / 'webssh_external_agent_handoff.json'
     tmp_path = handoff_path.with_suffix('.json.tmp')
@@ -3739,7 +4037,8 @@ def write_external_agent_handoff(payload):
     return str(handoff_path)
 
 def build_external_agent_token_payload(token, record, terminal_id, base_url):
-    cli_command = build_external_agent_cli_command(base_url, token, terminal_id)
+    discovery = build_external_agent_discovery_payload(base_url, token, terminal_id)
+    cli_command = discovery['cli_commands']['send_pwd']
     payload = {
         'status': 'ok',
         'token': token,
@@ -3749,6 +4048,7 @@ def build_external_agent_token_payload(token, record, terminal_id, base_url):
         'url': base_url,
         'cli_command': cli_command,
     }
+    payload.update(discovery)
     payload['handoff_path'] = write_external_agent_handoff(payload)
     return payload
 
@@ -4398,10 +4698,10 @@ def process_external_agent_command(command):
             return external_agent_error(error_code, terminal_id=terminal_id)
         return {
             'status': 'ok',
-            'version': 1,
+            'version': EXTERNAL_AGENT_PROTOCOL_VERSION,
             'external_agent_id': record.get('external_agent_id'),
             'terminal_id': record.get('terminal_id'),
-            'capabilities': ['state', 'screen', 'tail', 'send', 'revoke'],
+            'capabilities': list(EXTERNAL_AGENT_CAPABILITIES),
             'state': state.public_state(),
         }
 
@@ -4447,7 +4747,7 @@ def process_external_agent_command(command):
     if op == 'state':
         return build_external_agent_state_payload(record, state)
 
-    if op in {'screen', 'tail'}:
+    if op in {'screen', 'render', 'tail'}:
         if not is_agent_context_allowed(state):
             return external_agent_error(AGENT_ERROR_PRIVACY_BLOCKED, terminal_id=terminal_id)
         bridge = get_bridge(record.get('session_token'), terminal_id)
@@ -4469,6 +4769,40 @@ def process_external_agent_command(command):
                 'output_seq': bridge.output_seq,
                 'state': state.public_state(),
                 'screen': active_screen,
+            }
+        if op == 'render':
+            render, render_error, request_payload, wait_ms = build_external_agent_viewport_render_payload(
+                record,
+                state,
+                terminal_id,
+                bridge,
+                wait_ms=command.get('wait_ms'),
+            )
+            record_agent_audit_event(
+                state,
+                AGENT_AUDIT_EXTERNAL_AGENT_RENDER,
+                external_agent_id=record.get('external_agent_id'),
+                request_id=request_payload.get('request_id'),
+                status=AGENT_STATUS_FAILED if render_error else 'ok',
+                error_code=render_error,
+                wait_ms=wait_ms,
+                render_type=request_payload.get('render_type'),
+                mime_type=request_payload.get('mime_type'),
+                image_byte_length=render.get('image_byte_length') if render else None,
+                cols=render.get('cols') if render else None,
+                rows=render.get('rows') if render else None,
+                pixel_width=render.get('pixel_width') if render else None,
+                pixel_height=render.get('pixel_height') if render else None,
+                output_seq=render.get('output_seq') if render else bridge.output_seq,
+            )
+            if render_error:
+                return external_agent_error(render_error, terminal_id=terminal_id)
+            return {
+                'status': 'ok',
+                'terminal_id': terminal_id,
+                'external_agent_id': record.get('external_agent_id'),
+                'state': state.public_state(),
+                'render': render,
             }
         tail, error_code = build_external_agent_tail_payload_waiting(
             bridge,
@@ -4819,6 +5153,55 @@ def on_agent_viewport_snapshot(data):
         room=request.sid,
     )
 
+@socketio.on(AGENT_EVENT_VIEWPORT_RENDER_RESULT)
+def on_agent_viewport_render_result(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    request_id = data.get('request_id') if isinstance(data, dict) else None
+    if not session_token or not terminal_id or not isinstance(request_id, str):
+        return
+    bridge = get_bridge(session_token, terminal_id)
+    if not bridge or request.sid not in bridge.attached_sids:
+        agent_viewport_render_request_store.fail(
+            session_token,
+            terminal_id,
+            request.sid,
+            request_id,
+            AGENT_ERROR_TERMINAL_NOT_FOUND if not bridge else AGENT_ERROR_NOT_ATTACHED,
+        )
+        return
+    with agent_lock:
+        state = get_agent_state(session_token, terminal_id, request.sid)
+        if (
+            not state
+            or state.paused
+            or state.mode == AGENT_MODE_PAUSED
+            or state.mode == AGENT_MODE_DISABLED
+            or not is_agent_context_allowed(state)
+        ):
+            if not state:
+                error_code = AGENT_ERROR_NOT_ATTACHED
+            elif state.paused or state.mode == AGENT_MODE_PAUSED:
+                error_code = AGENT_ERROR_PAUSED
+            elif state.mode == AGENT_MODE_DISABLED:
+                error_code = AGENT_ERROR_EXTERNAL_AGENT_DISABLED
+            else:
+                error_code = AGENT_ERROR_PRIVACY_BLOCKED
+            agent_viewport_render_request_store.fail(
+                session_token,
+                terminal_id,
+                request.sid,
+                request_id,
+                error_code,
+            )
+            return
+    agent_viewport_render_request_store.resolve(
+        session_token,
+        terminal_id,
+        request.sid,
+        data,
+    )
+
 
 @socketio.on('start_ssh')
 def on_start_ssh(data):
@@ -5036,6 +5419,7 @@ def on_disconnect(reason=None):
                 record_agent_audit_event(state, AGENT_AUDIT_VIEWER_DETACH, reason=AGENT_REASON_DISCONNECTED)
         invalidate_agent_states(session_token, sid=request.sid, reason=AGENT_REASON_DISCONNECTED)
         agent_viewport_snapshot_store.discard(session_token, sid=request.sid)
+        agent_viewport_render_request_store.discard(session_token, sid=request.sid)
         detach_session_bridges(session_token, request.sid)
     print(f"[-] Client disconnected: {request.sid} from {client_ip}; reason={reason or 'unknown'}")
 

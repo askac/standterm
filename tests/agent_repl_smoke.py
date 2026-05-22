@@ -2,9 +2,11 @@ import queue
 import sys
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
+import webssh_agent_cli as cli
 import webssh_agent_repl as repl
 
 
@@ -105,6 +107,37 @@ def test_tail_worker_stops_on_not_attached_error():
     assert stop_event.is_set() is True
 
 
+def test_cli_and_repl_apply_handoff_defaults(tmp_path=None):
+    handoff_path = Path('/tmp/webssh_agent_handoff_unit.json') if tmp_path is None else tmp_path / 'handoff.json'
+    handoff_path.write_text(
+        '{"url":"http://127.0.0.1:5012","token":"agt_unit","terminal_id":"term-2"}\n',
+        encoding='utf-8',
+    )
+    cli_args = SimpleNamespace(
+        handoff=str(handoff_path),
+        url=None,
+        token=None,
+        terminal='main',
+    )
+    cli.apply_handoff(cli_args)
+    assert cli_args.url == 'http://127.0.0.1:5012'
+    assert cli_args.token == 'agt_unit'
+    assert cli_args.terminal == 'term-2'
+
+    repl_args = SimpleNamespace(
+        handoff=str(handoff_path),
+        url='http://override',
+        token=None,
+        terminal='main',
+    )
+    repl.apply_handoff(repl_args)
+    assert repl_args.url == 'http://override'
+    assert repl_args.token == 'agt_unit'
+    assert repl_args.terminal == 'term-2'
+    if tmp_path is None:
+        handoff_path.unlink(missing_ok=True)
+
+
 def main():
     tests = [
         test_normalize_key_modes,
@@ -114,6 +147,7 @@ def main():
         test_send_worker_drops_queued_input_after_fatal_error,
         test_send_worker_keeps_running_on_transient_human_lease,
         test_tail_worker_stops_on_not_attached_error,
+        test_cli_and_repl_apply_handoff_defaults,
     ]
     for test in tests:
         test()
