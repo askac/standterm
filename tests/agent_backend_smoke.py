@@ -757,6 +757,45 @@ def test_external_agent_expired_and_wrong_terminal_tokens_are_rejected():
     client.disconnect()
 
 
+def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
+    flask_client = make_flask_client()
+    client = make_socket_client(flask_client)
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(webssh.AGENT_EVENT_MODE_SET, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'mode': 'direct',
+    })
+    state = last_payload(client, webssh.AGENT_EVENT_STATE)
+
+    response = flask_client.post('/agent/external/token', json={
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'viewer_id': state['viewer_id'],
+        'agent_binding_id': state['agent_binding_id'],
+        'mode_version': state['mode_version'],
+        'privacy_version': state['privacy_version'],
+    })
+    assert response.status_code == 200
+    token_payload = response.get_json()
+    assert token_payload['status'] == 'ok'
+    assert token_payload['token'].startswith('agt_')
+
+    response = flask_client.post('/agent/external/command', json={
+        'op': 'send',
+        'token': token_payload['token'],
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'data': 'http-external\n',
+    })
+    assert response.status_code == 200
+    result = response.get_json()
+    assert result['status'] == webssh.AGENT_STATUS_COMPLETED
+    assert ''.join(bridge.writes) == 'http-external\n'
+
+    client.disconnect()
+
+
 def test_agent_audit_records_typed_events_without_raw_action_data():
     client = make_client()
     session_token = current_session_token()
@@ -1315,6 +1354,7 @@ def main():
         test_external_agent_privacy_and_disabled_state_block_visibility_and_send,
         test_external_agent_token_revoke_and_terminal_close_invalidate_access,
         test_external_agent_expired_and_wrong_terminal_tokens_are_rejected,
+        test_external_agent_http_bridge_mints_token_and_accepts_cli_command,
         test_agent_audit_records_typed_events_without_raw_action_data,
         test_wrong_sid_cannot_approve_action,
         test_stale_mode_version_cannot_approve_action,

@@ -65,10 +65,11 @@ parser that consumes the same terminal output stream.
 
 ## External Agent Mirror Boundary
 
-The External Agent Mirror is the planned local IPC/CLI boundary for tools such
-as Codex CLI or Claude Code. The first backend slice exposes an in-process
-typed command handler; OS transports such as Unix domain sockets, Windows named
-pipes, or localhost TCP are layered on top of this command boundary later.
+The External Agent Mirror is the local CLI boundary for tools such as Codex CLI
+or Claude Code. The current testable transport is a loopback-only HTTP command
+bridge plus `scripts/webssh_agent_cli.py`. OS transports such as Unix domain
+sockets or Windows named pipes can be layered on top of the same command
+boundary later.
 
 The human WebSSH viewer remains the controller:
 
@@ -89,6 +90,21 @@ already attached human viewer for one terminal. Agent identifiers such as
 sufficient for attach authorization. Tokens are short-lived, scoped to the
 terminal and authorizing browser binding, and are invalidated by terminal close,
 viewer detach/disconnect, session expiry, explicit revoke, or binding changes.
+
+The browser mints tokens through `POST /agent/external/token` using the current
+authenticated WebSSH session cookie and public Agent state fields for the active
+terminal. External clients submit commands through `POST /agent/external/command`,
+which is accepted only from loopback clients and still requires the `agt_...`
+token. The CLI wrapper is intentionally small and speaks this JSON command
+contract:
+
+```bash
+tools/.venv_wsl/bin/python scripts/webssh_agent_cli.py \
+  --url http://127.0.0.1:5010 \
+  --token agt_... \
+  --terminal main \
+  send --text "pwd\n"
+```
 
 ### External Command Shape
 

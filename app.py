@@ -18,7 +18,7 @@ import hashlib
 import threading
 from collections import deque
 from pathlib import Path
-from flask import Flask, render_template, request, abort, make_response, redirect, send_file
+from flask import Flask, render_template, request, abort, make_response, redirect, send_file, jsonify
 from flask_socketio import SocketIO
 
 try:
@@ -2811,6 +2811,28 @@ def mint_external_agent_attach_token(session_token, terminal_id, sid,
         )
         return token, record, None
 
+def mint_external_agent_attach_token_for_viewer(session_token, terminal_id, viewer_id,
+                                                agent_binding_id, mode_version=None,
+                                                privacy_version=None):
+    if not session_token or not terminal_id:
+        return None, None, AGENT_ERROR_ACTION_INVALID_DATA
+    with agent_lock:
+        matches = [
+            state for state in agent_states.values()
+            if state.session_token == session_token
+            and state.terminal_id == terminal_id
+            and state.viewer_id == viewer_id
+            and state.agent_binding_id == agent_binding_id
+        ]
+        if not matches:
+            return None, None, AGENT_ERROR_NOT_ATTACHED
+        state = matches[-1]
+        if mode_version is not None and state.mode_version != mode_version:
+            return None, None, AGENT_ERROR_STALE_MODE_VERSION
+        if privacy_version is not None and state.privacy_version != privacy_version:
+            return None, None, AGENT_ERROR_STALE_PROPOSAL
+        return mint_external_agent_attach_token(session_token, terminal_id, state.sid)
+
 def validate_external_agent_command_token(command, require_terminal=True):
     if not isinstance(command, dict):
         return None, None, None, AGENT_ERROR_ACTION_INVALID_DATA
@@ -3561,6 +3583,69 @@ def index():
         terminal_policy=build_terminal_policy(),
     ))
     return add_common_headers(response)
+
+def is_loopback_client_request():
+    client_ip = get_request_client_ip()
+    try:
+        return ipaddress.ip_address(client_ip).is_loopback
+    except ValueError:
+        return client_ip in {'localhost'}
+
+def external_agent_json_response(payload, status_code=200):
+    response = jsonify(payload)
+    response.status_code = status_code
+    return add_common_headers(response)
+
+@app.route('/agent/external/token', methods=['POST'])
+def external_agent_token():
+    session_token = get_request_session_token()
+    if not session_token:
+        return external_agent_json_response(external_agent_error(AGENT_ERROR_EXTERNAL_AGENT_UNAUTHORIZED), 403)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return external_agent_json_response(external_agent_error(AGENT_ERROR_ACTION_INVALID_DATA), 400)
+    terminal_id = validate_terminal_id_payload(data)
+    if not terminal_id:
+        return external_agent_json_response(external_agent_error(AGENT_ERROR_ACTION_INVALID_DATA), 400)
+    mode_version = data.get('mode_version')
+    privacy_version = data.get('privacy_version')
+    if mode_version is not None:
+        try:
+            mode_version = int(mode_version)
+        except (TypeError, ValueError):
+            return external_agent_json_response(external_agent_error(AGENT_ERROR_ACTION_INVALID_DATA), 400)
+    if privacy_version is not None:
+        try:
+            privacy_version = int(privacy_version)
+        except (TypeError, ValueError):
+            return external_agent_json_response(external_agent_error(AGENT_ERROR_ACTION_INVALID_DATA), 400)
+    token, record, error_code = mint_external_agent_attach_token_for_viewer(
+        session_token,
+        terminal_id,
+        data.get('viewer_id'),
+        data.get('agent_binding_id'),
+        mode_version=mode_version,
+        privacy_version=privacy_version,
+    )
+    if error_code:
+        return external_agent_json_response(external_agent_error(error_code, terminal_id=terminal_id), 409)
+    return external_agent_json_response({
+        'status': 'ok',
+        'token': token,
+        'terminal_id': terminal_id,
+        'external_agent_id': record.get('external_agent_id'),
+        'expires_at': record.get('expires_at'),
+        'url': request.host_url.rstrip('/'),
+    })
+
+@app.route('/agent/external/command', methods=['POST'])
+def external_agent_command():
+    if not is_loopback_client_request():
+        return external_agent_json_response(external_agent_error(AGENT_ERROR_EXTERNAL_AGENT_UNAUTHORIZED), 403)
+    data = request.get_json(silent=True)
+    payload = process_external_agent_command(data)
+    status_code = 200 if payload.get('status') != AGENT_STATUS_FAILED else 400
+    return external_agent_json_response(payload, status_code)
 
 @app.route('/download_ca')
 def download_ca():

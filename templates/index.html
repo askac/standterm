@@ -542,6 +542,10 @@
                 <input type="text" id="agent-mock-input" autocomplete="off" spellcheck="false" value="whoami\n">
                 <button type="button" id="agent-mock-send-btn">Send</button>
                 <button type="button" id="agent-provider-run-btn">Run</button>
+                <button type="button" id="agent-external-token-btn">External</button>
+            </div>
+            <div id="agent-external-box">
+                <input type="text" id="agent-external-command" readonly value="">
             </div>
             <div id="agent-action-box">
                 <div class="agent-preview" id="agent-action-preview"></div>
@@ -817,6 +821,8 @@
             const agentMockInput = document.getElementById('agent-mock-input');
             const agentMockSendBtn = document.getElementById('agent-mock-send-btn');
             const agentProviderRunBtn = document.getElementById('agent-provider-run-btn');
+            const agentExternalTokenBtn = document.getElementById('agent-external-token-btn');
+            const agentExternalCommand = document.getElementById('agent-external-command');
             const agentActionBox = document.getElementById('agent-action-box');
             const agentActionPreview = document.getElementById('agent-action-preview');
             const agentActionTarget = document.getElementById('agent-action-target');
@@ -1035,6 +1041,7 @@
                 agentMockInput.disabled = !usable || (mode !== 'approval_pending' && mode !== AGENT_MODE_DIRECT_ACTIVE);
                 agentMockSendBtn.disabled = agentMockInput.disabled || !agentMockInput.value;
                 agentProviderRunBtn.disabled = agentMockInput.disabled;
+                agentExternalTokenBtn.disabled = !usable || mode === AGENT_MODE_DISABLED;
                 renderAgentActionPanel(state);
             }
 
@@ -2182,6 +2189,38 @@
                 socket.emit('agent_provider_run_request', {
                     terminal_id: state.id
                 });
+            };
+            function shellQuote(value) {
+                return `'${String(value).replace(/'/g, `'\\''`)}'`;
+            }
+            agentExternalTokenBtn.onclick = async () => {
+                const state = getActiveTerminalState();
+                if (!canUseAgentPanel(state) || agentExternalTokenBtn.disabled) return;
+                const payload = {
+                    terminal_id: state.id,
+                    viewer_id: state.agent.viewerId,
+                    agent_binding_id: state.agent.agentBindingId,
+                    mode_version: state.agent.modeVersion,
+                    privacy_version: state.agent.privacyVersion
+                };
+                agentExternalCommand.value = 'minting external agent token...';
+                try {
+                    const response = await fetch('/agent/external/token', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    const result = await response.json();
+                    if (!response.ok || result.status !== 'ok') {
+                        agentExternalCommand.value = `error: ${result.error_code || response.status}`;
+                        return;
+                    }
+                    const cli = `tools/.venv_wsl/bin/python scripts/webssh_agent_cli.py --url ${shellQuote(result.url)} --token ${shellQuote(result.token)} --terminal ${shellQuote(result.terminal_id)} send --text ${shellQuote('pwd\n')}`;
+                    agentExternalCommand.value = cli;
+                    agentExternalCommand.select();
+                } catch (error) {
+                    agentExternalCommand.value = `error: ${error.message || error}`;
+                }
             };
             function getPendingAgentAction(state) {
                 return state && state.agent ? state.agent.pendingAction : null;
