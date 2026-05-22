@@ -1,0 +1,2 @@
+請閱讀 docs/examples/webssh-external-agent-skill/SKILL.md，增加 webssh-external-agent local skill。
+使用時以 WebSSH startup banner 印出的 active Python 與絕對路徑命令為準，先跑 hello，再依 typed capabilities 執行 render、tail、send 或 REPL。

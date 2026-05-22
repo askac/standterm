@@ -1380,6 +1380,78 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
     client.disconnect()
 
 
+def test_external_agent_startup_lines_point_to_launch_handoff():
+    lines = webssh.build_external_agent_startup_lines()
+    joined = '\n'.join(lines)
+    hello_line = next(line for line in lines if line.startswith('External Agent CLI hello: '))
+    render_line = next(line for line in lines if line.startswith('External Agent CLI render: '))
+
+    assert webssh.quote_local_command(['C:\\Program Files\\Python\\python.exe'], platform_name='win32') == (
+        '"C:\\Program Files\\Python\\python.exe"'
+    )
+    assert str(webssh.EXTERNAL_AGENT_HANDOFF_PATH) in joined
+    assert str(webssh.APP_DIR / 'scripts' / 'webssh_agent_cli.py') in joined
+    assert webssh.sys.executable in joined
+    assert '--handoff' in hello_line
+    assert str(webssh.EXTERNAL_AGENT_HANDOFF_PATH) in hello_line
+    assert hello_line.endswith(' hello')
+    assert '--handoff' in render_line
+    assert str(webssh.EXTERNAL_AGENT_HANDOFF_PATH) in render_line
+    assert render_line.endswith(' render')
+    assert 'after browser Agent attach and external token mint' in joined
+    assert 'explicit --url, --token, and --terminal' in joined
+
+
+def test_wsl_local_shell_choice_is_structured_and_wsl_only():
+    original_is_wsl = webssh.is_wsl
+    plugin = webssh.LocalShellBackendPlugin()
+    try:
+        webssh.is_wsl = lambda: True
+        with webssh.app.test_request_context('/'):
+            option = plugin.build_policy_option(browser_authorized=False)
+        shell_options = option['shell_options']
+        assert [item['kind'] for item in shell_options] == ['bash', 'cmd', 'powershell']
+        assert option['default_shell_kind'] == 'bash'
+
+        payload, error = plugin.validate_start_payload(
+            {'local_shell_kind': 'cmd'},
+            webssh.TERMINAL_ID_MAIN,
+            '127.0.0.1',
+            browser_authorized=False,
+        )
+        assert error is None
+        assert payload['local_shell_config']['shell_kind'] == 'cmd'
+        assert payload['local_shell_config']['terminal_label'] == 'cmd.exe'
+
+        payload, error = plugin.validate_start_payload(
+            {},
+            webssh.TERMINAL_ID_MAIN,
+            '127.0.0.1',
+            browser_authorized=False,
+        )
+        assert error is None
+        assert payload['local_shell_config']['shell_kind'] == 'bash'
+
+        _payload, error = plugin.validate_start_payload(
+            {'local_shell_kind': 'zsh'},
+            webssh.TERMINAL_ID_MAIN,
+            '127.0.0.1',
+            browser_authorized=False,
+        )
+        assert error['error_code'] == 'local_shell_invalid_kind'
+
+        webssh.is_wsl = lambda: False
+        _payload, error = plugin.validate_start_payload(
+            {'local_shell_kind': 'cmd'},
+            webssh.TERMINAL_ID_MAIN,
+            '127.0.0.1',
+            browser_authorized=False,
+        )
+        assert error['error_code'] == 'local_shell_kind_not_supported'
+    finally:
+        webssh.is_wsl = original_is_wsl
+
+
 def test_agent_audit_records_typed_events_without_raw_action_data():
     client = make_client()
     session_token = current_session_token()
@@ -1950,6 +2022,8 @@ def main():
         test_external_agent_token_revoke_and_terminal_close_invalidate_access,
         test_external_agent_expired_and_wrong_terminal_tokens_are_rejected,
         test_external_agent_http_bridge_mints_token_and_accepts_cli_command,
+        test_external_agent_startup_lines_point_to_launch_handoff,
+        test_wsl_local_shell_choice_is_structured_and_wsl_only,
         test_agent_audit_records_typed_events_without_raw_action_data,
         test_wrong_sid_cannot_approve_action,
         test_stale_mode_version_cannot_approve_action,

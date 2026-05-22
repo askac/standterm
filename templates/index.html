@@ -149,6 +149,7 @@
         .mode-selector.locked label { cursor: default; opacity: 0.55; }
         .mode-selector.locked label.active { opacity: 1; }
         #ssh-fields { display: block; }
+        #local-shell-fields { display: none; }
         #uart-fields { display: none; }
         #browser-auth-box { display: none; margin-bottom: 14px; padding: 10px 12px; background: #1f1f1f; border: 1px solid #444; border-radius: 6px; }
         #browser-auth-header { color: #aaa; font-size: 12px; line-height: 1.4; margin-bottom: 10px; word-break: break-word; }
@@ -481,6 +482,9 @@
             <input type="text" id="username" placeholder="Username" value="aska">
             <input type="password" id="password" placeholder="Password (Optional)">
         </div>
+        <div id="local-shell-fields">
+            <select id="local-shell-kind"></select>
+        </div>
         <div id="uart-fields">
             <input type="text" id="uart-port" list="uart-port-list" placeholder="COM3 or /dev/ttyUSB0">
             <datalist id="uart-port-list"></datalist>
@@ -801,6 +805,8 @@
             const connectBtn = document.getElementById('connectBtn');
             const modeSelector = document.getElementById('modeSelector');
             const sshFields = document.getElementById('ssh-fields');
+            const localShellFields = document.getElementById('local-shell-fields');
+            const localShellKindSelect = document.getElementById('local-shell-kind');
             const uartFields = document.getElementById('uart-fields');
             const uartPortInput = document.getElementById('uart-port');
             const uartPortList = document.getElementById('uart-port-list');
@@ -1504,6 +1510,29 @@
                 uartBaudSelect.value = String(uartOption.default_baud_rate || 115200);
             }
 
+            function populateLocalShellFields() {
+                const localShellOption = getConnectionOption('local_shell') || {};
+                const shellOptions = Array.isArray(localShellOption.shell_options)
+                    ? localShellOption.shell_options
+                    : [];
+                const previousKind = localShellKindSelect.value;
+                localShellKindSelect.replaceChildren();
+                shellOptions.forEach(shellOption => {
+                    if (!shellOption || typeof shellOption.kind !== 'string') return;
+                    const option = document.createElement('option');
+                    option.value = shellOption.kind;
+                    option.innerText = shellOption.label || shellOption.kind;
+                    localShellKindSelect.appendChild(option);
+                });
+
+                const hasPreviousKind = shellOptions.some(shellOption => shellOption.kind === previousKind);
+                const defaultKind = localShellOption.default_shell_kind
+                    || (shellOptions.find(shellOption => shellOption && shellOption.default) || {}).kind
+                    || (shellOptions[0] || {}).kind
+                    || '';
+                localShellKindSelect.value = hasPreviousKind ? previousKind : defaultKind;
+            }
+
             function setConnectionType(mode) {
                 refreshPolicyState();
                 const normalized = getPolicyConnection(mode, defaultConnectionType);
@@ -1518,6 +1547,9 @@
                 });
                 modeSelector.classList.toggle('locked', !!forcedConnectionType || getActiveModeCount() <= 1);
                 sshFields.style.display = normalized === 'ssh' ? 'block' : 'none';
+                localShellFields.style.display = (
+                    normalized === 'local_shell' && localShellKindSelect.options.length > 0
+                ) ? 'block' : 'none';
                 uartFields.style.display = normalized === 'uart' ? 'block' : 'none';
                 updateBrowserAuthUi();
                 connectBtn.innerText = getConnectButtonText();
@@ -1589,6 +1621,7 @@
                 const previousLocalShellOption = getConnectionOption('local_shell') || {};
                 terminalPolicy = policy;
                 refreshPolicyState();
+                populateLocalShellFields();
                 populateUartFields();
                 const nextLocalShellOption = getConnectionOption('local_shell') || {};
                 if (!previousLocalShellOption.allowed && nextLocalShellOption.allowed && defaultConnectionType === 'local_shell') {
@@ -2240,6 +2273,8 @@
                     formData.port = document.getElementById('port').value;
                     formData.username = document.getElementById('username').value;
                     formData.password = document.getElementById('password').value;
+                } else if (connectionType === 'local_shell' && localShellKindSelect.value) {
+                    formData.local_shell_kind = localShellKindSelect.value;
                 } else if (connectionType === 'uart') {
                     formData.serial_port = uartPortInput.value;
                     formData.baud_rate = uartBaudSelect.value;
@@ -2468,7 +2503,7 @@
                 });
             });
             applyTerminalPolicy(terminalPolicy);
-            ['host', 'port', 'username', 'password', 'uart-port', 'uart-baud'].forEach(id => {
+            ['host', 'port', 'username', 'password', 'local-shell-kind', 'uart-port', 'uart-baud'].forEach(id => {
                 document.getElementById(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') doConnect(); });
             });
 

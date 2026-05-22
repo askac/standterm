@@ -79,6 +79,14 @@ MAX_TERMINAL_ROWS = 500
 CONNECTION_TYPE_SSH = 'ssh'
 CONNECTION_TYPE_LOCAL_SHELL = 'local_shell'
 CONNECTION_TYPE_UART = 'uart'
+LOCAL_SHELL_KIND_BASH = 'bash'
+LOCAL_SHELL_KIND_CMD = 'cmd'
+LOCAL_SHELL_KIND_POWERSHELL = 'powershell'
+WSL_LOCAL_SHELL_KINDS = (
+    LOCAL_SHELL_KIND_BASH,
+    LOCAL_SHELL_KIND_CMD,
+    LOCAL_SHELL_KIND_POWERSHELL,
+)
 CONNECTION_TYPES = (
     CONNECTION_TYPE_SSH,
     CONNECTION_TYPE_LOCAL_SHELL,
@@ -970,6 +978,87 @@ def get_windows_shell_kind(shell_path):
         return 'cmd'
     return 'shell'
 
+def get_wsl_local_shell_options():
+    return [
+        {
+            'kind': LOCAL_SHELL_KIND_BASH,
+            'label': 'bash',
+            'default': True,
+        },
+        {
+            'kind': LOCAL_SHELL_KIND_CMD,
+            'label': 'cmd.exe',
+            'default': False,
+        },
+        {
+            'kind': LOCAL_SHELL_KIND_POWERSHELL,
+            'label': 'PowerShell',
+            'default': False,
+        },
+    ]
+
+def get_wsl_local_shell_config(shell_kind):
+    requested_kind = shell_kind.strip().lower() if isinstance(shell_kind, str) else ''
+    if not requested_kind:
+        requested_kind = LOCAL_SHELL_KIND_BASH
+    if requested_kind not in WSL_LOCAL_SHELL_KINDS:
+        return None, {
+            'message': 'Local Shell kind must be bash, cmd, or powershell on WSL.',
+            'error_code': 'local_shell_invalid_kind',
+        }
+
+    shell_paths = {
+        LOCAL_SHELL_KIND_BASH: shutil.which('bash') or '/bin/bash',
+        LOCAL_SHELL_KIND_CMD: shutil.which('cmd.exe') or 'cmd.exe',
+        LOCAL_SHELL_KIND_POWERSHELL: shutil.which('powershell.exe') or 'powershell.exe',
+    }
+    labels = {
+        LOCAL_SHELL_KIND_BASH: 'bash',
+        LOCAL_SHELL_KIND_CMD: 'cmd.exe',
+        LOCAL_SHELL_KIND_POWERSHELL: 'PowerShell',
+    }
+    return {
+        'shell_kind': requested_kind,
+        'terminal_kind': requested_kind,
+        'terminal_label': labels[requested_kind],
+        'shell_command': [shell_paths[requested_kind]],
+        'shell_display': shell_paths[requested_kind],
+    }, None
+
+def get_default_local_shell_config():
+    if is_wsl():
+        return get_wsl_local_shell_config(LOCAL_SHELL_KIND_BASH)
+    if sys.platform.startswith('win'):
+        shell = get_windows_shell_path()
+        terminal_kind = get_windows_shell_kind(shell)
+        return {
+            'shell_kind': terminal_kind,
+            'terminal_kind': terminal_kind,
+            'terminal_label': get_shell_label(terminal_kind),
+            'shell_command': shell,
+            'shell_display': shell,
+        }, None
+
+    shell = os.environ.get('SHELL') or '/bin/sh'
+    terminal_kind = get_shell_kind(shell)
+    return {
+        'shell_kind': terminal_kind,
+        'terminal_kind': terminal_kind,
+        'terminal_label': get_shell_label(terminal_kind),
+        'shell_command': [shell],
+        'shell_display': shell,
+    }, None
+
+def get_local_shell_config(shell_kind=None):
+    if is_wsl():
+        return get_wsl_local_shell_config(shell_kind)
+    if isinstance(shell_kind, str) and shell_kind.strip():
+        return None, {
+            'message': 'Local Shell selection is only available on WSL.',
+            'error_code': 'local_shell_kind_not_supported',
+        }
+    return get_default_local_shell_config()
+
 class TerminalBridge:
     connection_type = None
     terminal_kind = None
@@ -1487,13 +1576,14 @@ class SSHBridge(TerminalBridge):
 class LocalShellBridge(TerminalBridge):
     connection_type = CONNECTION_TYPE_LOCAL_SHELL
 
-    def __init__(self, sid, terminal_id=TERMINAL_ID_MAIN):
+    def __init__(self, sid, terminal_id=TERMINAL_ID_MAIN, shell_config=None):
         super().__init__(sid, terminal_id)
         self.process = None
-        shell = get_windows_shell_path() if sys.platform.startswith('win') else (os.environ.get('SHELL') or '/bin/sh')
-        self.shell = shell
-        self.terminal_kind = get_windows_shell_kind(shell) if sys.platform.startswith('win') else get_shell_kind(shell)
-        self.terminal_label = get_shell_label(self.terminal_kind)
+        shell_config = shell_config or get_default_local_shell_config()[0]
+        self.shell = shell_config['shell_display']
+        self.shell_command = shell_config['shell_command']
+        self.terminal_kind = shell_config['terminal_kind']
+        self.terminal_label = shell_config['terminal_label']
 
     def connect(self, cols=80, rows=24):
         if sys.platform.startswith('win'):
@@ -1509,7 +1599,7 @@ class LocalShellBridge(TerminalBridge):
             env['TERM'] = SSH_TERM
             cwd = str(Path.home())
             self.process = PtyProcessUnicode.spawn(
-                [self.shell],
+                self.shell_command,
                 cwd=cwd,
                 env=env,
                 dimensions=(rows, cols),
@@ -2003,13 +2093,17 @@ class LocalShellBackendPlugin(TerminalBackendPlugin):
     def build_policy_option(self, browser_authorized=False):
         client_ip = get_request_client_ip()
         allowed = is_local_shell_allowed_for_client(client_ip, browser_authorized=browser_authorized)
-        return {
+        option = {
             'connection_type': self.connection_type,
             'label': self.label,
             'allowed': allowed,
             'authorization_available': not allowed,
             'browser_authorized': bool(browser_authorized),
         }
+        if is_wsl():
+            option['shell_options'] = get_wsl_local_shell_options()
+            option['default_shell_kind'] = LOCAL_SHELL_KIND_BASH
+        return option
 
     def validate_start_payload(self, data, terminal_id, client_ip, browser_authorized=False):
         if not is_local_shell_allowed_for_client(client_ip, browser_authorized=browser_authorized):
@@ -2017,10 +2111,13 @@ class LocalShellBackendPlugin(TerminalBackendPlugin):
                 'message': 'Local Shell is not available for this client.',
                 'error_code': 'local_shell_unavailable_for_client',
             }
-        return {}, None
+        shell_config, shell_error = get_local_shell_config(data.get('local_shell_kind'))
+        if shell_error:
+            return None, shell_error
+        return {'local_shell_config': shell_config}, None
 
     def create_bridge(self, session_token, terminal_id, payload):
-        return LocalShellBridge(session_token, terminal_id)
+        return LocalShellBridge(session_token, terminal_id, shell_config=payload.get('local_shell_config'))
 
     def connect_bridge(self, bridge, payload, cols, rows):
         return bridge.connect(cols=cols, rows=rows)
@@ -4052,6 +4149,30 @@ def build_external_agent_token_payload(token, record, terminal_id, base_url):
     payload['handoff_path'] = write_external_agent_handoff(payload)
     return payload
 
+def quote_local_command(args, platform_name=None):
+    platform_name = sys.platform if platform_name is None else platform_name
+    if platform_name.startswith('win'):
+        return subprocess.list2cmdline(args)
+    return ' '.join(shlex.quote(arg) for arg in args)
+
+def build_external_agent_startup_lines():
+    python_arg = sys.executable
+    cli_arg = str(APP_DIR / 'scripts' / 'webssh_agent_cli.py')
+    handoff_arg = str(EXTERNAL_AGENT_HANDOFF_PATH)
+    hello_command = quote_local_command([
+        python_arg, cli_arg, '--handoff', handoff_arg, 'hello',
+    ])
+    render_command = quote_local_command([
+        python_arg, cli_arg, '--handoff', handoff_arg, 'render',
+    ])
+    return [
+        f"External Agent Handoff: {EXTERNAL_AGENT_HANDOFF_PATH}",
+        "External Agent Handoff is created or refreshed after browser Agent attach and external token mint.",
+        f"External Agent CLI hello: {hello_command}",
+        f"External Agent CLI render: {render_command}",
+        "External Agent multi-terminal tests should pass explicit --url, --token, and --terminal; the handoff file stores the latest minted token.",
+    ]
+
 def find_external_agent_dev_state(terminal_id):
     with agent_lock:
         matches = [
@@ -5672,6 +5793,8 @@ if __name__ == '__main__':
         print(f"Forced Connection: {FORCE_CONNECTION_TYPE}")
     print(f"Access URL: {scheme}://{access_host}:{port}/?token={ACCESS_TOKEN}")
     print(f"Listening on: {bind_host}:{port}")
+    for line in build_external_agent_startup_lines():
+        print(line)
     if is_wsl() and not is_loopback_bind(bind_host):
         print(f"WSL Localhost URL: {get_localhost_access_url(port)}")
         print("WSL Localhost URL is useful when browsers require a secure context for authorization.")

@@ -107,6 +107,9 @@ non-WebSSH agents. It includes `handoff_schema`, `schema_version`,
 ready-to-run CLI commands.
 Agents should call `hello` first when possible and branch only on the typed
 `capabilities` field, not on displayed terminal text.
+See `docs/examples/webssh-external-agent-skill/SKILL.md` and the adjacent
+`skill_prompt.txt` for a local skill example that wraps this workflow for CLI
+agents.
 
 The command endpoint is loopback-only. If an external agent runs on another
 machine, route it through an SSH tunnel or equivalent loopback tunnel to the
