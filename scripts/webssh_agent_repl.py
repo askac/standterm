@@ -24,6 +24,16 @@ except ImportError:
 
 
 STOP = object()
+FATAL_AGENT_ERRORS = {
+    'agent_paused',
+    'agent_privacy_blocked',
+    'agent_mode_not_writable',
+    'agent_external_unauthorized',
+    'agent_external_expired',
+    'agent_external_revoked',
+    'agent_external_disabled',
+    'terminal_not_found',
+}
 
 
 class AgentHttpClient:
@@ -169,14 +179,7 @@ def tail_worker(client, last_seq, stop_event, poll_seconds, limit):
         if result.get('status') == 'failed':
             error_code = result.get('error_code') or 'tail failed'
             stderr_line(f"[webssh-agent] tail failed: {error_code}")
-            if error_code in {
-                'agent_paused',
-                'agent_privacy_blocked',
-                'agent_mode_not_writable',
-                'agent_external_unauthorized',
-                'agent_external_expired',
-                'agent_external_revoked',
-            }:
+            if error_code in FATAL_AGENT_ERRORS:
                 stop_event.set()
                 return
             time.sleep(max(poll_seconds, 0.1))
@@ -194,6 +197,17 @@ def tail_worker(client, last_seq, stop_event, poll_seconds, limit):
         if isinstance(output_seq, int):
             last_seq = max(last_seq, output_seq if not events else last_seq)
         time.sleep(poll_seconds)
+
+
+def handle_send_result(result, stop_event):
+    if result.get('status') != 'failed':
+        return False
+    error_code = result.get('error_code') or 'send failed'
+    stderr_line(f"[webssh-agent] send failed: {error_code}")
+    if error_code in FATAL_AGENT_ERRORS:
+        stop_event.set()
+        return True
+    return False
 
 
 def send_worker(client, input_queue, stop_event, coalesce_seconds, debug):
@@ -222,12 +236,13 @@ def send_worker(client, input_queue, stop_event, coalesce_seconds, debug):
             _status, result = client.request('send', data=data)
             if debug:
                 stderr_line('[webssh-agent] send: ' + json.dumps(result, sort_keys=True))
-            if result.get('status') == 'failed':
-                stderr_line(f"[webssh-agent] send failed: {result.get('error_code')}")
+            if handle_send_result(result, stop_event):
+                return
     if pending:
         _status, result = client.request('send', data=''.join(pending))
         if debug:
             stderr_line('[webssh-agent] send: ' + json.dumps(result, sort_keys=True))
+        handle_send_result(result, stop_event)
 
 
 def is_local_escape(ch, escape):

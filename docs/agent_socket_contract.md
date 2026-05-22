@@ -130,7 +130,13 @@ servers started with `WEBSSH_AGENT_DEV_TOKEN=1`, the REPL may omit `--token` and
 use the loopback-only dev command endpoint. `--enter cr` is the default because
 PTY-style interactive programs generally expect carriage return for Enter; use
 `--enter lf` for line-oriented shell pipe behavior and `--enter crlf` only for
-targets that explicitly require both bytes.
+targets that explicitly require both bytes. The REPL stops itself on fatal Agent
+errors such as revoked/expired tokens, paused/privacy-blocked state, disabled
+external access, or a missing terminal. A short human-input lease is transient:
+the REPL reports `agent_human_input_active` but does not detach automatically.
+Rejected input is not retried automatically, because replaying stale keystrokes
+after the human lease expires can put bytes into the wrong prompt or editor
+state.
 
 ### External Command Shape
 
