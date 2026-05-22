@@ -9,8 +9,13 @@ provider is connected yet.
 Agent state is scoped to:
 
 ```text
-session_token + terminal_id + browser sid
+session_id + terminal_id + viewer_id + agent_binding_id
 ```
+
+The live backend still uses the authenticated session cookie and Socket.IO sid
+internally. Agent/provider-facing context uses non-secret identifiers instead:
+`session_id`, `viewer_id`, `agent_binding_id`, `run_id`, `proposal_id`, and
+`mode_version`.
 
 The target architecture follows a `screen -x` style shared terminal model:
 
@@ -35,20 +40,22 @@ terminal display text.
 
 The mock Agent panel may send `agent_mode_set`, `agent_suggestion_request`,
 `agent_provider_run_request`, `agent_action_approve`, `agent_action_reject`,
-and `agent_pause`. The approval panel must display only the public action
-metadata returned by the backend, including `escaped_preview`; it must not
-receive or render the raw terminal input payload.
+`agent_privacy_set`, and `agent_pause`. The approval panel must display only
+the public action metadata returned by the backend, including `escaped_preview`;
+it must not receive or render the raw terminal input payload.
 
 The mock panel is opened manually from the status bar `Show Agent Panel` /
 `Hide Agent Panel` toggle. A terminal connection must not automatically expand
 the panel when Agent state is not attached.
 
-The frontend may send xterm viewport snapshots as typed Agent context. The
-current browser viewport snapshot path is a provisional Agent terminal mirror
-adapter, not the final source of truth. Snapshot text is untrusted display data
-and must not be used as a control signal. Future implementations should replace
-or supplement this adapter with a dedicated hidden xterm mirror or a backend
-headless terminal parser that consumes the same terminal output stream.
+The frontend may send xterm screen snapshots as typed Agent context. The
+frontend now builds these snapshots from a dedicated hidden xterm mirror that
+consumes the same terminal output stream as human viewers, rather than from the
+human viewer scroll position. The backend event path is still the provisional
+snapshot adapter, not the final source of truth. Snapshot text is untrusted
+display data and must not be used as a control signal. Future implementations
+should replace or supplement this adapter with a backend headless terminal
+parser that consumes the same terminal output stream.
 
 ## Client-to-Server Events
 
@@ -89,6 +96,32 @@ Allowed client mode values:
 - `direct` or `direct_active`
 
 Changing mode increments `control_epoch` and cancels pending actions.
+
+### `agent_privacy_set`
+
+Payload:
+
+```json
+{ "terminal_id": "main", "privacy_state": "private_input" }
+```
+
+Allowed privacy states:
+
+- `normal`
+- `private_input`
+- `paste_review`
+- `paused`
+
+`private_input`, `paste_review`, and `paused` block Agent context/run creation
+and Agent terminal writes. Human terminal input still goes to the terminal, but
+metadata captured while privacy is not `normal` is redacted and does not include
+`escaped_preview`. Privacy changes increment `privacy_version` and cancel open
+proposals. `paused` also closes the Agent write gate.
+
+The frontend uses `paste_review` for large or multiline paste input. It sets
+privacy to `paste_review`, shows a review dialog, sends the paste through
+`ssh_input` only after explicit approval, and returns privacy to `normal` after
+approval or cancellation when the terminal is still connected and not paused.
 
 ### `agent_pause`
 
@@ -148,11 +181,20 @@ In `approval_pending` mode, the resulting action is emitted as
 Payload:
 
 ```json
-{ "terminal_id": "main", "action_id": "..." }
+{
+  "terminal_id": "main",
+  "action_id": "...",
+  "proposal_id": "agp_...",
+  "session_id": "ags_...",
+  "viewer_id": "agv_...",
+  "agent_binding_id": "agb_...",
+  "mode_version": 1
+}
 ```
 
 Approves a pending action for this exact sid, terminal, and current
-`control_epoch`. Approved input is written only through `AgentInputGate`.
+`control_epoch`/`mode_version`. Approved input is written only through
+`AgentInputGate`.
 
 ### `agent_action_reject`
 
@@ -182,12 +224,13 @@ Payload:
 }
 ```
 
-Stores the current xterm viewport for future Agent context. The snapshot is
-scoped to the current browser sid, session token, and terminal id. The backend
-accepts it only when the sid is currently attached to that terminal, validates
-cols, rows, line count, monotonic `snapshot_seq`, non-negative `output_seq`,
-and total byte limits, and clears stored snapshots on terminal close, session
-close, or sid disconnect.
+Stores the current frontend Agent mirror screen for future Agent context. The
+event name is retained for compatibility with the earlier viewport adapter. The
+snapshot is scoped to the current browser sid, session token, and terminal id.
+The backend accepts it only when the sid is currently attached to that terminal,
+validates cols, rows, line count, monotonic `snapshot_seq`, non-negative
+`output_seq`, and total byte limits, and clears stored snapshots on terminal
+close, session close, or sid disconnect.
 
 ## Server-to-Client Events
 
@@ -197,10 +240,16 @@ Payload:
 
 ```json
 {
+  "session_id": "ags_...",
+  "viewer_id": "agv_...",
+  "agent_binding_id": "agb_...",
   "terminal_id": "main",
   "mode": "observe",
   "paused": false,
   "control_epoch": 1,
+  "mode_version": 1,
+  "privacy_state": "normal",
+  "privacy_version": 0,
   "run_id": "...",
   "pending_actions": 0
 }
@@ -213,11 +262,18 @@ Payload:
 ```json
 {
   "action_id": "...",
+  "proposal_id": "agp_...",
   "action_type": "terminal_input",
+  "session_id": "ags_...",
+  "viewer_id": "agv_...",
+  "agent_binding_id": "agb_...",
   "terminal_id": "main",
   "requires_approval": true,
   "status": "pending_approval",
   "control_epoch": 1,
+  "mode_version": 1,
+  "privacy_state": "normal",
+  "privacy_version": 0,
   "run_id": "...",
   "byte_length": 7,
   "line_count": 1,
@@ -228,8 +284,10 @@ Payload:
 ```
 
 The exact `data` payload is intentionally not included in the public action
-payload yet. The approval UI should display the escaped preview and safety
-metadata until a final redaction policy is chosen.
+payload. The approval UI should display the escaped preview and safety metadata.
+Approval may use `action_id` for compatibility, but should also echo
+`proposal_id`, `session_id`, `viewer_id`, `agent_binding_id`, and `mode_version`
+when available so the backend can reject stale or cross-viewer approvals.
 
 ### `agent_action_result`
 
@@ -281,6 +339,9 @@ explicit `error_code`.
 - `agent_snapshot_invalid`
 - `agent_snapshot_too_large`
 - `agent_snapshot_stale`
+- `agent_privacy_blocked`
+- `agent_stale_mode_version`
+- `agent_stale_proposal`
 
 ## Transcript Boundary
 
@@ -304,6 +365,25 @@ present, and a short escaped preview only when the payload has no unsafe control
 characters. It does not store SSH password form values, access tokens, browser
 authorization data, DOM/app state, or the full input payload.
 
+When privacy is `private_input`, `paste_review`, or `paused`, input metadata
+keeps only minimized counts plus privacy/redaction metadata and does not store
+an escaped preview.
+
+## Agent Audit Boundary
+
+The backend keeps an internal bounded structured audit buffer keyed by
+`session_token + terminal_id`. Audit entries use non-secret identifiers such as
+`session_id`, `viewer_id`, `agent_binding_id`, `run_id`, `proposal_id`, and
+version fields. They record typed events for viewer attach/detach, mode and
+privacy changes, provider run requests, context metadata summaries, proposal
+creation, approvals/rejections, direct writes, action results, and terminal
+cleanup.
+
+Audit entries must not store raw terminal input, raw terminal output, SSH
+passwords, access tokens, browser authorization material, or DOM/app state.
+Action audit metadata is based on public action fields and excludes the raw
+`data` payload.
+
 ## Viewport Snapshot Boundary
 
 The viewport snapshot store is separate from terminal transcript and input
@@ -314,11 +394,11 @@ payload and remain data only.
 
 ## Agent Terminal Mirror Direction
 
-The browser viewport snapshot currently implements the first
-`AgentTerminalMirror` adapter:
+The frontend dedicated xterm mirror currently feeds the backend's provisional
+snapshot adapter. The backend mirror boundary is:
 
 ```text
-TerminalMirror.get_active_screen(session_token, terminal_id, viewer_sid)
+AgentTerminalMirror.get_active_screen(session_token, terminal_id, viewer_sid)
 ```
 
 The adapter returns the latest same-browser-sid snapshot plus metadata such as

@@ -90,6 +90,27 @@
             background: rgba(0,0,0,0.75); z-index: 4000; align-items: center; justify-content: center;
         }
         #settings-modal.open { display: flex; }
+        #paste-review-modal {
+            display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.75); z-index: 4100; align-items: center; justify-content: center;
+        }
+        #paste-review-modal.open { display: flex; }
+        .paste-review-box {
+            background: #1c1c1e; border: 1px solid #3a3a3c; border-radius: 8px;
+            width: min(620px, calc(100vw - 28px)); max-height: 80vh; display: flex; flex-direction: column;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.9); color: #ddd; font-size: 13px; overflow: hidden;
+        }
+        .paste-review-body { padding: 14px 20px; display: grid; gap: 10px; overflow: hidden; }
+        #paste-review-meta { color: #aaa; font-size: 12px; }
+        #paste-review-preview {
+            width: 100%; height: min(280px, 40vh); box-sizing: border-box; resize: vertical;
+            background: #0d0d0d; border: 1px solid #444; border-radius: 5px; color: #eee;
+            padding: 10px; font: 12px/1.4 Consolas, "Courier New", monospace; white-space: pre; outline: none;
+        }
+        .paste-review-actions { display: flex; justify-content: flex-end; gap: 10px; padding: 12px 20px; border-top: 1px solid #3a3a3c; }
+        .paste-review-actions button { border: none; border-radius: 5px; color: #fff; cursor: pointer; padding: 8px 18px; font-size: 13px; }
+        #paste-review-cancel { background: #444; }
+        #paste-review-approve { background: #0a84ff; }
         .settings-box {
             background: #1c1c1e; border: 1px solid #3a3a3c; border-radius: 10px;
             width: 500px; max-height: 80vh; display: flex; flex-direction: column;
@@ -420,6 +441,22 @@
         </div>
     </div>
 
+    <div id="paste-review-modal">
+        <div class="paste-review-box">
+            <div class="settings-header">
+                <h3>Review Paste</h3>
+            </div>
+            <div class="paste-review-body">
+                <div id="paste-review-meta"></div>
+                <textarea id="paste-review-preview" readonly spellcheck="false"></textarea>
+            </div>
+            <div class="paste-review-actions">
+                <button type="button" id="paste-review-cancel">Cancel</button>
+                <button type="button" id="paste-review-approve">Paste</button>
+            </div>
+        </div>
+    </div>
+
     <div id="controls" style="display: none;">
         <h2>Web Terminal</h2>
         <div id="errorBox" class="error-msg"></div>
@@ -543,6 +580,8 @@
         const AGENT_MODE_PAUSED = 'paused';
         const AGENT_OPEN_ACTION_STATUSES = new Set(['pending_approval', 'direct_pending', 'approved']);
         const AGENT_VIEWPORT_SNAPSHOT_DEBOUNCE_MS = 250;
+        const AGENT_SNAPSHOT_BLOCKED_PRIVACY_STATES = new Set(['private_input', 'paste_review', 'paused']);
+        const PASTE_REVIEW_MIN_LENGTH = 256;
         const SCHEMES = {
             ibm5153: { background: '#000000', foreground: '#aaaaaa', black: '#000000', red: '#aa0000', green: '#00aa00', yellow: '#aa5500', blue: '#0000aa', magenta: '#aa00aa', cyan: '#00aaaa', white: '#aaaaaa', brightBlack: '#555555', brightRed: '#ff5555', brightGreen: '#55ff55', brightYellow: '#ffff55', brightBlue: '#5555ff', brightMagenta: '#ff55ff', brightCyan: '#55ffff', brightWhite: '#ffffff', cursor: '#aaaaaa' },
             campbell: { background: '#0C0C0C', foreground: '#CCCCCC', black: '#0C0C0C', red: '#C50F1F', green: '#13A10E', yellow: '#C19C00', blue: '#0037DA', magenta: '#881798', cyan: '#3A96DD', white: '#CCCCCC', brightBlack: '#767676', brightRed: '#E74856', brightGreen: '#16C60C', brightYellow: '#F9F1A5', brightBlue: '#3B78FF', brightMagenta: '#B4009E', brightCyan: '#61D6D6', brightWhite: '#F2F2F2', cursor: '#FFFFFF' },
@@ -789,6 +828,11 @@
             const agentApproveBtn = document.getElementById('agent-approve-btn');
             const agentRejectBtn = document.getElementById('agent-reject-btn');
             const agentActionPauseBtn = document.getElementById('agent-action-pause-btn');
+            const pasteReviewModal = document.getElementById('paste-review-modal');
+            const pasteReviewMeta = document.getElementById('paste-review-meta');
+            const pasteReviewPreview = document.getElementById('paste-review-preview');
+            const pasteReviewApproveBtn = document.getElementById('paste-review-approve');
+            const pasteReviewCancelBtn = document.getElementById('paste-review-cancel');
             const tabsList = document.getElementById('tabs-list');
             const agentPauseBtn = document.getElementById('agent-pause-btn');
             const agentToggleBtn = document.getElementById('agent-toggle-btn');
@@ -815,6 +859,7 @@
             let browserPairingResponseTimer = null;
             let browserAuthDetailsVisible = false;
             let agentPanelVisible = false;
+            let pendingPasteReview = null;
 
             function normalizeConnectionType(value) {
                 return String(value || '').trim().toLowerCase().replace('-', '_');
@@ -868,6 +913,12 @@
                     paused: false,
                     controlEpoch: null,
                     runId: null,
+                    sessionId: null,
+                    viewerId: null,
+                    agentBindingId: null,
+                    modeVersion: null,
+                    privacyState: null,
+                    privacyVersion: null,
                     pendingActions: 0,
                     openActionIds: new Set(),
                     lastAction: null,
@@ -876,6 +927,27 @@
                     snapshotTimer: null,
                     lastSnapshotResult: null
                 };
+            }
+
+            function getAgentStringField(source, field) {
+                return source && typeof source[field] === 'string' ? source[field] : null;
+            }
+
+            function getAgentNumberField(source, field) {
+                const value = source ? Number(source[field]) : NaN;
+                return Number.isFinite(value) ? value : null;
+            }
+
+            function shouldSendAgentViewportSnapshot(state) {
+                return !!(
+                    socket &&
+                    socket.connected &&
+                    state &&
+                    state.connected &&
+                    state.agent &&
+                    state.agent.attached &&
+                    !AGENT_SNAPSHOT_BLOCKED_PRIVACY_STATES.has(state.agent.privacyState)
+                );
             }
 
             function normalizeAgentCount(value) {
@@ -891,6 +963,8 @@
                     paused: state.agent.paused,
                     control_epoch: state.agent.controlEpoch,
                     run_id: state.agent.runId,
+                    privacy_state: state.agent.privacyState,
+                    privacy_version: state.agent.privacyVersion,
                     pending_actions: state.agent.pendingActions
                 }, null, 2));
             }
@@ -980,18 +1054,50 @@
                 socket.emit('agent_detach', { terminal_id: state.id });
             }
 
-            function buildAgentViewportSnapshot(state) {
-                if (!state || !state.term || !state.agent.attached) return null;
-                const activeBuffer = state.term.buffer && state.term.buffer.active;
-                if (!activeBuffer || typeof activeBuffer.getLine !== 'function') return null;
+            function createAgentTerminalMirror() {
+                return new Terminal({
+                    cols: 80,
+                    rows: 24,
+                    convertEol: false,
+                    cursorBlink: false,
+                    disableStdin: true,
+                    scrollback: 1000,
+                    theme: SCHEMES[prefs.colorScheme] || SCHEMES.ibm5153
+                });
+            }
+
+            function syncAgentTerminalMirrorSize(state) {
+                if (!state || !state.agentTerminalMirror || !state.term) return;
                 const cols = state.term.cols;
                 const rows = state.term.rows;
+                if (!Number.isFinite(cols) || !Number.isFinite(rows) || rows <= 0 || cols <= 0) return;
+                if (state.agentTerminalMirrorSize.cols === cols && state.agentTerminalMirrorSize.rows === rows) return;
+                state.agentTerminalMirror.resize(cols, rows);
+                state.agentTerminalMirrorSize = { cols, rows };
+            }
+
+            function writeAgentTerminalMirror(state, data, outputSeq, callback) {
+                if (!state || !state.agentTerminalMirror || typeof data !== 'string') return false;
+                syncAgentTerminalMirrorSize(state);
+                state.agentTerminalMirror.write(data, () => {
+                    if (typeof outputSeq === 'number') state.agentTerminalMirrorOutputSeq = outputSeq;
+                    if (callback) callback();
+                });
+                return true;
+            }
+
+            function buildAgentViewportSnapshot(state) {
+                if (!state || !state.agentTerminalMirror || !state.agent.attached) return null;
+                syncAgentTerminalMirrorSize(state);
+                const activeBuffer = state.agentTerminalMirror.buffer && state.agentTerminalMirror.buffer.active;
+                if (!activeBuffer || typeof activeBuffer.getLine !== 'function') return null;
+                const cols = state.agentTerminalMirrorSize.cols;
+                const rows = state.agentTerminalMirrorSize.rows;
                 if (!Number.isFinite(cols) || !Number.isFinite(rows) || rows <= 0 || cols <= 0) return null;
-                const viewportY = Number.isFinite(Number(activeBuffer.viewportY)) ? Number(activeBuffer.viewportY) : 0;
                 const baseY = Number.isFinite(Number(activeBuffer.baseY)) ? Number(activeBuffer.baseY) : 0;
                 const lines = [];
                 for (let row = 0; row < rows; row += 1) {
-                    const bufferLine = activeBuffer.getLine(viewportY + row);
+                    const bufferLine = activeBuffer.getLine(baseY + row);
                     lines.push(bufferLine ? bufferLine.translateToString(true) : '');
                 }
                 state.agent.snapshotSeq += 1;
@@ -999,9 +1105,9 @@
                     terminal_id: state.id,
                     cols,
                     rows,
-                    viewport_y: viewportY,
+                    viewport_y: baseY,
                     base_y: baseY,
-                    output_seq: state.lastOutputSeq || 0,
+                    output_seq: state.agentTerminalMirrorOutputSeq || state.lastOutputSeq || 0,
                     snapshot_seq: state.agent.snapshotSeq,
                     captured_at: new Date().toISOString(),
                     lines
@@ -1009,7 +1115,7 @@
             }
 
             function sendAgentViewportSnapshot(state) {
-                if (!socket || !socket.connected || !state || !state.connected || !state.agent.attached) return;
+                if (!shouldSendAgentViewportSnapshot(state)) return;
                 const snapshot = buildAgentViewportSnapshot(state);
                 if (!snapshot) return;
                 socket.emit('agent_viewport_snapshot', snapshot);
@@ -1017,12 +1123,70 @@
             }
 
             function scheduleAgentViewportSnapshot(state = getActiveTerminalState()) {
-                if (!socket || !socket.connected || !state || !state.connected || !state.agent.attached) return;
+                if (!shouldSendAgentViewportSnapshot(state)) return;
                 if (state.agent.snapshotTimer) clearTimeout(state.agent.snapshotTimer);
                 state.agent.snapshotTimer = setTimeout(() => {
                     state.agent.snapshotTimer = null;
                     sendAgentViewportSnapshot(state);
                 }, AGENT_VIEWPORT_SNAPSHOT_DEBOUNCE_MS);
+            }
+
+            function emitAgentPrivacyState(state, privacyState) {
+                if (!socket || !socket.connected || !state || !state.connected) return;
+                socket.emit('agent_privacy_set', {
+                    terminal_id: state.id,
+                    privacy_state: privacyState
+                });
+                if (state.agent) state.agent.privacyState = privacyState;
+                updateAgentDebugState('agent.privacy_set_requested', state);
+            }
+
+            function sendTerminalInput(state, data) {
+                if (!socket || !socket.connected || !state || !state.connected || typeof data !== 'string' || !data) return;
+                socket.emit('ssh_input', { terminal_id: state.id, data });
+            }
+
+            function countPasteLines(text) {
+                if (!text) return 0;
+                return text.split(/\r\n|\r|\n/).length;
+            }
+
+            function requiresPasteReview(text) {
+                if (typeof text !== 'string' || !text) return false;
+                const carriageReturns = (text.match(/\r/g) || []).length;
+                return text.length >= PASTE_REVIEW_MIN_LENGTH || text.includes('\n') || carriageReturns > 1;
+            }
+
+            function endPasteReview(restoreState) {
+                const review = pendingPasteReview;
+                pendingPasteReview = null;
+                pasteReviewModal.classList.remove('open');
+                pasteReviewPreview.value = '';
+                pasteReviewMeta.innerText = '';
+                if (!restoreState || !review) return;
+                const state = terminals.get(review.terminalId);
+                if (state && state.connected && state.agent && !state.agent.paused && state.agent.mode !== AGENT_MODE_PAUSED) {
+                    emitAgentPrivacyState(state, 'normal');
+                }
+            }
+
+            function startPasteReview(state, text) {
+                if (!state || !state.connected || typeof text !== 'string' || !text) return false;
+                if (!requiresPasteReview(text)) {
+                    sendTerminalInput(state, text);
+                    return true;
+                }
+                if (pendingPasteReview) endPasteReview(true);
+                pendingPasteReview = {
+                    terminalId: state.id,
+                    text
+                };
+                emitAgentPrivacyState(state, 'paste_review');
+                pasteReviewMeta.innerText = `${state.label || state.id} · ${text.length} bytes · ${countPasteLines(text)} lines`;
+                pasteReviewPreview.value = text;
+                pasteReviewModal.classList.add('open');
+                pasteReviewApproveBtn.focus();
+                return true;
             }
 
             function applyAgentViewportSnapshotResult(data) {
@@ -1053,6 +1217,14 @@
                 state.agent.paused = !!data.paused || mode === AGENT_MODE_PAUSED;
                 state.agent.controlEpoch = Number.isFinite(Number(data.control_epoch)) ? Number(data.control_epoch) : null;
                 state.agent.runId = typeof data.run_id === 'string' ? data.run_id : null;
+                state.agent.sessionId = getAgentStringField(data, 'session_id') || state.agent.sessionId;
+                state.agent.viewerId = getAgentStringField(data, 'viewer_id') || state.agent.viewerId;
+                state.agent.agentBindingId = getAgentStringField(data, 'agent_binding_id') || state.agent.agentBindingId;
+                const modeVersion = getAgentNumberField(data, 'mode_version');
+                const privacyVersion = getAgentNumberField(data, 'privacy_version');
+                if (modeVersion !== null) state.agent.modeVersion = modeVersion;
+                if (Object.prototype.hasOwnProperty.call(data, 'privacy_state')) state.agent.privacyState = getAgentStringField(data, 'privacy_state');
+                if (privacyVersion !== null) state.agent.privacyVersion = privacyVersion;
                 state.agent.pendingActions = normalizeAgentCount(data.pending_actions);
                 if (state.agent.pendingActions === 0) {
                     state.agent.openActionIds.clear();
@@ -1075,6 +1247,11 @@
                 const status = typeof data.status === 'string' ? data.status : '';
                 state.agent.lastAction = {
                     actionId,
+                    proposalId: getAgentStringField(data, 'proposal_id'),
+                    sessionId: getAgentStringField(data, 'session_id'),
+                    viewerId: getAgentStringField(data, 'viewer_id'),
+                    agentBindingId: getAgentStringField(data, 'agent_binding_id'),
+                    modeVersion: getAgentNumberField(data, 'mode_version'),
                     actionType: typeof data.action_type === 'string' ? data.action_type : null,
                     status,
                     errorCode: typeof data.error_code === 'string' ? data.error_code : null,
@@ -1403,6 +1580,7 @@
             function notifyTerminalResize(state = getActiveTerminalState()) {
                 if (!state || state.id !== activeTerminalId) return;
                 updateTerminalSizeStatus();
+                syncAgentTerminalMirrorSize(state);
                 if (!socket || !socket.connected || !state.connected) return;
                 if (state.lastNotifiedSize.cols === state.term.cols && state.lastNotifiedSize.rows === state.term.rows) return;
                 state.lastNotifiedSize = { cols: state.term.cols, rows: state.term.rows };
@@ -1532,6 +1710,9 @@
                     termName: '{{ ssh_term }}',
                     lastNotifiedSize: { cols: null, rows: null },
                     lastOutputSeq: 0,
+                    agentTerminalMirror: createAgentTerminalMirror(),
+                    agentTerminalMirrorSize: { cols: 80, rows: 24 },
+                    agentTerminalMirrorOutputSeq: 0,
                     needsReplay: true,
                     agent: createAgentClientState(),
                     container,
@@ -1543,12 +1724,12 @@
                 };
                 terminals.set(terminalId, state);
                 configureWebLinks(state);
+                syncAgentTerminalMirrorSize(state);
                 term.onResize(() => notifyTerminalResize(state));
-                term.onScroll(() => scheduleAgentViewportSnapshot(state));
                 term.onData(data => {
-                    if (socket && socket.connected && state.connected) {
-                        socket.emit('ssh_input', { terminal_id: state.id, data });
-                    }
+                    if (!socket || !socket.connected || !state.connected) return;
+                    if (requiresPasteReview(data)) startPasteReview(state, data);
+                    else sendTerminalInput(state, data);
                 });
                 tabEl.addEventListener('click', () => switchTerminal(terminalId));
                 closeBtn.addEventListener('click', (event) => {
@@ -1563,6 +1744,7 @@
             function removeTerminalState(state) {
                 detachAgentFromTerminal(state);
                 if (state.webLinksAddon) state.webLinksAddon.dispose();
+                if (state.agentTerminalMirror) state.agentTerminalMirror.dispose();
                 state.term.dispose();
                 state.container.remove();
                 state.tabEl.remove();
@@ -1920,17 +2102,33 @@
             function getPendingAgentAction(state) {
                 return state && state.agent ? state.agent.pendingAction : null;
             }
+            function buildAgentActionDecisionPayload(state, action) {
+                const payload = {
+                    terminal_id: state.id,
+                    action_id: action.action_id
+                };
+                [
+                    ['proposal_id', action.proposal_id],
+                    ['session_id', action.session_id ?? state.agent.sessionId],
+                    ['viewer_id', action.viewer_id ?? state.agent.viewerId],
+                    ['agent_binding_id', action.agent_binding_id ?? state.agent.agentBindingId],
+                    ['mode_version', action.mode_version ?? state.agent.modeVersion]
+                ].forEach(([key, value]) => {
+                    if (value !== null && value !== undefined && value !== '') payload[key] = value;
+                });
+                return payload;
+            }
             agentApproveBtn.onclick = () => {
                 const state = getActiveTerminalState();
                 const action = getPendingAgentAction(state);
                 if (!canUseAgentPanel(state) || !action || !action.action_id) return;
-                socket.emit('agent_action_approve', { terminal_id: state.id, action_id: action.action_id });
+                socket.emit('agent_action_approve', buildAgentActionDecisionPayload(state, action));
             };
             agentRejectBtn.onclick = () => {
                 const state = getActiveTerminalState();
                 const action = getPendingAgentAction(state);
                 if (!canUseAgentPanel(state) || !action || !action.action_id) return;
-                socket.emit('agent_action_reject', { terminal_id: state.id, action_id: action.action_id });
+                socket.emit('agent_action_reject', buildAgentActionDecisionPayload(state, action));
             };
             agentActionPauseBtn.onclick = () => {
                 agentPauseBtn.click();
@@ -1982,6 +2180,11 @@
                 hideActionPrompt();
                 resetConnectButton();
             };
+            function writeTerminalOutput(state, data, outputSeq) {
+                if (typeof data !== 'string') return;
+                const scheduleAfterMirror = writeAgentTerminalMirror(state, data, outputSeq, () => scheduleAgentViewportSnapshot(state));
+                state.term.write(data, scheduleAfterMirror ? undefined : () => scheduleAgentViewportSnapshot(state));
+            }
             socket.on('ssh_output', data => {
                 if (!data || typeof data !== 'object') return;
                 const messageType = data.message_type;
@@ -2076,7 +2279,7 @@
                             state.lastOutputSeq = data.output_seq;
                         }
                         if (typeof data.data === 'string') {
-                            state.term.write(data.data, () => scheduleAgentViewportSnapshot(state));
+                            writeTerminalOutput(state, data.data, data.output_seq);
                         }
                         break;
                     default:
@@ -2173,6 +2376,30 @@
 
             openOption.onclick = () => openUrlInOverlay(openOption.dataset.url);
             searchOption.onclick = () => openExternalUrl(`https://www.google.com/search?q=${encodeURIComponent(searchOption.dataset.query)}`);
+            pasteReviewApproveBtn.onclick = () => {
+                const review = pendingPasteReview;
+                if (!review) return;
+                const state = terminals.get(review.terminalId);
+                if (state && state.connected) sendTerminalInput(state, review.text);
+                endPasteReview(true);
+            };
+            pasteReviewCancelBtn.onclick = () => {
+                endPasteReview(true);
+            };
+            pasteReviewModal.addEventListener('keydown', event => {
+                if (event.key === 'Escape') {
+                    event.preventDefault();
+                    endPasteReview(true);
+                }
+            });
+            terminalContainer.addEventListener('paste', event => {
+                const state = getActiveTerminalState();
+                if (!state || !state.connected) return;
+                const text = event.clipboardData ? event.clipboardData.getData('text/plain') : '';
+                if (!text) return;
+                event.preventDefault();
+                startPasteReview(state, text);
+            });
             document.getElementById('paste-option').onclick = async (e) => {
                 e.stopPropagation(); contextMenu.style.display = 'none';
                 let text = "";
@@ -2180,7 +2407,7 @@
                     if (navigator.clipboard && navigator.clipboard.readText) text = await navigator.clipboard.readText();
                     else text = prompt("Paste text here:");
                     const state = getActiveTerminalState();
-                    if (text && socket.connected && state && state.connected) socket.emit('ssh_input', { terminal_id: state.id, data: text });
+                    if (text && socket.connected && state && state.connected) startPasteReview(state, text);
                 } catch(err) {}
             };
             document.getElementById('close-overlay').onclick = (e) => {
@@ -2273,6 +2500,7 @@
                     state.term.options.fontFamily = prefs.fontFace;
                     state.term.options.fontSize = prefs.fontSize;
                     state.term.options.theme = SCHEMES[prefs.colorScheme] || SCHEMES.ibm5153;
+                    if (state.agentTerminalMirror) state.agentTerminalMirror.options.theme = SCHEMES[prefs.colorScheme] || SCHEMES.ibm5153;
                 });
                 fitAndNotifyResize(); applyDetectUrls(); settingsModal.classList.remove('open');
             };

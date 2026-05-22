@@ -139,6 +139,7 @@ AGENT_EVENT_STATE = 'agent_state'
 AGENT_EVENT_ACTION_REQUEST = 'agent_action_request'
 AGENT_EVENT_ACTION_RESULT = 'agent_action_result'
 AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT = 'agent_viewport_snapshot_result'
+AGENT_EVENT_PRIVACY_SET = 'agent_privacy_set'
 AGENT_ERROR_NOT_ATTACHED = 'agent_not_attached'
 AGENT_ERROR_PAUSED = 'agent_paused'
 AGENT_ERROR_STALE_EPOCH = 'agent_stale_epoch'
@@ -156,6 +157,9 @@ AGENT_ERROR_ACTION_NOT_PENDING = 'agent_action_not_pending'
 AGENT_ERROR_SNAPSHOT_INVALID = 'agent_snapshot_invalid'
 AGENT_ERROR_SNAPSHOT_TOO_LARGE = 'agent_snapshot_too_large'
 AGENT_ERROR_SNAPSHOT_STALE = 'agent_snapshot_stale'
+AGENT_ERROR_PRIVACY_BLOCKED = 'agent_privacy_blocked'
+AGENT_ERROR_STALE_MODE_VERSION = 'agent_stale_mode_version'
+AGENT_ERROR_STALE_PROPOSAL = 'agent_stale_proposal'
 AGENT_REASON_DETACHED = 'agent_detached'
 AGENT_REASON_DISABLED = 'agent_disabled'
 AGENT_REASON_MODE_CHANGED = 'agent_mode_changed'
@@ -165,6 +169,7 @@ AGENT_REASON_INVALIDATED = 'agent_invalidated'
 AGENT_MAX_INPUT_BYTES = 4096
 AGENT_INPUT_CHUNK_BYTES = 256
 AGENT_AUDIT_EVENTS = 200
+AGENT_AUDIT_TTL_SECONDS = 12 * 60 * 60
 AGENT_PREVIEW_CHARS = 160
 AGENT_TRANSCRIPT_TTL_SECONDS = 30 * 60
 AGENT_TRANSCRIPT_MAX_EVENTS = 400
@@ -173,9 +178,39 @@ AGENT_TRANSCRIPT_MAX_EVENT_BYTES = 4096
 AGENT_USER_INPUT_METADATA_TTL_SECONDS = 30 * 60
 AGENT_USER_INPUT_METADATA_MAX_EVENTS = 400
 AGENT_USER_INPUT_PREVIEW_CHARS = 80
+AGENT_PRIVACY_NORMAL = 'normal'
+AGENT_PRIVACY_PRIVATE_INPUT = 'private_input'
+AGENT_PRIVACY_PASTE_REVIEW = 'paste_review'
+AGENT_PRIVACY_PAUSED = 'paused'
+AGENT_PRIVACY_STATES = {
+    AGENT_PRIVACY_NORMAL,
+    AGENT_PRIVACY_PRIVATE_INPUT,
+    AGENT_PRIVACY_PASTE_REVIEW,
+    AGENT_PRIVACY_PAUSED,
+}
+AGENT_CONTEXT_BLOCKING_PRIVACY_STATES = {
+    AGENT_PRIVACY_PRIVATE_INPUT,
+    AGENT_PRIVACY_PASTE_REVIEW,
+    AGENT_PRIVACY_PAUSED,
+}
 AGENT_VIEWPORT_SNAPSHOT_TTL_SECONDS = 5 * 60
 AGENT_VIEWPORT_SNAPSHOT_MAX_BYTES = 120000
 AGENT_VIEWPORT_SNAPSHOT_MAX_LINE_BYTES = 4096
+AGENT_AUDIT_VIEWER_ATTACH = 'viewer_attach'
+AGENT_AUDIT_VIEWER_DETACH = 'viewer_detach'
+AGENT_AUDIT_MODE_SET = 'mode_set'
+AGENT_AUDIT_PAUSE = 'pause'
+AGENT_AUDIT_RESUME = 'resume'
+AGENT_AUDIT_PRIVACY_SET = 'privacy_set'
+AGENT_AUDIT_PROVIDER_RUN_REQUEST = 'provider_run_request'
+AGENT_AUDIT_CONTEXT_BUILT = 'context_built'
+AGENT_AUDIT_PROPOSAL_CREATED = 'proposal_created'
+AGENT_AUDIT_ACTION_APPROVE = 'action_approve'
+AGENT_AUDIT_ACTION_REJECT = 'action_reject'
+AGENT_AUDIT_ACTION_RESULT = 'action_result'
+AGENT_AUDIT_DIRECT_WRITE = 'direct_write'
+AGENT_AUDIT_TERMINAL_CLEANUP = 'terminal_cleanup'
+AGENT_AUDIT_ERROR = 'error'
 ANSI_OSC_PATTERN = re.compile(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)')
 ANSI_CSI_PATTERN = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
 ANSI_ESCAPE_PATTERN = re.compile(r'\x1b[@-Z\\-_]')
@@ -2058,8 +2093,66 @@ socket_browser_identities = {}
 socket_browser_authorized = {}
 socket_browser_auth_challenges = {}
 agent_states = {}
+agent_session_ids = {}
+agent_viewer_ids = {}
 agent_lock = threading.RLock()
 session_cleanup_task_started = False
+
+class AgentAuditStore:
+    def __init__(self):
+        self._entries = {}
+
+    def append(self, session_token, terminal_id, event_type, **fields):
+        if not session_token or not terminal_id or not isinstance(event_type, str):
+            return None
+        key = (session_token, terminal_id)
+        now = time.time()
+        entry = {
+            'event_type': event_type,
+            'recorded_at': now,
+            'session_id': get_agent_session_id(session_token),
+            'terminal_id': terminal_id,
+        }
+        for field, value in fields.items():
+            if value is not None:
+                entry[field] = value
+        bucket = self._entries.setdefault(key, deque(maxlen=AGENT_AUDIT_EVENTS))
+        bucket.append(entry)
+        self._trim_bucket(key, now)
+        return dict(entry)
+
+    def get_recent(self, session_token, terminal_id):
+        key = (session_token, terminal_id)
+        bucket = self._entries.get(key)
+        if not bucket:
+            return []
+        self._trim_bucket(key, time.time())
+        return [dict(entry) for entry in bucket]
+
+    def discard(self, session_token, terminal_id=None):
+        if terminal_id is not None:
+            self._entries.pop((session_token, terminal_id), None)
+            return
+        for key in [
+            key for key in self._entries
+            if key[0] == session_token
+        ]:
+            self._entries.pop(key, None)
+
+    def clear(self):
+        self._entries.clear()
+
+    def _trim_bucket(self, key, now):
+        bucket = self._entries.get(key)
+        if not bucket:
+            return
+        expires_before = now - AGENT_AUDIT_TTL_SECONDS
+        while bucket and bucket[0].get('recorded_at', 0) < expires_before:
+            bucket.popleft()
+        if not bucket:
+            self._entries.pop(key, None)
+
+agent_audit_store = AgentAuditStore()
 
 class AgentTranscriptStore:
     def __init__(self):
@@ -2134,10 +2227,10 @@ class AgentUserInputMetadataStore:
     def __init__(self):
         self._entries = {}
 
-    def append_input(self, session_token, terminal_id, data):
+    def append_input(self, session_token, terminal_id, data, privacy_state=AGENT_PRIVACY_NORMAL):
         if not session_token or not terminal_id or not isinstance(data, str):
             return
-        metadata = summarize_agent_user_input_metadata(terminal_id, data)
+        metadata = summarize_agent_user_input_metadata(terminal_id, data, privacy_state)
         key = (session_token, terminal_id)
         now = time.time()
         metadata['timestamp'] = now
@@ -2174,16 +2267,21 @@ class AgentUserInputMetadataStore:
         ):
             bucket.popleft()
 
-def summarize_agent_user_input_metadata(terminal_id, value):
+def summarize_agent_user_input_metadata(terminal_id, value, privacy_state=AGENT_PRIVACY_NORMAL):
     encoded = value.encode('utf-8', errors='ignore')
     contains_control_chars = has_agent_control_chars(value)
+    if privacy_state not in AGENT_PRIVACY_STATES:
+        privacy_state = AGENT_PRIVACY_NORMAL
     metadata = {
         'terminal_id': terminal_id,
         'byte_length': len(encoded),
         'line_count': value.count('\n') + (1 if value and not value.endswith('\n') else 0),
         'contains_control_chars': contains_control_chars,
+        'privacy_state': privacy_state,
     }
-    if value and not contains_control_chars:
+    if privacy_state != AGENT_PRIVACY_NORMAL:
+        metadata['redacted'] = True
+    elif value and not contains_control_chars:
         preview = escape_agent_preview(value)
         if len(preview) > AGENT_USER_INPUT_PREVIEW_CHARS:
             preview = preview[:AGENT_USER_INPUT_PREVIEW_CHARS] + '...'
@@ -2298,24 +2396,62 @@ def validate_agent_viewport_snapshot_payload(data):
 
 agent_viewport_snapshot_store = AgentViewportSnapshotStore()
 
+def get_agent_session_id(session_token):
+    if not session_token:
+        return None
+    session_id = agent_session_ids.get(session_token)
+    if not session_id:
+        session_id = 'ags_' + secrets.token_urlsafe(12)
+        agent_session_ids[session_token] = session_id
+    return session_id
+
+def get_agent_viewer_id(sid):
+    if not sid:
+        return None
+    viewer_id = agent_viewer_ids.get(sid)
+    if not viewer_id:
+        viewer_id = 'agv_' + secrets.token_urlsafe(12)
+        agent_viewer_ids[sid] = viewer_id
+    return viewer_id
+
+def normalize_agent_privacy_state(value):
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower().replace('-', '_')
+    if normalized in AGENT_PRIVACY_STATES:
+        return normalized
+    return None
+
 class AgentControlState:
     def __init__(self, session_token, terminal_id, sid):
         self.session_token = session_token
+        self.session_id = get_agent_session_id(session_token)
         self.terminal_id = terminal_id
         self.sid = sid
+        self.viewer_id = get_agent_viewer_id(sid)
+        self.agent_binding_id = 'agb_' + secrets.token_urlsafe(12)
         self.mode = AGENT_MODE_DISABLED
         self.paused = False
         self.control_epoch = 0
+        self.mode_version = 0
+        self.privacy_state = AGENT_PRIVACY_NORMAL
+        self.privacy_version = 0
         self.run_id = None
         self.pending_actions = {}
         self.audit_ring = deque(maxlen=AGENT_AUDIT_EVENTS)
 
     def public_state(self):
         return {
+            'session_id': self.session_id,
+            'viewer_id': self.viewer_id,
+            'agent_binding_id': self.agent_binding_id,
             'terminal_id': self.terminal_id,
             'mode': self.mode,
             'paused': self.paused,
             'control_epoch': self.control_epoch,
+            'mode_version': self.mode_version,
+            'privacy_state': self.privacy_state,
+            'privacy_version': self.privacy_version,
             'run_id': self.run_id,
             'pending_actions': len([
                 action for action in self.pending_actions.values()
@@ -2343,7 +2479,20 @@ class MockAgentBridge:
 
 AGENT_BRIDGE = MockAgentBridge()
 
-class BrowserViewportMirrorAdapter:
+class AgentTerminalMirror:
+    source = None
+    provisional = True
+
+    def get_active_screen(self, session_token, terminal_id, sid):
+        raise NotImplementedError
+
+    def metadata(self):
+        return {
+            'source': self.source,
+            'provisional': self.provisional,
+        }
+
+class BrowserViewportMirrorAdapter(AgentTerminalMirror):
     source = 'browser_viewport_snapshot'
     provisional = True
 
@@ -2375,13 +2524,28 @@ def build_agent_context(session_token, terminal_id, sid):
         'session_token': session_token,
         'terminal_id': terminal_id,
     }
+    session_metadata = dict(session_metadata)
+    session_metadata.pop('session_token', None)
+    session_metadata['session_id'] = get_agent_session_id(session_token)
+    state = get_agent_state(session_token, terminal_id, sid)
+    privacy_state = state.privacy_state if state else AGENT_PRIVACY_NORMAL
+    context_allowed = privacy_state not in AGENT_CONTEXT_BLOCKING_PRIVACY_STATES
     return {
+        'session_id': get_agent_session_id(session_token),
+        'viewer_id': get_agent_viewer_id(sid),
+        'agent_binding_id': state.agent_binding_id if state else None,
         'terminal_id': terminal_id,
+        'privacy': {
+            'state': privacy_state,
+            'version': state.privacy_version if state else 0,
+            'context_allowed': context_allowed,
+        },
+        'terminal_mirror': AGENT_TERMINAL_MIRROR.metadata(),
         'terminal_session': session_metadata,
-        'active_screen': AGENT_TERMINAL_MIRROR.get_active_screen(session_token, terminal_id, sid),
-        'viewport_snapshot': agent_viewport_snapshot_store.get_latest(session_token, terminal_id, sid),
-        'transcript_events': agent_transcript_store.get_recent(session_token, terminal_id),
-        'human_input_metadata': agent_user_input_metadata_store.get_recent(session_token, terminal_id),
+        'active_screen': AGENT_TERMINAL_MIRROR.get_active_screen(session_token, terminal_id, sid) if context_allowed else None,
+        'viewport_snapshot': agent_viewport_snapshot_store.get_latest(session_token, terminal_id, sid) if context_allowed else None,
+        'transcript_events': agent_transcript_store.get_recent(session_token, terminal_id) if context_allowed else [],
+        'human_input_metadata': agent_user_input_metadata_store.get_recent(session_token, terminal_id) if context_allowed else [],
     }
 
 def agent_state_key(session_token, terminal_id, sid):
@@ -2391,6 +2555,20 @@ def normalize_agent_mode(value):
     if not isinstance(value, str):
         return None
     return AGENT_CLIENT_MODE_MAP.get(value.strip().lower().replace('-', '_'))
+
+def bump_agent_mode_version(state):
+    state.control_epoch += 1
+    state.mode_version = state.control_epoch
+
+def set_agent_privacy_state(state, privacy_state):
+    if privacy_state == state.privacy_state:
+        return False
+    state.privacy_state = privacy_state
+    state.privacy_version += 1
+    return True
+
+def is_agent_context_allowed(state):
+    return state and state.privacy_state not in AGENT_CONTEXT_BLOCKING_PRIVACY_STATES
 
 def get_agent_state(session_token, terminal_id, sid):
     return agent_states.get(agent_state_key(session_token, terminal_id, sid))
@@ -2429,32 +2607,52 @@ def build_agent_action(state, proposal, requires_approval):
     if len(action_data.encode('utf-8', errors='ignore')) > AGENT_MAX_INPUT_BYTES:
         return None, AGENT_ERROR_ACTION_TOO_LARGE
     action_id = secrets.token_urlsafe(12)
+    proposal_id = 'agp_' + secrets.token_urlsafe(12)
     run_id = state.run_id or secrets.token_urlsafe(12)
     action = {
         'action_id': action_id,
+        'proposal_id': proposal_id,
         'action_type': AGENT_ACTION_TERMINAL_INPUT,
+        'session_id': state.session_id,
+        'viewer_id': state.viewer_id,
+        'agent_binding_id': state.agent_binding_id,
         'terminal_id': state.terminal_id,
         'data': action_data,
         'requires_approval': requires_approval,
         'status': AGENT_STATUS_PENDING_APPROVAL if requires_approval else AGENT_STATUS_DIRECT_PENDING,
         'created_at': time.time(),
         'control_epoch': state.control_epoch,
+        'mode_version': state.mode_version,
+        'privacy_state': state.privacy_state,
+        'privacy_version': state.privacy_version,
         'run_id': run_id,
     }
     action.update(summarize_agent_input(action_data))
     state.pending_actions[action_id] = action
     state.run_id = run_id
-    record_agent_audit(state, action, action['status'])
+    record_agent_audit_event(
+        state,
+        AGENT_AUDIT_PROPOSAL_CREATED,
+        action=action,
+        status=action['status'],
+    )
     return action, None
 
 def public_agent_action(action):
     return {
         'action_id': action.get('action_id'),
+        'proposal_id': action.get('proposal_id'),
         'action_type': action.get('action_type'),
+        'session_id': action.get('session_id'),
+        'viewer_id': action.get('viewer_id'),
+        'agent_binding_id': action.get('agent_binding_id'),
         'terminal_id': action.get('terminal_id'),
         'requires_approval': action.get('requires_approval'),
         'status': action.get('status'),
         'control_epoch': action.get('control_epoch'),
+        'mode_version': action.get('mode_version'),
+        'privacy_state': action.get('privacy_state'),
+        'privacy_version': action.get('privacy_version'),
         'run_id': action.get('run_id'),
         'byte_length': action.get('byte_length'),
         'line_count': action.get('line_count'),
@@ -2463,16 +2661,66 @@ def public_agent_action(action):
         'escaped_preview': action.get('escaped_preview'),
     }
 
+def build_agent_audit_identity(state):
+    if not state:
+        return {}
+    return {
+        'viewer_id': state.viewer_id,
+        'agent_binding_id': state.agent_binding_id,
+        'mode': state.mode,
+        'control_epoch': state.control_epoch,
+        'mode_version': state.mode_version,
+        'privacy_state': state.privacy_state,
+        'privacy_version': state.privacy_version,
+        'run_id': state.run_id,
+    }
+
+def record_agent_audit_event(state, event_type, action=None, **fields):
+    if not state:
+        return None
+    event_fields = build_agent_audit_identity(state)
+    event_fields.update(fields)
+    if action:
+        action_metadata = public_agent_action(action)
+        action_metadata.pop('escaped_preview', None)
+        event_fields['action'] = action_metadata
+    entry = agent_audit_store.append(
+        state.session_token,
+        state.terminal_id,
+        event_type,
+        **event_fields,
+    )
+    if entry:
+        state.audit_ring.append(entry)
+    return entry
+
+def summarize_agent_context_for_audit(context):
+    if not isinstance(context, dict):
+        return None
+    active_screen = context.get('active_screen') or {}
+    terminal_session = context.get('terminal_session') or {}
+    privacy = context.get('privacy') or {}
+    return {
+        'privacy_state': privacy.get('state'),
+        'context_allowed': privacy.get('context_allowed'),
+        'terminal_output_seq': terminal_session.get('output_seq'),
+        'active_screen_source': active_screen.get('source'),
+        'active_screen_provisional': active_screen.get('provisional'),
+        'active_screen_output_seq': active_screen.get('output_seq'),
+        'active_screen_rows': active_screen.get('rows'),
+        'active_screen_cols': active_screen.get('cols'),
+        'transcript_event_count': len(context.get('transcript_events') or []),
+        'human_input_event_count': len(context.get('human_input_metadata') or []),
+    }
+
 def record_agent_audit(state, action, status, error_code=None):
-    entry = public_agent_action(action)
-    entry.update({
-        'status': status,
-        'recorded_at': time.time(),
-        'sid': state.sid,
-    })
-    if error_code:
-        entry['error_code'] = error_code
-    state.audit_ring.append(entry)
+    record_agent_audit_event(
+        state,
+        AGENT_AUDIT_ACTION_RESULT,
+        action=action,
+        status=status,
+        error_code=error_code,
+    )
 
 def emit_agent_state(sid, state):
     socketio.emit(AGENT_EVENT_STATE, state.public_state(), room=sid)
@@ -2516,7 +2764,8 @@ def invalidate_agent_states(session_token, terminal_id=None, sid=None, reason=AG
             state = agent_states.pop(key)
             state.paused = True
             state.mode = AGENT_MODE_DISABLED
-            state.control_epoch += 1
+            set_agent_privacy_state(state, AGENT_PRIVACY_PAUSED)
+            bump_agent_mode_version(state)
             invalidated.extend((state.sid, action) for action in cancel_agent_pending_actions(state, reason))
         return invalidated
 
@@ -2534,19 +2783,36 @@ def iter_text_chunks(value, max_chunk_bytes):
     if chunk:
         yield ''.join(chunk)
 
-def check_agent_write_allowed(session_token, terminal_id, sid, action_id, control_epoch):
+def check_agent_write_allowed(session_token, terminal_id, sid, action_id, control_epoch,
+                              mode_version=None, proposal_id=None):
     state = get_agent_state(session_token, terminal_id, sid)
     if not state:
         return None, None, AGENT_ERROR_NOT_ATTACHED
     if state.paused or state.mode == AGENT_MODE_PAUSED:
         return state, None, AGENT_ERROR_PAUSED
+    if state.privacy_state in AGENT_CONTEXT_BLOCKING_PRIVACY_STATES:
+        return state, None, AGENT_ERROR_PRIVACY_BLOCKED
     if state.control_epoch != control_epoch:
         return state, None, AGENT_ERROR_STALE_EPOCH
+    if mode_version is not None and state.mode_version != mode_version:
+        return state, None, AGENT_ERROR_STALE_MODE_VERSION
     action = state.pending_actions.get(action_id)
     if not action:
         return state, None, AGENT_ERROR_ACTION_NOT_FOUND
+    if proposal_id is not None and action.get('proposal_id') != proposal_id:
+        return state, action, AGENT_ERROR_STALE_PROPOSAL
+    if action.get('session_id') != state.session_id:
+        return state, action, AGENT_ERROR_STALE_PROPOSAL
+    if action.get('viewer_id') != state.viewer_id:
+        return state, action, AGENT_ERROR_STALE_PROPOSAL
+    if action.get('agent_binding_id') != state.agent_binding_id:
+        return state, action, AGENT_ERROR_STALE_PROPOSAL
     if action.get('control_epoch') != control_epoch:
         return state, action, AGENT_ERROR_STALE_ACTION
+    if action.get('mode_version') != state.mode_version:
+        return state, action, AGENT_ERROR_STALE_MODE_VERSION
+    if action.get('privacy_version') != state.privacy_version:
+        return state, action, AGENT_ERROR_PRIVACY_BLOCKED
     if action.get('status') not in AGENT_STATUS_WRITABLE:
         return state, action, AGENT_ERROR_ACTION_NOT_WRITABLE
     if action.get('terminal_id') != terminal_id:
@@ -2556,7 +2822,8 @@ def check_agent_write_allowed(session_token, terminal_id, sid, action_id, contro
         return state, action, AGENT_ERROR_TERMINAL_NOT_FOUND
     return state, action, None
 
-def write_agent_terminal_input(session_token, terminal_id, sid, action_id, control_epoch):
+def write_agent_terminal_input(session_token, terminal_id, sid, action_id, control_epoch,
+                               mode_version=None, proposal_id=None):
     bytes_written = 0
     while True:
         with agent_lock:
@@ -2566,6 +2833,8 @@ def write_agent_terminal_input(session_token, terminal_id, sid, action_id, contr
                 sid,
                 action_id,
                 control_epoch,
+                mode_version=mode_version,
+                proposal_id=proposal_id,
             )
             if error_code:
                 if state and action:
@@ -2590,6 +2859,8 @@ def write_agent_terminal_input(session_token, terminal_id, sid, action_id, contr
                 sid,
                 action_id,
                 control_epoch,
+                mode_version=mode_version,
+                proposal_id=proposal_id,
             )
             if error_code:
                 if state and action:
@@ -2605,6 +2876,13 @@ def write_agent_terminal_input(session_token, terminal_id, sid, action_id, contr
         if state:
             action = state.pending_actions.get(action_id)
             if action:
+                if not action.get('requires_approval'):
+                    record_agent_audit_event(
+                        state,
+                        AGENT_AUDIT_DIRECT_WRITE,
+                        action=action,
+                        bytes_written=bytes_written,
+                    )
                 action['status'] = AGENT_STATUS_COMPLETED
                 record_agent_audit(state, action, AGENT_STATUS_COMPLETED)
     return True, {'bytes_written': bytes_written}
@@ -2623,6 +2901,7 @@ def is_valid_session(session_token):
     if time.time() > expires_at:
         active_sessions.pop(session_token, None)
         close_all_terminal_bridges(session_token)
+        agent_session_ids.pop(session_token, None)
         return False
     return True
 
@@ -2643,6 +2922,8 @@ def cleanup_expired_sessions():
                 socket_browser_identities.pop(sid, None)
                 socket_browser_authorized.pop(sid, None)
                 socket_browser_auth_challenges.pop(sid, None)
+                agent_viewer_ids.pop(sid, None)
+        agent_session_ids.pop(session_token, None)
 
 def session_cleanup_loop():
     while True:
@@ -2701,6 +2982,24 @@ def close_bridge(bridge):
     bridge.closing = True
     bridge.close()
 
+def record_agent_terminal_cleanup(session_token, terminal_id, reason):
+    if not session_token or not terminal_id:
+        return
+    states = [
+        state for state in agent_states.values()
+        if state.session_token == session_token and state.terminal_id == terminal_id
+    ]
+    if states:
+        for state in states:
+            record_agent_audit_event(state, AGENT_AUDIT_TERMINAL_CLEANUP, reason=reason)
+        return
+    agent_audit_store.append(
+        session_token,
+        terminal_id,
+        AGENT_AUDIT_TERMINAL_CLEANUP,
+        reason=reason,
+    )
+
 def get_bridge(session_token, terminal_id):
     return bridges.get(session_token, {}).get(terminal_id)
 
@@ -2720,6 +3019,7 @@ def unregister_terminal_bridge(session_token, terminal_id, bridge):
     if get_bridge(session_token, terminal_id) is not bridge:
         return
     pop_bridge(session_token, terminal_id)
+    record_agent_terminal_cleanup(session_token, terminal_id, AGENT_REASON_TERMINAL_CLOSED)
     invalidate_agent_states(session_token, terminal_id=terminal_id, reason=AGENT_REASON_TERMINAL_CLOSED)
     agent_transcript_store.discard(session_token, terminal_id)
     agent_user_input_metadata_store.discard(session_token, terminal_id)
@@ -2727,6 +3027,7 @@ def unregister_terminal_bridge(session_token, terminal_id, bridge):
     close_bridge(bridge)
 
 def close_terminal_bridge(session_token, terminal_id):
+    record_agent_terminal_cleanup(session_token, terminal_id, AGENT_REASON_TERMINAL_CLOSED)
     invalidate_agent_states(session_token, terminal_id=terminal_id, reason=AGENT_REASON_TERMINAL_CLOSED)
     agent_transcript_store.discard(session_token, terminal_id)
     agent_user_input_metadata_store.discard(session_token, terminal_id)
@@ -2734,6 +3035,8 @@ def close_terminal_bridge(session_token, terminal_id):
     close_bridge(pop_bridge(session_token, terminal_id))
 
 def close_all_terminal_bridges(session_token):
+    for terminal_id in list(bridges.get(session_token, {})):
+        record_agent_terminal_cleanup(session_token, terminal_id, AGENT_REASON_TERMINAL_CLOSED)
     invalidate_agent_states(session_token, reason=AGENT_REASON_TERMINAL_CLOSED)
     agent_transcript_store.discard(session_token)
     agent_user_input_metadata_store.discard(session_token)
@@ -2989,6 +3292,8 @@ def on_connect():
     socket_session_tokens[request.sid] = session_token
     socket_client_ips[request.sid] = client_ip
     socket_browser_authorized[request.sid] = False
+    get_agent_session_id(session_token)
+    get_agent_viewer_id(request.sid)
     print(f"[+] Client connected: {request.sid} from {client_ip}")
 
 @socketio.on('register_browser_identity')
@@ -3186,6 +3491,8 @@ def on_agent_attach(data):
         state = get_or_create_agent_state(session_token, terminal_id, request.sid)
         if state.mode == AGENT_MODE_DISABLED:
             state.mode = AGENT_MODE_OBSERVE
+            bump_agent_mode_version(state)
+        record_agent_audit_event(state, AGENT_AUDIT_VIEWER_ATTACH)
         emit_agent_state(request.sid, state)
 
 @socketio.on(AGENT_EVENT_DETACH)
@@ -3194,6 +3501,10 @@ def on_agent_detach(data):
     terminal_id = validate_terminal_id_payload(data)
     if not session_token or not terminal_id:
         return
+    with agent_lock:
+        state = get_agent_state(session_token, terminal_id, request.sid)
+        if state:
+            record_agent_audit_event(state, AGENT_AUDIT_VIEWER_DETACH, reason=AGENT_REASON_DETACHED)
     cancelled = invalidate_agent_states(
         session_token,
         terminal_id=terminal_id,
@@ -3205,10 +3516,16 @@ def on_agent_detach(data):
     socketio.emit(
         AGENT_EVENT_STATE,
         {
+            'session_id': get_agent_session_id(session_token),
+            'viewer_id': get_agent_viewer_id(request.sid),
+            'agent_binding_id': None,
             'terminal_id': terminal_id,
             'mode': AGENT_MODE_DISABLED,
             'paused': False,
             'control_epoch': None,
+            'mode_version': None,
+            'privacy_state': AGENT_PRIVACY_NORMAL,
+            'privacy_version': None,
             'run_id': None,
             'pending_actions': 0,
         },
@@ -3236,14 +3553,21 @@ def on_agent_mode_set(data):
             emit_agent_error(request.sid, terminal_id, AGENT_ERROR_PAUSED)
             emit_agent_state(request.sid, state)
             return
+        previous_mode = state.mode
         if mode != state.mode:
-            state.control_epoch += 1
+            bump_agent_mode_version(state)
             state.run_id = None
             cancel_reason = AGENT_REASON_DISABLED if mode == AGENT_MODE_DISABLED else AGENT_REASON_MODE_CHANGED
             for action in cancel_agent_pending_actions(state, cancel_reason):
                 emit_agent_action_result(request.sid, action, cancel_reason, error_code=cancel_reason)
         state.mode = mode
         state.paused = False
+        record_agent_audit_event(
+            state,
+            AGENT_AUDIT_MODE_SET,
+            previous_mode=previous_mode,
+            requested_mode=mode,
+        )
         emit_agent_state(request.sid, state)
 
 @socketio.on(AGENT_EVENT_PAUSE)
@@ -3259,11 +3583,13 @@ def on_agent_pause(data):
         state = get_or_create_agent_state(session_token, terminal_id, request.sid)
         state.paused = True
         state.mode = AGENT_MODE_PAUSED
-        state.control_epoch += 1
+        set_agent_privacy_state(state, AGENT_PRIVACY_PAUSED)
+        bump_agent_mode_version(state)
         state.run_id = None
         cancelled = cancel_agent_pending_actions(state, AGENT_ERROR_PAUSED)
         for action in cancelled:
             emit_agent_action_result(request.sid, action, AGENT_ERROR_PAUSED, error_code=AGENT_ERROR_PAUSED)
+        record_agent_audit_event(state, AGENT_AUDIT_PAUSE, cancelled_actions=len(cancelled))
         emit_agent_state(request.sid, state)
 
 @socketio.on(AGENT_EVENT_RESUME)
@@ -3287,8 +3613,52 @@ def on_agent_resume(data):
         state = get_or_create_agent_state(session_token, terminal_id, request.sid)
         state.paused = False
         state.mode = target_mode
-        state.control_epoch += 1
+        set_agent_privacy_state(state, AGENT_PRIVACY_NORMAL)
+        bump_agent_mode_version(state)
         state.run_id = secrets.token_urlsafe(12)
+        record_agent_audit_event(state, AGENT_AUDIT_RESUME, requested_mode=target_mode)
+        emit_agent_state(request.sid, state)
+
+@socketio.on(AGENT_EVENT_PRIVACY_SET)
+def on_agent_privacy_set(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    if not session_token or not terminal_id or not isinstance(data, dict):
+        return
+    privacy_state = normalize_agent_privacy_state(data.get('privacy_state'))
+    if not privacy_state:
+        emit_agent_error(request.sid, terminal_id, AGENT_ERROR_ACTION_INVALID_DATA)
+        return
+    if not get_bridge(session_token, terminal_id):
+        emit_agent_error(request.sid, terminal_id, AGENT_ERROR_TERMINAL_NOT_FOUND)
+        return
+    with agent_lock:
+        state = get_or_create_agent_state(session_token, terminal_id, request.sid)
+        cancelled = []
+        previous_privacy_state = state.privacy_state
+        if privacy_state == AGENT_PRIVACY_PAUSED:
+            state.paused = True
+            state.mode = AGENT_MODE_PAUSED
+            set_agent_privacy_state(state, AGENT_PRIVACY_PAUSED)
+            bump_agent_mode_version(state)
+            state.run_id = None
+            cancelled = cancel_agent_pending_actions(state, AGENT_ERROR_PRIVACY_BLOCKED)
+        elif state.paused or state.mode == AGENT_MODE_PAUSED:
+            emit_agent_error(request.sid, terminal_id, AGENT_ERROR_PAUSED)
+            emit_agent_state(request.sid, state)
+            return
+        elif set_agent_privacy_state(state, privacy_state):
+            state.run_id = None
+            cancelled = cancel_agent_pending_actions(state, AGENT_ERROR_PRIVACY_BLOCKED)
+        for action in cancelled:
+            emit_agent_action_result(request.sid, action, AGENT_ERROR_PRIVACY_BLOCKED, error_code=AGENT_ERROR_PRIVACY_BLOCKED)
+        record_agent_audit_event(
+            state,
+            AGENT_AUDIT_PRIVACY_SET,
+            previous_privacy_state=previous_privacy_state,
+            requested_privacy_state=privacy_state,
+            cancelled_actions=len(cancelled),
+        )
         emit_agent_state(request.sid, state)
 
 def process_agent_terminal_input_proposal(data, proposal_builder):
@@ -3308,6 +3678,10 @@ def process_agent_terminal_input_proposal(data, proposal_builder):
             return
         if state.paused or state.mode == AGENT_MODE_PAUSED:
             emit_agent_error(request.sid, terminal_id, AGENT_ERROR_PAUSED)
+            emit_agent_state(request.sid, state)
+            return
+        if not is_agent_context_allowed(state):
+            emit_agent_error(request.sid, terminal_id, AGENT_ERROR_PRIVACY_BLOCKED)
             emit_agent_state(request.sid, state)
             return
         if state.mode not in {AGENT_MODE_APPROVAL_PENDING, AGENT_MODE_DIRECT_ACTIVE}:
@@ -3335,6 +3709,8 @@ def process_agent_terminal_input_proposal(data, proposal_builder):
         request.sid,
         action['action_id'],
         action['control_epoch'],
+        mode_version=action['mode_version'],
+        proposal_id=action['proposal_id'],
     )
     status = AGENT_STATUS_COMPLETED if ok else AGENT_STATUS_FAILED
     if result.get('error_code'):
@@ -3358,14 +3734,19 @@ def on_agent_suggestion_request(data):
 
 @socketio.on(AGENT_EVENT_PROVIDER_RUN_REQUEST)
 def on_agent_provider_run_request(data):
+    def build_provider_proposal(session_token, terminal_id, sid, state, _payload):
+        record_agent_audit_event(state, AGENT_AUDIT_PROVIDER_RUN_REQUEST)
+        context = build_agent_context(session_token, terminal_id, sid)
+        record_agent_audit_event(
+            state,
+            AGENT_AUDIT_CONTEXT_BUILT,
+            context=summarize_agent_context_for_audit(context),
+        )
+        return AGENT_BRIDGE.create_provider_run_action(state, context)
+
     process_agent_terminal_input_proposal(
         data,
-        lambda session_token, terminal_id, sid, state, _payload: (
-            AGENT_BRIDGE.create_provider_run_action(
-                state,
-                build_agent_context(session_token, terminal_id, sid),
-            )
-        ),
+        build_provider_proposal,
     )
 
 @socketio.on(AGENT_EVENT_ACTION_APPROVE)
@@ -3375,7 +3756,8 @@ def on_agent_action_approve(data):
     if not session_token or not terminal_id or not isinstance(data, dict):
         return
     action_id = data.get('action_id')
-    if not isinstance(action_id, str):
+    proposal_id = data.get('proposal_id')
+    if not isinstance(action_id, str) and not isinstance(proposal_id, str):
         emit_agent_error(request.sid, terminal_id, AGENT_ERROR_ACTION_NOT_FOUND)
         return
     with agent_lock:
@@ -3383,13 +3765,46 @@ def on_agent_action_approve(data):
         if not state:
             emit_agent_error(request.sid, terminal_id, AGENT_ERROR_NOT_ATTACHED)
             return
-        action = state.pending_actions.get(action_id)
+        if data.get('session_id') is not None and data.get('session_id') != state.session_id:
+            emit_agent_error(request.sid, terminal_id, AGENT_ERROR_STALE_PROPOSAL)
+            emit_agent_state(request.sid, state)
+            return
+        if data.get('viewer_id') is not None and data.get('viewer_id') != state.viewer_id:
+            emit_agent_error(request.sid, terminal_id, AGENT_ERROR_STALE_PROPOSAL)
+            emit_agent_state(request.sid, state)
+            return
+        if data.get('agent_binding_id') is not None and data.get('agent_binding_id') != state.agent_binding_id:
+            emit_agent_error(request.sid, terminal_id, AGENT_ERROR_STALE_PROPOSAL)
+            emit_agent_state(request.sid, state)
+            return
+        if data.get('mode_version') is not None and data.get('mode_version') != state.mode_version:
+            emit_agent_error(request.sid, terminal_id, AGENT_ERROR_STALE_MODE_VERSION)
+            emit_agent_state(request.sid, state)
+            return
+        action = state.pending_actions.get(action_id) if isinstance(action_id, str) else None
+        if not action and isinstance(proposal_id, str):
+            action = next(
+                (
+                    candidate for candidate in state.pending_actions.values()
+                    if candidate.get('proposal_id') == proposal_id
+                ),
+                None,
+            )
         if not action:
             emit_agent_error(request.sid, terminal_id, AGENT_ERROR_ACTION_NOT_FOUND)
             emit_agent_state(request.sid, state)
             return
+        if isinstance(proposal_id, str) and action.get('proposal_id') != proposal_id:
+            emit_agent_action_result(request.sid, action, AGENT_ERROR_STALE_PROPOSAL, error_code=AGENT_ERROR_STALE_PROPOSAL)
+            emit_agent_state(request.sid, state)
+            return
+        action_id = action['action_id']
         if state.paused or state.mode == AGENT_MODE_PAUSED:
             emit_agent_action_result(request.sid, action, AGENT_ERROR_PAUSED, error_code=AGENT_ERROR_PAUSED)
+            emit_agent_state(request.sid, state)
+            return
+        if not is_agent_context_allowed(state):
+            emit_agent_action_result(request.sid, action, AGENT_ERROR_PRIVACY_BLOCKED, error_code=AGENT_ERROR_PRIVACY_BLOCKED)
             emit_agent_state(request.sid, state)
             return
         if action.get('status') != AGENT_STATUS_PENDING_APPROVAL:
@@ -3401,6 +3816,7 @@ def on_agent_action_approve(data):
             emit_agent_state(request.sid, state)
             return
         action['status'] = AGENT_STATUS_APPROVED
+        record_agent_audit_event(state, AGENT_AUDIT_ACTION_APPROVE, action=action)
         record_agent_audit(state, action, AGENT_STATUS_APPROVED)
         control_epoch = state.control_epoch
 
@@ -3410,6 +3826,8 @@ def on_agent_action_approve(data):
         request.sid,
         action_id,
         control_epoch,
+        mode_version=action['mode_version'],
+        proposal_id=action['proposal_id'],
     )
     status = AGENT_STATUS_COMPLETED if ok else AGENT_STATUS_FAILED
     if result.get('error_code'):
@@ -3427,7 +3845,8 @@ def on_agent_action_reject(data):
     if not session_token or not terminal_id or not isinstance(data, dict):
         return
     action_id = data.get('action_id')
-    if not isinstance(action_id, str):
+    proposal_id = data.get('proposal_id')
+    if not isinstance(action_id, str) and not isinstance(proposal_id, str):
         emit_agent_error(request.sid, terminal_id, AGENT_ERROR_ACTION_NOT_FOUND)
         return
     with agent_lock:
@@ -3435,12 +3854,25 @@ def on_agent_action_reject(data):
         if not state:
             emit_agent_error(request.sid, terminal_id, AGENT_ERROR_NOT_ATTACHED)
             return
-        action = state.pending_actions.get(action_id)
+        action = state.pending_actions.get(action_id) if isinstance(action_id, str) else None
+        if not action and isinstance(proposal_id, str):
+            action = next(
+                (
+                    candidate for candidate in state.pending_actions.values()
+                    if candidate.get('proposal_id') == proposal_id
+                ),
+                None,
+            )
         if not action:
             emit_agent_error(request.sid, terminal_id, AGENT_ERROR_ACTION_NOT_FOUND)
             emit_agent_state(request.sid, state)
             return
+        if isinstance(proposal_id, str) and action.get('proposal_id') != proposal_id:
+            emit_agent_action_result(request.sid, action, AGENT_ERROR_STALE_PROPOSAL, error_code=AGENT_ERROR_STALE_PROPOSAL)
+            emit_agent_state(request.sid, state)
+            return
         action['status'] = AGENT_STATUS_REJECTED
+        record_agent_audit_event(state, AGENT_AUDIT_ACTION_REJECT, action=action)
         record_agent_audit(state, action, AGENT_STATUS_REJECTED)
         emit_agent_action_result(request.sid, action, AGENT_STATUS_REJECTED)
         emit_agent_state(request.sid, state)
@@ -3648,7 +4080,10 @@ def on_ssh_input(data):
     if len(ssh_input.encode('utf-8', errors='ignore')) > MAX_SSH_INPUT_BYTES:
         return
     log_terminal_input(request.sid, terminal_id, ssh_input)
-    agent_user_input_metadata_store.append_input(session_token, terminal_id, ssh_input)
+    with agent_lock:
+        state = get_agent_state(session_token, terminal_id, request.sid)
+        privacy_state = state.privacy_state if state else AGENT_PRIVACY_NORMAL
+    agent_user_input_metadata_store.append_input(session_token, terminal_id, ssh_input, privacy_state=privacy_state)
     bridge.write(ssh_input)
 
 @socketio.on('resize')
@@ -3702,7 +4137,14 @@ def on_disconnect(reason=None):
     socket_browser_identities.pop(request.sid, None)
     socket_browser_authorized.pop(request.sid, None)
     socket_browser_auth_challenges.pop(request.sid, None)
+    agent_viewer_ids.pop(request.sid, None)
     if session_token:
+        with agent_lock:
+            for state in [
+                state for state in agent_states.values()
+                if state.session_token == session_token and state.sid == request.sid
+            ]:
+                record_agent_audit_event(state, AGENT_AUDIT_VIEWER_DETACH, reason=AGENT_REASON_DISCONNECTED)
         invalidate_agent_states(session_token, sid=request.sid, reason=AGENT_REASON_DISCONNECTED)
         agent_viewport_snapshot_store.discard(session_token, sid=request.sid)
         detach_session_bridges(session_token, request.sid)

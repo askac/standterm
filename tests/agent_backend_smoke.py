@@ -32,6 +32,9 @@ def reset_state():
     webssh.socket_browser_authorized.clear()
     webssh.socket_browser_auth_challenges.clear()
     webssh.agent_states.clear()
+    webssh.agent_session_ids.clear()
+    webssh.agent_viewer_ids.clear()
+    webssh.agent_audit_store.clear()
     webssh.agent_transcript_store.clear()
     webssh.agent_user_input_metadata_store.clear()
     webssh.agent_viewport_snapshot_store.clear()
@@ -145,17 +148,29 @@ def test_approval_and_direct_writes_use_gate():
         'terminal_id': webssh.TERMINAL_ID_MAIN,
         'mode': 'approval',
     })
+    state = last_payload(client, webssh.AGENT_EVENT_STATE)
     client.emit(webssh.AGENT_EVENT_SUGGESTION_REQUEST, {
         'terminal_id': webssh.TERMINAL_ID_MAIN,
         'mock_input': 'approved\n',
     })
     action = last_payload(client, webssh.AGENT_EVENT_ACTION_REQUEST)
     assert action['requires_approval'] is True
+    assert action['session_id'].startswith('ags_')
+    assert action['viewer_id'].startswith('agv_')
+    assert action['agent_binding_id'].startswith('agb_')
+    assert action['proposal_id'].startswith('agp_')
+    assert action['mode_version'] == state['mode_version']
+    assert action['privacy_state'] == webssh.AGENT_PRIVACY_NORMAL
     assert action['escaped_preview'] == 'approved\\n'
 
     client.emit(webssh.AGENT_EVENT_ACTION_APPROVE, {
         'terminal_id': webssh.TERMINAL_ID_MAIN,
         'action_id': action['action_id'],
+        'proposal_id': action['proposal_id'],
+        'session_id': action['session_id'],
+        'viewer_id': action['viewer_id'],
+        'agent_binding_id': action['agent_binding_id'],
+        'mode_version': action['mode_version'],
     })
     assert ''.join(bridge.writes) == 'approved\n'
     assert last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)['status'] == webssh.AGENT_STATUS_COMPLETED
@@ -215,6 +230,61 @@ def test_provider_run_uses_agent_gate():
     client.disconnect()
 
 
+def test_agent_audit_records_typed_events_without_raw_action_data():
+    client = make_client()
+    session_token = current_session_token()
+    add_dummy_bridge(session_token)
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot())
+    assert last_payload(client, webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)['status'] == 'accepted'
+
+    client.emit(webssh.AGENT_EVENT_MODE_SET, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'mode': 'approval',
+    })
+    client.emit(webssh.AGENT_EVENT_PROVIDER_RUN_REQUEST, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    })
+    action = last_payload(client, webssh.AGENT_EVENT_ACTION_REQUEST)
+    client.emit(webssh.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'action_id': action['action_id'],
+        'proposal_id': action['proposal_id'],
+        'mode_version': action['mode_version'],
+    })
+    assert last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)['status'] == webssh.AGENT_STATUS_COMPLETED
+
+    audit_events = webssh.agent_audit_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    event_types = [event['event_type'] for event in audit_events]
+    assert webssh.AGENT_AUDIT_VIEWER_ATTACH in event_types
+    assert webssh.AGENT_AUDIT_MODE_SET in event_types
+    assert webssh.AGENT_AUDIT_PROVIDER_RUN_REQUEST in event_types
+    assert webssh.AGENT_AUDIT_CONTEXT_BUILT in event_types
+    assert webssh.AGENT_AUDIT_PROPOSAL_CREATED in event_types
+    assert webssh.AGENT_AUDIT_ACTION_APPROVE in event_types
+    assert webssh.AGENT_AUDIT_ACTION_RESULT in event_types
+
+    context_events = [
+        event for event in audit_events
+        if event['event_type'] == webssh.AGENT_AUDIT_CONTEXT_BUILT
+    ]
+    assert context_events[-1]['context']['active_screen_source'] == 'browser_viewport_snapshot'
+    assert context_events[-1]['context']['context_allowed'] is True
+
+    action_events = [
+        event for event in audit_events
+        if event.get('action')
+    ]
+    assert action_events
+    for event in action_events:
+        assert 'data' not in event['action']
+        assert 'escaped_preview' not in event['action']
+
+    client.disconnect()
+
+
 def test_wrong_sid_cannot_approve_action():
     client_a = make_client()
     session_token = current_session_token()
@@ -241,6 +311,40 @@ def test_wrong_sid_cannot_approve_action():
 
     client_a.disconnect()
     client_b.disconnect()
+
+
+def test_stale_mode_version_cannot_approve_action():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(webssh.AGENT_EVENT_MODE_SET, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'mode': 'approval',
+    })
+    client.emit(webssh.AGENT_EVENT_SUGGESTION_REQUEST, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'mock_input': 'versioned\n',
+    })
+    action = last_payload(client, webssh.AGENT_EVENT_ACTION_REQUEST)
+
+    client.emit(webssh.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'proposal_id': action['proposal_id'],
+        'mode_version': action['mode_version'] + 1,
+    })
+    assert bridge.writes == []
+    assert last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)['error_code'] == webssh.AGENT_ERROR_STALE_MODE_VERSION
+
+    client.emit(webssh.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'proposal_id': action['proposal_id'],
+        'mode_version': action['mode_version'],
+    })
+    assert bridge.writes == ['versioned\n']
+
+    client.disconnect()
 
 
 def test_mode_change_cancels_pending_action():
@@ -297,6 +401,8 @@ def test_terminal_close_invalidates_pending_action():
     )
 
     client.emit('close_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    audit_events = webssh.agent_audit_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    assert any(event['event_type'] == webssh.AGENT_AUDIT_TERMINAL_CLEANUP for event in audit_events)
     client.emit(webssh.AGENT_EVENT_ACTION_APPROVE, {
         'terminal_id': webssh.TERMINAL_ID_MAIN,
         'action_id': action['action_id'],
@@ -443,6 +549,48 @@ def test_agent_input_metadata_bounds_and_sanitized_preview():
     assert metadata[0]['escaped_preview'] == 'cmd-1\\n'
 
 
+def test_privacy_state_blocks_agent_context_and_redacts_input_metadata():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(webssh.AGENT_EVENT_MODE_SET, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'mode': 'approval',
+    })
+    client.emit(webssh.AGENT_EVENT_PRIVACY_SET, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'privacy_state': webssh.AGENT_PRIVACY_PRIVATE_INPUT,
+    })
+    state = last_payload(client, webssh.AGENT_EVENT_STATE)
+    assert state['privacy_state'] == webssh.AGENT_PRIVACY_PRIVATE_INPUT
+    assert state['privacy_version'] == 1
+
+    client.emit('ssh_input', {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'data': 'secret value\n',
+    })
+    metadata = webssh.agent_user_input_metadata_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    assert bridge.writes == ['secret value\n']
+    assert metadata[-1]['privacy_state'] == webssh.AGENT_PRIVACY_PRIVATE_INPUT
+    assert metadata[-1]['redacted'] is True
+    assert 'escaped_preview' not in metadata[-1]
+
+    context = webssh.build_agent_context(session_token, webssh.TERMINAL_ID_MAIN, current_sid_for_session(session_token))
+    assert context['privacy']['context_allowed'] is False
+    assert context['human_input_metadata'] == []
+
+    client.emit(webssh.AGENT_EVENT_PROVIDER_RUN_REQUEST, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    })
+    result = last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)
+    assert result['error_code'] == webssh.AGENT_ERROR_PRIVACY_BLOCKED
+    assert bridge.writes == ['secret value\n']
+
+    client.disconnect()
+
+
 def test_ssh_input_does_not_record_invalid_or_oversized_metadata():
     client = make_client()
     session_token = current_session_token()
@@ -514,6 +662,10 @@ def test_viewport_snapshot_accepts_attached_sid():
     assert stored['output_seq'] == 1
 
     context = webssh.build_agent_context(session_token, webssh.TERMINAL_ID_MAIN, sid)
+    assert context['session_id'].startswith('ags_')
+    assert context['viewer_id'].startswith('agv_')
+    assert context['terminal_mirror']['source'] == 'browser_viewport_snapshot'
+    assert 'session_token' not in context['terminal_session']
     assert context['terminal_session']['output_seq'] == 1
     assert context['active_screen']['source'] == 'browser_viewport_snapshot'
     assert context['active_screen']['provisional'] is True
@@ -590,7 +742,9 @@ def main():
         test_pause_blocks_pending_approval,
         test_approval_and_direct_writes_use_gate,
         test_provider_run_uses_agent_gate,
+        test_agent_audit_records_typed_events_without_raw_action_data,
         test_wrong_sid_cannot_approve_action,
+        test_stale_mode_version_cannot_approve_action,
         test_mode_change_cancels_pending_action,
         test_terminal_close_invalidates_pending_action,
         test_disconnect_invalidates_agent_state,
@@ -599,6 +753,7 @@ def main():
         test_terminal_bridge_tracks_shared_session_metadata,
         test_ssh_input_records_agent_metadata_after_validation,
         test_agent_input_metadata_bounds_and_sanitized_preview,
+        test_privacy_state_blocks_agent_context_and_redacts_input_metadata,
         test_ssh_input_does_not_record_invalid_or_oversized_metadata,
         test_viewport_snapshot_is_sid_scoped,
         test_viewport_snapshot_accepts_attached_sid,
