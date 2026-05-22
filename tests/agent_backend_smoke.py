@@ -22,6 +22,45 @@ class DummyBridge(webssh.TerminalBridge):
         self.closing = True
 
 
+class RecordingProvider(webssh.AgentProvider):
+    name = 'recording'
+    version = 'test-1'
+
+    def __init__(self, terminal_input='provider\n'):
+        self.terminal_input = terminal_input
+        self.contexts = []
+        self.runs = []
+
+    def create_terminal_input_proposal(self, context, run):
+        self.contexts.append(context)
+        self.runs.append(run)
+        return {
+            'action_type': webssh.AGENT_ACTION_TERMINAL_INPUT,
+            'terminal_id': context['terminal_id'],
+            'data': self.terminal_input,
+        }
+
+
+class FailingProvider(webssh.AgentProvider):
+    name = 'failing'
+    version = 'test-1'
+
+    def create_terminal_input_proposal(self, context, run):
+        raise webssh.AgentProviderError(webssh.AGENT_ERROR_PROVIDER_FAILED, 'provider failed')
+
+
+class InvalidProvider(webssh.AgentProvider):
+    name = 'invalid'
+    version = 'test-1'
+
+    def create_terminal_input_proposal(self, context, run):
+        return {
+            'action_type': 'unsupported',
+            'terminal_id': context['terminal_id'],
+            'data': 'invalid\n',
+        }
+
+
 def reset_state():
     webssh.bridges.clear()
     webssh.pending_localhost_key_setups.clear()
@@ -38,6 +77,7 @@ def reset_state():
     webssh.agent_transcript_store.clear()
     webssh.agent_user_input_metadata_store.clear()
     webssh.agent_viewport_snapshot_store.clear()
+    webssh.set_agent_provider_for_test(webssh.MockAgentProvider())
 
 
 def make_client():
@@ -228,6 +268,156 @@ def test_provider_run_uses_agent_gate():
     })
     assert ''.join(bridge.writes) == 'pwd\npwd\n'
     assert last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)['status'] == webssh.AGENT_STATUS_COMPLETED
+
+    client.disconnect()
+
+
+def test_provider_adapter_receives_context_and_exposes_run_metadata():
+    provider = RecordingProvider('adapter\n')
+    webssh.set_agent_provider_for_test(provider)
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot(fill='screen'))
+    assert last_payload(client, webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)['status'] == 'accepted'
+
+    client.emit(webssh.AGENT_EVENT_MODE_SET, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'mode': 'approval',
+    })
+    client.emit(webssh.AGENT_EVENT_PROVIDER_RUN_REQUEST, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    })
+    action = last_payload(client, webssh.AGENT_EVENT_ACTION_REQUEST)
+
+    assert provider.contexts
+    assert provider.contexts[-1]['terminal_id'] == webssh.TERMINAL_ID_MAIN
+    assert provider.contexts[-1]['active_screen']['lines'] == ['screen', 'screen']
+    assert provider.contexts[-1]['terminal_session']['session_id'] == action['session_id']
+    assert provider.runs[-1]['run_id'].startswith('agr_')
+    assert action['run_id'] == provider.runs[-1]['run_id']
+    assert action['provider_name'] == 'recording'
+    assert action['provider_version'] == 'test-1'
+    assert action['provider_status'] == webssh.AGENT_RUN_STATUS_COMPLETED
+    assert action['escaped_preview'] == 'adapter\\n'
+    assert bridge.writes == []
+
+    client.emit(webssh.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'action_id': action['action_id'],
+        'proposal_id': action['proposal_id'],
+        'session_id': action['session_id'],
+        'viewer_id': action['viewer_id'],
+        'agent_binding_id': action['agent_binding_id'],
+        'mode_version': action['mode_version'],
+        'privacy_version': action['privacy_version'],
+    })
+    assert ''.join(bridge.writes) == 'adapter\n'
+
+    audit_events = webssh.agent_audit_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    event_types = [event['event_type'] for event in audit_events]
+    assert webssh.AGENT_AUDIT_PROVIDER_RUN_REQUEST in event_types
+    assert webssh.AGENT_AUDIT_PROVIDER_RUN_START in event_types
+    assert webssh.AGENT_AUDIT_PROVIDER_RUN_COMPLETE in event_types
+    provider_events = [
+        event for event in audit_events
+        if event['event_type'] in {
+            webssh.AGENT_AUDIT_PROVIDER_RUN_REQUEST,
+            webssh.AGENT_AUDIT_PROVIDER_RUN_START,
+            webssh.AGENT_AUDIT_PROVIDER_RUN_COMPLETE,
+        }
+    ]
+    assert provider_events
+    for event in provider_events:
+        assert event['provider_name'] == 'recording'
+        assert event['provider_version'] == 'test-1'
+        assert event['run_id'] == action['run_id']
+
+    client.disconnect()
+
+
+def test_static_env_provider_is_explicit_adapter():
+    provider = webssh.StaticEnvAgentProvider('static-adapter\n')
+    webssh.set_agent_provider_for_test(provider)
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(webssh.AGENT_EVENT_MODE_SET, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'mode': 'direct',
+    })
+    client.emit(webssh.AGENT_EVENT_PROVIDER_RUN_REQUEST, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    })
+
+    assert ''.join(bridge.writes) == 'static-adapter\n'
+    result = last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)
+    assert result['status'] == webssh.AGENT_STATUS_COMPLETED
+    assert result['provider_name'] == 'static_env'
+
+    client.disconnect()
+
+
+def test_provider_failure_is_typed_and_does_not_write():
+    webssh.set_agent_provider_for_test(FailingProvider())
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(webssh.AGENT_EVENT_MODE_SET, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'mode': 'approval',
+    })
+    client.emit(webssh.AGENT_EVENT_PROVIDER_RUN_REQUEST, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    })
+
+    assert bridge.writes == []
+    result = last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)
+    assert result['error_code'] == webssh.AGENT_ERROR_PROVIDER_FAILED
+    assert received_events(client, webssh.AGENT_EVENT_ACTION_REQUEST) == []
+    audit_events = webssh.agent_audit_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    errors = [
+        event for event in audit_events
+        if event['event_type'] == webssh.AGENT_AUDIT_PROVIDER_RUN_ERROR
+    ]
+    assert errors
+    assert errors[-1]['error_code'] == webssh.AGENT_ERROR_PROVIDER_FAILED
+    assert errors[-1]['status'] == webssh.AGENT_RUN_STATUS_FAILED
+
+    client.disconnect()
+
+
+def test_invalid_provider_proposal_is_rejected_before_action_creation():
+    webssh.set_agent_provider_for_test(InvalidProvider())
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(webssh.AGENT_EVENT_MODE_SET, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'mode': 'approval',
+    })
+    client.emit(webssh.AGENT_EVENT_PROVIDER_RUN_REQUEST, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    })
+
+    assert bridge.writes == []
+    result = last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)
+    assert result['error_code'] == webssh.AGENT_ERROR_PROVIDER_INVALID_PROPOSAL
+    assert received_events(client, webssh.AGENT_EVENT_ACTION_REQUEST) == []
+    audit_events = webssh.agent_audit_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    assert not [
+        event for event in audit_events
+        if event['event_type'] == webssh.AGENT_AUDIT_PROPOSAL_CREATED
+    ]
 
     client.disconnect()
 
@@ -778,6 +968,10 @@ def main():
         test_pause_blocks_pending_approval,
         test_approval_and_direct_writes_use_gate,
         test_provider_run_uses_agent_gate,
+        test_provider_adapter_receives_context_and_exposes_run_metadata,
+        test_static_env_provider_is_explicit_adapter,
+        test_provider_failure_is_typed_and_does_not_write,
+        test_invalid_provider_proposal_is_rejected_before_action_creation,
         test_agent_audit_records_typed_events_without_raw_action_data,
         test_wrong_sid_cannot_approve_action,
         test_stale_mode_version_cannot_approve_action,

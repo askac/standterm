@@ -160,12 +160,22 @@ AGENT_ERROR_SNAPSHOT_STALE = 'agent_snapshot_stale'
 AGENT_ERROR_PRIVACY_BLOCKED = 'agent_privacy_blocked'
 AGENT_ERROR_STALE_MODE_VERSION = 'agent_stale_mode_version'
 AGENT_ERROR_STALE_PROPOSAL = 'agent_stale_proposal'
+AGENT_ERROR_PROVIDER_UNAVAILABLE = 'agent_provider_unavailable'
+AGENT_ERROR_PROVIDER_FAILED = 'agent_provider_failed'
+AGENT_ERROR_PROVIDER_TIMEOUT = 'agent_provider_timeout'
+AGENT_ERROR_PROVIDER_INVALID_PROPOSAL = 'agent_provider_invalid_proposal'
 AGENT_REASON_DETACHED = 'agent_detached'
 AGENT_REASON_DISABLED = 'agent_disabled'
 AGENT_REASON_MODE_CHANGED = 'agent_mode_changed'
 AGENT_REASON_DISCONNECTED = 'agent_disconnected'
 AGENT_REASON_TERMINAL_CLOSED = 'terminal_closed'
 AGENT_REASON_INVALIDATED = 'agent_invalidated'
+AGENT_RUN_STATUS_REQUESTED = 'requested'
+AGENT_RUN_STATUS_RUNNING = 'running'
+AGENT_RUN_STATUS_COMPLETED = 'completed'
+AGENT_RUN_STATUS_FAILED = 'failed'
+AGENT_RUN_STATUS_TIMEOUT = 'timeout'
+AGENT_RUN_STATUS_CANCELLED = 'cancelled'
 AGENT_MAX_INPUT_BYTES = 4096
 AGENT_INPUT_CHUNK_BYTES = 256
 AGENT_AUDIT_EVENTS = 200
@@ -203,6 +213,9 @@ AGENT_AUDIT_PAUSE = 'pause'
 AGENT_AUDIT_RESUME = 'resume'
 AGENT_AUDIT_PRIVACY_SET = 'privacy_set'
 AGENT_AUDIT_PROVIDER_RUN_REQUEST = 'provider_run_request'
+AGENT_AUDIT_PROVIDER_RUN_START = 'provider_run_start'
+AGENT_AUDIT_PROVIDER_RUN_COMPLETE = 'provider_run_complete'
+AGENT_AUDIT_PROVIDER_RUN_ERROR = 'provider_run_error'
 AGENT_AUDIT_CONTEXT_BUILT = 'context_built'
 AGENT_AUDIT_PROPOSAL_CREATED = 'proposal_created'
 AGENT_AUDIT_ACTION_APPROVE = 'action_approve'
@@ -2470,14 +2483,85 @@ class MockAgentBridge:
             'data': data,
         }
 
-    def create_provider_run_action(self, state, context):
+
+AGENT_BRIDGE = MockAgentBridge()
+
+class AgentProviderError(Exception):
+    def __init__(self, error_code=AGENT_ERROR_PROVIDER_FAILED, message=None):
+        super().__init__(message or error_code)
+        self.error_code = error_code
+        self.message = message
+
+class AgentProvider:
+    name = 'base'
+    version = '0'
+
+    def create_terminal_input_proposal(self, context, run):
+        raise NotImplementedError
+
+    def metadata(self):
+        return {
+            'provider_name': self.name,
+            'provider_version': self.version,
+        }
+
+class MockAgentProvider(AgentProvider):
+    name = 'mock'
+    version = '1'
+
+    def create_terminal_input_proposal(self, context, run):
         return {
             'action_type': AGENT_ACTION_TERMINAL_INPUT,
-            'terminal_id': state.terminal_id,
+            'terminal_id': context.get('terminal_id'),
             'data': 'pwd\n',
         }
 
-AGENT_BRIDGE = MockAgentBridge()
+class StaticEnvAgentProvider(AgentProvider):
+    name = 'static_env'
+    version = '1'
+
+    def __init__(self, terminal_input):
+        self.terminal_input = terminal_input
+
+    def create_terminal_input_proposal(self, context, run):
+        return {
+            'action_type': AGENT_ACTION_TERMINAL_INPUT,
+            'terminal_id': context.get('terminal_id'),
+            'data': self.terminal_input,
+        }
+
+class UnavailableAgentProvider(AgentProvider):
+    version = '0'
+
+    def __init__(self, name, reason):
+        self.name = name or 'unavailable'
+        self.reason = reason
+
+    def create_terminal_input_proposal(self, context, run):
+        raise AgentProviderError(AGENT_ERROR_PROVIDER_UNAVAILABLE, self.reason)
+
+def build_agent_provider_from_env():
+    provider_name = os.getenv('WEBSSH_AGENT_PROVIDER', 'mock').strip().lower() or 'mock'
+    if provider_name == 'mock':
+        return MockAgentProvider()
+    if provider_name == 'static_env':
+        terminal_input = os.getenv('WEBSSH_AGENT_STATIC_INPUT')
+        if not isinstance(terminal_input, str) or terminal_input == '':
+            return UnavailableAgentProvider(provider_name, 'WEBSSH_AGENT_STATIC_INPUT is required')
+        return StaticEnvAgentProvider(terminal_input)
+    return UnavailableAgentProvider(provider_name, 'Unknown Agent provider')
+
+AGENT_PROVIDER = build_agent_provider_from_env()
+
+def set_agent_provider_for_test(provider):
+    global AGENT_PROVIDER
+    AGENT_PROVIDER = provider
+
+def get_agent_provider():
+    return AGENT_PROVIDER
+
+def create_agent_run_id():
+    return 'agr_' + secrets.token_urlsafe(12)
 
 class AgentTerminalMirror:
     source = None
@@ -2608,7 +2692,11 @@ def build_agent_action(state, proposal, requires_approval):
         return None, AGENT_ERROR_ACTION_TOO_LARGE
     action_id = secrets.token_urlsafe(12)
     proposal_id = 'agp_' + secrets.token_urlsafe(12)
-    run_id = state.run_id or secrets.token_urlsafe(12)
+    run_id = proposal.get('run_id') if isinstance(proposal.get('run_id'), str) else None
+    run_id = run_id or state.run_id or create_agent_run_id()
+    provider_name = proposal.get('provider_name') if isinstance(proposal.get('provider_name'), str) else None
+    provider_version = proposal.get('provider_version') if isinstance(proposal.get('provider_version'), str) else None
+    provider_status = proposal.get('provider_status') if isinstance(proposal.get('provider_status'), str) else None
     action = {
         'action_id': action_id,
         'proposal_id': proposal_id,
@@ -2627,6 +2715,12 @@ def build_agent_action(state, proposal, requires_approval):
         'privacy_version': state.privacy_version,
         'run_id': run_id,
     }
+    if provider_name:
+        action['provider_name'] = provider_name
+    if provider_version:
+        action['provider_version'] = provider_version
+    if provider_status:
+        action['provider_status'] = provider_status
     action.update(summarize_agent_input(action_data))
     state.pending_actions[action_id] = action
     state.run_id = run_id
@@ -2654,6 +2748,9 @@ def public_agent_action(action):
         'privacy_state': action.get('privacy_state'),
         'privacy_version': action.get('privacy_version'),
         'run_id': action.get('run_id'),
+        'provider_name': action.get('provider_name'),
+        'provider_version': action.get('provider_version'),
+        'provider_status': action.get('provider_status'),
         'byte_length': action.get('byte_length'),
         'line_count': action.get('line_count'),
         'contains_control_chars': action.get('contains_control_chars'),
@@ -3661,7 +3758,8 @@ def on_agent_privacy_set(data):
         )
         emit_agent_state(request.sid, state)
 
-def process_agent_terminal_input_proposal(data, proposal_builder):
+def process_agent_terminal_input_proposal(data, proposal_builder,
+                                          invalid_proposal_error=AGENT_ERROR_ACTION_NOT_ALLOWED):
     session_token = socket_session_tokens.get(request.sid)
     terminal_id = validate_terminal_id_payload(data)
     if not session_token or not terminal_id or not isinstance(data, dict):
@@ -3688,9 +3786,53 @@ def process_agent_terminal_input_proposal(data, proposal_builder):
             emit_agent_error(request.sid, terminal_id, AGENT_ERROR_MODE_NOT_WRITABLE)
             emit_agent_state(request.sid, state)
             return
-        proposal = proposal_builder(session_token, terminal_id, request.sid, state, data)
+        try:
+            proposal = proposal_builder(session_token, terminal_id, request.sid, state, data)
+        except AgentProviderError as exc:
+            if invalid_proposal_error != AGENT_ERROR_PROVIDER_INVALID_PROPOSAL:
+                raise
+            record_agent_audit_event(
+                state,
+                AGENT_AUDIT_PROVIDER_RUN_ERROR,
+                status=AGENT_RUN_STATUS_FAILED,
+                error_code=exc.error_code,
+            )
+            emit_agent_error(request.sid, terminal_id, exc.error_code, message=exc.message)
+            emit_agent_state(request.sid, state)
+            return
+        except TimeoutError:
+            if invalid_proposal_error != AGENT_ERROR_PROVIDER_INVALID_PROPOSAL:
+                raise
+            record_agent_audit_event(
+                state,
+                AGENT_AUDIT_PROVIDER_RUN_ERROR,
+                status=AGENT_RUN_STATUS_TIMEOUT,
+                error_code=AGENT_ERROR_PROVIDER_TIMEOUT,
+            )
+            emit_agent_error(request.sid, terminal_id, AGENT_ERROR_PROVIDER_TIMEOUT)
+            emit_agent_state(request.sid, state)
+            return
+        except Exception:
+            if invalid_proposal_error != AGENT_ERROR_PROVIDER_INVALID_PROPOSAL:
+                raise
+            record_agent_audit_event(
+                state,
+                AGENT_AUDIT_PROVIDER_RUN_ERROR,
+                status=AGENT_RUN_STATUS_FAILED,
+                error_code=AGENT_ERROR_PROVIDER_FAILED,
+            )
+            emit_agent_error(request.sid, terminal_id, AGENT_ERROR_PROVIDER_FAILED)
+            emit_agent_state(request.sid, state)
+            return
         if not isinstance(proposal, dict) or proposal.get('action_type') != AGENT_ACTION_TERMINAL_INPUT:
-            emit_agent_error(request.sid, terminal_id, AGENT_ERROR_ACTION_NOT_ALLOWED)
+            if invalid_proposal_error == AGENT_ERROR_PROVIDER_INVALID_PROPOSAL:
+                record_agent_audit_event(
+                    state,
+                    AGENT_AUDIT_PROVIDER_RUN_ERROR,
+                    status=AGENT_RUN_STATUS_FAILED,
+                    error_code=invalid_proposal_error,
+                )
+            emit_agent_error(request.sid, terminal_id, invalid_proposal_error)
             return
         requires_approval = state.mode != AGENT_MODE_DIRECT_ACTIVE
         action, error_code = build_agent_action(state, proposal, requires_approval)
@@ -3735,18 +3877,60 @@ def on_agent_suggestion_request(data):
 @socketio.on(AGENT_EVENT_PROVIDER_RUN_REQUEST)
 def on_agent_provider_run_request(data):
     def build_provider_proposal(session_token, terminal_id, sid, state, _payload):
-        record_agent_audit_event(state, AGENT_AUDIT_PROVIDER_RUN_REQUEST)
+        provider = get_agent_provider()
+        provider_metadata = provider.metadata()
+        run_id = create_agent_run_id()
+        state.run_id = run_id
+        record_agent_audit_event(
+            state,
+            AGENT_AUDIT_PROVIDER_RUN_REQUEST,
+            run_id=run_id,
+            status=AGENT_RUN_STATUS_REQUESTED,
+            **provider_metadata,
+        )
         context = build_agent_context(session_token, terminal_id, sid)
         record_agent_audit_event(
             state,
             AGENT_AUDIT_CONTEXT_BUILT,
             context=summarize_agent_context_for_audit(context),
+            run_id=run_id,
+            **provider_metadata,
         )
-        return AGENT_BRIDGE.create_provider_run_action(state, context)
+        record_agent_audit_event(
+            state,
+            AGENT_AUDIT_PROVIDER_RUN_START,
+            run_id=run_id,
+            status=AGENT_RUN_STATUS_RUNNING,
+            **provider_metadata,
+        )
+        proposal = provider.create_terminal_input_proposal(
+            context,
+            {
+                'run_id': run_id,
+                'provider_name': provider_metadata['provider_name'],
+                'provider_version': provider_metadata['provider_version'],
+            },
+        )
+        if isinstance(proposal, dict):
+            proposal = dict(proposal)
+            proposal['run_id'] = run_id
+            proposal['provider_name'] = provider_metadata['provider_name']
+            proposal['provider_version'] = provider_metadata['provider_version']
+            proposal['provider_status'] = AGENT_RUN_STATUS_COMPLETED
+            if proposal.get('action_type') == AGENT_ACTION_TERMINAL_INPUT:
+                record_agent_audit_event(
+                    state,
+                    AGENT_AUDIT_PROVIDER_RUN_COMPLETE,
+                    run_id=run_id,
+                    status=AGENT_RUN_STATUS_COMPLETED,
+                    **provider_metadata,
+                )
+        return proposal
 
     process_agent_terminal_input_proposal(
         data,
         build_provider_proposal,
+        invalid_proposal_error=AGENT_ERROR_PROVIDER_INVALID_PROPOSAL,
     )
 
 @socketio.on(AGENT_EVENT_ACTION_APPROVE)

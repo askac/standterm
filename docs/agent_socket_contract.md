@@ -166,11 +166,18 @@ Payload:
 { "terminal_id": "main" }
 ```
 
-Runs the current backend mock provider against the internal Agent context
-builder. The context builder can read the latest same-browser-sid viewport
-snapshot, sanitized transcript events, and minimized human input metadata. The
-current mock provider emits a fixed `terminal_input` proposal for local contract
-testing; it is not an external LLM provider.
+Runs the configured backend Agent provider against the internal Agent context
+builder. The provider receives only the bounded context returned by
+`build_agent_context()` and a run metadata object; it must not access Socket.IO,
+terminal bridges, or terminal transport directly. The context builder can read
+the latest same-browser-sid viewport snapshot, sanitized transcript events, and
+minimized human input metadata.
+
+The default provider is `mock`, which emits a fixed `terminal_input` proposal
+for local contract testing. A second `static_env` adapter is available only when
+explicitly selected with `WEBSSH_AGENT_PROVIDER=static_env` and
+`WEBSSH_AGENT_STATIC_INPUT`; it is intended for adapter wiring tests, not as an
+LLM integration.
 
 In `approval_pending` mode, the resulting action is emitted as
 `agent_action_request`. In `direct_active` mode, it is written only through
@@ -276,6 +283,9 @@ Payload:
   "privacy_state": "normal",
   "privacy_version": 0,
   "run_id": "...",
+  "provider_name": "mock",
+  "provider_version": "1",
+  "provider_status": "completed",
   "byte_length": 7,
   "line_count": 1,
   "contains_control_chars": false,
@@ -287,8 +297,11 @@ Payload:
 The exact `data` payload is intentionally not included in the public action
 payload. The approval UI should display the escaped preview and safety metadata.
 Approval may use `action_id` for compatibility, but should also echo
-`proposal_id`, `session_id`, `viewer_id`, `agent_binding_id`, and `mode_version`
-when available so the backend can reject stale or cross-viewer approvals.
+`proposal_id`, `session_id`, `viewer_id`, `agent_binding_id`, `mode_version`,
+and `privacy_version` when available so the backend can reject stale or
+cross-viewer approvals.
+Provider metadata is present for provider-created actions and is safe to expose;
+the raw provider context and terminal input `data` are not included.
 
 ### `agent_action_result`
 
@@ -343,6 +356,10 @@ explicit `error_code`.
 - `agent_privacy_blocked`
 - `agent_stale_mode_version`
 - `agent_stale_proposal`
+- `agent_provider_unavailable`
+- `agent_provider_failed`
+- `agent_provider_timeout`
+- `agent_provider_invalid_proposal`
 
 ## Transcript Boundary
 
@@ -374,11 +391,11 @@ an escaped preview.
 
 The backend keeps an internal bounded structured audit buffer keyed by
 `session_token + terminal_id`. Audit entries use non-secret identifiers such as
-`session_id`, `viewer_id`, `agent_binding_id`, `run_id`, `proposal_id`, and
-version fields. They record typed events for viewer attach/detach, mode and
-privacy changes, provider run requests, context metadata summaries, proposal
-creation, approvals/rejections, direct writes, action results, and terminal
-cleanup.
+`session_id`, `viewer_id`, `agent_binding_id`, `run_id`, `proposal_id`,
+`provider_name`, `provider_version`, and version fields. They record typed
+events for viewer attach/detach, mode and privacy changes, provider run
+requests/start/complete/error, context metadata summaries, proposal creation,
+approvals/rejections, direct writes, action results, and terminal cleanup.
 
 Audit entries must not store raw terminal input, raw terminal output, SSH
 passwords, access tokens, browser authorization material, or DOM/app state.
