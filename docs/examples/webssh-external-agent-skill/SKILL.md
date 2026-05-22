@@ -8,6 +8,22 @@ description: Use when controlling a local WebSSH terminal through the external-a
 Use this skill only from the WebSSH launch directory after the browser Agent
 panel is attached and an external token has been minted.
 
+## Minimum Usage From A User Prompt
+
+If the user only provides this skill prompt and asks you to operate WebSSH:
+
+1. Use the WebSSH startup banner as the source of truth for the active Python,
+   `scripts/webssh_agent_cli.py`, `scripts/webssh_agent_repl.py`, and
+   `webssh_external_agent_handoff.json` absolute paths. Do not guess the port,
+   URL, token, or working directory.
+2. If the banner is not available, derive paths from the WebSSH launch
+   directory, then run `hello` before doing anything else.
+3. Do not run backend smoke tests to create a handoff. Smoke tests may mint
+   test-only tokens that are not recognized by the live WebSSH server.
+4. For HTTPS, prefer `--handoff`; it can carry the local CA path. If the
+   startup banner includes `--ca-file`, preserve it exactly.
+5. Never print the bearer token or full handoff JSON.
+
 ## Workflow
 
 1. Inspect `webssh_external_agent_handoff.json` only as a local secret-bearing
@@ -22,6 +38,12 @@ panel is attached and an external token has been minted.
    token. For `agent_external_disabled`, `agent_not_attached`, or
    `terminal_not_found`, first fix the browser Agent panel, external access
    state, or terminal lifecycle, then mint a new token.
+6. For `agent_external_unauthorized` with a non-expired-looking handoff, assume
+   the file may be stale, test-generated, or from another server process. Ask
+   the user to mint a fresh token from the live browser Agent UI.
+7. If the handoff `url` or `transport.command_endpoint` does not match the
+   observed running WebSSH server, do not patch around it by guessing a port;
+   mint a fresh token.
 
 ## Commands
 

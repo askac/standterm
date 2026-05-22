@@ -1,2 +1,2 @@
-請閱讀 docs/examples/webssh-external-agent-skill/SKILL.md，增加 webssh-external-agent local skill。
-使用時以 WebSSH startup banner 印出的 active Python 與絕對路徑命令為準，先跑 hello，再依 typed capabilities 執行 render、tail、send 或 REPL。
+請閱讀 docs/examples/webssh-external-agent-skill/SKILL.md，增加 `webssh-external-agent` local skill；若使用者要求操作 WebSSH，從 WebSSH startup banner 或該 skill 取得 active Python、`scripts/webssh_agent_cli.py`、`webssh_external_agent_handoff.json` 的絕對路徑，不要猜 port、URL 或 token。
+使用時先確認 handoff 是瀏覽器 Agent UI 新 mint 的 local secret，不印出 token；先跑 banner 的 `hello`，HTTPS 依 `--handoff`/`--ca-file` 驗證 CA，只依 typed JSON fields (`status`/`error_code`/`capabilities`/`terminal_id`) 決策；若 `agent_external_unauthorized`、`expired`、`revoked`、URL 與 running server 不符，請使用者重新 mint token，再依需求使用 `render`/`tail`/`send`/REPL。
