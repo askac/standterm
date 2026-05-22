@@ -195,7 +195,9 @@ python scripts/webssh_agent_repl.py --handoff webssh_external_agent_handoff.json
 ```
 
 Prefer the exact absolute commands printed by the WebSSH startup banner. They
-use the active runtime Python and platform-appropriate quoting.
+use the active runtime Python, platform-appropriate quoting, and the generated
+local CA path when WebSSH is serving HTTPS with its local development
+certificate.
 
 Full protocol details are in `docs/agent_socket_contract.md`.
 

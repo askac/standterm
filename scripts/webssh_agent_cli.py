@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import ssl
 import sys
 import urllib.error
 import urllib.request
@@ -12,6 +13,8 @@ def parse_args():
     parser.add_argument('--url', help='WebSSH base URL, for example http://127.0.0.1:5010')
     parser.add_argument('--token', help='External agent attach token. Omit only on dev servers with WEBSSH_AGENT_DEV_TOKEN=1.')
     parser.add_argument('--terminal', default='main', help='Terminal id')
+    parser.add_argument('--ca-file', help='CA certificate bundle used to verify HTTPS WebSSH servers')
+    parser.add_argument('--insecure', action='store_true', help='Disable HTTPS certificate verification')
     subparsers = parser.add_subparsers(dest='command', required=True)
 
     subparsers.add_parser('hello')
@@ -62,6 +65,11 @@ def apply_handoff(args):
         args.token = payload.get('token')
     if args.terminal == 'main' and isinstance(payload.get('terminal_id'), str):
         args.terminal = payload['terminal_id']
+    transport = payload.get('transport')
+    if not args.ca_file and isinstance(transport, dict):
+        args.ca_file = transport.get('tls_ca_cert_path')
+    if not args.ca_file:
+        args.ca_file = payload.get('tls_ca_cert_path')
 
 
 def command_payload(args):
@@ -81,7 +89,15 @@ def command_payload(args):
     return payload
 
 
-def post_json(base_url, payload, dev_mode=False):
+def build_ssl_context(ca_file=None, insecure=False):
+    if insecure:
+        return ssl._create_unverified_context()
+    if ca_file:
+        return ssl.create_default_context(cafile=ca_file)
+    return None
+
+
+def post_json(base_url, payload, dev_mode=False, ca_file=None, insecure=False):
     path = '/agent/external/dev-command' if dev_mode else '/agent/external/command'
     url = base_url.rstrip('/') + path
     data = json.dumps(payload).encode('utf-8')
@@ -91,8 +107,9 @@ def post_json(base_url, payload, dev_mode=False):
         headers={'Content-Type': 'application/json'},
         method='POST',
     )
+    context = build_ssl_context(ca_file=ca_file, insecure=insecure)
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with urllib.request.urlopen(request, timeout=30, context=context) as response:
             return response.status, json.loads(response.read().decode('utf-8'))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode('utf-8', errors='replace')
@@ -109,7 +126,13 @@ def print_result(result):
 
 def main():
     args = parse_args()
-    _status, result = post_json(args.url, command_payload(args), dev_mode=not bool(args.token))
+    _status, result = post_json(
+        args.url,
+        command_payload(args),
+        dev_mode=not bool(args.token),
+        ca_file=args.ca_file,
+        insecure=args.insecure,
+    )
     print_result(result)
     return 0 if result.get('status') != 'failed' else 1
 

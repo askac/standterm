@@ -110,7 +110,10 @@ def test_tail_worker_stops_on_not_attached_error():
 def test_cli_and_repl_apply_handoff_defaults(tmp_path=None):
     handoff_path = Path('/tmp/webssh_agent_handoff_unit.json') if tmp_path is None else tmp_path / 'handoff.json'
     handoff_path.write_text(
-        '{"url":"http://127.0.0.1:5012","token":"agt_unit","terminal_id":"term-2"}\n',
+        (
+            '{"url":"http://127.0.0.1:5012","token":"agt_unit","terminal_id":"term-2",'
+            '"transport":{"tls_ca_cert_path":"/tmp/webssh-test-ca.crt"}}\n'
+        ),
         encoding='utf-8',
     )
     cli_args = SimpleNamespace(
@@ -118,22 +121,26 @@ def test_cli_and_repl_apply_handoff_defaults(tmp_path=None):
         url=None,
         token=None,
         terminal='main',
+        ca_file=None,
     )
     cli.apply_handoff(cli_args)
     assert cli_args.url == 'http://127.0.0.1:5012'
     assert cli_args.token == 'agt_unit'
     assert cli_args.terminal == 'term-2'
+    assert cli_args.ca_file == '/tmp/webssh-test-ca.crt'
 
     repl_args = SimpleNamespace(
         handoff=str(handoff_path),
         url='http://override',
         token=None,
         terminal='main',
+        ca_file=None,
     )
     repl.apply_handoff(repl_args)
     assert repl_args.url == 'http://override'
     assert repl_args.token == 'agt_unit'
     assert repl_args.terminal == 'term-2'
+    assert repl_args.ca_file == '/tmp/webssh-test-ca.crt'
     if tmp_path is None:
         handoff_path.unlink(missing_ok=True)
 

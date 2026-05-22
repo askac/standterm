@@ -4,6 +4,7 @@ import json
 import os
 import queue
 import select
+import ssl
 import sys
 import threading
 import time
@@ -37,13 +38,23 @@ FATAL_AGENT_ERRORS = {
 }
 
 
+def build_ssl_context(ca_file=None, insecure=False):
+    if insecure:
+        return ssl._create_unverified_context()
+    if ca_file:
+        return ssl.create_default_context(cafile=ca_file)
+    return None
+
+
 class AgentHttpClient:
-    def __init__(self, base_url, token=None, terminal_id='main', timeout=30, debug=False):
+    def __init__(self, base_url, token=None, terminal_id='main', timeout=30, debug=False,
+                 ca_file=None, insecure=False):
         self.base_url = base_url.rstrip('/')
         self.token = token
         self.terminal_id = terminal_id
         self.timeout = timeout
         self.debug = debug
+        self.ssl_context = build_ssl_context(ca_file=ca_file, insecure=insecure)
 
     def command_url(self):
         if self.token:
@@ -66,7 +77,7 @@ class AgentHttpClient:
             method='POST',
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with urllib.request.urlopen(request, timeout=self.timeout, context=self.ssl_context) as response:
                 return response.status, json.loads(response.read().decode('utf-8'))
         except urllib.error.HTTPError as exc:
             body = exc.read().decode('utf-8', errors='replace')
@@ -87,6 +98,8 @@ def parse_args():
     parser.add_argument('--url', help='WebSSH base URL, for example http://127.0.0.1:5012')
     parser.add_argument('--token', help='External agent attach token. Omit only on dev servers with WEBSSH_AGENT_DEV_TOKEN=1.')
     parser.add_argument('--terminal', default='main', help='Terminal id')
+    parser.add_argument('--ca-file', help='CA certificate bundle used to verify HTTPS WebSSH servers')
+    parser.add_argument('--insecure', action='store_true', help='Disable HTTPS certificate verification')
     parser.add_argument('--poll-ms', type=int, default=150, help='Tail polling interval in milliseconds')
     parser.add_argument('--tail-wait-ms', type=int, default=25000, help='Server-side long-poll wait for tail output in milliseconds')
     parser.add_argument('--limit', type=int, default=200, help='Maximum tail events per poll')
@@ -127,6 +140,11 @@ def apply_handoff(args):
         args.token = payload.get('token')
     if args.terminal == 'main' and isinstance(payload.get('terminal_id'), str):
         args.terminal = payload['terminal_id']
+    transport = payload.get('transport')
+    if not args.ca_file and isinstance(transport, dict):
+        args.ca_file = transport.get('tls_ca_cert_path')
+    if not args.ca_file:
+        args.ca_file = payload.get('tls_ca_cert_path')
 
 
 def stderr_line(message):
@@ -334,7 +352,14 @@ def pipe_input_loop(input_queue, enter_mode, backspace_mode):
 
 
 def run_repl(args):
-    client = AgentHttpClient(args.url, token=args.token, terminal_id=args.terminal, debug=args.debug)
+    client = AgentHttpClient(
+        args.url,
+        token=args.token,
+        terminal_id=args.terminal,
+        debug=args.debug,
+        ca_file=args.ca_file,
+        insecure=args.insecure,
+    )
     state = assert_repl_ready(client, args.allow_non_direct)
     stderr_line(f"[webssh-agent] attached to {args.terminal} mode={state.get('mode')}")
     last_seq = current_output_seq(client) if args.no_initial_screen else print_initial_screen(client)

@@ -1381,6 +1381,7 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
 
 
 def test_external_agent_startup_lines_point_to_launch_handoff():
+    original_https_enabled = webssh.HTTPS_ENABLED
     lines = webssh.build_external_agent_startup_lines()
     joined = '\n'.join(lines)
     hello_line = next(line for line in lines if line.startswith('External Agent CLI hello: '))
@@ -1400,6 +1401,15 @@ def test_external_agent_startup_lines_point_to_launch_handoff():
     assert render_line.endswith(' render')
     assert 'after browser Agent attach and external token mint' in joined
     assert 'explicit --url, --token, and --terminal' in joined
+    try:
+        webssh.HTTPS_ENABLED = True
+        tls_lines = webssh.build_external_agent_startup_lines()
+    finally:
+        webssh.HTTPS_ENABLED = original_https_enabled
+    tls_joined = '\n'.join(tls_lines)
+    if webssh.LOCAL_CA_CERT_PATH.is_file() and not (webssh.CLI_ARGS.certfile or webssh.CLI_ARGS.keyfile):
+        assert '--ca-file' in tls_joined
+        assert str(webssh.LOCAL_CA_CERT_PATH) in tls_joined
 
 
 def test_wsl_local_shell_choice_is_structured_and_wsl_only():

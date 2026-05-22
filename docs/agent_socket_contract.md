@@ -117,7 +117,9 @@ WebSSH host; do not expose the command endpoint or bearer token directly on a
 network interface.
 
 The CLI wrapper is intentionally small and speaks this JSON command contract.
-It can read the generated handoff file directly:
+It can read the generated handoff file directly. When WebSSH serves HTTPS with
+its generated local development certificate, the handoff includes the local CA
+path and the wrapper uses it for TLS verification.
 
 ```bash
 tools/.venv_wsl/bin/python scripts/webssh_agent_cli.py \

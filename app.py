@@ -4047,6 +4047,17 @@ def external_agent_json_response(payload, status_code=200):
     response.status_code = status_code
     return add_common_headers(response)
 
+def get_external_agent_tls_ca_cert_path():
+    if HTTPS_ENABLED and not (CLI_ARGS.certfile or CLI_ARGS.keyfile) and LOCAL_CA_CERT_PATH.is_file():
+        return str(LOCAL_CA_CERT_PATH)
+    return None
+
+def get_external_agent_cli_tls_args():
+    ca_cert_path = get_external_agent_tls_ca_cert_path()
+    if ca_cert_path:
+        return ['--ca-file', ca_cert_path]
+    return []
+
 def build_external_agent_cli_command(base_url, token, terminal_id, op='send', text='pwd\n'):
     args = [
         'tools/.venv_wsl/bin/python',
@@ -4058,6 +4069,7 @@ def build_external_agent_cli_command(base_url, token, terminal_id, op='send', te
         '--terminal',
         terminal_id,
     ]
+    args.extend(get_external_agent_cli_tls_args())
     if op == 'send':
         args.extend(['send', '--text', text])
     else:
@@ -4075,6 +4087,7 @@ def build_external_agent_repl_command(base_url, token, terminal_id):
         '--terminal',
         terminal_id,
     ]
+    args.extend(get_external_agent_cli_tls_args())
     return ' '.join(shlex.quote(arg) for arg in args)
 
 def build_external_agent_cli_commands(base_url, token, terminal_id):
@@ -4089,15 +4102,20 @@ def build_external_agent_cli_commands(base_url, token, terminal_id):
     }
 
 def build_external_agent_discovery_payload(base_url, token, terminal_id):
+    transport = {
+        'type': 'loopback_http_json',
+        'command_endpoint': base_url.rstrip('/') + '/agent/external/command',
+        'loopback_only': True,
+        'tls_verify': True,
+    }
+    ca_cert_path = get_external_agent_tls_ca_cert_path()
+    if ca_cert_path:
+        transport['tls_ca_cert_path'] = ca_cert_path
     return {
         'handoff_schema': 'webssh_external_agent_handoff',
         'schema_version': 1,
         'protocol_version': EXTERNAL_AGENT_PROTOCOL_VERSION,
-        'transport': {
-            'type': 'loopback_http_json',
-            'command_endpoint': base_url.rstrip('/') + '/agent/external/command',
-            'loopback_only': True,
-        },
+        'transport': transport,
         'capabilities': list(EXTERNAL_AGENT_CAPABILITIES),
         'operations': {
             'hello': {'op': 'hello'},
@@ -4160,10 +4178,10 @@ def build_external_agent_startup_lines():
     cli_arg = str(APP_DIR / 'scripts' / 'webssh_agent_cli.py')
     handoff_arg = str(EXTERNAL_AGENT_HANDOFF_PATH)
     hello_command = quote_local_command([
-        python_arg, cli_arg, '--handoff', handoff_arg, 'hello',
+        python_arg, cli_arg, '--handoff', handoff_arg, *get_external_agent_cli_tls_args(), 'hello',
     ])
     render_command = quote_local_command([
-        python_arg, cli_arg, '--handoff', handoff_arg, 'render',
+        python_arg, cli_arg, '--handoff', handoff_arg, *get_external_agent_cli_tls_args(), 'render',
     ])
     return [
         f"External Agent Handoff: {EXTERNAL_AGENT_HANDOFF_PATH}",
