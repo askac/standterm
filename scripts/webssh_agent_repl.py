@@ -144,6 +144,25 @@ def assert_repl_ready(client, allow_non_direct):
     return result
 
 
+def warn_tail_gap(result, last_seq):
+    gap = result.get('gap')
+    if isinstance(gap, dict) and gap.get('detected'):
+        gap_from = gap.get('from_output_seq')
+        gap_to = gap.get('to_output_seq')
+        missing_count = gap.get('missing_count')
+        stderr_line(
+            f"[webssh-agent] warning: output gap {gap_from}..{gap_to} "
+            f"({missing_count} events no longer available)"
+        )
+        return
+    events = result.get('events')
+    if not isinstance(events, list) or not events:
+        return
+    first_seq = events[0].get('output_seq')
+    if isinstance(first_seq, int) and last_seq and first_seq > last_seq + 1:
+        stderr_line(f"[webssh-agent] warning: output gap {last_seq + 1}..{first_seq - 1}")
+
+
 def tail_worker(client, last_seq, stop_event, poll_seconds, limit):
     while not stop_event.is_set():
         _status, result = client.request('tail', since_output_seq=last_seq, limit=limit)
@@ -163,10 +182,8 @@ def tail_worker(client, last_seq, stop_event, poll_seconds, limit):
             time.sleep(max(poll_seconds, 0.1))
             continue
         events = result.get('events')
+        warn_tail_gap(result, last_seq)
         if isinstance(events, list) and events:
-            first_seq = events[0].get('output_seq')
-            if isinstance(first_seq, int) and last_seq and first_seq > last_seq + 1:
-                stderr_line(f"[webssh-agent] warning: output gap {last_seq + 1}..{first_seq - 1}")
             for event in events:
                 seq = event.get('output_seq')
                 if isinstance(seq, int):

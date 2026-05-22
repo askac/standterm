@@ -79,6 +79,8 @@ The human WebSSH viewer remains the controller:
   scroll position;
 - the external agent cannot approve its own proposal;
 - the external agent cannot change Agent mode or resume/unpause itself;
+- recent human terminal input creates a short backend lease that blocks Agent
+  writes until it expires;
 - closing the Agent panel by setting mode to `disabled` blocks external screen,
   tail, and send commands;
 - `private_input`, `paste_review`, and `paused` block external screen, tail,
@@ -116,7 +118,8 @@ starting one CLI process per line:
 ```bash
 tools/.venv_wsl/bin/python scripts/webssh_agent_repl.py \
   --url http://127.0.0.1:5012 \
-  --terminal main
+  --terminal main \
+  --enter cr
 ```
 
 The REPL keeps one local process alive, coalesces local keyboard input before
@@ -124,7 +127,10 @@ calling `send`, and renders remote output from `tail` using `output_seq` as its
 cursor. `screen` is only a provisional initial viewport/debug source; it is not
 the authoritative terminal stream. The local detach key is `Ctrl-]`. In dev
 servers started with `WEBSSH_AGENT_DEV_TOKEN=1`, the REPL may omit `--token` and
-use the loopback-only dev command endpoint.
+use the loopback-only dev command endpoint. `--enter cr` is the default because
+PTY-style interactive programs generally expect carriage return for Enter; use
+`--enter lf` for line-oriented shell pipe behavior and `--enter crlf` only for
+targets that explicitly require both bytes.
 
 ### External Command Shape
 
@@ -173,6 +179,35 @@ Tail terminal display events:
   "limit": 50
 }
 ```
+
+Tail returns a structured cursor and retention contract:
+
+```json
+{
+  "status": "ok",
+  "terminal_id": "main",
+  "external_agent_id": "exa_...",
+  "output_seq": 130,
+  "since_output_seq": 123,
+  "limit": 50,
+  "first_available_output_seq": 81,
+  "dropped_before_output_seq": 80,
+  "gap": {
+    "detected": false,
+    "from_output_seq": null,
+    "to_output_seq": null,
+    "missing_count": 0
+  },
+  "events": []
+}
+```
+
+If `since_output_seq` is older than the retained replay buffer, `gap.detected`
+is `true` and the `from_output_seq` / `to_output_seq` range describes terminal
+events that are no longer available. When more than `limit` events are available,
+tail returns the earliest page after `since_output_seq`, so clients can advance
+from the last returned event and call `tail` again without skipping retained
+events. Clients must not infer control state from terminal text.
 
 Propose terminal input:
 
@@ -402,6 +437,10 @@ Payload:
   "privacy_state": "normal",
   "privacy_version": 0,
   "run_id": "...",
+  "human_activity_seq": 0,
+  "human_activity_at": null,
+  "human_input_lease_expires_at": null,
+  "human_input_lease_active": false,
   "pending_actions": 0
 }
 ```
@@ -507,6 +546,7 @@ explicit `error_code`.
 - `agent_external_expired`
 - `agent_external_revoked`
 - `agent_external_disabled`
+- `agent_human_input_active`
 
 ## Transcript Boundary
 
@@ -522,6 +562,15 @@ Local Shell, and UART terminals because they share that input event. Metadata is
 recorded only after the current `ssh_input` session, terminal, bridge, type, and
 size validation passes, immediately before the input is written to the terminal
 bridge.
+
+Validated human input also updates typed Agent state for all Agent viewers on
+the same `session_id + terminal_id` with `human_activity_seq`,
+`human_activity_at`, `human_input_lease_expires_at`, and
+`human_input_lease_active`. While that short terminal-scoped lease is active,
+Agent terminal input proposals and external `send` commands fail with
+`agent_human_input_active`; terminal display text is not involved in this
+decision. Human and Agent writes are serialized through the terminal bridge
+input lock so the lease check and write order stay consistent.
 
 The buffer is keyed by `session_token + terminal_id`, has a TTL, and is cleared
 when the terminal or session is closed. It stores only minimized metadata:

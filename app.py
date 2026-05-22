@@ -171,6 +171,7 @@ AGENT_ERROR_EXTERNAL_AGENT_UNAUTHORIZED = 'agent_external_unauthorized'
 AGENT_ERROR_EXTERNAL_AGENT_EXPIRED = 'agent_external_expired'
 AGENT_ERROR_EXTERNAL_AGENT_REVOKED = 'agent_external_revoked'
 AGENT_ERROR_EXTERNAL_AGENT_DISABLED = 'agent_external_disabled'
+AGENT_ERROR_HUMAN_INPUT_ACTIVE = 'agent_human_input_active'
 AGENT_REASON_DETACHED = 'agent_detached'
 AGENT_REASON_DISABLED = 'agent_disabled'
 AGENT_REASON_MODE_CHANGED = 'agent_mode_changed'
@@ -215,6 +216,7 @@ AGENT_VIEWPORT_SNAPSHOT_MAX_BYTES = 120000
 AGENT_VIEWPORT_SNAPSHOT_MAX_LINE_BYTES = 4096
 AGENT_EXTERNAL_ATTACH_TOKEN_TTL_SECONDS = 5 * 60
 AGENT_EXTERNAL_TAIL_MAX_EVENTS = 200
+AGENT_HUMAN_INPUT_LEASE_SECONDS = 2.0
 AGENT_AUDIT_VIEWER_ATTACH = 'viewer_attach'
 AGENT_AUDIT_VIEWER_DETACH = 'viewer_detach'
 AGENT_AUDIT_MODE_SET = 'mode_set'
@@ -969,6 +971,7 @@ class TerminalBridge:
         self.output_seq = 0
         self.replay_buffer = deque()
         self.replay_buffer_bytes = 0
+        self.input_lock = threading.RLock()
 
     def metadata(self, cols=None, rows=None):
         cols = self.cols if cols is None else cols
@@ -2544,10 +2547,14 @@ class AgentControlState:
         self.privacy_state = AGENT_PRIVACY_NORMAL
         self.privacy_version = 0
         self.run_id = None
+        self.human_activity_seq = 0
+        self.human_activity_at = None
+        self.human_input_lease_expires_at = None
         self.pending_actions = {}
         self.audit_ring = deque(maxlen=AGENT_AUDIT_EVENTS)
 
     def public_state(self):
+        human_input_lease_active = is_agent_human_input_lease_active(self)
         return {
             'session_id': self.session_id,
             'viewer_id': self.viewer_id,
@@ -2560,6 +2567,10 @@ class AgentControlState:
             'privacy_state': self.privacy_state,
             'privacy_version': self.privacy_version,
             'run_id': self.run_id,
+            'human_activity_seq': self.human_activity_seq,
+            'human_activity_at': self.human_activity_at,
+            'human_input_lease_expires_at': self.human_input_lease_expires_at,
+            'human_input_lease_active': human_input_lease_active,
             'pending_actions': len([
                 action for action in self.pending_actions.values()
                 if action.get('status') in AGENT_STATUS_OPEN
@@ -2745,6 +2756,26 @@ def set_agent_privacy_state(state, privacy_state):
     state.privacy_version += 1
     return True
 
+def is_agent_human_input_lease_active(state, now=None):
+    if not state or state.human_input_lease_expires_at is None:
+        return False
+    now = time.time() if now is None else now
+    return state.human_input_lease_expires_at > now
+
+def note_agent_human_input(state):
+    now = time.time()
+    state.human_activity_seq += 1
+    state.human_activity_at = now
+    state.human_input_lease_expires_at = now + AGENT_HUMAN_INPUT_LEASE_SECONDS
+
+def note_agent_human_input_for_terminal(session_token, terminal_id):
+    updated_states = []
+    for state in agent_states.values():
+        if state.session_token == session_token and state.terminal_id == terminal_id:
+            note_agent_human_input(state)
+            updated_states.append(state)
+    return updated_states
+
 def is_agent_context_allowed(state):
     return state and state.privacy_state not in AGENT_CONTEXT_BLOCKING_PRIVACY_STATES
 
@@ -2861,22 +2892,50 @@ def build_external_agent_state_payload(record, state):
     payload['status'] = 'ok'
     return payload
 
-def get_external_agent_tail_events(bridge, since_output_seq=None, limit=AGENT_EXTERNAL_TAIL_MAX_EVENTS):
+def build_external_agent_tail_payload(bridge, since_output_seq=None, limit=AGENT_EXTERNAL_TAIL_MAX_EVENTS):
     try:
         since_output_seq = int(since_output_seq if since_output_seq is not None else 0)
     except (TypeError, ValueError):
         since_output_seq = 0
+    since_output_seq = max(0, since_output_seq)
     try:
         limit = int(limit)
     except (TypeError, ValueError):
         limit = AGENT_EXTERNAL_TAIL_MAX_EVENTS
     limit = max(1, min(limit, AGENT_EXTERNAL_TAIL_MAX_EVENTS))
-    events = [
+    replay_events = [
         dict(payload) for payload in list(bridge.replay_buffer)
         if isinstance(payload.get('output_seq'), int)
-        and payload.get('output_seq') > since_output_seq
     ]
-    return events[-limit:]
+    events = [
+        payload for payload in replay_events
+        if payload.get('output_seq') > since_output_seq
+    ]
+    first_available_output_seq = None
+    if replay_events:
+        first_available_output_seq = replay_events[0].get('output_seq')
+    elif bridge.output_seq > 0:
+        first_available_output_seq = bridge.output_seq + 1
+    dropped_before_output_seq = max(0, (first_available_output_seq or 1) - 1)
+    gap_detected = (
+        bridge.output_seq > 0
+        and first_available_output_seq is not None
+        and since_output_seq < first_available_output_seq - 1
+    )
+    gap = {
+        'detected': gap_detected,
+        'from_output_seq': since_output_seq + 1 if gap_detected else None,
+        'to_output_seq': dropped_before_output_seq if gap_detected else None,
+        'missing_count': dropped_before_output_seq - since_output_seq if gap_detected else 0,
+    }
+    return {
+        'since_output_seq': since_output_seq,
+        'limit': limit,
+        'first_available_output_seq': first_available_output_seq,
+        'dropped_before_output_seq': dropped_before_output_seq,
+        'gap': gap,
+        'events': events[:limit],
+    }
 
 def external_agent_build_terminal_input_action(state, data):
     return {
@@ -3138,6 +3197,8 @@ def check_agent_write_allowed(session_token, terminal_id, sid, action_id, contro
         return state, action, AGENT_ERROR_ACTION_NOT_WRITABLE
     if action.get('terminal_id') != terminal_id:
         return state, action, AGENT_ERROR_TERMINAL_MISMATCH
+    if is_agent_human_input_lease_active(state):
+        return state, action, AGENT_ERROR_HUMAN_INPUT_ACTIVE
     bridge = get_bridge(session_token, terminal_id)
     if not bridge:
         return state, action, AGENT_ERROR_TERMINAL_NOT_FOUND
@@ -3173,23 +3234,26 @@ def write_agent_terminal_input(session_token, terminal_id, sid, action_id, contr
             break
 
     for chunk in chunks:
-        with agent_lock:
-            state, action, error_code = check_agent_write_allowed(
-                session_token,
-                terminal_id,
-                sid,
-                action_id,
-                control_epoch,
-                mode_version=mode_version,
-                proposal_id=proposal_id,
-            )
-            if error_code:
-                if state and action:
-                    action['status'] = AGENT_STATUS_FAILED
-                    record_agent_audit(state, action, AGENT_STATUS_FAILED, error_code=error_code)
-                return False, {'error_code': error_code, 'bytes_written': bytes_written}
-            bridge = get_bridge(session_token, terminal_id)
-        bridge.write(chunk)
+        bridge = get_bridge(session_token, terminal_id)
+        if not bridge:
+            return False, {'error_code': AGENT_ERROR_TERMINAL_NOT_FOUND, 'bytes_written': bytes_written}
+        with bridge.input_lock:
+            with agent_lock:
+                state, action, error_code = check_agent_write_allowed(
+                    session_token,
+                    terminal_id,
+                    sid,
+                    action_id,
+                    control_epoch,
+                    mode_version=mode_version,
+                    proposal_id=proposal_id,
+                )
+                if error_code:
+                    if state and action:
+                        action['status'] = AGENT_STATUS_FAILED
+                        record_agent_audit(state, action, AGENT_STATUS_FAILED, error_code=error_code)
+                    return False, {'error_code': error_code, 'bytes_written': bytes_written}
+            bridge.write(chunk)
         bytes_written += len(chunk.encode('utf-8', errors='ignore'))
 
     with agent_lock:
@@ -4021,6 +4085,10 @@ def on_agent_detach(data):
             'privacy_state': AGENT_PRIVACY_NORMAL,
             'privacy_version': None,
             'run_id': None,
+            'human_activity_seq': 0,
+            'human_activity_at': None,
+            'human_input_lease_expires_at': None,
+            'human_input_lease_active': False,
             'pending_actions': 0,
         },
         room=request.sid,
@@ -4166,91 +4234,96 @@ def process_agent_terminal_input_proposal(data, proposal_builder,
         emit_agent_error(request.sid, terminal_id, AGENT_ERROR_TERMINAL_NOT_FOUND)
         return
     bridge.attach(request.sid)
-    with agent_lock:
-        state = get_agent_state(session_token, terminal_id, request.sid)
-        if not state:
-            emit_agent_error(request.sid, terminal_id, AGENT_ERROR_NOT_ATTACHED)
-            return
-        if state.paused or state.mode == AGENT_MODE_PAUSED:
-            emit_agent_error(request.sid, terminal_id, AGENT_ERROR_PAUSED)
-            emit_agent_state(request.sid, state)
-            return
-        if not is_agent_context_allowed(state):
-            emit_agent_error(request.sid, terminal_id, AGENT_ERROR_PRIVACY_BLOCKED)
-            emit_agent_state(request.sid, state)
-            return
-        if state.mode not in {AGENT_MODE_APPROVAL_PENDING, AGENT_MODE_DIRECT_ACTIVE}:
-            emit_agent_error(request.sid, terminal_id, AGENT_ERROR_MODE_NOT_WRITABLE)
-            emit_agent_state(request.sid, state)
-            return
-        try:
-            proposal = proposal_builder(session_token, terminal_id, request.sid, state, data)
-        except AgentProviderError as exc:
-            if invalid_proposal_error != AGENT_ERROR_PROVIDER_INVALID_PROPOSAL:
-                raise
-            record_agent_audit_event(
-                state,
-                AGENT_AUDIT_PROVIDER_RUN_ERROR,
-                status=AGENT_RUN_STATUS_FAILED,
-                error_code=exc.error_code,
-            )
-            emit_agent_error(request.sid, terminal_id, exc.error_code, message=exc.message)
-            emit_agent_state(request.sid, state)
-            return
-        except TimeoutError:
-            if invalid_proposal_error != AGENT_ERROR_PROVIDER_INVALID_PROPOSAL:
-                raise
-            record_agent_audit_event(
-                state,
-                AGENT_AUDIT_PROVIDER_RUN_ERROR,
-                status=AGENT_RUN_STATUS_TIMEOUT,
-                error_code=AGENT_ERROR_PROVIDER_TIMEOUT,
-            )
-            emit_agent_error(request.sid, terminal_id, AGENT_ERROR_PROVIDER_TIMEOUT)
-            emit_agent_state(request.sid, state)
-            return
-        except Exception:
-            if invalid_proposal_error != AGENT_ERROR_PROVIDER_INVALID_PROPOSAL:
-                raise
-            record_agent_audit_event(
-                state,
-                AGENT_AUDIT_PROVIDER_RUN_ERROR,
-                status=AGENT_RUN_STATUS_FAILED,
-                error_code=AGENT_ERROR_PROVIDER_FAILED,
-            )
-            emit_agent_error(request.sid, terminal_id, AGENT_ERROR_PROVIDER_FAILED)
-            emit_agent_state(request.sid, state)
-            return
-        if not isinstance(proposal, dict) or proposal.get('action_type') != AGENT_ACTION_TERMINAL_INPUT:
-            if invalid_proposal_error == AGENT_ERROR_PROVIDER_INVALID_PROPOSAL:
+    with bridge.input_lock:
+        with agent_lock:
+            state = get_agent_state(session_token, terminal_id, request.sid)
+            if not state:
+                emit_agent_error(request.sid, terminal_id, AGENT_ERROR_NOT_ATTACHED)
+                return
+            if state.paused or state.mode == AGENT_MODE_PAUSED:
+                emit_agent_error(request.sid, terminal_id, AGENT_ERROR_PAUSED)
+                emit_agent_state(request.sid, state)
+                return
+            if not is_agent_context_allowed(state):
+                emit_agent_error(request.sid, terminal_id, AGENT_ERROR_PRIVACY_BLOCKED)
+                emit_agent_state(request.sid, state)
+                return
+            if is_agent_human_input_lease_active(state):
+                emit_agent_error(request.sid, terminal_id, AGENT_ERROR_HUMAN_INPUT_ACTIVE)
+                emit_agent_state(request.sid, state)
+                return
+            if state.mode not in {AGENT_MODE_APPROVAL_PENDING, AGENT_MODE_DIRECT_ACTIVE}:
+                emit_agent_error(request.sid, terminal_id, AGENT_ERROR_MODE_NOT_WRITABLE)
+                emit_agent_state(request.sid, state)
+                return
+            try:
+                proposal = proposal_builder(session_token, terminal_id, request.sid, state, data)
+            except AgentProviderError as exc:
+                if invalid_proposal_error != AGENT_ERROR_PROVIDER_INVALID_PROPOSAL:
+                    raise
                 record_agent_audit_event(
                     state,
                     AGENT_AUDIT_PROVIDER_RUN_ERROR,
                     status=AGENT_RUN_STATUS_FAILED,
-                    error_code=invalid_proposal_error,
+                    error_code=exc.error_code,
                 )
-            emit_agent_error(request.sid, terminal_id, invalid_proposal_error)
-            return
-        requires_approval = state.mode != AGENT_MODE_DIRECT_ACTIVE
-        action, error_code = build_agent_action(state, proposal, requires_approval)
-        if error_code:
-            emit_agent_error(request.sid, terminal_id, error_code)
-            return
-        socketio.emit(AGENT_EVENT_ACTION_REQUEST, public_agent_action(action), room=request.sid)
-        emit_agent_state(request.sid, state)
+                emit_agent_error(request.sid, terminal_id, exc.error_code, message=exc.message)
+                emit_agent_state(request.sid, state)
+                return
+            except TimeoutError:
+                if invalid_proposal_error != AGENT_ERROR_PROVIDER_INVALID_PROPOSAL:
+                    raise
+                record_agent_audit_event(
+                    state,
+                    AGENT_AUDIT_PROVIDER_RUN_ERROR,
+                    status=AGENT_RUN_STATUS_TIMEOUT,
+                    error_code=AGENT_ERROR_PROVIDER_TIMEOUT,
+                )
+                emit_agent_error(request.sid, terminal_id, AGENT_ERROR_PROVIDER_TIMEOUT)
+                emit_agent_state(request.sid, state)
+                return
+            except Exception:
+                if invalid_proposal_error != AGENT_ERROR_PROVIDER_INVALID_PROPOSAL:
+                    raise
+                record_agent_audit_event(
+                    state,
+                    AGENT_AUDIT_PROVIDER_RUN_ERROR,
+                    status=AGENT_RUN_STATUS_FAILED,
+                    error_code=AGENT_ERROR_PROVIDER_FAILED,
+                )
+                emit_agent_error(request.sid, terminal_id, AGENT_ERROR_PROVIDER_FAILED)
+                emit_agent_state(request.sid, state)
+                return
+            if not isinstance(proposal, dict) or proposal.get('action_type') != AGENT_ACTION_TERMINAL_INPUT:
+                if invalid_proposal_error == AGENT_ERROR_PROVIDER_INVALID_PROPOSAL:
+                    record_agent_audit_event(
+                        state,
+                        AGENT_AUDIT_PROVIDER_RUN_ERROR,
+                        status=AGENT_RUN_STATUS_FAILED,
+                        error_code=invalid_proposal_error,
+                    )
+                emit_agent_error(request.sid, terminal_id, invalid_proposal_error)
+                return
+            requires_approval = state.mode != AGENT_MODE_DIRECT_ACTIVE
+            action, error_code = build_agent_action(state, proposal, requires_approval)
+            if error_code:
+                emit_agent_error(request.sid, terminal_id, error_code)
+                return
+            socketio.emit(AGENT_EVENT_ACTION_REQUEST, public_agent_action(action), room=request.sid)
+            emit_agent_state(request.sid, state)
 
-    if requires_approval:
-        return
+        if requires_approval:
+            return
 
-    ok, result = write_agent_terminal_input(
-        session_token,
-        terminal_id,
-        request.sid,
-        action['action_id'],
-        action['control_epoch'],
-        mode_version=action['mode_version'],
-        proposal_id=action['proposal_id'],
-    )
+        ok, result = write_agent_terminal_input(
+            session_token,
+            terminal_id,
+            request.sid,
+            action['action_id'],
+            action['control_epoch'],
+            mode_version=action['mode_version'],
+            proposal_id=action['proposal_id'],
+        )
     status = AGENT_STATUS_COMPLETED if ok else AGENT_STATUS_FAILED
     if result.get('error_code'):
         status = result['error_code']
@@ -4350,7 +4423,7 @@ def process_external_agent_command(command):
                 'state': state.public_state(),
                 'screen': active_screen,
             }
-        events = get_external_agent_tail_events(
+        tail = build_external_agent_tail_payload(
             bridge,
             since_output_seq=command.get('since_output_seq'),
             limit=command.get('limit', AGENT_EXTERNAL_TAIL_MAX_EVENTS),
@@ -4359,52 +4432,64 @@ def process_external_agent_command(command):
             state,
             AGENT_AUDIT_EXTERNAL_AGENT_TAIL,
             external_agent_id=record.get('external_agent_id'),
-            event_count=len(events),
+            event_count=len(tail['events']),
             output_seq=bridge.output_seq,
+            gap=tail['gap'],
         )
         return {
             'status': 'ok',
             'terminal_id': terminal_id,
             'external_agent_id': record.get('external_agent_id'),
             'output_seq': bridge.output_seq,
-            'events': events,
+            'since_output_seq': tail['since_output_seq'],
+            'limit': tail['limit'],
+            'first_available_output_seq': tail['first_available_output_seq'],
+            'dropped_before_output_seq': tail['dropped_before_output_seq'],
+            'gap': tail['gap'],
+            'events': tail['events'],
         }
 
     if op == 'send':
-        if state.paused or state.mode == AGENT_MODE_PAUSED:
-            return external_agent_error(AGENT_ERROR_PAUSED, terminal_id=terminal_id)
-        if not is_agent_context_allowed(state):
-            return external_agent_error(AGENT_ERROR_PRIVACY_BLOCKED, terminal_id=terminal_id)
-        if state.mode not in {AGENT_MODE_APPROVAL_PENDING, AGENT_MODE_DIRECT_ACTIVE}:
-            return external_agent_error(AGENT_ERROR_MODE_NOT_WRITABLE, terminal_id=terminal_id)
         data = command.get('data')
-        proposal = external_agent_build_terminal_input_action(state, data)
-        requires_approval = state.mode != AGENT_MODE_DIRECT_ACTIVE
-        with agent_lock:
-            action, error_code = build_agent_action(state, proposal, requires_approval)
-            if error_code:
-                return external_agent_error(error_code, terminal_id=terminal_id)
-            record_agent_audit_event(
-                state,
-                AGENT_AUDIT_EXTERNAL_AGENT_SEND,
-                action=action,
-                external_agent_id=record.get('external_agent_id'),
+        bridge = get_bridge(record.get('session_token'), terminal_id)
+        if not bridge:
+            return external_agent_error(AGENT_ERROR_TERMINAL_NOT_FOUND, terminal_id=terminal_id)
+        with bridge.input_lock:
+            with agent_lock:
+                if state.paused or state.mode == AGENT_MODE_PAUSED:
+                    return external_agent_error(AGENT_ERROR_PAUSED, terminal_id=terminal_id)
+                if not is_agent_context_allowed(state):
+                    return external_agent_error(AGENT_ERROR_PRIVACY_BLOCKED, terminal_id=terminal_id)
+                if is_agent_human_input_lease_active(state):
+                    return external_agent_error(AGENT_ERROR_HUMAN_INPUT_ACTIVE, terminal_id=terminal_id)
+                if state.mode not in {AGENT_MODE_APPROVAL_PENDING, AGENT_MODE_DIRECT_ACTIVE}:
+                    return external_agent_error(AGENT_ERROR_MODE_NOT_WRITABLE, terminal_id=terminal_id)
+                proposal = external_agent_build_terminal_input_action(state, data)
+                requires_approval = state.mode != AGENT_MODE_DIRECT_ACTIVE
+                action, error_code = build_agent_action(state, proposal, requires_approval)
+                if error_code:
+                    return external_agent_error(error_code, terminal_id=terminal_id)
+                record_agent_audit_event(
+                    state,
+                    AGENT_AUDIT_EXTERNAL_AGENT_SEND,
+                    action=action,
+                    external_agent_id=record.get('external_agent_id'),
+                )
+                socketio.emit(AGENT_EVENT_ACTION_REQUEST, public_agent_action(action), room=state.sid)
+                emit_agent_state(state.sid, state)
+            if requires_approval:
+                payload = public_agent_action(action)
+                payload['status'] = AGENT_STATUS_PENDING_APPROVAL
+                return payload
+            ok, result = write_agent_terminal_input(
+                record.get('session_token'),
+                terminal_id,
+                state.sid,
+                action['action_id'],
+                action['control_epoch'],
+                mode_version=action['mode_version'],
+                proposal_id=action['proposal_id'],
             )
-            socketio.emit(AGENT_EVENT_ACTION_REQUEST, public_agent_action(action), room=state.sid)
-            emit_agent_state(state.sid, state)
-        if requires_approval:
-            payload = public_agent_action(action)
-            payload['status'] = AGENT_STATUS_PENDING_APPROVAL
-            return payload
-        ok, result = write_agent_terminal_input(
-            record.get('session_token'),
-            terminal_id,
-            state.sid,
-            action['action_id'],
-            action['control_epoch'],
-            mode_version=action['mode_version'],
-            proposal_id=action['proposal_id'],
-        )
         status = AGENT_STATUS_COMPLETED if ok else AGENT_STATUS_FAILED
         if result.get('error_code'):
             status = result['error_code']
@@ -4827,11 +4912,15 @@ def on_ssh_input(data):
     if len(ssh_input.encode('utf-8', errors='ignore')) > MAX_SSH_INPUT_BYTES:
         return
     log_terminal_input(request.sid, terminal_id, ssh_input)
-    with agent_lock:
-        state = get_agent_state(session_token, terminal_id, request.sid)
-        privacy_state = state.privacy_state if state else AGENT_PRIVACY_NORMAL
-    agent_user_input_metadata_store.append_input(session_token, terminal_id, ssh_input, privacy_state=privacy_state)
-    bridge.write(ssh_input)
+    with bridge.input_lock:
+        with agent_lock:
+            state = get_agent_state(session_token, terminal_id, request.sid)
+            privacy_state = state.privacy_state if state else AGENT_PRIVACY_NORMAL
+            updated_states = note_agent_human_input_for_terminal(session_token, terminal_id)
+        agent_user_input_metadata_store.append_input(session_token, terminal_id, ssh_input, privacy_state=privacy_state)
+        bridge.write(ssh_input)
+    for updated_state in updated_states:
+        emit_agent_state(updated_state.sid, updated_state)
 
 @socketio.on('resize')
 def on_resize(data):
