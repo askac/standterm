@@ -25,6 +25,7 @@ except ImportError:
 
 STOP = object()
 FATAL_AGENT_ERRORS = {
+    'agent_not_attached',
     'agent_paused',
     'agent_privacy_blocked',
     'agent_mode_not_writable',

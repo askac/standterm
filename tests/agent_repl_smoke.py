@@ -59,6 +59,17 @@ def test_send_worker_stops_on_fatal_error():
     assert stop_event.is_set() is True
 
 
+def test_send_worker_stops_on_not_attached_error():
+    client, stop_event = run_send_worker(
+        ['x'],
+        responses=[{'status': 'failed', 'error_code': 'agent_not_attached'}],
+    )
+    assert client.requests == [
+        ('send', {'data': 'x'}),
+    ]
+    assert stop_event.is_set() is True
+
+
 def test_send_worker_drops_queued_input_after_fatal_error():
     client, stop_event = run_send_worker(
         ['x', 'y'],
@@ -82,13 +93,27 @@ def test_send_worker_keeps_running_on_transient_human_lease():
     assert stop_event.is_set() is False
 
 
+def test_tail_worker_stops_on_not_attached_error():
+    client = FakeClient(responses=[
+        {'status': 'failed', 'error_code': 'agent_not_attached'},
+    ])
+    stop_event = threading.Event()
+    repl.tail_worker(client, 0, stop_event, poll_seconds=0, limit=10)
+    assert client.requests == [
+        ('tail', {'since_output_seq': 0, 'limit': 10}),
+    ]
+    assert stop_event.is_set() is True
+
+
 def main():
     tests = [
         test_normalize_key_modes,
         test_send_worker_coalesces_pending_input_on_stop,
         test_send_worker_stops_on_fatal_error,
+        test_send_worker_stops_on_not_attached_error,
         test_send_worker_drops_queued_input_after_fatal_error,
         test_send_worker_keeps_running_on_transient_human_lease,
+        test_tail_worker_stops_on_not_attached_error,
     ]
     for test in tests:
         test()
