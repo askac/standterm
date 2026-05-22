@@ -781,6 +781,12 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
     token_payload = response.get_json()
     assert token_payload['status'] == 'ok'
     assert token_payload['token'].startswith('agt_')
+    assert token_payload['cli_command'].endswith("send --text 'pwd\n'")
+    handoff = Path(token_payload['handoff_path'])
+    assert handoff.is_file()
+    handoff_payload = webssh.json.loads(handoff.read_text(encoding='utf-8'))
+    assert handoff_payload['token'] == token_payload['token']
+    assert handoff_payload['cli_command'] == token_payload['cli_command']
 
     response = flask_client.post('/agent/external/command', json={
         'op': 'send',
@@ -792,6 +798,21 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
     result = response.get_json()
     assert result['status'] == webssh.AGENT_STATUS_COMPLETED
     assert ''.join(bridge.writes) == 'http-external\n'
+
+    webssh.AGENT_EXTERNAL_DEV_TOKEN_ENABLED = True
+    try:
+        response = flask_client.post('/agent/external/dev-command', json={
+            'op': 'send',
+            'terminal_id': webssh.TERMINAL_ID_MAIN,
+            'data': 'http-dev-external\n',
+        })
+    finally:
+        webssh.AGENT_EXTERNAL_DEV_TOKEN_ENABLED = False
+    assert response.status_code == 200
+    result = response.get_json()
+    assert result['status'] == webssh.AGENT_STATUS_COMPLETED
+    assert result['dev_token'] is True
+    assert ''.join(bridge.writes) == 'http-external\nhttp-dev-external\n'
 
     client.disconnect()
 

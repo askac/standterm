@@ -95,7 +95,11 @@ The browser mints tokens through `POST /agent/external/token` using the current
 authenticated WebSSH session cookie and public Agent state fields for the active
 terminal. External clients submit commands through `POST /agent/external/command`,
 which is accepted only from loopback clients and still requires the `agt_...`
-token. The CLI wrapper is intentionally small and speaks this JSON command
+token. When a token is minted, the server also writes the latest local handoff
+JSON to the platform temp directory as `webssh_external_agent_handoff.json`.
+This file is only a local convenience for CLI agents on the WebSSH host; it does
+not bypass the short-lived token, loopback-only command endpoint, or Agent panel
+mode gates. The CLI wrapper is intentionally small and speaks this JSON command
 contract:
 
 ```bash
@@ -105,6 +109,22 @@ tools/.venv_wsl/bin/python scripts/webssh_agent_cli.py \
   --terminal main \
   send --text "pwd\n"
 ```
+
+For terminal-like interaction, use the persistent REPL wrapper instead of
+starting one CLI process per line:
+
+```bash
+tools/.venv_wsl/bin/python scripts/webssh_agent_repl.py \
+  --url http://127.0.0.1:5012 \
+  --terminal main
+```
+
+The REPL keeps one local process alive, coalesces local keyboard input before
+calling `send`, and renders remote output from `tail` using `output_seq` as its
+cursor. `screen` is only a provisional initial viewport/debug source; it is not
+the authoritative terminal stream. The local detach key is `Ctrl-]`. In dev
+servers started with `WEBSSH_AGENT_DEV_TOKEN=1`, the REPL may omit `--token` and
+use the loopback-only dev command endpoint.
 
 ### External Command Shape
 

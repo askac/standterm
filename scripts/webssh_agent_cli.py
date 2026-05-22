@@ -9,7 +9,7 @@ import urllib.request
 def parse_args():
     parser = argparse.ArgumentParser(description='WebSSH external agent CLI')
     parser.add_argument('--url', required=True, help='WebSSH base URL, for example http://127.0.0.1:5010')
-    parser.add_argument('--token', required=True, help='External agent attach token')
+    parser.add_argument('--token', help='External agent attach token. Omit only on dev servers with WEBSSH_AGENT_DEV_TOKEN=1.')
     parser.add_argument('--terminal', default='main', help='Terminal id')
     subparsers = parser.add_subparsers(dest='command', required=True)
 
@@ -33,9 +33,10 @@ def parse_args():
 def command_payload(args):
     payload = {
         'op': args.command,
-        'token': args.token,
         'terminal_id': args.terminal,
     }
+    if args.token:
+        payload['token'] = args.token
     if args.command == 'tail':
         payload['since_output_seq'] = args.since
         payload['limit'] = args.limit
@@ -44,8 +45,9 @@ def command_payload(args):
     return payload
 
 
-def post_json(base_url, payload):
-    url = base_url.rstrip('/') + '/agent/external/command'
+def post_json(base_url, payload, dev_mode=False):
+    path = '/agent/external/dev-command' if dev_mode else '/agent/external/command'
+    url = base_url.rstrip('/') + path
     data = json.dumps(payload).encode('utf-8')
     request = urllib.request.Request(
         url,
@@ -71,7 +73,7 @@ def print_result(result):
 
 def main():
     args = parse_args()
-    _status, result = post_json(args.url, command_payload(args))
+    _status, result = post_json(args.url, command_payload(args), dev_mode=not bool(args.token))
     print_result(result)
     return 0 if result.get('status') != 'failed' else 1
 

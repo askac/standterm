@@ -2215,8 +2215,11 @@
                         agentExternalCommand.value = `error: ${result.error_code || response.status}`;
                         return;
                     }
-                    const cli = `tools/.venv_wsl/bin/python scripts/webssh_agent_cli.py --url ${shellQuote(result.url)} --token ${shellQuote(result.token)} --terminal ${shellQuote(result.terminal_id)} send --text ${shellQuote('pwd\n')}`;
+                    const cli = result.cli_command || `tools/.venv_wsl/bin/python scripts/webssh_agent_cli.py --url ${shellQuote(result.url)} --token ${shellQuote(result.token)} --terminal ${shellQuote(result.terminal_id)} send --text ${shellQuote('pwd\n')}`;
                     agentExternalCommand.value = cli;
+                    if (result.handoff_path) {
+                        agentExternalCommand.value += `\n# local handoff: ${result.handoff_path}`;
+                    }
                     agentExternalCommand.select();
                 } catch (error) {
                     agentExternalCommand.value = `error: ${error.message || error}`;

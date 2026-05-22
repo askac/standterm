@@ -16,6 +16,8 @@ import json
 import hmac
 import hashlib
 import threading
+import tempfile
+import shlex
 from collections import deque
 from pathlib import Path
 from flask import Flask, render_template, request, abort, make_response, redirect, send_file, jsonify
@@ -61,6 +63,7 @@ SSH_PORT = 22
 SSH_USER = os.getenv('USER', 'aska')
 DEFAULT_BIND_HOST = os.getenv('WEBSSH_HOST', '').strip()
 DEFAULT_PORT = int(os.getenv('WEBSSH_PORT', '5000'))
+AGENT_EXTERNAL_DEV_TOKEN_ENABLED = os.getenv('WEBSSH_AGENT_DEV_TOKEN', '').strip().lower() in {'1', 'true', 'yes', 'on'}
 SSH_TERM = 'xterm-256color'
 MAX_SSH_INPUT_BYTES = 65536
 MAX_PASSWORD_BYTES = 4096
@@ -3596,6 +3599,58 @@ def external_agent_json_response(payload, status_code=200):
     response.status_code = status_code
     return add_common_headers(response)
 
+def build_external_agent_cli_command(base_url, token, terminal_id, op='send', text='pwd\n'):
+    args = [
+        'tools/.venv_wsl/bin/python',
+        'scripts/webssh_agent_cli.py',
+        '--url',
+        base_url,
+        '--token',
+        token,
+        '--terminal',
+        terminal_id,
+    ]
+    if op == 'send':
+        args.extend(['send', '--text', text])
+    else:
+        args.append(op)
+    return ' '.join(shlex.quote(arg) for arg in args)
+
+def write_external_agent_handoff(payload):
+    handoff_path = Path(tempfile.gettempdir()) / 'webssh_external_agent_handoff.json'
+    tmp_path = handoff_path.with_suffix('.json.tmp')
+    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+    try:
+        os.chmod(tmp_path, 0o600)
+    except OSError:
+        pass
+    tmp_path.replace(handoff_path)
+    return str(handoff_path)
+
+def build_external_agent_token_payload(token, record, terminal_id, base_url):
+    cli_command = build_external_agent_cli_command(base_url, token, terminal_id)
+    payload = {
+        'status': 'ok',
+        'token': token,
+        'terminal_id': terminal_id,
+        'external_agent_id': record.get('external_agent_id'),
+        'expires_at': record.get('expires_at'),
+        'url': base_url,
+        'cli_command': cli_command,
+    }
+    payload['handoff_path'] = write_external_agent_handoff(payload)
+    return payload
+
+def find_external_agent_dev_state(terminal_id):
+    with agent_lock:
+        matches = [
+            state for state in agent_states.values()
+            if state.terminal_id == terminal_id
+            and get_bridge(state.session_token, state.terminal_id)
+            and is_external_agent_state_visible(state)
+        ]
+        return matches[-1] if matches else None
+
 @app.route('/agent/external/token', methods=['POST'])
 def external_agent_token():
     session_token = get_request_session_token()
@@ -3629,14 +3684,72 @@ def external_agent_token():
     )
     if error_code:
         return external_agent_json_response(external_agent_error(error_code, terminal_id=terminal_id), 409)
-    return external_agent_json_response({
-        'status': 'ok',
-        'token': token,
-        'terminal_id': terminal_id,
-        'external_agent_id': record.get('external_agent_id'),
-        'expires_at': record.get('expires_at'),
-        'url': request.host_url.rstrip('/'),
-    })
+    return external_agent_json_response(build_external_agent_token_payload(
+        token,
+        record,
+        terminal_id,
+        request.host_url.rstrip('/'),
+    ))
+
+@app.route('/agent/external/dev-token', methods=['GET', 'POST'])
+def external_agent_dev_token():
+    if not AGENT_EXTERNAL_DEV_TOKEN_ENABLED or not is_loopback_client_request():
+        return external_agent_json_response(external_agent_error(AGENT_ERROR_EXTERNAL_AGENT_UNAUTHORIZED), 403)
+    requested_terminal_id = request.args.get('terminal_id') or TERMINAL_ID_MAIN
+    if not is_valid_terminal_id(requested_terminal_id):
+        return external_agent_json_response(external_agent_error(AGENT_ERROR_ACTION_INVALID_DATA), 400)
+    state = find_external_agent_dev_state(requested_terminal_id)
+    if not state:
+        return external_agent_json_response(
+            external_agent_error(AGENT_ERROR_NOT_ATTACHED, terminal_id=requested_terminal_id),
+            404,
+        )
+    token, record, error_code = mint_external_agent_attach_token(
+        state.session_token,
+        state.terminal_id,
+        state.sid,
+    )
+    if error_code:
+        return external_agent_json_response(external_agent_error(error_code, terminal_id=requested_terminal_id), 409)
+    payload = build_external_agent_token_payload(
+        token,
+        record,
+        state.terminal_id,
+        request.host_url.rstrip('/'),
+    )
+    payload['dev_token'] = True
+    return external_agent_json_response(payload)
+
+@app.route('/agent/external/dev-command', methods=['POST'])
+def external_agent_dev_command():
+    if not AGENT_EXTERNAL_DEV_TOKEN_ENABLED or not is_loopback_client_request():
+        return external_agent_json_response(external_agent_error(AGENT_ERROR_EXTERNAL_AGENT_UNAUTHORIZED), 403)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return external_agent_json_response(external_agent_error(AGENT_ERROR_ACTION_INVALID_DATA), 400)
+    terminal_id = validate_terminal_id_payload(data, default=TERMINAL_ID_MAIN)
+    if not terminal_id:
+        return external_agent_json_response(external_agent_error(AGENT_ERROR_ACTION_INVALID_DATA), 400)
+    state = find_external_agent_dev_state(terminal_id)
+    if not state:
+        return external_agent_json_response(
+            external_agent_error(AGENT_ERROR_NOT_ATTACHED, terminal_id=terminal_id),
+            404,
+        )
+    token, _record, error_code = mint_external_agent_attach_token(
+        state.session_token,
+        state.terminal_id,
+        state.sid,
+    )
+    if error_code:
+        return external_agent_json_response(external_agent_error(error_code, terminal_id=terminal_id), 409)
+    command = dict(data)
+    command['token'] = token
+    command['terminal_id'] = state.terminal_id
+    payload = process_external_agent_command(command)
+    status_code = 200 if payload.get('status') != AGENT_STATUS_FAILED else 400
+    payload['dev_token'] = True
+    return external_agent_json_response(payload, status_code)
 
 @app.route('/agent/external/command', methods=['POST'])
 def external_agent_command():
