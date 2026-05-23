@@ -72,6 +72,12 @@ Request a browser-rendered terminal PNG:
 <python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json render
 ```
 
+Save a browser-rendered terminal PNG without printing base64 to stdout:
+
+```text
+<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json render --save viewport.png
+```
+
 Read terminal output events:
 
 ```text

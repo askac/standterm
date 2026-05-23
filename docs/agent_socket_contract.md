@@ -298,6 +298,18 @@ Read rendered xterm viewport:
 }
 ```
 
+The CLI wrapper can save the returned PNG directly:
+
+```bash
+tools/.venv_wsl/bin/python scripts/webssh_agent_cli.py \
+  --handoff webssh_external_agent_handoff.json \
+  render --save viewport.png
+```
+
+When `--save` is used, the CLI writes `render.image_base64` to the given path,
+omits `image_base64` from stdout, and adds `render.saved_path` to the printed
+JSON metadata.
+
 `render` asks the authorizing browser viewer for a typed in-memory PNG capture
 of the currently rendered xterm viewport. The server emits
 `agent_viewport_render_request` to that browser sid, waits up to `wait_ms`, then

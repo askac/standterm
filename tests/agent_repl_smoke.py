@@ -2,6 +2,7 @@ import io
 import json
 import queue
 import sys
+import tempfile
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -306,6 +307,26 @@ def test_cli_send_wait_strip_ansi_payload_requests_plain_capture():
     }
 
 
+def test_cli_render_save_writes_png_and_redacts_base64():
+    one_pixel_png = 'iVBORw0KGgo='
+    result = {
+        'status': 'ok',
+        'render': {
+            'mime_type': 'image/png',
+            'image_base64': one_pixel_png,
+            'image_byte_length': 8,
+        },
+    }
+    with tempfile.TemporaryDirectory() as temp_dir:
+        path = str(Path(temp_dir) / 'viewport.png')
+        output = cli.save_render_image(result, path)
+        assert Path(path).read_bytes() == b'\x89PNG\r\n\x1a\n'
+    assert result['render']['image_base64'] == one_pixel_png
+    assert 'image_base64' not in output['render']
+    assert output['render']['saved_path'].endswith('viewport.png')
+    assert output['render']['image_byte_length'] == 8
+
+
 def test_jsonl_client_reuses_defaults_and_preserves_ids():
     fake_post = FakePostJson(responses=[
         (200, {'status': 'completed', 'bytes_written': 4}),
@@ -408,6 +429,7 @@ def main():
         test_cli_send_capture_payload,
         test_cli_send_wait_payload_requests_capture,
         test_cli_send_wait_strip_ansi_payload_requests_plain_capture,
+        test_cli_render_save_writes_png_and_redacts_base64,
         test_jsonl_client_reuses_defaults_and_preserves_ids,
         test_jsonl_client_reports_invalid_json_as_jsonl_error,
         test_jsonl_client_preserves_backend_failed_result,

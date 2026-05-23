@@ -196,6 +196,7 @@ CLI examples:
 ```bash
 python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json hello
 python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json render
+python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json render --save viewport.png
 python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json screen --tail-lines 12
 python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json screen --region 0:12
 python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json tail --since 0 --limit 50

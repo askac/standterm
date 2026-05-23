@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import argparse
+import base64
+import copy
 import json
 import ssl
 import sys
@@ -27,6 +29,7 @@ def parse_args():
 
     render_parser = subparsers.add_parser('render')
     render_parser.add_argument('--wait-ms', type=int, default=3000, help='Maximum browser render wait time')
+    render_parser.add_argument('--save', help='Save returned PNG image bytes to this path and omit image_base64 from stdout')
 
     tail_parser = subparsers.add_parser('tail')
     tail_parser.add_argument('--since', type=int, default=0, help='Only return events after this output_seq')
@@ -168,6 +171,29 @@ def print_result(result):
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
 
 
+def save_render_image(result, path):
+    render = result.get('render') if isinstance(result, dict) else None
+    image_base64 = render.get('image_base64') if isinstance(render, dict) else None
+    if not isinstance(image_base64, str) or not image_base64:
+        raise SystemExit('render response does not include render.image_base64')
+    try:
+        image_bytes = base64.b64decode(image_base64, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise SystemExit(f'failed to decode render.image_base64: {exc}') from exc
+    try:
+        with open(path, 'wb') as handle:
+            handle.write(image_bytes)
+    except OSError as exc:
+        raise SystemExit(f'failed to save render image: {exc}') from exc
+
+    output = copy.deepcopy(result)
+    output_render = output.get('render')
+    if isinstance(output_render, dict):
+        output_render.pop('image_base64', None)
+        output_render['saved_path'] = path
+    return output
+
+
 def main():
     args = parse_args()
     _status, result = post_json(
@@ -177,6 +203,8 @@ def main():
         ca_file=args.ca_file,
         insecure=args.insecure,
     )
+    if result.get('status') != 'failed' and args.command == 'render' and args.save:
+        result = save_render_image(result, args.save)
     print_result(result)
     return 0 if result.get('status') != 'failed' else 1
 
