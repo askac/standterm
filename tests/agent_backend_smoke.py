@@ -1727,6 +1727,9 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             assert 'strip_ansi' in token_payload['capabilities']
             assert token_payload['transport']['type'] == 'loopback_http_json'
             assert token_payload['transport']['loopback_only'] is True
+            assert token_payload['transport']['command_endpoint'].endswith('/agent/external/command')
+            assert token_payload['url'] == token_payload['transport']['command_endpoint'].rsplit('/agent/external/command', 1)[0]
+            assert token_payload['browser_url'].startswith('http://')
             assert token_payload['operations']['render']['op'] == 'render'
             assert token_payload['operations']['screen_tail'] == {'op': 'screen', 'tail_lines': 12}
             assert token_payload['operations']['screen_region'] == {
@@ -1747,6 +1750,7 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             )
             assert token_payload['security']['remote_use_requires_loopback_tunnel'] is True
             assert token_payload['cli_command'].endswith("send --text 'pwd\n'")
+            assert f"--url {token_payload['url']}" in token_payload['cli_command']
             assert token_payload['cli_commands']['hello'].endswith('hello')
             assert token_payload['cli_commands']['render'].endswith('render')
             assert token_payload['cli_commands']['screen_tail'].endswith("screen --tail-lines 12")
@@ -1761,6 +1765,8 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             assert handoff.is_file()
             handoff_payload = webssh.json.loads(handoff.read_text(encoding='utf-8'))
             assert handoff_payload['token'] == token_payload['token']
+            assert handoff_payload['url'] == token_payload['url']
+            assert handoff_payload['browser_url'] == token_payload['browser_url']
             assert handoff_payload['cli_command'] == token_payload['cli_command']
             assert handoff_payload['capabilities'] == token_payload['capabilities']
             assert handoff_payload['cli_commands']['render'] == token_payload['cli_commands']['render']
@@ -1796,6 +1802,17 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
     client.disconnect()
 
 
+def test_external_agent_handoff_uses_loopback_command_url_for_non_loopback_browser_url():
+    payload = webssh.build_external_agent_discovery_payload(
+        'https://172.17.186.221:5000',
+        'agt_unit',
+        webssh.TERMINAL_ID_MAIN,
+    )
+    assert payload['transport']['command_endpoint'] == 'https://127.0.0.1:5000/agent/external/command'
+    assert "--url https://127.0.0.1:5000" in payload['cli_commands']['hello']
+    assert "--url https://127.0.0.1:5000" in payload['cli_commands']['jsonl']
+
+
 def test_external_agent_startup_lines_point_to_launch_handoff():
     original_https_enabled = webssh.HTTPS_ENABLED
     lines = webssh.build_external_agent_startup_lines()
@@ -1810,9 +1827,11 @@ def test_external_agent_startup_lines_point_to_launch_handoff():
     assert str(webssh.APP_DIR / 'scripts' / 'webssh_agent_cli.py') in joined
     assert webssh.sys.executable in joined
     assert '--handoff' in hello_line
+    assert f'--url http://127.0.0.1:{webssh.DEFAULT_PORT}' in hello_line
     assert str(webssh.EXTERNAL_AGENT_HANDOFF_PATH) in hello_line
     assert hello_line.endswith(' hello')
     assert '--handoff' in render_line
+    assert f'--url http://127.0.0.1:{webssh.DEFAULT_PORT}' in render_line
     assert str(webssh.EXTERNAL_AGENT_HANDOFF_PATH) in render_line
     assert render_line.endswith(' render')
     assert 'after browser Agent attach and external token mint' in joined
@@ -1823,6 +1842,7 @@ def test_external_agent_startup_lines_point_to_launch_handoff():
     finally:
         webssh.HTTPS_ENABLED = original_https_enabled
     tls_joined = '\n'.join(tls_lines)
+    assert f'--url https://127.0.0.1:{webssh.DEFAULT_PORT}' in tls_joined
     if webssh.LOCAL_CA_CERT_PATH.is_file() and not (webssh.CLI_ARGS.certfile or webssh.CLI_ARGS.keyfile):
         assert '--ca-file' in tls_joined
         assert str(webssh.LOCAL_CA_CERT_PATH) in tls_joined
@@ -2455,6 +2475,7 @@ def main():
         test_external_agent_token_revoke_and_terminal_close_invalidate_access,
         test_external_agent_expired_and_wrong_terminal_tokens_are_rejected,
         test_external_agent_http_bridge_mints_token_and_accepts_cli_command,
+        test_external_agent_handoff_uses_loopback_command_url_for_non_loopback_browser_url,
         test_external_agent_startup_lines_point_to_launch_handoff,
         test_wsl_local_shell_choice_is_structured_and_wsl_only,
         test_agent_audit_records_typed_events_without_raw_action_data,

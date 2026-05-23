@@ -40,12 +40,17 @@ If the user only provides this skill prompt and asks you to operate WebSSH:
    state, or terminal lifecycle, then mint a new token.
    External tokens use a sliding idle timeout; active `hello`, `tail`, `render`,
    `send`, or REPL traffic keeps the current token alive.
-6. For `agent_external_unauthorized` with a non-expired-looking handoff, assume
-   the file may be stale, test-generated, or from another server process. Ask
-   the user to mint a fresh token from the live browser Agent UI.
-7. If the handoff `url` or `transport.command_endpoint` does not match the
-   observed running WebSSH server, do not patch around it by guessing a port;
-   mint a fresh token.
+6. For `agent_external_unauthorized`, first check typed handoff fields before
+   assuming the token is stale. If `transport.loopback_only` or
+   `security.remote_use_requires_loopback_tunnel` is true and an older handoff
+   uses a non-loopback `url` / `transport.command_endpoint`, retry the same
+   token and CA against `https://127.0.0.1:<same-port>` or
+   `http://127.0.0.1:<same-port>`. Only ask for a fresh token if the loopback
+   retry also fails.
+7. Do not guess a different port. Replacing a browser-facing host with
+   loopback on the same port is allowed when `loopback_only` is true; otherwise
+   if the handoff does not match the observed running WebSSH server, mint a
+   fresh token.
 
 ## Commands
 

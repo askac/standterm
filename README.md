@@ -186,6 +186,10 @@ expose it outside the WebSSH host.
 The handoff file is a convenience for the latest minted token. For
 multi-terminal checks, pass explicit `--url`, `--token`, and `--terminal` values
 from the token payload instead of relying on the single latest handoff file.
+External-agent commands are loopback-only: even when the browser uses a WSL or
+LAN URL, the handoff `url`, `transport.command_endpoint`, and generated CLI
+commands use loopback for the command endpoint. The browser-facing address is
+recorded separately as `browser_url`.
 
 CLI examples:
 

@@ -17,6 +17,7 @@ import hmac
 import hashlib
 import threading
 import shlex
+import urllib.parse
 from collections import deque
 from pathlib import Path
 from flask import Flask, render_template, request, abort, make_response, redirect, send_file, jsonify
@@ -4284,6 +4285,33 @@ def get_external_agent_cli_tls_args():
         return ['--ca-file', ca_cert_path]
     return []
 
+def is_loopback_url_host(host):
+    if not host:
+        return False
+    if host == 'localhost':
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+def build_external_agent_loopback_base_url(base_url):
+    base_url = base_url.rstrip('/')
+    try:
+        parsed = urllib.parse.urlsplit(base_url)
+        if is_loopback_url_host(parsed.hostname):
+            return base_url
+        netloc = '127.0.0.1'
+        if parsed.port is not None:
+            netloc = f'{netloc}:{parsed.port}'
+        return urllib.parse.urlunsplit((parsed.scheme, netloc, parsed.path.rstrip('/'), '', ''))
+    except ValueError:
+        return base_url
+
+def get_external_agent_local_base_url():
+    scheme = 'https' if HTTPS_ENABLED else 'http'
+    return f'{scheme}://127.0.0.1:{DEFAULT_PORT}'
+
 def build_external_agent_cli_command(base_url, token, terminal_id, op='send', text='pwd\n',
                                      extra_args=None):
     args = [
@@ -4378,9 +4406,10 @@ def build_external_agent_cli_commands(base_url, token, terminal_id):
     }
 
 def build_external_agent_discovery_payload(base_url, token, terminal_id):
+    command_base_url = build_external_agent_loopback_base_url(base_url)
     transport = {
         'type': 'loopback_http_json',
-        'command_endpoint': base_url.rstrip('/') + '/agent/external/command',
+        'command_endpoint': command_base_url.rstrip('/') + '/agent/external/command',
         'loopback_only': True,
         'tls_verify': True,
     }
@@ -4441,7 +4470,7 @@ def build_external_agent_discovery_payload(base_url, token, terminal_id):
             },
             'revoke': {'op': 'revoke'},
         },
-        'cli_commands': build_external_agent_cli_commands(base_url, token, terminal_id),
+        'cli_commands': build_external_agent_cli_commands(command_base_url, token, terminal_id),
         'security': {
             'token_prefix': 'agt_',
             'token_is_secret': True,
@@ -4464,7 +4493,8 @@ def write_external_agent_handoff(payload):
     return str(handoff_path)
 
 def build_external_agent_token_payload(token, record, terminal_id, base_url):
-    discovery = build_external_agent_discovery_payload(base_url, token, terminal_id)
+    command_base_url = build_external_agent_loopback_base_url(base_url)
+    discovery = build_external_agent_discovery_payload(command_base_url, token, terminal_id)
     cli_command = discovery['cli_commands']['send_pwd']
     payload = {
         'status': 'ok',
@@ -4472,7 +4502,8 @@ def build_external_agent_token_payload(token, record, terminal_id, base_url):
         'terminal_id': terminal_id,
         'external_agent_id': record.get('external_agent_id'),
         'expires_at': record.get('expires_at'),
-        'url': base_url,
+        'url': command_base_url,
+        'browser_url': base_url,
         'cli_command': cli_command,
     }
     payload.update(discovery)
@@ -4489,11 +4520,14 @@ def build_external_agent_startup_lines():
     python_arg = sys.executable
     cli_arg = str(APP_DIR / 'scripts' / 'webssh_agent_cli.py')
     handoff_arg = str(EXTERNAL_AGENT_HANDOFF_PATH)
+    loopback_url = build_external_agent_loopback_base_url(get_external_agent_local_base_url())
     hello_command = quote_local_command([
-        python_arg, cli_arg, '--handoff', handoff_arg, *get_external_agent_cli_tls_args(), 'hello',
+        python_arg, cli_arg, '--handoff', handoff_arg, '--url', loopback_url,
+        *get_external_agent_cli_tls_args(), 'hello',
     ])
     render_command = quote_local_command([
-        python_arg, cli_arg, '--handoff', handoff_arg, *get_external_agent_cli_tls_args(), 'render',
+        python_arg, cli_arg, '--handoff', handoff_arg, '--url', loopback_url,
+        *get_external_agent_cli_tls_args(), 'render',
     ])
     return [
         f"External Agent Handoff: {EXTERNAL_AGENT_HANDOFF_PATH}",

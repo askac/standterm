@@ -107,6 +107,10 @@ Agent panel mode gates. It is also the machine-readable discovery document for
 non-WebSSH agents. It includes `handoff_schema`, `schema_version`,
 `protocol_version`, `transport`, `capabilities`, operation templates, and
 ready-to-run CLI commands.
+Because `/agent/external/command` only accepts loopback clients, the handoff
+`url`, `transport.command_endpoint`, and generated CLI commands use a loopback
+host even when the browser-facing WebSSH URL is a WSL or LAN address. The
+browser-facing address is retained as `browser_url`.
 Agents should call `hello` first when possible and branch only on the typed
 `capabilities` field, not on displayed terminal text.
 See `docs/examples/webssh-external-agent-skill/SKILL.md` and the adjacent
