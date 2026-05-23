@@ -140,8 +140,14 @@ tools/.venv_wsl/bin/python scripts/webssh_agent_cli.py \
   --url http://127.0.0.1:5010 \
   --token agt_... \
   --terminal main \
-  send --text "pwd\n"
+  send --text $'pwd\r'
 ```
+
+CLI `--text` is sent verbatim. Normal quoted strings do not decode backslash
+escapes, so `--text "pwd\n"` sends literal backslash and `n` bytes. In bash,
+use `$'...'` to send a real control byte such as carriage return. On Windows
+shells, prefer `--stdin` or the JSONL wrapper for portable line breaks.
+PTY-style interactive programs usually expect carriage return (`\r`) for Enter.
 
 For terminal-like interaction, use the persistent REPL wrapper instead of
 starting one CLI process per line:
@@ -183,7 +189,7 @@ Each stdin line is a JSON command object. The wrapper fills in the default
 caller-supplied `id`, and returns one JSON response per stdout line:
 
 ```json
-{"id":"1","op":"send-wait","data":"pwd\n","wait_ms":2000}
+{"id":"1","op":"send-wait","data":"pwd\r","wait_ms":2000}
 ```
 
 ```json
@@ -193,6 +199,9 @@ caller-supplied `id`, and returns one JSON response per stdout line:
 The JSONL wrapper is sequential in its first version. Long-poll commands such
 as `send-wait` block the next stdin command until their HTTP response returns.
 It must not print the bearer token or full handoff JSON.
+JSONL `data` is JSON-decoded, so escapes such as `\r` and `\n` become real
+control bytes before sending; this is intentionally different from raw CLI
+`--text`.
 
 ### External Command Shape
 
@@ -385,7 +394,7 @@ Propose terminal input:
   "op": "send",
   "token": "agt_...",
   "terminal_id": "main",
-  "data": "pwd\n"
+  "data": "pwd\r"
 }
 ```
 
@@ -403,7 +412,7 @@ terminal `output_seq` just before the direct write as the cursor:
   "op": "send",
   "token": "agt_...",
   "terminal_id": "main",
-  "data": "pwd\n",
+  "data": "pwd\r",
   "capture": true,
   "wait_ms": 3000,
   "settle_ms": 150,

@@ -34,20 +34,23 @@ If the user only provides this skill prompt and asks you to operate WebSSH:
    Do not use displayed text as an application control signal.
 4. Use explicit `--url`, `--token`, and `--terminal` for multi-terminal checks.
    The handoff file stores only the latest minted token.
-5. For `agent_external_expired` or `agent_external_revoked`, ask for a fresh
+5. Track the terminal application's current view before sending
+   mode-dependent keys. The same byte sequence can mean different things in a
+   list, prompt, pager, or editor view.
+6. For `agent_external_expired` or `agent_external_revoked`, ask for a fresh
    token. For `agent_external_disabled`, `agent_not_attached`, or
    `terminal_not_found`, first fix the browser Agent panel, external access
    state, or terminal lifecycle, then mint a new token.
    External tokens use a sliding idle timeout; active `hello`, `tail`, `render`,
    `send`, or REPL traffic keeps the current token alive.
-6. For `agent_external_unauthorized`, first check typed handoff fields before
+7. For `agent_external_unauthorized`, first check typed handoff fields before
    assuming the token is stale. If `transport.loopback_only` or
    `security.remote_use_requires_loopback_tunnel` is true and an older handoff
    uses a non-loopback `url` / `transport.command_endpoint`, retry the same
    token and CA against `https://127.0.0.1:<same-port>` or
    `http://127.0.0.1:<same-port>`. Only ask for a fresh token if the loopback
    retry also fails.
-7. Do not guess a different port. Replacing a browser-facing host with
+8. Do not guess a different port. Replacing a browser-facing host with
    loopback on the same port is allowed when `loopback_only` is true; otherwise
    if the handoff does not match the observed running WebSSH server, mint a
    fresh token.
@@ -94,25 +97,34 @@ large:
 
 Send input only when Agent mode allows it:
 
-```text
-<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json send --text "pwd\n"
+```bash
+<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json send --text $'pwd\r'
 ```
 
 Prefer atomic send-and-observe when the server advertises `send_capture`:
 
-```text
-<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json send-wait --text "pwd\n"
+```bash
+<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json send-wait --text $'pwd\r'
 ```
 
-```text
-<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json send-wait --text "pwd\n" --strip-ansi
+```bash
+<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json send-wait --text $'pwd\r' --strip-ansi
 ```
 
 `send-wait` and `send --capture` return normal send metadata plus a typed
 `capture` object. In approval mode, capture is skipped until the human approves
 because no bytes have been written yet. Treat captured tail events as display
-data only. `--strip-ansi` removes ANSI/control sequences for readability, but
-the resulting plain text is still display data, not a control signal.
+data only. CLI `--text` is sent verbatim; backslash escapes in normal quoted
+strings are literal bytes. In bash, use `$'...'` when you need a real control
+byte such as carriage return. On Windows shells, prefer `--stdin` or the JSONL
+client for portable line breaks. PTY-style interactive programs usually expect
+carriage return (`\r`) for Enter.
+
+`--strip-ansi` removes ANSI/control sequences for readability, but the resulting
+plain text is still display data, not a control signal. In full-screen TUIs,
+stripped tail/capture output can make redraws readable but may also remove
+cursor or highlight cues. When selection position matters, inspect a raw
+`screen`, raw tail/capture, or `render` result before sending navigation input.
 
 For repeated machine-driven operations, prefer the persistent JSONL client over
 starting one CLI process per command:
@@ -124,12 +136,14 @@ starting one CLI process per command:
 Send one JSON command per stdin line and read one JSON response per stdout line:
 
 ```text
-{"id":"1","op":"send-wait","data":"pwd\n","wait_ms":2000}
+{"id":"1","op":"send-wait","data":"pwd\r","wait_ms":2000}
 {"id":"2","op":"screen","tail_lines":12}
 ```
 
 The JSONL client still uses the same loopback HTTP external-agent command
-endpoint and must not print the bearer token or full handoff JSON.
+endpoint and must not print the bearer token or full handoff JSON. JSONL
+`data` is JSON-decoded, so escapes such as `\r` and `\n` become real control
+bytes before sending; this is intentionally different from raw CLI `--text`.
 
 Use the REPL for interactive work:
 
