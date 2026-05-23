@@ -789,6 +789,50 @@ def test_external_agent_tail_reports_gap_metadata():
     client.disconnect()
 
 
+def test_external_agent_tail_strip_ansi_is_explicit_plain_format():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    token, _record, error_code = webssh.mint_external_agent_attach_token(
+        session_token,
+        webssh.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert error_code is None
+    raw_data = '\x1b[31mred\x1b[0m\r\nnext\x1b]0;title\x07\n'
+    bridge.emit_output({
+        'message_type': 'terminal',
+        'data': raw_data,
+    })
+
+    raw_tail = webssh.process_external_agent_command({
+        'op': 'tail',
+        'token': token,
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'since_output_seq': 0,
+    })
+    assert raw_tail['status'] == 'ok'
+    assert raw_tail['events'][-1]['data'] == raw_data
+    assert 'strip_ansi' not in raw_tail
+
+    plain_tail = webssh.process_external_agent_command({
+        'op': 'tail',
+        'token': token,
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'since_output_seq': 0,
+        'strip_ansi': True,
+    })
+    assert plain_tail['status'] == 'ok'
+    assert plain_tail['strip_ansi'] is True
+    assert plain_tail['data_format'] == 'plain'
+    assert plain_tail['events'][-1]['data'] == 'red\nnext\n'
+
+    client.disconnect()
+
+
 def test_external_agent_tail_limit_preserves_cursor_order():
     client = make_client()
     session_token = current_session_token()
@@ -1109,6 +1153,58 @@ def test_external_agent_direct_send_capture_returns_tail_after_write():
     assert result['capture']['settled'] is True
     assert result['capture']['before_output_seq'] == 1
     assert result['capture']['after_output_seq'] == 2
+    assert [event['data'] for event in result['capture']['events']] == ['/tmp/project\n']
+
+    client.disconnect()
+
+
+def test_external_agent_send_wait_strip_ansi_formats_capture_only_when_requested():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+
+    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(webssh.AGENT_EVENT_MODE_SET, {
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'mode': 'direct',
+    })
+    token, _record, error_code = webssh.mint_external_agent_attach_token(
+        session_token,
+        webssh.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert error_code is None
+
+    result_box = {}
+
+    def request_send_wait():
+        result_box['send'] = webssh.process_external_agent_command({
+            'op': 'send-wait',
+            'token': token,
+            'terminal_id': webssh.TERMINAL_ID_MAIN,
+            'data': 'pwd\n',
+            'wait_ms': 1000,
+            'settle_ms': 10,
+            'strip_ansi': True,
+        })
+
+    thread = threading.Thread(target=request_send_wait)
+    thread.start()
+    wait_until(lambda: ''.join(bridge.writes) == 'pwd\n', 'send-wait did not write input')
+    bridge.emit_output({
+        'message_type': 'terminal',
+        'data': '\x1b[32m/tmp/project\x1b[0m\r\n',
+    })
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+
+    result = result_box['send']
+    assert result['status'] == webssh.AGENT_STATUS_COMPLETED
+    assert result['capture']['requested'] is True
+    assert result['capture']['status'] == 'ok'
+    assert result['capture']['strip_ansi'] is True
+    assert result['capture']['data_format'] == 'plain'
     assert [event['data'] for event in result['capture']['events']] == ['/tmp/project\n']
 
     client.disconnect()
@@ -1628,6 +1724,7 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             assert token_payload['protocol_version'] == webssh.EXTERNAL_AGENT_PROTOCOL_VERSION
             assert 'render' in token_payload['capabilities']
             assert 'send_capture' in token_payload['capabilities']
+            assert 'strip_ansi' in token_payload['capabilities']
             assert token_payload['transport']['type'] == 'loopback_http_json'
             assert token_payload['transport']['loopback_only'] is True
             assert token_payload['operations']['render']['op'] == 'render'
@@ -1640,7 +1737,9 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
                 },
             }
             assert token_payload['operations']['tail']['wait_ms'] == webssh.AGENT_EXTERNAL_TAIL_MAX_WAIT_MS
+            assert token_payload['operations']['tail_plain']['strip_ansi'] is True
             assert token_payload['operations']['send_wait']['op'] == 'send-wait'
+            assert token_payload['operations']['send_wait_plain']['strip_ansi'] is True
             assert token_payload['expires_at'] > webssh.time.time()
             assert token_payload['security']['token_lifetime'] == 'idle_timeout'
             assert token_payload['security']['idle_timeout_seconds'] == (
@@ -1652,6 +1751,8 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             assert token_payload['cli_commands']['render'].endswith('render')
             assert token_payload['cli_commands']['screen_tail'].endswith("screen --tail-lines 12")
             assert token_payload['cli_commands']['screen_region'].endswith("screen --region 0:12")
+            assert token_payload['cli_commands']['tail_plain'].endswith('tail --strip-ansi')
+            assert token_payload['cli_commands']['send_wait_plain_pwd'].endswith("send-wait --text 'pwd\n' --strip-ansi")
             assert 'scripts/webssh_agent_repl.py' in token_payload['cli_commands']['repl']
             assert 'scripts/webssh_agent_jsonl.py' in token_payload['cli_commands']['jsonl']
             handoff = Path(token_payload['handoff_path'])
@@ -2333,6 +2434,7 @@ def main():
         test_external_agent_render_requests_browser_viewport_png,
         test_external_agent_render_timeout_is_typed,
         test_external_agent_tail_reports_gap_metadata,
+        test_external_agent_tail_strip_ansi_is_explicit_plain_format,
         test_external_agent_tail_limit_preserves_cursor_order,
         test_external_agent_tail_wait_returns_after_new_output,
         test_external_agent_tail_wait_times_out_without_output,
@@ -2341,6 +2443,7 @@ def main():
         test_external_agent_approval_send_waits_for_human_approval,
         test_external_agent_direct_send_uses_agent_gate,
         test_external_agent_direct_send_capture_returns_tail_after_write,
+        test_external_agent_send_wait_strip_ansi_formats_capture_only_when_requested,
         test_external_agent_send_wait_times_out_without_output,
         test_external_agent_approval_send_capture_is_pending_without_capture,
         test_external_agent_send_capture_reports_pause_as_nested_capture_error,

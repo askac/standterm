@@ -245,6 +245,25 @@ def test_cli_screen_region_payload():
     }
 
 
+def test_cli_tail_strip_ansi_payload():
+    args = SimpleNamespace(
+        command='tail',
+        terminal='main',
+        token='agt_unit',
+        since=0,
+        limit=50,
+        strip_ansi=True,
+    )
+    assert cli.command_payload(args) == {
+        'op': 'tail',
+        'terminal_id': 'main',
+        'token': 'agt_unit',
+        'since_output_seq': 0,
+        'limit': 50,
+        'strip_ansi': True,
+    }
+
+
 def test_cli_send_wait_payload_requests_capture():
     args = SimpleNamespace(
         command='send-wait',
@@ -262,6 +281,28 @@ def test_cli_send_wait_payload_requests_capture():
         'token': 'agt_unit',
         'data': 'pwd\n',
         'capture': True,
+    }
+
+
+def test_cli_send_wait_strip_ansi_payload_requests_plain_capture():
+    args = SimpleNamespace(
+        command='send-wait',
+        terminal='main',
+        token='agt_unit',
+        text='pwd\n',
+        stdin=False,
+        wait_ms=None,
+        settle_ms=None,
+        limit=None,
+        strip_ansi=True,
+    )
+    assert cli.command_payload(args) == {
+        'op': 'send-wait',
+        'terminal_id': 'main',
+        'token': 'agt_unit',
+        'data': 'pwd\n',
+        'capture': True,
+        'strip_ansi': True,
     }
 
 
@@ -363,8 +404,10 @@ def main():
         test_cli_plain_send_payload_stays_compatible,
         test_cli_screen_tail_lines_payload,
         test_cli_screen_region_payload,
+        test_cli_tail_strip_ansi_payload,
         test_cli_send_capture_payload,
         test_cli_send_wait_payload_requests_capture,
+        test_cli_send_wait_strip_ansi_payload_requests_plain_capture,
         test_jsonl_client_reuses_defaults_and_preserves_ids,
         test_jsonl_client_reports_invalid_json_as_jsonl_error,
         test_jsonl_client_preserves_backend_failed_result,

@@ -31,6 +31,7 @@ def parse_args():
     tail_parser = subparsers.add_parser('tail')
     tail_parser.add_argument('--since', type=int, default=0, help='Only return events after this output_seq')
     tail_parser.add_argument('--limit', type=int, default=50, help='Maximum events to return')
+    tail_parser.add_argument('--strip-ansi', action='store_true', help='Strip ANSI/control sequences from returned terminal data')
 
     send_parser = subparsers.add_parser('send')
     input_group = send_parser.add_mutually_exclusive_group(required=True)
@@ -40,6 +41,7 @@ def parse_args():
     send_parser.add_argument('--wait-ms', type=int, help='Maximum capture wait time')
     send_parser.add_argument('--settle-ms', type=int, help='Output idle time before capture returns')
     send_parser.add_argument('--limit', type=int, help='Maximum captured tail events to return')
+    send_parser.add_argument('--strip-ansi', action='store_true', help='Strip ANSI/control sequences from captured terminal data')
 
     send_wait_parser = subparsers.add_parser('send-wait')
     send_wait_group = send_wait_parser.add_mutually_exclusive_group(required=True)
@@ -48,6 +50,7 @@ def parse_args():
     send_wait_parser.add_argument('--wait-ms', type=int, help='Maximum capture wait time')
     send_wait_parser.add_argument('--settle-ms', type=int, help='Output idle time before capture returns')
     send_wait_parser.add_argument('--limit', type=int, help='Maximum captured tail events to return')
+    send_wait_parser.add_argument('--strip-ansi', action='store_true', help='Strip ANSI/control sequences from captured terminal data')
 
     subparsers.add_parser('revoke')
     args = parser.parse_args()
@@ -97,6 +100,8 @@ def command_payload(args):
     if args.command == 'tail':
         payload['since_output_seq'] = args.since
         payload['limit'] = args.limit
+        if getattr(args, 'strip_ansi', False):
+            payload['strip_ansi'] = True
     elif args.command == 'screen':
         if getattr(args, 'tail_lines', None) is not None:
             payload['tail_lines'] = args.tail_lines
@@ -123,6 +128,8 @@ def command_payload(args):
             payload['settle_ms'] = args.settle_ms
         if getattr(args, 'limit', None) is not None:
             payload['limit'] = args.limit
+        if getattr(args, 'strip_ansi', False):
+            payload['strip_ansi'] = True
     return payload
 
 

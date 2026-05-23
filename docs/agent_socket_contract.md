@@ -208,7 +208,7 @@ Discover protocol/capabilities:
 
 `hello` returns `version`, `external_agent_id`, `terminal_id`, current public
 Agent state, and a typed `capabilities` array such as `state`, `screen`,
-`render`, `tail`, `send`, and `revoke`.
+`render`, `tail`, `send`, `send_capture`, `strip_ansi`, and `revoke`.
 
 Attach:
 
@@ -333,6 +333,11 @@ Tail terminal display events:
 }
 ```
 
+Add `"strip_ansi": true` only when the caller wants a plain display-data view
+of terminal events. Raw terminal bytes remain the default. Plain output has
+ANSI/control sequences removed and `\r` normalized to `\n`; it is still display
+data and must not be used as a WebSSH control signal.
+
 Tail returns a structured cursor and retention contract:
 
 ```json
@@ -364,7 +369,10 @@ from the last returned event and call `tail` again without skipping retained
 events. `wait_ms` is optional. When it is positive and no retained events are
 available yet, the server may hold the request until new terminal output arrives
 or the wait expires. The response payload shape is identical for immediate and
-long-poll tail calls. Clients must not infer control state from terminal text.
+long-poll tail calls. When `strip_ansi` is requested, the response includes
+`"strip_ansi": true` and `"data_format": "plain"`, and each returned event's
+`data` field is the stripped text. Clients must not infer control state from
+terminal text.
 
 Propose terminal input:
 
@@ -395,7 +403,8 @@ terminal `output_seq` just before the direct write as the cursor:
   "capture": true,
   "wait_ms": 3000,
   "settle_ms": 150,
-  "limit": 50
+  "limit": 50,
+  "strip_ansi": true
 }
 ```
 
@@ -432,8 +441,11 @@ If no terminal output arrives before `wait_ms`, the send may still be
 bytes have been written yet; the response remains `pending_approval` and
 includes `capture.status: "skipped"` with reason `pending_approval`. Captured
 tail events are display data only and must not be parsed as WebSSH control
-state. Capture returns terminal output after `before_output_seq`; it does not
-prove that every returned byte was causally produced by the sent input.
+state. `strip_ansi` affects only the captured `events[*].data` formatting and
+adds `capture.strip_ansi: true` plus `capture.data_format: "plain"`; raw capture
+events remain the default. Capture returns terminal output after
+`before_output_seq`; it does not prove that every returned byte was causally
+produced by the sent input.
 
 Revoke:
 

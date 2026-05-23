@@ -282,7 +282,7 @@ AGENT_AUDIT_DIRECT_WRITE = 'direct_write'
 AGENT_AUDIT_TERMINAL_CLEANUP = 'terminal_cleanup'
 AGENT_AUDIT_ERROR = 'error'
 EXTERNAL_AGENT_PROTOCOL_VERSION = 1
-EXTERNAL_AGENT_CAPABILITIES = ['state', 'screen', 'render', 'tail', 'send', 'send_capture', 'revoke']
+EXTERNAL_AGENT_CAPABILITIES = ['state', 'screen', 'render', 'tail', 'send', 'send_capture', 'strip_ansi', 'revoke']
 AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_WAIT_MS = 3000
 AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_SETTLE_MS = 150
 AGENT_EXTERNAL_SEND_CAPTURE_MAX_SETTLE_MS = 5000
@@ -2383,13 +2383,16 @@ class AgentTranscriptStore:
             removed = events.popleft()
             bucket['bytes'] -= removed['byte_length']
 
-def sanitize_agent_transcript_text(value):
+def strip_terminal_display_text(value):
     value = ANSI_OSC_PATTERN.sub('', value)
     value = ANSI_CSI_PATTERN.sub('', value)
     value = ANSI_ESCAPE_PATTERN.sub('', value)
     value = value.replace('\r\n', '\n').replace('\r', '\n')
     value = AGENT_TRANSCRIPT_CONTROL_PATTERN.sub('', value)
     return value
+
+def sanitize_agent_transcript_text(value):
+    return strip_terminal_display_text(value)
 
 agent_transcript_store = AgentTranscriptStore()
 
@@ -3357,6 +3360,22 @@ def build_external_agent_tail_payload(bridge, since_output_seq=None, limit=AGENT
         'events': events[:limit],
     }
 
+def format_external_agent_tail_payload(tail, strip_ansi=False):
+    payload = dict(tail)
+    payload['events'] = [dict(event) for event in tail.get('events', [])]
+    if not strip_ansi:
+        return payload
+    payload['strip_ansi'] = True
+    payload['data_format'] = 'plain'
+    for event in payload['events']:
+        data = event.get('data')
+        if isinstance(data, str):
+            stripped = strip_terminal_display_text(data)
+            event['data'] = stripped
+            if 'byte_length' in event:
+                event['byte_length'] = len(stripped.encode('utf-8', errors='ignore'))
+    return payload
+
 def parse_external_agent_tail_wait_ms(value):
     try:
         wait_ms = int(value if value is not None else 0)
@@ -3384,6 +3403,9 @@ def external_agent_flag_enabled(value):
 def should_external_agent_capture_send(command):
     return external_agent_flag_enabled(command.get('capture'))
 
+def should_external_agent_strip_ansi(command):
+    return external_agent_flag_enabled(command.get('strip_ansi'))
+
 def get_external_agent_capture_context_error(state):
     if state.paused or state.mode == AGENT_MODE_PAUSED:
         return AGENT_ERROR_PAUSED
@@ -3395,7 +3417,8 @@ def get_external_agent_capture_context_error(state):
 
 def build_external_agent_send_capture_payload(bridge, state, before_output_seq,
                                               limit=AGENT_EXTERNAL_TAIL_MAX_EVENTS,
-                                              wait_ms=None, settle_ms=None):
+                                              wait_ms=None, settle_ms=None,
+                                              strip_ansi=False):
     wait_ms = parse_external_agent_send_capture_wait_ms(wait_ms)
     settle_ms = parse_external_agent_send_capture_settle_ms(settle_ms)
     context_error = get_external_agent_capture_context_error(state)
@@ -3452,7 +3475,7 @@ def build_external_agent_send_capture_payload(bridge, state, before_output_seq,
     context_error = get_external_agent_capture_context_error(state)
     if context_error:
         return None, context_error
-    return {
+    return format_external_agent_tail_payload({
         'status': 'timeout' if timed_out else 'ok',
         'mode': 'tail',
         'before_output_seq': before_output_seq,
@@ -3468,7 +3491,7 @@ def build_external_agent_send_capture_payload(bridge, state, before_output_seq,
         'dropped_before_output_seq': tail['dropped_before_output_seq'],
         'gap': tail['gap'],
         'events': tail['events'],
-    }, None
+    }, strip_ansi=strip_ansi), None
 
 def build_external_agent_tail_payload_waiting(bridge, state, since_output_seq=None,
                                               limit=AGENT_EXTERNAL_TAIL_MAX_EVENTS,
@@ -4333,8 +4356,23 @@ def build_external_agent_cli_commands(base_url, token, terminal_id):
         ),
         'render': build_external_agent_cli_command(base_url, token, terminal_id, op='render'),
         'tail': build_external_agent_cli_command(base_url, token, terminal_id, op='tail'),
+        'tail_plain': build_external_agent_cli_command(
+            base_url,
+            token,
+            terminal_id,
+            op='tail',
+            extra_args=['--strip-ansi'],
+        ),
         'send_pwd': build_external_agent_cli_command(base_url, token, terminal_id, op='send', text='pwd\n'),
         'send_wait_pwd': build_external_agent_cli_command(base_url, token, terminal_id, op='send-wait', text='pwd\n'),
+        'send_wait_plain_pwd': build_external_agent_cli_command(
+            base_url,
+            token,
+            terminal_id,
+            op='send-wait',
+            text='pwd\n',
+            extra_args=['--strip-ansi'],
+        ),
         'repl': build_external_agent_repl_command(base_url, token, terminal_id),
         'jsonl': build_external_agent_jsonl_command(base_url, token, terminal_id),
     }
@@ -4368,6 +4406,13 @@ def build_external_agent_discovery_payload(base_url, token, terminal_id):
                 'limit': AGENT_EXTERNAL_TAIL_MAX_EVENTS,
                 'wait_ms': AGENT_EXTERNAL_TAIL_MAX_WAIT_MS,
             },
+            'tail_plain': {
+                'op': 'tail',
+                'since_output_seq': 0,
+                'limit': AGENT_EXTERNAL_TAIL_MAX_EVENTS,
+                'wait_ms': AGENT_EXTERNAL_TAIL_MAX_WAIT_MS,
+                'strip_ansi': True,
+            },
             'send': {'op': 'send', 'data': 'pwd\n'},
             'send_capture': {
                 'op': 'send',
@@ -4384,6 +4429,15 @@ def build_external_agent_discovery_payload(base_url, token, terminal_id):
                 'wait_ms': AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_WAIT_MS,
                 'settle_ms': AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_SETTLE_MS,
                 'limit': AGENT_EXTERNAL_TAIL_MAX_EVENTS,
+            },
+            'send_wait_plain': {
+                'op': 'send-wait',
+                'data': 'pwd\n',
+                'capture': True,
+                'wait_ms': AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_WAIT_MS,
+                'settle_ms': AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_SETTLE_MS,
+                'limit': AGENT_EXTERNAL_TAIL_MAX_EVENTS,
+                'strip_ansi': True,
             },
             'revoke': {'op': 'revoke'},
         },
@@ -5217,6 +5271,8 @@ def process_external_agent_command(command):
         )
         if error_code:
             return external_agent_error(error_code, terminal_id=terminal_id)
+        strip_ansi = should_external_agent_strip_ansi(command)
+        tail = format_external_agent_tail_payload(tail, strip_ansi=strip_ansi)
         record_agent_audit_event(
             state,
             AGENT_AUDIT_EXTERNAL_AGENT_TAIL,
@@ -5225,8 +5281,9 @@ def process_external_agent_command(command):
             output_seq=tail['output_seq'],
             wait_ms=parse_external_agent_tail_wait_ms(command.get('wait_ms')),
             gap=tail['gap'],
+            strip_ansi=strip_ansi,
         )
-        return {
+        payload = {
             'status': 'ok',
             'terminal_id': terminal_id,
             'external_agent_id': record.get('external_agent_id'),
@@ -5239,6 +5296,10 @@ def process_external_agent_command(command):
             'gap': tail['gap'],
             'events': tail['events'],
         }
+        if strip_ansi:
+            payload['strip_ansi'] = True
+            payload['data_format'] = tail['data_format']
+        return payload
 
     if op in {'send', 'send-wait'}:
         data = command.get('data')
@@ -5246,6 +5307,7 @@ def process_external_agent_command(command):
         if not bridge:
             return external_agent_error(AGENT_ERROR_TERMINAL_NOT_FOUND, terminal_id=terminal_id)
         capture_requested = op == 'send-wait' or should_external_agent_capture_send(command)
+        strip_ansi = should_external_agent_strip_ansi(command)
         before_output_seq = None
         with bridge.input_lock:
             with agent_lock:
@@ -5268,6 +5330,7 @@ def process_external_agent_command(command):
                     action=action,
                     external_agent_id=record.get('external_agent_id'),
                     capture_requested=capture_requested,
+                    strip_ansi=strip_ansi if capture_requested else False,
                 )
                 socketio.emit(AGENT_EVENT_ACTION_REQUEST, public_agent_action(action), room=state.sid)
                 emit_agent_state(state.sid, state)
@@ -5313,6 +5376,7 @@ def process_external_agent_command(command):
                 limit=command.get('limit', AGENT_EXTERNAL_TAIL_MAX_EVENTS),
                 wait_ms=command.get('wait_ms'),
                 settle_ms=command.get('settle_ms'),
+                strip_ansi=strip_ansi,
             )
             if capture_error:
                 payload['capture'] = {
