@@ -22,6 +22,7 @@ from collections import deque
 from pathlib import Path
 from flask import Flask, render_template, request, abort, make_response, redirect, send_file, jsonify
 from flask_socketio import SocketIO
+from terminal_backends import TerminalBackendPlugin, TerminalBackendRegistry
 
 try:
     from ptyprocess import PtyProcessUnicode
@@ -1991,43 +1992,6 @@ class UARTBridge(TerminalBridge):
             pass
         self.serial = None
 
-class TerminalBackendPlugin:
-    connection_type = None
-    label = None
-
-    def build_policy_option(self, browser_authorized=False):
-        return {
-            'connection_type': self.connection_type,
-            'label': self.label,
-            'allowed': True,
-        }
-
-    def validate_start_payload(self, data, terminal_id, client_ip, browser_authorized=False):
-        raise NotImplementedError
-
-    def create_bridge(self, session_token, terminal_id, payload):
-        raise NotImplementedError
-
-    def connect_bridge(self, bridge, payload, cols, rows):
-        raise NotImplementedError
-
-    def build_connection_failure(self, sid, bridge, payload, result):
-        message = 'Connection failed.'
-        error_code = None
-        if isinstance(result, dict):
-            message = result.get('message', message)
-            error_code = result.get('error_code')
-        elif result:
-            message = str(result)
-        return {
-            'message': message,
-            'error_code': error_code,
-            'action_type': None,
-            'action_message': None,
-            'action_question': None,
-            'action_id': None,
-        }
-
 class SSHBackendPlugin(TerminalBackendPlugin):
     connection_type = CONNECTION_TYPE_SSH
     label = 'SSH'
@@ -2224,51 +2188,14 @@ class UARTBackendPlugin(TerminalBackendPlugin):
     def connect_bridge(self, bridge, payload, cols, rows):
         return bridge.connect(cols=cols, rows=rows)
 
-class TerminalBackendRegistry:
-    def __init__(self, plugins):
-        self._plugins = {}
-        for plugin in plugins:
-            connection_type = getattr(plugin, 'connection_type', None)
-            label = getattr(plugin, 'label', None)
-            if not isinstance(connection_type, str) or normalize_connection_type(connection_type) != connection_type:
-                raise ValueError(f'Invalid terminal backend connection type: {connection_type!r}')
-            if connection_type in self._plugins:
-                raise ValueError(f'Duplicate terminal backend connection type: {connection_type}')
-            if not isinstance(label, str) or not label:
-                raise ValueError(f'Invalid terminal backend label for {connection_type}')
-            self._plugins[connection_type] = plugin
-
-    def get(self, connection_type):
-        return self._plugins.get(connection_type)
-
-    def build_policy_options(self, browser_authorized=False):
-        options = []
-        for plugin in self._plugins.values():
-            option = plugin.build_policy_option(browser_authorized=browser_authorized)
-            if not isinstance(option, dict):
-                raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid policy option.')
-            if option.get('connection_type') != plugin.connection_type:
-                raise ValueError(f'Terminal backend {plugin.connection_type} returned mismatched policy option.')
-            if not isinstance(option.get('allowed'), bool):
-                raise ValueError(f'Terminal backend {plugin.connection_type} returned non-bool allowed flag.')
-            options.append(option)
-        return options
-
-    def get_default_connection(self, allowed_connections):
-        if allowed_connections.get(CONNECTION_TYPE_LOCAL_SHELL):
-            return CONNECTION_TYPE_LOCAL_SHELL
-        if allowed_connections.get(CONNECTION_TYPE_SSH):
-            return CONNECTION_TYPE_SSH
-        for connection_type, allowed in allowed_connections.items():
-            if allowed:
-                return connection_type
-        return CONNECTION_TYPE_SSH
-
 TERMINAL_BACKEND_REGISTRY = TerminalBackendRegistry([
     SSHBackendPlugin(),
     LocalShellBackendPlugin(),
     UARTBackendPlugin(),
-])
+], normalize_connection_type, default_preference=(
+    CONNECTION_TYPE_LOCAL_SHELL,
+    CONNECTION_TYPE_SSH,
+))
 
 bridges = {}
 pending_localhost_key_setups = {}
