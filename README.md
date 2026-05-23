@@ -230,13 +230,19 @@ through the external-agent handoff:
 ```text
 docs/examples/webssh-external-agent-skill/SKILL.md
 docs/examples/webssh-external-agent-skill/skill_prompt.txt
+docs/examples/webssh-external-agent-skill/boot_prompt.txt
 ```
 
-The intended prompt shape is:
+Use `skill_prompt.txt` when asking an agent to install or create the local
+skill. The intended prompt shape is:
 
 ```text
 請閱讀 docs/examples/webssh-external-agent-skill/SKILL.md，增加 webssh-external-agent local skill。
 ```
+
+Use `boot_prompt.txt` when the skill already exists and an agent should start
+assisting the current WebSSH terminal session through the external-agent
+handoff.
 
 The skill tells an agent to:
 
@@ -251,7 +257,8 @@ The skill tells an agent to:
 
 If your local agent supports filesystem-based skills, install or import that
 example as a local skill. Otherwise, paste the two-line `skill_prompt.txt` into
-the agent that is managing your local skills.
+the agent that is managing your local skills. For normal terminal assistance
+after the skill exists, paste `boot_prompt.txt` into the assisting agent.
 
 ## Configuration
 
