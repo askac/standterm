@@ -307,6 +307,27 @@ def test_cli_send_wait_strip_ansi_payload_requests_plain_capture():
     }
 
 
+def test_cli_send_named_keys_payload_uses_control_sequences():
+    args = SimpleNamespace(
+        command='send',
+        terminal='main',
+        token='agt_unit',
+        text=None,
+        stdin=False,
+        key=['Down', 'Enter'],
+        capture=False,
+        wait_ms=None,
+        settle_ms=None,
+        limit=None,
+    )
+    assert cli.command_payload(args) == {
+        'op': 'send',
+        'terminal_id': 'main',
+        'token': 'agt_unit',
+        'data': '\x1b[B\r',
+    }
+
+
 def test_cli_render_save_writes_png_and_redacts_base64():
     one_pixel_png = 'iVBORw0KGgo='
     result = {
@@ -429,6 +450,7 @@ def main():
         test_cli_send_capture_payload,
         test_cli_send_wait_payload_requests_capture,
         test_cli_send_wait_strip_ansi_payload_requests_plain_capture,
+        test_cli_send_named_keys_payload_uses_control_sequences,
         test_cli_render_save_writes_png_and_redacts_base64,
         test_jsonl_client_reuses_defaults_and_preserves_ids,
         test_jsonl_client_reports_invalid_json_as_jsonl_error,

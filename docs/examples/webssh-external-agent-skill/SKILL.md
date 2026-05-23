@@ -107,6 +107,12 @@ Send input only when Agent mode allows it:
 <python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json send --text $'pwd\r'
 ```
 
+Send named navigation keys:
+
+```text
+<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json send --key Down --key Enter
+```
+
 Prefer atomic send-and-observe when the server advertises `send_capture`:
 
 ```bash

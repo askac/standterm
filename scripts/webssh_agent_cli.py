@@ -9,6 +9,25 @@ import urllib.error
 import urllib.request
 
 
+KEY_INPUTS = {
+    'Enter': '\r',
+    'Return': '\r',
+    'Tab': '\t',
+    'Escape': '\x1b',
+    'Esc': '\x1b',
+    'Backspace': '\x7f',
+    'Delete': '\x1b[3~',
+    'Up': '\x1b[A',
+    'Down': '\x1b[B',
+    'Right': '\x1b[C',
+    'Left': '\x1b[D',
+    'Home': '\x1b[H',
+    'End': '\x1b[F',
+    'PageUp': '\x1b[5~',
+    'PageDown': '\x1b[6~',
+}
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description='WebSSH external agent CLI')
     parser.add_argument('--handoff', help='Read url, token, and terminal from a WebSSH external agent handoff JSON file')
@@ -40,6 +59,7 @@ def parse_args():
     input_group = send_parser.add_mutually_exclusive_group(required=True)
     input_group.add_argument('--text', help='Text to send')
     input_group.add_argument('--stdin', action='store_true', help='Read text from stdin')
+    input_group.add_argument('--key', action='append', choices=sorted(KEY_INPUTS), help='Named key to send; repeat for multiple keys')
     send_parser.add_argument('--capture', action='store_true', help='Wait for terminal output after sending')
     send_parser.add_argument('--wait-ms', type=int, help='Maximum capture wait time')
     send_parser.add_argument('--settle-ms', type=int, help='Output idle time before capture returns')
@@ -50,6 +70,7 @@ def parse_args():
     send_wait_group = send_wait_parser.add_mutually_exclusive_group(required=True)
     send_wait_group.add_argument('--text', help='Text to send')
     send_wait_group.add_argument('--stdin', action='store_true', help='Read text from stdin')
+    send_wait_group.add_argument('--key', action='append', choices=sorted(KEY_INPUTS), help='Named key to send; repeat for multiple keys')
     send_wait_parser.add_argument('--wait-ms', type=int, help='Maximum capture wait time')
     send_wait_parser.add_argument('--settle-ms', type=int, help='Output idle time before capture returns')
     send_wait_parser.add_argument('--limit', type=int, help='Maximum captured tail events to return')
@@ -120,7 +141,7 @@ def command_payload(args):
     elif args.command == 'render':
         payload['wait_ms'] = args.wait_ms
     elif args.command in {'send', 'send-wait'}:
-        payload['data'] = sys.stdin.read() if args.stdin else args.text
+        payload['data'] = send_data(args)
         if args.command == 'send-wait':
             payload['capture'] = True
         elif getattr(args, 'capture', False):
@@ -134,6 +155,13 @@ def command_payload(args):
         if getattr(args, 'strip_ansi', False):
             payload['strip_ansi'] = True
     return payload
+
+
+def send_data(args):
+    keys = getattr(args, 'key', None)
+    if keys:
+        return ''.join(KEY_INPUTS[key] for key in keys)
+    return sys.stdin.read() if args.stdin else args.text
 
 
 def build_ssl_context(ca_file=None, insecure=False):

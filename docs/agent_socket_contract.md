@@ -148,6 +148,9 @@ escapes, so `--text "pwd\n"` sends literal backslash and `n` bytes. In bash,
 use `$'...'` to send a real control byte such as carriage return. On Windows
 shells, prefer `--stdin` or the JSONL wrapper for portable line breaks.
 PTY-style interactive programs usually expect carriage return (`\r`) for Enter.
+For navigation-only input, the CLI also accepts repeated named keys such as
+`send --key Down --key Enter`; these are converted client-side into terminal
+control bytes before the same typed `send` command is posted.
 
 For terminal-like interaction, use the persistent REPL wrapper instead of
 starting one CLI process per line:

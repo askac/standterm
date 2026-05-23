@@ -202,6 +202,7 @@ python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json 
 python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json tail --since 0 --limit 50
 python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json tail --since 0 --limit 50 --strip-ansi
 python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json send --text $'pwd\r'
+python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json send --key Down --key Enter
 python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json send-wait --text $'pwd\r'
 python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json send-wait --text $'pwd\r' --strip-ansi
 python scripts/webssh_agent_jsonl.py --handoff webssh_external_agent_handoff.json
