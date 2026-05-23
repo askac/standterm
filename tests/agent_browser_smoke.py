@@ -211,6 +211,29 @@ def attach_agent(page):
     return wait_for_agent(page, "state.mode === 'observe'")
 
 
+def test_agent_panel_can_be_dragged(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        page.click('#agent-toggle-btn')
+        page.wait_for_selector('#agent-panel.visible', timeout=5000)
+        before = page.locator('#agent-panel').bounding_box()
+        header = page.locator('#agent-panel-header').bounding_box()
+        check(before is not None and header is not None, 'agent panel/header did not render')
+        page.mouse.move(header['x'] + 20, header['y'] + 10)
+        page.mouse.down()
+        page.mouse.move(header['x'] - 150, header['y'] - 90)
+        page.mouse.up()
+        after = page.locator('#agent-panel').bounding_box()
+        check(after is not None, 'agent panel disappeared after drag')
+        check(abs(after['x'] - before['x']) > 40, 'agent panel x position did not change after drag')
+        check(abs(after['y'] - before['y']) > 40, 'agent panel y position did not change after drag')
+        saved = page.evaluate("() => JSON.parse(localStorage.getItem('webssh.agentPanelPosition.v1'))")
+        check(isinstance(saved.get('left'), (int, float)), 'agent panel left position was not saved')
+        check(isinstance(saved.get('top'), (int, float)), 'agent panel top position was not saved')
+    finally:
+        close_context(context)
+
+
 def set_agent_mode(page, mode, expected_mode):
     emit_socket(page, 'agent_mode_set', {'terminal_id': TERMINAL_ID, 'mode': mode})
     return wait_for_agent(page, f"state.mode === '{expected_mode}'")
@@ -437,6 +460,7 @@ def test_terminal_payload_text_is_not_control(browser, access_url):
 def main():
     sync_playwright, PlaywrightError, _ = load_playwright()
     tests = [
+        test_agent_panel_can_be_dragged,
         test_hidden_mirror_ignores_visible_scroll,
         test_privacy_states_block_snapshots_and_agent_runs,
         test_rendered_viewport_snapshot_returns_png,

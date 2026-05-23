@@ -218,7 +218,8 @@
             font-size: 12px;
         }
         #agent-panel.visible { display: block; }
-        #agent-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border-bottom: 1px solid #2c2c2e; }
+        #agent-panel.dragging { user-select: none; }
+        #agent-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border-bottom: 1px solid #2c2c2e; cursor: move; touch-action: none; user-select: none; }
         #agent-panel-title { color: #fff; font-weight: 700; }
         #agent-panel-state { color: #aaa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         #agent-panel-body { padding: 10px; display: grid; gap: 10px; }
@@ -824,6 +825,7 @@
             const policyDebugPanel = document.getElementById('policy-debug-panel');
             const payloadLog = document.getElementById('payload-log');
             const agentPanel = document.getElementById('agent-panel');
+            const agentPanelHeader = document.getElementById('agent-panel-header');
             const agentPanelState = document.getElementById('agent-panel-state');
             const agentModeButtons = [...document.querySelectorAll('[data-agent-mode]')];
             const agentMockInput = document.getElementById('agent-mock-input');
@@ -873,6 +875,8 @@
             let browserPairingResponseTimer = null;
             let browserAuthDetailsVisible = false;
             let agentPanelVisible = false;
+            let agentPanelPosition = null;
+            let agentPanelDrag = null;
             let pendingPasteReview = null;
 
             function normalizeConnectionType(value) {
@@ -997,6 +1001,90 @@
                 agentPauseBtn.disabled = !(visible && socket && socket.connected && state && state.connected);
             }
 
+            function loadAgentPanelPosition() {
+                try {
+                    const payload = JSON.parse(localStorage.getItem('webssh.agentPanelPosition.v1') || 'null');
+                    if (!payload || typeof payload.left !== 'number' || typeof payload.top !== 'number') return null;
+                    return {
+                        left: payload.left,
+                        top: payload.top,
+                    };
+                } catch (_error) {
+                    return null;
+                }
+            }
+
+            function saveAgentPanelPosition(position) {
+                try {
+                    localStorage.setItem('webssh.agentPanelPosition.v1', JSON.stringify(position));
+                } catch (_error) {
+                    // Manual positioning still works for the current page load.
+                }
+            }
+
+            function getStatusBarHeight() {
+                const value = getComputedStyle(document.documentElement).getPropertyValue('--status-bar-height');
+                const parsed = parseFloat(value);
+                return Number.isFinite(parsed) ? parsed : 0;
+            }
+
+            function clampAgentPanelPosition(position) {
+                const rect = agentPanel.getBoundingClientRect();
+                const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
+                const maxTop = Math.max(8, window.innerHeight - getStatusBarHeight() - rect.height - 8);
+                return {
+                    left: Math.min(Math.max(8, position.left), maxLeft),
+                    top: Math.min(Math.max(8, position.top), maxTop),
+                };
+            }
+
+            function applyAgentPanelPosition() {
+                if (!agentPanelPosition) {
+                    agentPanel.style.left = '';
+                    agentPanel.style.top = '';
+                    agentPanel.style.right = '';
+                    agentPanel.style.bottom = '';
+                    return;
+                }
+                agentPanelPosition = clampAgentPanelPosition(agentPanelPosition);
+                agentPanel.style.left = `${agentPanelPosition.left}px`;
+                agentPanel.style.top = `${agentPanelPosition.top}px`;
+                agentPanel.style.right = 'auto';
+                agentPanel.style.bottom = 'auto';
+            }
+
+            function beginAgentPanelDrag(event) {
+                if (!agentPanel.classList.contains('visible') || event.button !== 0) return;
+                const rect = agentPanel.getBoundingClientRect();
+                agentPanelDrag = {
+                    pointerId: event.pointerId,
+                    offsetX: event.clientX - rect.left,
+                    offsetY: event.clientY - rect.top,
+                };
+                agentPanel.classList.add('dragging');
+                agentPanelHeader.setPointerCapture(event.pointerId);
+                event.preventDefault();
+            }
+
+            function moveAgentPanelDrag(event) {
+                if (!agentPanelDrag || event.pointerId !== agentPanelDrag.pointerId) return;
+                agentPanelPosition = clampAgentPanelPosition({
+                    left: event.clientX - agentPanelDrag.offsetX,
+                    top: event.clientY - agentPanelDrag.offsetY,
+                });
+                applyAgentPanelPosition();
+                event.preventDefault();
+            }
+
+            function endAgentPanelDrag(event) {
+                if (!agentPanelDrag || event.pointerId !== agentPanelDrag.pointerId) return;
+                agentPanel.classList.remove('dragging');
+                agentPanelHeader.releasePointerCapture(event.pointerId);
+                agentPanelDrag = null;
+                if (agentPanelPosition) saveAgentPanelPosition(agentPanelPosition);
+                event.preventDefault();
+            }
+
             function canUseAgentPanel(state) {
                 return !!(socket && socket.connected && state && state.connected);
             }
@@ -1035,6 +1123,7 @@
                 const usable = canUseAgentPanel(state);
                 if (!usable) agentPanelVisible = false;
                 agentPanel.classList.toggle('visible', usable && agentPanelVisible);
+                if (usable && agentPanelVisible) applyAgentPanelPosition();
                 agentToggleBtn.disabled = !usable;
                 agentToggleBtn.innerText = agentPanelVisible ? 'Hide Agent Panel' : 'Show Agent Panel';
                 agentToggleBtn.title = agentPanelVisible ? 'Hide Agent panel' : 'Show Agent panel';
@@ -2481,6 +2570,16 @@
                 agentPanelVisible = !agentPanelVisible;
                 updateAgentPanel();
             };
+            agentPanelPosition = loadAgentPanelPosition();
+            agentPanelHeader.addEventListener('pointerdown', beginAgentPanelDrag);
+            agentPanelHeader.addEventListener('pointermove', moveAgentPanelDrag);
+            agentPanelHeader.addEventListener('pointerup', endAgentPanelDrag);
+            agentPanelHeader.addEventListener('pointercancel', endAgentPanelDrag);
+            window.addEventListener('resize', () => {
+                if (!agentPanelPosition) return;
+                applyAgentPanelPosition();
+                saveAgentPanelPosition(agentPanelPosition);
+            });
             newTabBtn.onclick = () => {
                 const terminalId = `term-${nextTerminalIndex}`;
                 const state = createTerminalTab(terminalId, `Terminal ${nextTerminalIndex}`);
