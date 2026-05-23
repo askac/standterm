@@ -192,10 +192,23 @@ CLI examples:
 ```bash
 python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json hello
 python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json render
+python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json screen --tail-lines 12
+python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json screen --region 0:12
 python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json tail --since 0 --limit 50
 python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json send --text "pwd\n"
+python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json send-wait --text "pwd\n"
+python scripts/webssh_agent_jsonl.py --handoff webssh_external_agent_handoff.json
 python scripts/webssh_agent_repl.py --handoff webssh_external_agent_handoff.json --enter cr
 ```
+
+Use `send-wait` or `send --capture` when the `hello` capabilities include
+`send_capture`. It writes only through the normal Agent gate, then returns typed
+tail observation metadata based on `output_seq`. In approval mode, capture is
+skipped until the human approves because no terminal bytes have been written.
+For repeated machine-driven operations, prefer `webssh_agent_jsonl.py`: it
+starts one persistent local process, reads the handoff once, accepts one JSON
+command per stdin line, and writes one JSON response per stdout line while still
+using the same loopback HTTP command endpoint.
 
 Prefer the exact absolute commands printed by the WebSSH startup banner. They
 use the active runtime Python, platform-appropriate quoting, and the generated

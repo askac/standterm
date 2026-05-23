@@ -20,7 +20,10 @@ def parse_args():
     subparsers.add_parser('hello')
     subparsers.add_parser('attach')
     subparsers.add_parser('state')
-    subparsers.add_parser('screen')
+    screen_parser = subparsers.add_parser('screen')
+    screen_group = screen_parser.add_mutually_exclusive_group()
+    screen_group.add_argument('--tail-lines', type=int, help='Only return the last N viewport lines')
+    screen_group.add_argument('--region', help='Only return zero-based line range TOP:BOTTOM, with BOTTOM exclusive')
 
     render_parser = subparsers.add_parser('render')
     render_parser.add_argument('--wait-ms', type=int, default=3000, help='Maximum browser render wait time')
@@ -33,6 +36,18 @@ def parse_args():
     input_group = send_parser.add_mutually_exclusive_group(required=True)
     input_group.add_argument('--text', help='Text to send')
     input_group.add_argument('--stdin', action='store_true', help='Read text from stdin')
+    send_parser.add_argument('--capture', action='store_true', help='Wait for terminal output after sending')
+    send_parser.add_argument('--wait-ms', type=int, help='Maximum capture wait time')
+    send_parser.add_argument('--settle-ms', type=int, help='Output idle time before capture returns')
+    send_parser.add_argument('--limit', type=int, help='Maximum captured tail events to return')
+
+    send_wait_parser = subparsers.add_parser('send-wait')
+    send_wait_group = send_wait_parser.add_mutually_exclusive_group(required=True)
+    send_wait_group.add_argument('--text', help='Text to send')
+    send_wait_group.add_argument('--stdin', action='store_true', help='Read text from stdin')
+    send_wait_parser.add_argument('--wait-ms', type=int, help='Maximum capture wait time')
+    send_wait_parser.add_argument('--settle-ms', type=int, help='Output idle time before capture returns')
+    send_wait_parser.add_argument('--limit', type=int, help='Maximum captured tail events to return')
 
     subparsers.add_parser('revoke')
     args = parser.parse_args()
@@ -82,10 +97,32 @@ def command_payload(args):
     if args.command == 'tail':
         payload['since_output_seq'] = args.since
         payload['limit'] = args.limit
+    elif args.command == 'screen':
+        if getattr(args, 'tail_lines', None) is not None:
+            payload['tail_lines'] = args.tail_lines
+        elif getattr(args, 'region', None):
+            try:
+                top_text, bottom_text = args.region.split(':', 1)
+                payload['region'] = {
+                    'top': int(top_text),
+                    'bottom': int(bottom_text),
+                }
+            except ValueError as exc:
+                raise SystemExit('screen --region must use TOP:BOTTOM') from exc
     elif args.command == 'render':
         payload['wait_ms'] = args.wait_ms
-    elif args.command == 'send':
+    elif args.command in {'send', 'send-wait'}:
         payload['data'] = sys.stdin.read() if args.stdin else args.text
+        if args.command == 'send-wait':
+            payload['capture'] = True
+        elif getattr(args, 'capture', False):
+            payload['capture'] = True
+        if getattr(args, 'wait_ms', None) is not None:
+            payload['wait_ms'] = args.wait_ms
+        if getattr(args, 'settle_ms', None) is not None:
+            payload['settle_ms'] = args.settle_ms
+        if getattr(args, 'limit', None) is not None:
+            payload['limit'] = args.limit
     return payload
 
 

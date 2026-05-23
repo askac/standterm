@@ -165,6 +165,31 @@ Rejected input is not retried automatically, because replaying stale keystrokes
 after the human lease expires can put bytes into the wrong prompt or editor
 state.
 
+For machine-to-machine repeated commands, use the persistent JSONL wrapper
+instead of the terminal-style REPL. It keeps stdout as JSON only and still
+forwards each command to the same loopback HTTP command endpoint:
+
+```bash
+tools/.venv_wsl/bin/python scripts/webssh_agent_jsonl.py \
+  --handoff webssh_external_agent_handoff.json
+```
+
+Each stdin line is a JSON command object. The wrapper fills in the default
+`token` and `terminal_id` from the handoff when omitted, preserves an optional
+caller-supplied `id`, and returns one JSON response per stdout line:
+
+```json
+{"id":"1","op":"send-wait","data":"pwd\n","wait_ms":2000}
+```
+
+```json
+{"id":"1","ok":true,"http_status":200,"result":{"status":"completed"}}
+```
+
+The JSONL wrapper is sequential in its first version. Long-poll commands such
+as `send-wait` block the next stdin command until their HTTP response returns.
+It must not print the bearer token or full handoff JSON.
+
 ### External Command Shape
 
 The command boundary is JSON object based. Future IPC transports should carry
@@ -214,6 +239,40 @@ Read screen:
   "terminal_id": "main"
 }
 ```
+
+`screen` returns the latest browser mirror viewport snapshot. This snapshot is
+marked `provisional: true`: it is useful display data for observation, but it is
+not an authoritative backend terminal parser and must not be used as a WebSSH
+control signal. To reduce repeated full viewport payloads, clients may request
+a slice of the latest snapshot:
+
+```json
+{
+  "op": "screen",
+  "token": "agt_...",
+  "terminal_id": "main",
+  "tail_lines": 12
+}
+```
+
+```json
+{
+  "op": "screen",
+  "token": "agt_...",
+  "terminal_id": "main",
+  "region": {
+    "top": 0,
+    "bottom": 12
+  }
+}
+```
+
+`region.top` is inclusive and `region.bottom` is exclusive. Sliced responses
+preserve snapshot metadata such as `source`, `provisional`, `snapshot_seq`,
+`output_seq`, `captured_at`, `rows`, and `cols`, and add `region`,
+`original_line_count`, and `truncated` fields. `tail_lines` and `region` are
+mutually exclusive. Diff reads are intentionally not defined yet because the
+current backend only retains the latest viewport snapshot for each browser sid.
 
 Read rendered xterm viewport:
 
@@ -322,6 +381,59 @@ Propose terminal input:
 emits `agent_action_request` to the authorizing human browser. `send` in
 `direct_active` mode still writes only through `AgentInputGate`. `send` in
 `observe`, `disabled`, paused, or privacy-blocked states returns a typed error.
+Clients may request an atomic send-and-observe operation by adding
+`"capture": true` to `send`, or by using `op: "send-wait"` / the `send-wait`
+CLI alias. The first supported capture mode is tail-based and uses the
+terminal `output_seq` just before the direct write as the cursor:
+
+```json
+{
+  "op": "send",
+  "token": "agt_...",
+  "terminal_id": "main",
+  "data": "pwd\n",
+  "capture": true,
+  "wait_ms": 3000,
+  "settle_ms": 150,
+  "limit": 50
+}
+```
+
+In `direct_active` mode, a captured response keeps the normal send status and
+adds typed observation metadata:
+
+```json
+{
+  "status": "completed",
+  "terminal_id": "main",
+  "bytes_written": 4,
+  "before_output_seq": 10,
+  "after_output_seq": 12,
+  "capture": {
+    "requested": true,
+    "status": "ok",
+    "mode": "tail",
+    "before_output_seq": 10,
+    "output_seq": 12,
+    "since_output_seq": 10,
+    "wait_ms": 3000,
+    "settle_ms": 150,
+    "settled": true,
+    "timed_out": false,
+    "gap": { "detected": false },
+    "events": []
+  }
+}
+```
+
+If no terminal output arrives before `wait_ms`, the send may still be
+`completed`; the timeout is reported only as `capture.status: "timeout"` and
+`capture.timed_out: true`. In approval mode, capture is not executed because no
+bytes have been written yet; the response remains `pending_approval` and
+includes `capture.status: "skipped"` with reason `pending_approval`. Captured
+tail events are display data only and must not be parsed as WebSSH control
+state. Capture returns terminal output after `before_output_seq`; it does not
+prove that every returned byte was causally produced by the sent input.
 
 Revoke:
 

@@ -282,7 +282,10 @@ AGENT_AUDIT_DIRECT_WRITE = 'direct_write'
 AGENT_AUDIT_TERMINAL_CLEANUP = 'terminal_cleanup'
 AGENT_AUDIT_ERROR = 'error'
 EXTERNAL_AGENT_PROTOCOL_VERSION = 1
-EXTERNAL_AGENT_CAPABILITIES = ['state', 'screen', 'render', 'tail', 'send', 'revoke']
+EXTERNAL_AGENT_CAPABILITIES = ['state', 'screen', 'render', 'tail', 'send', 'send_capture', 'revoke']
+AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_WAIT_MS = 3000
+AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_SETTLE_MS = 150
+AGENT_EXTERNAL_SEND_CAPTURE_MAX_SETTLE_MS = 5000
 ANSI_OSC_PATTERN = re.compile(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)')
 ANSI_CSI_PATTERN = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
 ANSI_ESCAPE_PATTERN = re.compile(r'\x1b[@-Z\\-_]')
@@ -3057,6 +3060,67 @@ class BrowserViewportMirrorAdapter(AgentTerminalMirror):
 
 AGENT_TERMINAL_MIRROR = BrowserViewportMirrorAdapter()
 
+def parse_external_agent_screen_options(command):
+    has_tail_lines = command.get('tail_lines') is not None
+    has_region = command.get('region') is not None
+    if has_tail_lines and has_region:
+        return None, AGENT_ERROR_ACTION_INVALID_DATA
+
+    if has_tail_lines:
+        try:
+            tail_lines = int(command.get('tail_lines'))
+        except (TypeError, ValueError):
+            return None, AGENT_ERROR_ACTION_INVALID_DATA
+        if tail_lines < 0:
+            return None, AGENT_ERROR_ACTION_INVALID_DATA
+        return {'mode': 'tail_lines', 'tail_lines': tail_lines}, None
+
+    if has_region:
+        region = command.get('region')
+        if not isinstance(region, dict):
+            return None, AGENT_ERROR_ACTION_INVALID_DATA
+        try:
+            top = int(region.get('top'))
+            bottom = int(region.get('bottom'))
+        except (TypeError, ValueError):
+            return None, AGENT_ERROR_ACTION_INVALID_DATA
+        if top < 0 or bottom < top:
+            return None, AGENT_ERROR_ACTION_INVALID_DATA
+        return {'mode': 'region', 'top': top, 'bottom': bottom}, None
+
+    return {'mode': 'full'}, None
+
+def apply_external_agent_screen_options(screen, options):
+    if not isinstance(screen, dict) or options.get('mode') == 'full':
+        return screen
+    lines = list(screen.get('lines') or [])
+    original_line_count = len(lines)
+    if options.get('mode') == 'tail_lines':
+        tail_lines = options['tail_lines']
+        start = max(0, original_line_count - tail_lines)
+        end = original_line_count
+        selected = lines[start:end]
+        region = {
+            'top': start,
+            'bottom': end,
+            'tail_lines': tail_lines,
+        }
+    else:
+        start = min(options['top'], original_line_count)
+        end = min(options['bottom'], original_line_count)
+        selected = lines[start:end]
+        region = {
+            'top': start,
+            'bottom': end,
+        }
+    sliced = dict(screen)
+    sliced['lines'] = selected
+    sliced['line_count'] = len(selected)
+    sliced['original_line_count'] = original_line_count
+    sliced['region'] = region
+    sliced['truncated'] = len(selected) != original_line_count
+    return sliced
+
 def build_agent_context(session_token, terminal_id, sid):
     bridge = get_bridge(session_token, terminal_id)
     session_metadata = bridge.session_metadata() if bridge else {
@@ -3299,6 +3363,112 @@ def parse_external_agent_tail_wait_ms(value):
     except (TypeError, ValueError):
         wait_ms = 0
     return max(0, min(wait_ms, AGENT_EXTERNAL_TAIL_MAX_WAIT_MS))
+
+def parse_external_agent_send_capture_wait_ms(value):
+    try:
+        wait_ms = int(value if value is not None else AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_WAIT_MS)
+    except (TypeError, ValueError):
+        wait_ms = AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_WAIT_MS
+    return max(0, min(wait_ms, AGENT_EXTERNAL_TAIL_MAX_WAIT_MS))
+
+def parse_external_agent_send_capture_settle_ms(value):
+    try:
+        settle_ms = int(value if value is not None else AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_SETTLE_MS)
+    except (TypeError, ValueError):
+        settle_ms = AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_SETTLE_MS
+    return max(0, min(settle_ms, AGENT_EXTERNAL_SEND_CAPTURE_MAX_SETTLE_MS))
+
+def external_agent_flag_enabled(value):
+    return value is True or value == 1
+
+def should_external_agent_capture_send(command):
+    return external_agent_flag_enabled(command.get('capture'))
+
+def get_external_agent_capture_context_error(state):
+    if state.paused or state.mode == AGENT_MODE_PAUSED:
+        return AGENT_ERROR_PAUSED
+    if state.mode == AGENT_MODE_DISABLED:
+        return AGENT_ERROR_EXTERNAL_AGENT_DISABLED
+    if not is_agent_context_allowed(state):
+        return AGENT_ERROR_PRIVACY_BLOCKED
+    return None
+
+def build_external_agent_send_capture_payload(bridge, state, before_output_seq,
+                                              limit=AGENT_EXTERNAL_TAIL_MAX_EVENTS,
+                                              wait_ms=None, settle_ms=None):
+    wait_ms = parse_external_agent_send_capture_wait_ms(wait_ms)
+    settle_ms = parse_external_agent_send_capture_settle_ms(settle_ms)
+    context_error = get_external_agent_capture_context_error(state)
+    if context_error:
+        return None, context_error
+    tail = build_external_agent_tail_payload(
+        bridge,
+        since_output_seq=before_output_seq,
+        limit=limit,
+    )
+    deadline = time.monotonic() + wait_ms / 1000.0
+    timed_out = False
+
+    while not tail['events'] and not tail['gap']['detected']:
+        context_error = get_external_agent_capture_context_error(state)
+        if context_error:
+            return None, context_error
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            timed_out = True
+            break
+        with bridge.output_condition:
+            bridge.output_condition.wait(timeout=min(remaining, 0.25))
+        tail = build_external_agent_tail_payload(
+            bridge,
+            since_output_seq=before_output_seq,
+            limit=limit,
+        )
+
+    settled = not timed_out
+    if tail['events'] and settle_ms > 0:
+        settle_deadline = time.monotonic() + settle_ms / 1000.0
+        last_output_seq = tail['output_seq']
+        while True:
+            context_error = get_external_agent_capture_context_error(state)
+            if context_error:
+                return None, context_error
+            remaining = settle_deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            with bridge.output_condition:
+                bridge.output_condition.wait(timeout=min(remaining, 0.25))
+            latest = build_external_agent_tail_payload(
+                bridge,
+                since_output_seq=before_output_seq,
+                limit=limit,
+            )
+            if latest['output_seq'] != last_output_seq:
+                tail = latest
+                last_output_seq = latest['output_seq']
+                settle_deadline = time.monotonic() + settle_ms / 1000.0
+        settled = True
+
+    context_error = get_external_agent_capture_context_error(state)
+    if context_error:
+        return None, context_error
+    return {
+        'status': 'timeout' if timed_out else 'ok',
+        'mode': 'tail',
+        'before_output_seq': before_output_seq,
+        'output_seq': tail['output_seq'],
+        'after_output_seq': tail['output_seq'],
+        'since_output_seq': tail['since_output_seq'],
+        'limit': tail['limit'],
+        'wait_ms': wait_ms,
+        'settle_ms': settle_ms,
+        'settled': settled,
+        'timed_out': timed_out,
+        'first_available_output_seq': tail['first_available_output_seq'],
+        'dropped_before_output_seq': tail['dropped_before_output_seq'],
+        'gap': tail['gap'],
+        'events': tail['events'],
+    }, None
 
 def build_external_agent_tail_payload_waiting(bridge, state, since_output_seq=None,
                                               limit=AGENT_EXTERNAL_TAIL_MAX_EVENTS,
@@ -4091,7 +4261,8 @@ def get_external_agent_cli_tls_args():
         return ['--ca-file', ca_cert_path]
     return []
 
-def build_external_agent_cli_command(base_url, token, terminal_id, op='send', text='pwd\n'):
+def build_external_agent_cli_command(base_url, token, terminal_id, op='send', text='pwd\n',
+                                     extra_args=None):
     args = [
         'tools/.venv_wsl/bin/python',
         'scripts/webssh_agent_cli.py',
@@ -4105,8 +4276,12 @@ def build_external_agent_cli_command(base_url, token, terminal_id, op='send', te
     args.extend(get_external_agent_cli_tls_args())
     if op == 'send':
         args.extend(['send', '--text', text])
+    elif op == 'send-wait':
+        args.extend(['send-wait', '--text', text])
     else:
         args.append(op)
+    if extra_args:
+        args.extend(extra_args)
     return ' '.join(shlex.quote(arg) for arg in args)
 
 def build_external_agent_repl_command(base_url, token, terminal_id):
@@ -4123,15 +4298,45 @@ def build_external_agent_repl_command(base_url, token, terminal_id):
     args.extend(get_external_agent_cli_tls_args())
     return ' '.join(shlex.quote(arg) for arg in args)
 
+def build_external_agent_jsonl_command(base_url, token, terminal_id):
+    args = [
+        'tools/.venv_wsl/bin/python',
+        'scripts/webssh_agent_jsonl.py',
+        '--url',
+        base_url,
+        '--token',
+        token,
+        '--terminal',
+        terminal_id,
+    ]
+    args.extend(get_external_agent_cli_tls_args())
+    return ' '.join(shlex.quote(arg) for arg in args)
+
 def build_external_agent_cli_commands(base_url, token, terminal_id):
     return {
         'hello': build_external_agent_cli_command(base_url, token, terminal_id, op='hello'),
         'state': build_external_agent_cli_command(base_url, token, terminal_id, op='state'),
         'screen': build_external_agent_cli_command(base_url, token, terminal_id, op='screen'),
+        'screen_tail': build_external_agent_cli_command(
+            base_url,
+            token,
+            terminal_id,
+            op='screen',
+            extra_args=['--tail-lines', '12'],
+        ),
+        'screen_region': build_external_agent_cli_command(
+            base_url,
+            token,
+            terminal_id,
+            op='screen',
+            extra_args=['--region', '0:12'],
+        ),
         'render': build_external_agent_cli_command(base_url, token, terminal_id, op='render'),
         'tail': build_external_agent_cli_command(base_url, token, terminal_id, op='tail'),
         'send_pwd': build_external_agent_cli_command(base_url, token, terminal_id, op='send', text='pwd\n'),
+        'send_wait_pwd': build_external_agent_cli_command(base_url, token, terminal_id, op='send-wait', text='pwd\n'),
         'repl': build_external_agent_repl_command(base_url, token, terminal_id),
+        'jsonl': build_external_agent_jsonl_command(base_url, token, terminal_id),
     }
 
 def build_external_agent_discovery_payload(base_url, token, terminal_id):
@@ -4154,6 +4359,8 @@ def build_external_agent_discovery_payload(base_url, token, terminal_id):
             'hello': {'op': 'hello'},
             'state': {'op': 'state'},
             'screen': {'op': 'screen'},
+            'screen_tail': {'op': 'screen', 'tail_lines': 12},
+            'screen_region': {'op': 'screen', 'region': {'top': 0, 'bottom': 12}},
             'render': {'op': 'render', 'wait_ms': AGENT_VIEWPORT_RENDER_WAIT_MS},
             'tail': {
                 'op': 'tail',
@@ -4162,6 +4369,22 @@ def build_external_agent_discovery_payload(base_url, token, terminal_id):
                 'wait_ms': AGENT_EXTERNAL_TAIL_MAX_WAIT_MS,
             },
             'send': {'op': 'send', 'data': 'pwd\n'},
+            'send_capture': {
+                'op': 'send',
+                'data': 'pwd\n',
+                'capture': True,
+                'wait_ms': AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_WAIT_MS,
+                'settle_ms': AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_SETTLE_MS,
+                'limit': AGENT_EXTERNAL_TAIL_MAX_EVENTS,
+            },
+            'send_wait': {
+                'op': 'send-wait',
+                'data': 'pwd\n',
+                'capture': True,
+                'wait_ms': AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_WAIT_MS,
+                'settle_ms': AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_SETTLE_MS,
+                'limit': AGENT_EXTERNAL_TAIL_MAX_EVENTS,
+            },
             'revoke': {'op': 'revoke'},
         },
         'cli_commands': build_external_agent_cli_commands(base_url, token, terminal_id),
@@ -4928,13 +5151,20 @@ def process_external_agent_command(command):
         if not bridge:
             return external_agent_error(AGENT_ERROR_TERMINAL_NOT_FOUND, terminal_id=terminal_id)
         if op == 'screen':
+            screen_options, screen_options_error = parse_external_agent_screen_options(command)
+            if screen_options_error:
+                return external_agent_error(screen_options_error, terminal_id=terminal_id)
             context = build_agent_context(record.get('session_token'), terminal_id, record.get('sid'))
-            active_screen = context.get('active_screen')
+            active_screen = apply_external_agent_screen_options(
+                context.get('active_screen'),
+                screen_options,
+            )
             record_agent_audit_event(
                 state,
                 AGENT_AUDIT_EXTERNAL_AGENT_SCREEN,
                 external_agent_id=record.get('external_agent_id'),
                 context=summarize_agent_context_for_audit(context),
+                screen_options=screen_options,
             )
             return {
                 'status': 'ok',
@@ -5010,11 +5240,13 @@ def process_external_agent_command(command):
             'events': tail['events'],
         }
 
-    if op == 'send':
+    if op in {'send', 'send-wait'}:
         data = command.get('data')
         bridge = get_bridge(record.get('session_token'), terminal_id)
         if not bridge:
             return external_agent_error(AGENT_ERROR_TERMINAL_NOT_FOUND, terminal_id=terminal_id)
+        capture_requested = op == 'send-wait' or should_external_agent_capture_send(command)
+        before_output_seq = None
         with bridge.input_lock:
             with agent_lock:
                 if state.paused or state.mode == AGENT_MODE_PAUSED:
@@ -5035,13 +5267,22 @@ def process_external_agent_command(command):
                     AGENT_AUDIT_EXTERNAL_AGENT_SEND,
                     action=action,
                     external_agent_id=record.get('external_agent_id'),
+                    capture_requested=capture_requested,
                 )
                 socketio.emit(AGENT_EVENT_ACTION_REQUEST, public_agent_action(action), room=state.sid)
                 emit_agent_state(state.sid, state)
             if requires_approval:
                 payload = public_agent_action(action)
                 payload['status'] = AGENT_STATUS_PENDING_APPROVAL
+                if capture_requested:
+                    payload['capture'] = {
+                        'status': 'skipped',
+                        'reason': 'pending_approval',
+                        'requested': True,
+                    }
                 return payload
+            with bridge.output_condition:
+                before_output_seq = bridge.output_seq
             ok, result = write_agent_terminal_input(
                 record.get('session_token'),
                 terminal_id,
@@ -5064,6 +5305,26 @@ def process_external_agent_command(command):
         if result.get('error_code'):
             payload['error_code'] = result.get('error_code')
         payload['bytes_written'] = result.get('bytes_written', 0)
+        if capture_requested and ok:
+            capture, capture_error = build_external_agent_send_capture_payload(
+                bridge,
+                state,
+                before_output_seq if isinstance(before_output_seq, int) else 0,
+                limit=command.get('limit', AGENT_EXTERNAL_TAIL_MAX_EVENTS),
+                wait_ms=command.get('wait_ms'),
+                settle_ms=command.get('settle_ms'),
+            )
+            if capture_error:
+                payload['capture'] = {
+                    'status': AGENT_STATUS_FAILED,
+                    'error_code': capture_error,
+                    'requested': True,
+                }
+            else:
+                capture['requested'] = True
+                payload['capture'] = capture
+                payload['before_output_seq'] = capture['before_output_seq']
+                payload['after_output_seq'] = capture['output_seq']
         return payload
 
     return external_agent_error(AGENT_ERROR_ACTION_NOT_ALLOWED, terminal_id=terminal_id)

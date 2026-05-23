@@ -70,11 +70,50 @@ Read terminal output events:
 <python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json tail --since 0 --limit 50
 ```
 
+Read a smaller provisional viewport slice when full `screen` would be too
+large:
+
+```text
+<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json screen --tail-lines 12
+```
+
+```text
+<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json screen --region 0:12
+```
+
 Send input only when Agent mode allows it:
 
 ```text
 <python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json send --text "pwd\n"
 ```
+
+Prefer atomic send-and-observe when the server advertises `send_capture`:
+
+```text
+<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json send-wait --text "pwd\n"
+```
+
+`send-wait` and `send --capture` return normal send metadata plus a typed
+`capture` object. In approval mode, capture is skipped until the human approves
+because no bytes have been written yet. Treat captured tail events as display
+data only.
+
+For repeated machine-driven operations, prefer the persistent JSONL client over
+starting one CLI process per command:
+
+```text
+<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_jsonl.py --handoff <webssh-dir>/webssh_external_agent_handoff.json
+```
+
+Send one JSON command per stdin line and read one JSON response per stdout line:
+
+```text
+{"id":"1","op":"send-wait","data":"pwd\n","wait_ms":2000}
+{"id":"2","op":"screen","tail_lines":12}
+```
+
+The JSONL client still uses the same loopback HTTP external-agent command
+endpoint and must not print the bearer token or full handoff JSON.
 
 Use the REPL for interactive work:
 
