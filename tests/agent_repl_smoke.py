@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import webssh_agent_cli as cli
 import webssh_agent_jsonl as jsonl
 import webssh_agent_repl as repl
+import webssh_agent_type as typer
 
 
 class FakeClient:
@@ -433,6 +434,110 @@ def test_jsonl_client_preserves_backend_failed_result():
     }
 
 
+def test_type_units_translate_newlines_and_preserve_unicode_characters():
+    assert list(typer.iter_type_units('a\n測b', newline_mode='cr')) == ['a', '\r', '測', 'b']
+    assert list(typer.iter_type_units('a\nb', newline_mode='lf')) == ['a', '\n', 'b']
+    assert list(typer.iter_type_units('a\nb', newline_mode='crlf')) == ['a', '\r\n', 'b']
+
+
+def test_type_helper_sends_one_unit_per_plain_send_without_capture():
+    fake_post = FakePostJson()
+    sleeps = []
+    args = SimpleNamespace(
+        url='https://127.0.0.1:5010',
+        terminal='term-2',
+        token='agt_secret',
+        ca_file='/tmp/ca.crt',
+        insecure=False,
+        cps=2.0,
+        delay_ms=None,
+        jitter_ms=0,
+        punctuation_pause_ms=0,
+        progress=False,
+    )
+    result = typer.type_units(
+        args,
+        ['a', 'b', '測'],
+        post_json=fake_post,
+        sleep=sleeps.append,
+    )
+    assert result['status'] == 'completed'
+    assert result['sent_units'] == 3
+    assert result['sent_bytes'] == len('ab測'.encode('utf-8'))
+    assert sleeps == [0.5, 0.5]
+    assert fake_post.calls == [
+        {
+            'base_url': 'https://127.0.0.1:5010',
+            'payload': {
+                'op': 'send',
+                'terminal_id': 'term-2',
+                'token': 'agt_secret',
+                'data': 'a',
+            },
+            'dev_mode': False,
+            'ca_file': '/tmp/ca.crt',
+            'insecure': False,
+        },
+        {
+            'base_url': 'https://127.0.0.1:5010',
+            'payload': {
+                'op': 'send',
+                'terminal_id': 'term-2',
+                'token': 'agt_secret',
+                'data': 'b',
+            },
+            'dev_mode': False,
+            'ca_file': '/tmp/ca.crt',
+            'insecure': False,
+        },
+        {
+            'base_url': 'https://127.0.0.1:5010',
+            'payload': {
+                'op': 'send',
+                'terminal_id': 'term-2',
+                'token': 'agt_secret',
+                'data': '測',
+            },
+            'dev_mode': False,
+            'ca_file': '/tmp/ca.crt',
+            'insecure': False,
+        },
+    ]
+
+
+def test_type_helper_stops_on_failed_send_without_replaying_remaining_units():
+    fake_post = FakePostJson(responses=[
+        (200, {'status': 'ok'}),
+        (409, {'status': 'failed', 'error_code': 'agent_human_input_active'}),
+        (200, {'status': 'ok'}),
+    ])
+    sleeps = []
+    args = SimpleNamespace(
+        url='http://127.0.0.1:5010',
+        terminal='main',
+        token='agt_secret',
+        ca_file=None,
+        insecure=False,
+        cps=10.0,
+        delay_ms=None,
+        jitter_ms=0,
+        punctuation_pause_ms=0,
+        progress=False,
+    )
+    result = typer.type_units(
+        args,
+        ['a', 'b', 'c'],
+        post_json=fake_post,
+        sleep=sleeps.append,
+    )
+    assert result['status'] == 'failed'
+    assert result['error_code'] == 'agent_human_input_active'
+    assert result['stopped_at_unit'] == 1
+    assert result['sent_units'] == 1
+    assert [call['payload']['data'] for call in fake_post.calls] == ['a', 'b']
+    assert sleeps == [0.1]
+
+
 def main():
     tests = [
         test_normalize_key_modes,
@@ -455,6 +560,9 @@ def main():
         test_jsonl_client_reuses_defaults_and_preserves_ids,
         test_jsonl_client_reports_invalid_json_as_jsonl_error,
         test_jsonl_client_preserves_backend_failed_result,
+        test_type_units_translate_newlines_and_preserve_unicode_characters,
+        test_type_helper_sends_one_unit_per_plain_send_without_capture,
+        test_type_helper_stops_on_failed_send_without_replaying_remaining_units,
     ]
     for test in tests:
         test()

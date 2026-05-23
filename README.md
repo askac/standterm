@@ -207,6 +207,7 @@ python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json 
 python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json send-wait --text $'pwd\r' --strip-ansi
 python scripts/webssh_agent_jsonl.py --handoff webssh_external_agent_handoff.json
 python scripts/webssh_agent_repl.py --handoff webssh_external_agent_handoff.json --enter cr
+python scripts/webssh_agent_type.py --handoff webssh_external_agent_handoff.json --from-file body.txt --cps 3 --newline cr
 ```
 
 CLI `--text` is sent verbatim; normal quoted strings do not decode backslash
@@ -224,6 +225,14 @@ raw terminal events remain the default, and stripped text is still not a control
 signal. For full-screen TUIs, stripped output can make redraws readable but may
 remove cursor or highlight cues, so inspect raw `screen`, raw tail/capture, or
 `render` when selection position matters.
+
+Use `webssh_agent_type.py` for paced input into full-screen editors or TUIs. It
+sends one text unit per normal `send` request with configurable rate and newline
+translation. WebSSH terminal input is a single shared stream: while a paced
+typer is running, do not send cursor-moving keys from another CLI, REPL, browser,
+or helper. For progress checks, prefer `tail`; `screen` is a provisional browser
+snapshot and `render` depends on an active browser viewport.
+
 For repeated machine-driven operations, prefer `webssh_agent_jsonl.py`: it
 starts one persistent local process, reads the handoff once, accepts one JSON
 command per stdin line, and writes one JSON response per stdout line while still

@@ -178,6 +178,26 @@ Rejected input is not retried automatically, because replaying stale keystrokes
 after the human lease expires can put bytes into the wrong prompt or editor
 state.
 
+For paced input into a full-screen editor or TUI, use the dedicated typer helper
+instead of REPL pipe mode:
+
+```bash
+tools/.venv_wsl/bin/python scripts/webssh_agent_type.py \
+  --handoff webssh_external_agent_handoff.json \
+  --from-file body.txt \
+  --cps 3 \
+  --newline cr
+```
+
+The typer posts one normal `send` operation per text unit and stops on rejected
+input such as paused/privacy-blocked state, revoked tokens, missing terminals,
+or active human-input leases. It does not provide an exclusive multi-character
+write lease. WebSSH terminal input is one shared stream, so another writer can
+move the cursor or change editor state between typed units. While a paced typer
+is running, avoid concurrent cursor-moving input from browser viewers, CLI,
+REPL, JSONL, or other helpers. Use `tail` for progress checks; `screen` remains
+a provisional browser snapshot and `render` requires a live browser viewport.
+
 For machine-to-machine repeated commands, use the persistent JSONL wrapper
 instead of the terminal-style REPL. It keeps stdout as JSON only and still
 forwards each command to the same loopback HTTP command endpoint:
