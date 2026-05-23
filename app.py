@@ -170,6 +170,11 @@ AGENT_EVENT_ACTION_REQUEST = 'agent_action_request'
 AGENT_EVENT_ACTION_RESULT = 'agent_action_result'
 AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT = 'agent_viewport_snapshot_result'
 AGENT_EVENT_PRIVACY_SET = 'agent_privacy_set'
+OPERATOR_OBSERVATION_EVENT_START = 'operator_observation_start'
+OPERATOR_OBSERVATION_EVENT_STOP = 'operator_observation_stop'
+OPERATOR_OBSERVATION_EVENT_MARK = 'operator_observation_mark'
+OPERATOR_OBSERVATION_EVENT_STATE_REQUEST = 'operator_observation_state_request'
+OPERATOR_OBSERVATION_EVENT_STATE = 'operator_observation_state'
 AGENT_ERROR_NOT_ATTACHED = 'agent_not_attached'
 AGENT_ERROR_PAUSED = 'agent_paused'
 AGENT_ERROR_STALE_EPOCH = 'agent_stale_epoch'
@@ -388,6 +393,17 @@ APP_DIR = Path(__file__).resolve().parent
 EXTERNAL_AGENT_HANDOFF_PATH = APP_DIR / 'webssh_external_agent_handoff.json'
 AUTHORIZED_DIR = APP_DIR / 'authorized'
 AUTHORIZED_BROWSERS_PATH = AUTHORIZED_DIR / 'browsers.json'
+
+def resolve_operator_observation_dir():
+    configured = os.getenv('WEBSSH_OPERATOR_OBSERVATION_DIR', '').strip()
+    if configured:
+        return Path(configured).expanduser()
+    normalized = str(APP_DIR).replace('\\', '/')
+    if normalized.endswith('/MIBCRK/Tools/webssh'):
+        return APP_DIR / 'operator_observations'
+    return None
+
+OPERATOR_OBSERVATION_DIR = resolve_operator_observation_dir()
 
 def is_wsl_runtime_hint():
     if not sys.platform.startswith('linux'):
@@ -2464,6 +2480,95 @@ def summarize_agent_user_input_metadata(terminal_id, value, privacy_state=AGENT_
 
 agent_user_input_metadata_store = AgentUserInputMetadataStore()
 
+operator_observation_lock = threading.Lock()
+operator_observations = {}
+
+def operator_observation_key(session_token, terminal_id):
+    return (session_token, terminal_id)
+
+def operator_observation_path(observation_id, started_at=None):
+    if not OPERATOR_OBSERVATION_DIR:
+        return None
+    day = time.strftime('%Y%m%d', time.localtime(started_at or time.time()))
+    return OPERATOR_OBSERVATION_DIR / day / f'{observation_id}.jsonl'
+
+def public_operator_observation_state(session_token, terminal_id):
+    record = operator_observations.get(operator_observation_key(session_token, terminal_id))
+    if not record:
+        return {
+            'terminal_id': terminal_id,
+            'active': False,
+            'enabled': OPERATOR_OBSERVATION_DIR is not None,
+        }
+    return {
+        'terminal_id': terminal_id,
+        'active': True,
+        'enabled': OPERATOR_OBSERVATION_DIR is not None,
+        'observation_id': record.get('observation_id'),
+        'started_at': record.get('started_at'),
+        'started_by_viewer_id': record.get('started_by_viewer_id'),
+        'event_count': record.get('event_count', 0),
+    }
+
+def emit_operator_observation_state(session_token, terminal_id):
+    payload = public_operator_observation_state(session_token, terminal_id)
+    for sid in get_session_sids(session_token):
+        socketio.emit(OPERATOR_OBSERVATION_EVENT_STATE, payload, room=sid)
+
+def write_operator_observation_event(record, payload):
+    path = record.get('path')
+    if not path:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('a', encoding='utf-8') as handle:
+        handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + '\n')
+
+def record_operator_observation_event(session_token, terminal_id, kind, metadata=None, sid=None):
+    with operator_observation_lock:
+        record = operator_observations.get(operator_observation_key(session_token, terminal_id))
+        if not record:
+            return None
+        record['event_count'] += 1
+        payload = {
+            'event_type': 'operator_observation_event',
+            'observation_id': record['observation_id'],
+            'terminal_id': terminal_id,
+            'seq': record['event_count'],
+            'timestamp': time.time(),
+            'kind': kind,
+            'viewer_id': get_agent_viewer_id(sid) if sid else None,
+            'metadata': metadata or {},
+        }
+        write_operator_observation_event(record, payload)
+        return payload
+
+def stop_operator_observation(session_token, terminal_id, reason, sid=None):
+    with operator_observation_lock:
+        record = operator_observations.pop(operator_observation_key(session_token, terminal_id), None)
+        if record:
+            write_operator_observation_event(record, {
+                'event_type': 'operator_observation_stop',
+                'observation_id': record['observation_id'],
+                'terminal_id': terminal_id,
+                'timestamp': time.time(),
+                'viewer_id': get_agent_viewer_id(sid) if sid else None,
+                'metadata': {
+                    'event_count': record.get('event_count', 0),
+                    'reason': reason,
+                },
+            })
+    return record
+
+def summarize_operator_input_metadata(value, privacy_state=AGENT_PRIVACY_NORMAL):
+    encoded = value.encode('utf-8', errors='ignore')
+    return {
+        'byte_length': len(encoded),
+        'line_count': value.count('\n') + (1 if value and not value.endswith('\n') else 0),
+        'contains_control_chars': has_agent_control_chars(value),
+        'privacy_state': privacy_state if privacy_state in AGENT_PRIVACY_STATES else AGENT_PRIVACY_NORMAL,
+        'raw_preview_recorded': False,
+    }
+
 class AgentViewportSnapshotStore:
     def __init__(self):
         self._entries = {}
@@ -4012,6 +4117,7 @@ def unregister_terminal_bridge(session_token, terminal_id, bridge):
     if get_bridge(session_token, terminal_id) is not bridge:
         return
     pop_bridge(session_token, terminal_id)
+    stop_operator_observation(session_token, terminal_id, AGENT_REASON_TERMINAL_CLOSED)
     record_agent_terminal_cleanup(session_token, terminal_id, AGENT_REASON_TERMINAL_CLOSED)
     invalidate_agent_states(session_token, terminal_id=terminal_id, reason=AGENT_REASON_TERMINAL_CLOSED)
     agent_transcript_store.discard(session_token, terminal_id)
@@ -4021,6 +4127,7 @@ def unregister_terminal_bridge(session_token, terminal_id, bridge):
     close_bridge(bridge)
 
 def close_terminal_bridge(session_token, terminal_id):
+    stop_operator_observation(session_token, terminal_id, AGENT_REASON_TERMINAL_CLOSED)
     record_agent_terminal_cleanup(session_token, terminal_id, AGENT_REASON_TERMINAL_CLOSED)
     invalidate_agent_states(session_token, terminal_id=terminal_id, reason=AGENT_REASON_TERMINAL_CLOSED)
     agent_transcript_store.discard(session_token, terminal_id)
@@ -4031,6 +4138,7 @@ def close_terminal_bridge(session_token, terminal_id):
 
 def close_all_terminal_bridges(session_token):
     for terminal_id in list(bridges.get(session_token, {})):
+        stop_operator_observation(session_token, terminal_id, AGENT_REASON_TERMINAL_CLOSED)
         record_agent_terminal_cleanup(session_token, terminal_id, AGENT_REASON_TERMINAL_CLOSED)
     invalidate_agent_states(session_token, reason=AGENT_REASON_TERMINAL_CLOSED)
     agent_transcript_store.discard(session_token)
@@ -4962,6 +5070,16 @@ def on_agent_mode_set(data):
             previous_mode=previous_mode,
             requested_mode=mode,
         )
+        record_operator_observation_event(
+            session_token,
+            terminal_id,
+            'agent_mode_set',
+            metadata={
+                'previous_mode': previous_mode,
+                'requested_mode': mode,
+            },
+            sid=request.sid,
+        )
         emit_agent_state(request.sid, state)
 
 @socketio.on(AGENT_EVENT_PAUSE)
@@ -4984,6 +5102,13 @@ def on_agent_pause(data):
         for action in cancelled:
             emit_agent_action_result(request.sid, action, AGENT_ERROR_PAUSED, error_code=AGENT_ERROR_PAUSED)
         record_agent_audit_event(state, AGENT_AUDIT_PAUSE, cancelled_actions=len(cancelled))
+        record_operator_observation_event(
+            session_token,
+            terminal_id,
+            'agent_pause',
+            metadata={'cancelled_actions': len(cancelled)},
+            sid=request.sid,
+        )
         emit_agent_state(request.sid, state)
 
 @socketio.on(AGENT_EVENT_RESUME)
@@ -5011,6 +5136,13 @@ def on_agent_resume(data):
         bump_agent_mode_version(state)
         state.run_id = secrets.token_urlsafe(12)
         record_agent_audit_event(state, AGENT_AUDIT_RESUME, requested_mode=target_mode)
+        record_operator_observation_event(
+            session_token,
+            terminal_id,
+            'agent_resume',
+            metadata={'requested_mode': target_mode},
+            sid=request.sid,
+        )
         emit_agent_state(request.sid, state)
 
 @socketio.on(AGENT_EVENT_PRIVACY_SET)
@@ -5053,7 +5185,99 @@ def on_agent_privacy_set(data):
             requested_privacy_state=privacy_state,
             cancelled_actions=len(cancelled),
         )
+        record_operator_observation_event(
+            session_token,
+            terminal_id,
+            'agent_privacy_set',
+            metadata={
+                'previous_privacy_state': previous_privacy_state,
+                'requested_privacy_state': privacy_state,
+                'cancelled_actions': len(cancelled),
+            },
+            sid=request.sid,
+        )
         emit_agent_state(request.sid, state)
+
+@socketio.on(OPERATOR_OBSERVATION_EVENT_STATE_REQUEST)
+def on_operator_observation_state_request(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    if not session_token or not terminal_id:
+        return
+    socketio.emit(
+        OPERATOR_OBSERVATION_EVENT_STATE,
+        public_operator_observation_state(session_token, terminal_id),
+        room=request.sid,
+    )
+
+@socketio.on(OPERATOR_OBSERVATION_EVENT_START)
+def on_operator_observation_start(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    if not session_token or not terminal_id:
+        return
+    if not OPERATOR_OBSERVATION_DIR:
+        socketio.emit(
+            OPERATOR_OBSERVATION_EVENT_STATE,
+            public_operator_observation_state(session_token, terminal_id),
+            room=request.sid,
+        )
+        return
+    if not get_bridge(session_token, terminal_id):
+        emit_agent_error(request.sid, terminal_id, AGENT_ERROR_TERMINAL_NOT_FOUND)
+        return
+    with operator_observation_lock:
+        key = operator_observation_key(session_token, terminal_id)
+        record = operator_observations.get(key)
+        if not record:
+            started_at = time.time()
+            observation_id = 'obs_' + secrets.token_urlsafe(12)
+            record = {
+                'observation_id': observation_id,
+                'session_token': session_token,
+                'terminal_id': terminal_id,
+                'started_at': started_at,
+                'started_by_sid': request.sid,
+                'started_by_viewer_id': get_agent_viewer_id(request.sid),
+                'event_count': 0,
+                'path': operator_observation_path(observation_id, started_at=started_at),
+            }
+            operator_observations[key] = record
+            write_operator_observation_event(record, {
+                'event_type': 'operator_observation_start',
+                'observation_id': observation_id,
+                'terminal_id': terminal_id,
+                'timestamp': started_at,
+                'viewer_id': record['started_by_viewer_id'],
+                'metadata': {
+                    'raw_input_preview_recorded': False,
+                },
+            })
+    emit_operator_observation_state(session_token, terminal_id)
+
+@socketio.on(OPERATOR_OBSERVATION_EVENT_STOP)
+def on_operator_observation_stop(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    if not session_token or not terminal_id:
+        return
+    stop_operator_observation(session_token, terminal_id, 'operator_stop', sid=request.sid)
+    emit_operator_observation_state(session_token, terminal_id)
+
+@socketio.on(OPERATOR_OBSERVATION_EVENT_MARK)
+def on_operator_observation_mark(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    if not session_token or not terminal_id:
+        return
+    record_operator_observation_event(
+        session_token,
+        terminal_id,
+        'operator_mark',
+        metadata={},
+        sid=request.sid,
+    )
+    emit_operator_observation_state(session_token, terminal_id)
 
 def process_agent_terminal_input_proposal(data, proposal_builder,
                                           invalid_proposal_error=AGENT_ERROR_ACTION_NOT_ALLOWED):
@@ -5887,6 +6111,13 @@ def on_ssh_input(data):
             privacy_state = state.privacy_state if state else AGENT_PRIVACY_NORMAL
             updated_states = note_agent_human_input_for_terminal(session_token, terminal_id)
         agent_user_input_metadata_store.append_input(session_token, terminal_id, ssh_input, privacy_state=privacy_state)
+        record_operator_observation_event(
+            session_token,
+            terminal_id,
+            'terminal_input',
+            metadata=summarize_operator_input_metadata(ssh_input, privacy_state=privacy_state),
+            sid=request.sid,
+        )
         bridge.write(ssh_input)
     for updated_state in updated_states:
         emit_agent_state(updated_state.sid, updated_state)

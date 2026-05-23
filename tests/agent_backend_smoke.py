@@ -2,6 +2,7 @@ import sys
 import tempfile
 import threading
 import time
+import json
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -82,6 +83,7 @@ def reset_state():
     webssh.agent_viewport_snapshot_store.clear()
     webssh.agent_viewport_render_request_store.clear()
     webssh.external_agent_attach_store.clear()
+    webssh.operator_observations.clear()
     webssh.set_agent_provider_for_test(webssh.MockAgentProvider())
 
 
@@ -201,6 +203,84 @@ def test_pause_blocks_pending_approval():
     assert result['error_code'] in {webssh.AGENT_ERROR_PAUSED, webssh.AGENT_ERROR_ACTION_NOT_PENDING}
 
     client.disconnect()
+
+
+def test_operator_observation_logs_metadata_without_input_preview():
+    previous_dir = webssh.OPERATOR_OBSERVATION_DIR
+    with tempfile.TemporaryDirectory() as temp_dir:
+        webssh.OPERATOR_OBSERVATION_DIR = Path(temp_dir)
+        client = make_client()
+        session_token = current_session_token()
+        bridge = add_dummy_bridge(session_token)
+
+        client.emit(webssh.OPERATOR_OBSERVATION_EVENT_START, {
+            'terminal_id': webssh.TERMINAL_ID_MAIN,
+        })
+        state = last_payload(client, webssh.OPERATOR_OBSERVATION_EVENT_STATE)
+        assert state['active'] is True
+        assert state['enabled'] is True
+        observation_id = state['observation_id']
+
+        client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+        client.emit(webssh.AGENT_EVENT_MODE_SET, {
+            'terminal_id': webssh.TERMINAL_ID_MAIN,
+            'mode': 'observe',
+        })
+        client.emit('ssh_input', {
+            'terminal_id': webssh.TERMINAL_ID_MAIN,
+            'data': 'secret command\n',
+        })
+        client.emit(webssh.OPERATOR_OBSERVATION_EVENT_MARK, {
+            'terminal_id': webssh.TERMINAL_ID_MAIN,
+        })
+        client.emit(webssh.OPERATOR_OBSERVATION_EVENT_STOP, {
+            'terminal_id': webssh.TERMINAL_ID_MAIN,
+        })
+        state = last_payload(client, webssh.OPERATOR_OBSERVATION_EVENT_STATE)
+        assert state['active'] is False
+
+        paths = list(Path(temp_dir).glob(f'*/{observation_id}.jsonl'))
+        assert len(paths) == 1
+        lines = [json.loads(line) for line in paths[0].read_text(encoding='utf-8').splitlines()]
+        kinds = [line.get('kind') for line in lines if line.get('event_type') == 'operator_observation_event']
+        assert 'agent_mode_set' in kinds
+        assert 'terminal_input' in kinds
+        assert 'operator_mark' in kinds
+        joined = json.dumps(lines, ensure_ascii=False)
+        assert 'secret command' not in joined
+        input_event = next(line for line in lines if line.get('kind') == 'terminal_input')
+        assert input_event['metadata']['byte_length'] == len('secret command\n')
+        assert input_event['metadata']['raw_preview_recorded'] is False
+    webssh.OPERATOR_OBSERVATION_DIR = previous_dir
+
+
+def test_operator_observation_state_syncs_across_viewers():
+    previous_dir = webssh.OPERATOR_OBSERVATION_DIR
+    with tempfile.TemporaryDirectory() as temp_dir:
+        webssh.OPERATOR_OBSERVATION_DIR = Path(temp_dir)
+        flask_client = webssh.app.test_client()
+        response = flask_client.get('/?token=' + webssh.ACCESS_TOKEN)
+        assert response.status_code == 200
+        client_a = make_socket_client(flask_client)
+        client_b = make_socket_client(flask_client)
+        session_token = current_session_token()
+        add_dummy_bridge(session_token)
+
+        client_a.emit(webssh.OPERATOR_OBSERVATION_EVENT_START, {
+            'terminal_id': webssh.TERMINAL_ID_MAIN,
+        })
+        state_a = last_payload(client_a, webssh.OPERATOR_OBSERVATION_EVENT_STATE)
+        state_b = last_payload(client_b, webssh.OPERATOR_OBSERVATION_EVENT_STATE)
+        assert state_a['active'] is True
+        assert state_b['active'] is True
+        assert state_a['observation_id'] == state_b['observation_id']
+
+        client_b.emit(webssh.OPERATOR_OBSERVATION_EVENT_STOP, {
+            'terminal_id': webssh.TERMINAL_ID_MAIN,
+        })
+        assert last_payload(client_a, webssh.OPERATOR_OBSERVATION_EVENT_STATE)['active'] is False
+        assert last_payload(client_b, webssh.OPERATOR_OBSERVATION_EVENT_STATE)['active'] is False
+    webssh.OPERATOR_OBSERVATION_DIR = previous_dir
 
 
 def test_approval_and_direct_writes_use_gate():
@@ -2442,6 +2522,8 @@ def test_viewport_snapshot_context_clears_on_terminal_close_and_disconnect():
 def main():
     tests = [
         test_pause_blocks_pending_approval,
+        test_operator_observation_logs_metadata_without_input_preview,
+        test_operator_observation_state_syncs_across_viewers,
         test_approval_and_direct_writes_use_gate,
         test_provider_run_uses_agent_gate,
         test_provider_adapter_receives_context_and_exposes_run_metadata,

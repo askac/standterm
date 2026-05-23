@@ -30,6 +30,9 @@ authorized/
 # Local external-agent bearer-token handoff
 webssh_external_agent_handoff.json
 
+# Local operator observation JSONL logs
+operator_observations/
+
 # Local HTTPS certificates
 certs/
 

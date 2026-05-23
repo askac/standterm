@@ -236,6 +236,19 @@ certificate.
 
 Full protocol details are in `docs/agent_socket_contract.md`.
 
+## Operator Observation
+
+The Agent panel can start an operator observation session for documenting how a
+human drives a workflow. Observation is opt-in and shows a red warning state in
+the status bar, Agent panel, and terminal tab for every viewer in the same
+session. The first version records typed metadata only, such as event kind,
+terminal id, byte counts, line counts, privacy state, and whether control
+characters were present. It does not record raw terminal input previews.
+
+Observation JSONL logs are runtime artifacts and are ignored by git. WebSSH
+writes them only when `WEBSSH_OPERATOR_OBSERVATION_DIR` is set, or when running
+from the MIBCRK mirror path where they default to `operator_observations/`.
+
 ## Local Agent Skill Example
 
 The repo includes a local skill example for agents that should operate WebSSH

@@ -4,6 +4,7 @@ import re
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
@@ -66,6 +67,7 @@ def start_server():
         'WEBSSH_PORT': str(port),
         'WEBSSH_DISABLE_AUTO_HTTPS': '1',
         'WEBSSH_ASYNC_MODE': 'threading',
+        'WEBSSH_OPERATOR_OBSERVATION_DIR': tempfile.mkdtemp(prefix='webssh-observation-smoke-'),
     })
     proc = subprocess.Popen(
         [str(PYTHON), 'app.py', '--force-connection', 'local-shell'],
@@ -230,6 +232,47 @@ def test_agent_panel_can_be_dragged(browser, access_url):
         saved = page.evaluate("() => JSON.parse(localStorage.getItem('webssh.agentPanelPosition.v1'))")
         check(isinstance(saved.get('left'), (int, float)), 'agent panel left position was not saved')
         check(isinstance(saved.get('top'), (int, float)), 'agent panel top position was not saved')
+    finally:
+        close_context(context)
+
+
+def test_operator_observation_warning_ui(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        page.click('#agent-toggle-btn')
+        page.wait_for_function(
+            "() => window.websshTest.getOperatorObservationState()?.enabled === true",
+            timeout=5000,
+        )
+        page.evaluate("() => document.getElementById('operator-observation-start-btn').click()")
+        page.wait_for_function(
+            "() => window.websshTest.getOperatorObservationState()?.active === true",
+            timeout=5000,
+        )
+        ui_state = page.evaluate(
+            """() => ({
+                body: document.body.classList.contains('operator-observing'),
+                panel: document.getElementById('agent-panel').classList.contains('operator-observing'),
+                text: document.getElementById('operator-observation-state').innerText
+            })"""
+        )
+        check(ui_state['body'] is True, 'operator observation did not set body warning class')
+        check(ui_state['panel'] is True, 'operator observation did not set panel warning class')
+        check('OBSERVING' in ui_state['text'], 'operator observation status text did not warn')
+        page.evaluate("() => document.getElementById('operator-observation-mark-btn').click()")
+        page.wait_for_function(
+            "() => window.websshTest.getOperatorObservationState()?.eventCount >= 1",
+            timeout=5000,
+        )
+        page.evaluate("() => document.getElementById('operator-observation-stop-btn').click()")
+        page.wait_for_function(
+            "() => window.websshTest.getOperatorObservationState()?.active === false",
+            timeout=5000,
+        )
+        check(
+            page.evaluate("() => !document.body.classList.contains('operator-observing')"),
+            'operator observation warning class stayed active after stop',
+        )
     finally:
         close_context(context)
 
@@ -461,6 +504,7 @@ def main():
     sync_playwright, PlaywrightError, _ = load_playwright()
     tests = [
         test_agent_panel_can_be_dragged,
+        test_operator_observation_warning_ui,
         test_hidden_mirror_ignores_visible_scroll,
         test_privacy_states_block_snapshots_and_agent_runs,
         test_rendered_viewport_snapshot_returns_png,
