@@ -143,6 +143,7 @@ fi
 if [[ "$PLATFORM_NAME" == "WSL" ]]; then
     echo "[*] WSL note: the browser will auto-open the WSL IP Access URL."
     echo "[*] WSL note: non-loopback access uses HTTPS by default."
+    echo "[*] WSL note: WSL IP clients need browser authorization for Local Shell/UART unless WEBSSH_TRUST_WSL_CLIENT_IPS=1."
     echo "[*] WSL note: if browser authorization needs certificate trust, use the Authorizer details in the page."
 fi
 

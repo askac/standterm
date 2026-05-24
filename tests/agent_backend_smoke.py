@@ -1978,6 +1978,59 @@ def test_wsl_local_shell_choice_is_structured_and_wsl_only():
         webssh.is_wsl = original_is_wsl
 
 
+def test_terminal_policy_creates_authorized_dir_for_fresh_checkout():
+    original_authorized_dir = webssh.AUTHORIZED_DIR
+    original_authorized_browsers_path = webssh.AUTHORIZED_BROWSERS_PATH
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            authorized_dir = Path(temp_dir) / 'authorized'
+            webssh.AUTHORIZED_DIR = authorized_dir
+            webssh.AUTHORIZED_BROWSERS_PATH = authorized_dir / 'browsers.json'
+            assert not authorized_dir.exists()
+
+            with webssh.app.test_request_context('/'):
+                policy = webssh.build_terminal_policy(browser_authorized=False)
+
+            assert authorized_dir.is_dir()
+            assert policy['authorized_dir'] == str(authorized_dir)
+            assert policy['authorized_dir_ready'] is True
+    finally:
+        webssh.AUTHORIZED_DIR = original_authorized_dir
+        webssh.AUTHORIZED_BROWSERS_PATH = original_authorized_browsers_path
+
+
+def test_wsl_client_ips_require_explicit_trust_for_local_resources():
+    original_is_wsl = webssh.is_wsl
+    original_get_wsl_host_addresses = webssh.get_wsl_host_addresses
+    original_get_wsl_ip = webssh.get_wsl_ip
+    original_env = webssh.os.environ.get('WEBSSH_TRUST_WSL_CLIENT_IPS')
+    try:
+        webssh.is_wsl = lambda: True
+        webssh.get_wsl_host_addresses = lambda: {webssh.ipaddress.ip_address('172.20.0.1')}
+        webssh.get_wsl_ip = lambda: '172.20.5.10'
+        webssh.os.environ.pop('WEBSSH_TRUST_WSL_CLIENT_IPS', None)
+
+        assert webssh.is_local_client_ip('127.0.0.1') is True
+        assert webssh.is_local_client_ip('172.20.0.1') is False
+        assert webssh.is_local_client_ip('172.20.5.20') is False
+        assert webssh.is_local_shell_allowed_for_client('172.20.0.1', browser_authorized=False) is False
+        assert webssh.is_uart_allowed_for_client('172.20.0.1', browser_authorized=False) is False
+        assert webssh.is_local_shell_allowed_for_client('172.20.0.1', browser_authorized=True) is True
+        assert webssh.is_uart_allowed_for_client('172.20.0.1', browser_authorized=True) is True
+
+        webssh.os.environ['WEBSSH_TRUST_WSL_CLIENT_IPS'] = '1'
+        assert webssh.is_local_client_ip('172.20.0.1') is True
+        assert webssh.is_local_client_ip('172.20.5.20') is True
+    finally:
+        webssh.is_wsl = original_is_wsl
+        webssh.get_wsl_host_addresses = original_get_wsl_host_addresses
+        webssh.get_wsl_ip = original_get_wsl_ip
+        if original_env is None:
+            webssh.os.environ.pop('WEBSSH_TRUST_WSL_CLIENT_IPS', None)
+        else:
+            webssh.os.environ['WEBSSH_TRUST_WSL_CLIENT_IPS'] = original_env
+
+
 def test_agent_audit_records_typed_events_without_raw_action_data():
     client = make_client()
     session_token = current_session_token()
@@ -2560,6 +2613,8 @@ def main():
         test_external_agent_handoff_uses_loopback_command_url_for_non_loopback_browser_url,
         test_external_agent_startup_lines_point_to_launch_handoff,
         test_wsl_local_shell_choice_is_structured_and_wsl_only,
+        test_terminal_policy_creates_authorized_dir_for_fresh_checkout,
+        test_wsl_client_ips_require_explicit_trust_for_local_resources,
         test_agent_audit_records_typed_events_without_raw_action_data,
         test_wrong_sid_cannot_approve_action,
         test_stale_mode_version_cannot_approve_action,

@@ -395,6 +395,14 @@ EXTERNAL_AGENT_HANDOFF_PATH = APP_DIR / 'webssh_external_agent_handoff.json'
 AUTHORIZED_DIR = APP_DIR / 'authorized'
 AUTHORIZED_BROWSERS_PATH = AUTHORIZED_DIR / 'browsers.json'
 
+def ensure_authorized_dir():
+    try:
+        AUTHORIZED_DIR.mkdir(parents=True, exist_ok=True)
+        return True
+    except OSError as exc:
+        print(f"[!] Failed to create browser authorization directory {AUTHORIZED_DIR}: {exc}", file=sys.stderr)
+        return False
+
 def resolve_operator_observation_dir():
     configured = os.getenv('WEBSSH_OPERATOR_OBSERVATION_DIR', '').strip()
     if configured:
@@ -485,6 +493,7 @@ finally:
 '''
 
 def build_terminal_policy(browser_authorized=False):
+    authorized_dir_ready = ensure_authorized_dir()
     connection_options = TERMINAL_BACKEND_REGISTRY.build_policy_options(browser_authorized=browser_authorized)
     allowed_connections = {
         option['connection_type']: bool(option.get('allowed'))
@@ -508,6 +517,7 @@ def build_terminal_policy(browser_authorized=False):
         'https_enabled': HTTPS_ENABLED,
         'ca_download_url': '/download_ca' if HTTPS_ENABLED and not (CLI_ARGS.certfile and CLI_ARGS.keyfile) else None,
         'authorized_dir': str(AUTHORIZED_DIR),
+        'authorized_dir_ready': authorized_dir_ready,
         'localhost_access_url': get_localhost_access_url(DEFAULT_PORT) if is_wsl() else None,
         'browser_authorization': {
             'available': bool(browser_authorization_required_for),
@@ -867,7 +877,8 @@ def load_authorized_browsers():
     return data
 
 def save_authorized_browsers(data):
-    AUTHORIZED_DIR.mkdir(parents=True, exist_ok=True)
+    if not ensure_authorized_dir():
+        raise OSError(f'Browser authorization directory is unavailable: {AUTHORIZED_DIR}')
     tmp_path = AUTHORIZED_BROWSERS_PATH.with_suffix('.json.tmp')
     tmp_path.write_text(json.dumps(data, indent=2, sort_keys=True) + '\n', encoding='utf-8')
     tmp_path.replace(AUTHORIZED_BROWSERS_PATH)
@@ -4655,7 +4666,17 @@ def on_request_browser_pairing():
         )
         return
 
-    AUTHORIZED_DIR.mkdir(parents=True, exist_ok=True)
+    if not ensure_authorized_dir():
+        socketio.emit(
+            'browser_authorization_status',
+            {
+                'status': 'failed',
+                'message': f'Browser authorization directory is unavailable: {AUTHORIZED_DIR}',
+                'error_code': 'browser_authorized_dir_unavailable',
+            },
+            room=request.sid,
+        )
+        return
     pairing = build_pairing_file(identity['browser_id'], identity['public_key'])
     filename = f"webssh-authorize_{pairing['pairing_id']}.json"
     socketio.emit(
@@ -6135,11 +6156,15 @@ def is_local_client_ip(client_ip):
         return False
     if address.is_loopback:
         return True
-    if is_wsl() and address in get_wsl_host_addresses():
-        return True
-    if is_wsl() and is_wsl_nat_client_ip(address):
-        return True
+    if is_wsl_client_ip_trust_enabled():
+        if is_wsl() and address in get_wsl_host_addresses():
+            return True
+        if is_wsl() and is_wsl_nat_client_ip(address):
+            return True
     return False
+
+def is_wsl_client_ip_trust_enabled():
+    return os.getenv('WEBSSH_TRUST_WSL_CLIENT_IPS', '').strip().lower() in {'1', 'true', 'yes', 'on'}
 
 def is_wsl_nat_client_ip(address):
     if not getattr(address, 'version', None) == 4 or not address.is_private:
@@ -6215,10 +6240,14 @@ if __name__ == '__main__':
         print("Import the HTTPS Local CA into Windows Trusted Root Certification Authorities to trust the WSL IP URL.")
     if is_local_shell_enabled() and not is_loopback_bind(bind_host) and os.getenv('WEBSSH_ALLOW_REMOTE_LOCAL_SHELL') != '1':
         print("[!] WARNING: Local Shell is enabled while listening on a non-loopback address.")
-        print("[!] Set WEBSSH_ALLOW_REMOTE_LOCAL_SHELL=1 to acknowledge this deployment mode.")
+        print("[!] Non-loopback clients must use browser authorization unless explicitly trusted.")
+        print("[!] Set WEBSSH_TRUST_WSL_CLIENT_IPS=1 only if the WSL host/NAT network is private and trusted.")
+        print("[!] Set WEBSSH_ALLOW_REMOTE_LOCAL_SHELL=1 only if remote clients should bypass browser authorization.")
     if is_uart_enabled() and not is_loopback_bind(bind_host) and os.getenv('WEBSSH_ALLOW_REMOTE_UART') != '1':
         print("[!] WARNING: UART is enabled while listening on a non-loopback address.")
-        print("[!] Set WEBSSH_ALLOW_REMOTE_UART=1 to acknowledge this deployment mode.")
+        print("[!] Non-loopback clients must use browser authorization unless explicitly trusted.")
+        print("[!] Set WEBSSH_TRUST_WSL_CLIENT_IPS=1 only if the WSL host/NAT network is private and trusted.")
+        print("[!] Set WEBSSH_ALLOW_REMOTE_UART=1 only if remote clients should bypass browser authorization.")
     if sys.platform == 'darwin':
         print("Tip: Enable Remote Login in macOS if you want localhost SSH access.")
     print("="*60 + "\n")

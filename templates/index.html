@@ -1759,6 +1759,9 @@
                     appendBrowserAuthDetail('Import webssh-local-ca.crt into Windows Trusted Root Certification Authorities, then reload the HTTPS URL.');
                 }
                 appendBrowserAuthDetail('Click Authorize to download webssh-authorize_*.json.');
+                if (terminalPolicy.authorized_dir_ready === false) {
+                    appendBrowserAuthDetail('The server could not create the authorization directory. Check server filesystem permissions before clicking Authorize.');
+                }
                 appendBrowserAuthDetail(`Move the downloaded authorization file into ${terminalPolicy.authorized_dir || 'authorized/'}.`);
                 appendBrowserAuthDetail('Click Check. If the file matches this browser key, Local Shell becomes available.');
                 browserAuthDetails.style.display = browserAuthDetailsVisible ? 'block' : 'none';

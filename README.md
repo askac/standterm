@@ -115,7 +115,10 @@ Useful launcher flags:
 ## Browser Authorization And HTTPS
 
 When WebSSH listens on a non-loopback address, HTTPS is enabled by default so
-modern browsers can use WebCrypto for browser authorization.
+modern browsers can use WebCrypto for browser authorization. Local Shell and
+UART only bypass browser authorization for true loopback clients by default.
+WSL host/NAT client IPs must authorize the browser unless you explicitly trust
+that WSL network with `WEBSSH_TRUST_WSL_CLIENT_IPS=1`.
 
 On WSL, the Authorizer panel provides a WebSSH CA download link and pairing
 steps. Import `webssh-local-ca.crt` into Windows Trusted Root Certification
@@ -309,6 +312,7 @@ Common settings:
 | `WEBSSH_CERTS_DIR` | Override local certificate storage. |
 | `WEBSSH_ALLOW_REMOTE_LOCAL_SHELL=1` | Acknowledge Local Shell while listening on a non-loopback address. |
 | `WEBSSH_ALLOW_REMOTE_UART=1` | Acknowledge UART while listening on a non-loopback address. |
+| `WEBSSH_TRUST_WSL_CLIENT_IPS=1` | Treat WSL host/NAT client IPs as local for Local Shell and UART. Use only on a trusted private WSL network. |
 | `WEBSSH_DEBUG_POLICY=1` | Print server-side policy decisions. |
 | `WEBSSH_AGENT_PROVIDER=static_env` | Use the static test Agent provider. |
 | `WEBSSH_AGENT_STATIC_INPUT` | Input text for the static test Agent provider. |
