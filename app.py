@@ -22,7 +22,7 @@ from collections import deque
 from pathlib import Path
 from flask import Flask, render_template, request, abort, make_response, redirect, send_file, jsonify
 from flask_socketio import SocketIO
-from terminal_backends import TerminalBackendPlugin, TerminalBackendRegistry
+from terminal_backends import LocalShellBackendPlugin, SSHBackendPlugin, TerminalBackendRegistry, UARTBackendPlugin
 
 try:
     from ptyprocess import PtyProcessUnicode
@@ -1992,213 +1992,55 @@ class UARTBridge(TerminalBridge):
             pass
         self.serial = None
 
-class SSHBackendPlugin(TerminalBackendPlugin):
-    connection_type = CONNECTION_TYPE_SSH
-    label = 'SSH'
-
-    def validate_start_payload(self, data, terminal_id, client_ip, browser_authorized=False):
-        host = data.get('host', SSH_HOST)
-        if not isinstance(host, str):
-            return None, 'Host must be a string.'
-        host = host.strip()
-        if not host or len(host) > MAX_HOST_LENGTH:
-            return None, 'Host is empty or too long.'
-        if has_control_chars(host):
-            return None, 'Host contains invalid control characters.'
-
-        try:
-            port = int(data.get('port', SSH_PORT))
-        except (TypeError, ValueError):
-            return None, 'Port must be a number.'
-        if port < 1 or port > 65535:
-            return None, 'Port must be between 1 and 65535.'
-
-        user = data.get('username', SSH_USER)
-        if not isinstance(user, str):
-            return None, 'Username must be a string.'
-        user = user.strip()
-        if not user or len(user) > MAX_USERNAME_LENGTH:
-            return None, 'Username is empty or too long.'
-        if has_control_chars(user):
-            return None, 'Username contains invalid control characters.'
-
-        password = data.get('password') or ''
-        if not isinstance(password, str):
-            return None, 'Password must be a string.'
-        if len(password.encode('utf-8', errors='ignore')) > MAX_PASSWORD_BYTES:
-            return None, 'Password is too long.'
-
-        return {
-            'host': host,
-            'port': port,
-            'username': user,
-            'password': password,
-        }, None
-
-    def create_bridge(self, session_token, terminal_id, payload):
-        return SSHBridge(session_token, terminal_id)
-
-    def connect_bridge(self, bridge, payload, cols, rows):
-        return bridge.connect(
-            payload['host'],
-            payload['port'],
-            payload['username'],
-            payload['password'],
-            cols=cols,
-            rows=rows,
-        )
-
-    def build_connection_failure(self, sid, bridge, payload, result):
-        failure = super().build_connection_failure(sid, bridge, payload, result)
-        action_type = None
-        action_message = None
-        action_question = None
-
-        if isinstance(result, dict):
-            action_type = result.get('action_type')
-            action_message = result.get('action_message')
-            action_question = result.get('action_question')
-        if action_type not in ALLOWED_CONNECTION_ACTION_TYPES:
-            action_type = None
-            action_message = None
-            action_question = None
-
-        action_id = None
-        if action_type == 'offer_localhost_key_setup':
-            missing_entries = bridge._get_missing_local_public_keys()
-            if missing_entries:
-                action_id = secrets.token_urlsafe(16)
-                pending_localhost_key_setups[sid] = {
-                    'action_id': action_id,
-                    'host': payload['host'],
-                    'port': payload['port'],
-                    'username': payload['username'],
-                    'terminal_id': payload['terminal_id'],
-                    'key_entry': missing_entries[0],
-                    'expires_at': time.time() + LOCALHOST_KEY_SETUP_TTL_SECONDS,
-                }
-            else:
-                action_type = None
-                action_message = None
-                action_question = None
-
-        failure.update({
-            'action_type': action_type,
-            'action_message': action_message,
-            'action_question': action_question,
-            'action_id': action_id,
-        })
-        return failure
-
-class LocalShellBackendPlugin(TerminalBackendPlugin):
-    connection_type = CONNECTION_TYPE_LOCAL_SHELL
-    label = 'Local Shell'
-
-    def build_policy_option(self, browser_authorized=False):
-        client_ip = get_request_client_ip()
-        allowed = is_local_shell_allowed_for_client(client_ip, browser_authorized=browser_authorized)
-        option = {
-            'connection_type': self.connection_type,
-            'label': self.label,
-            'allowed': allowed,
-            'authorization_available': not allowed,
-            'browser_authorized': bool(browser_authorized),
-        }
-        if is_wsl():
-            option['shell_options'] = get_wsl_local_shell_options()
-            option['default_shell_kind'] = LOCAL_SHELL_KIND_BASH
-        return option
-
-    def validate_start_payload(self, data, terminal_id, client_ip, browser_authorized=False):
-        if not is_local_shell_allowed_for_client(client_ip, browser_authorized=browser_authorized):
-            return None, {
-                'message': 'Local Shell is not available for this client.',
-                'error_code': 'local_shell_unavailable_for_client',
-            }
-        shell_config, shell_error = get_local_shell_config(data.get('local_shell_kind'))
-        if shell_error:
-            return None, shell_error
-        return {'local_shell_config': shell_config}, None
-
-    def create_bridge(self, session_token, terminal_id, payload):
-        return LocalShellBridge(session_token, terminal_id, shell_config=payload.get('local_shell_config'))
-
-    def connect_bridge(self, bridge, payload, cols, rows):
-        return bridge.connect(cols=cols, rows=rows)
-
-class UARTBackendPlugin(TerminalBackendPlugin):
-    connection_type = CONNECTION_TYPE_UART
-    label = 'UART'
-
-    def build_policy_option(self, browser_authorized=False):
-        client_ip = get_request_client_ip()
-        allowed = is_uart_allowed_for_client(client_ip, browser_authorized=browser_authorized)
-        return {
-            'connection_type': self.connection_type,
-            'label': self.label,
-            'allowed': allowed,
-            'authorization_available': not allowed,
-            'browser_authorized': bool(browser_authorized),
-            'available_ports': detect_serial_ports() if allowed else [],
-            'default_baud_rate': DEFAULT_UART_BAUD_RATE,
-            'baud_rates': UART_BAUD_RATES,
-        }
-
-    def validate_start_payload(self, data, terminal_id, client_ip, browser_authorized=False):
-        if not is_uart_allowed_for_client(client_ip, browser_authorized=browser_authorized):
-            return None, {
-                'message': 'UART is not available for this client.',
-                'error_code': 'uart_unavailable_for_client',
-            }
-
-        port_info = get_detected_serial_port(data.get('serial_port'))
-        if not port_info:
-            return None, {
-                'message': 'Select an available UART port.',
-                'error_code': 'uart_port_unavailable',
-            }
-
-        try:
-            baud_rate = int(data.get('baud_rate', DEFAULT_UART_BAUD_RATE))
-        except (TypeError, ValueError):
-            return None, {
-                'message': 'UART baud rate must be a number.',
-                'error_code': 'uart_invalid_baud_rate',
-            }
-        if baud_rate < MIN_UART_BAUD_RATE or baud_rate > MAX_UART_BAUD_RATE:
-            return None, {
-                'message': 'UART baud rate is outside the supported range.',
-                'error_code': 'uart_invalid_baud_rate',
-            }
-
-        return {
-            'serial_port': port_info['device'],
-            'serial_port_info': port_info,
-            'baud_rate': baud_rate,
-        }, None
-
-    def create_bridge(self, session_token, terminal_id, payload):
-        return UARTBridge(
-            session_token,
-            terminal_id,
-            payload['serial_port_info'],
-            payload['baud_rate'],
-        )
-
-    def connect_bridge(self, bridge, payload, cols, rows):
-        return bridge.connect(cols=cols, rows=rows)
-
+pending_localhost_key_setups = {}
 TERMINAL_BACKEND_REGISTRY = TerminalBackendRegistry([
-    SSHBackendPlugin(),
-    LocalShellBackendPlugin(),
-    UARTBackendPlugin(),
+    SSHBackendPlugin(
+        bridge_cls=SSHBridge,
+        default_host=SSH_HOST,
+        default_port=SSH_PORT,
+        default_user=SSH_USER,
+        max_host_length=MAX_HOST_LENGTH,
+        max_username_length=MAX_USERNAME_LENGTH,
+        max_password_bytes=MAX_PASSWORD_BYTES,
+        has_control_chars=lambda value: has_control_chars(value),
+        allowed_action_types=ALLOWED_CONNECTION_ACTION_TYPES,
+        pending_key_setups=pending_localhost_key_setups,
+        key_setup_ttl_seconds=LOCALHOST_KEY_SETUP_TTL_SECONDS,
+        token_urlsafe=secrets.token_urlsafe,
+        time_func=time.time,
+    ),
+    LocalShellBackendPlugin(
+        bridge_cls=LocalShellBridge,
+        get_request_client_ip=get_request_client_ip,
+        is_allowed_for_client=lambda client_ip, browser_authorized=False: is_local_shell_allowed_for_client(
+            client_ip,
+            browser_authorized=browser_authorized,
+        ),
+        get_local_shell_config=get_local_shell_config,
+        is_wsl=lambda: is_wsl(),
+        get_wsl_local_shell_options=get_wsl_local_shell_options,
+        default_shell_kind=LOCAL_SHELL_KIND_BASH,
+    ),
+    UARTBackendPlugin(
+        bridge_cls=UARTBridge,
+        get_request_client_ip=get_request_client_ip,
+        is_allowed_for_client=lambda client_ip, browser_authorized=False: is_uart_allowed_for_client(
+            client_ip,
+            browser_authorized=browser_authorized,
+        ),
+        detect_serial_ports=detect_serial_ports,
+        get_detected_serial_port=lambda device: get_detected_serial_port(device),
+        default_baud_rate=DEFAULT_UART_BAUD_RATE,
+        min_baud_rate=MIN_UART_BAUD_RATE,
+        max_baud_rate=MAX_UART_BAUD_RATE,
+        baud_rates=UART_BAUD_RATES,
+    ),
 ], normalize_connection_type, default_preference=(
     CONNECTION_TYPE_LOCAL_SHELL,
     CONNECTION_TYPE_SSH,
 ))
 
 bridges = {}
-pending_localhost_key_setups = {}
 active_sessions = {}
 socket_session_tokens = {}
 socket_client_ips = {}

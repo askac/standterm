@@ -1930,7 +1930,7 @@ def test_external_agent_startup_lines_point_to_launch_handoff():
 
 def test_wsl_local_shell_choice_is_structured_and_wsl_only():
     original_is_wsl = webssh.is_wsl
-    plugin = webssh.LocalShellBackendPlugin()
+    plugin = webssh.TERMINAL_BACKEND_REGISTRY.get(webssh.CONNECTION_TYPE_LOCAL_SHELL)
     try:
         webssh.is_wsl = lambda: True
         with webssh.app.test_request_context('/'):
