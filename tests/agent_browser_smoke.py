@@ -474,20 +474,24 @@ def test_settings_server_tab_loads_readonly_snapshot(browser, access_url):
         page.wait_for_selector('#settings-modal.open', timeout=5000)
         page.click('.settings-nav-item[data-tab="server"]')
         page.wait_for_function(
-            "() => document.getElementById('server-settings-status')?.textContent === 'Read-only'",
+            "() => ['Read-only', 'Writable'].includes(document.getElementById('server-settings-status')?.textContent)",
             timeout=5000,
         )
         state = page.evaluate(
             """() => ({
                 version: document.getElementById('server-settings-version').textContent,
                 view: document.getElementById('server-cap-settings-view').textContent,
+                low: document.getElementById('server-cap-settings-update-low').textContent,
                 high: document.getElementById('server-cap-settings-update-high').textContent,
+                selectedDefault: document.getElementById('server-setting-default-connection-select').value,
                 connectionCount: document.querySelectorAll('#server-settings-connections li').length
             })"""
         )
         check(state['version'] == '1', 'settings server tab did not show settings version')
         check(state['view'] == 'Allowed', 'settings server tab did not show view capability')
+        check(state['low'] == 'Allowed', 'settings server tab did not expose local low-risk writes')
         check(state['high'] == 'Denied', 'settings server tab exposed high-risk writes')
+        check(state['selectedDefault'], 'settings server tab did not populate default connection control')
         check(state['connectionCount'] > 0, 'settings server tab did not list connection types')
     finally:
         close_context(context)

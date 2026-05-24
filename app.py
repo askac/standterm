@@ -179,10 +179,27 @@ OPERATOR_OBSERVATION_EVENT_STATE_REQUEST = 'operator_observation_state_request'
 OPERATOR_OBSERVATION_EVENT_STATE = 'operator_observation_state'
 SETTINGS_EVENT_SNAPSHOT_REQUEST = 'settings_snapshot_request'
 SETTINGS_EVENT_SNAPSHOT = 'settings_snapshot'
+SETTINGS_EVENT_UPDATE_REQUEST = 'settings_update_request'
+SETTINGS_EVENT_UPDATE_RESULT = 'settings_update_result'
+SETTINGS_EVENT_ADMIN_GRANT_REQUEST = 'settings_admin_grant_request'
+SETTINGS_EVENT_ADMIN_GRANT_REVOKE = 'settings_admin_grant_revoke'
+SETTINGS_EVENT_ADMIN_GRANT_RESULT = 'settings_admin_grant'
 SETTINGS_VERSION = 1
+SETTINGS_ADMIN_GRANT_TTL_SECONDS = 120
+SETTINGS_AUDIT_EVENTS = 500
+SETTING_DEFAULT_CONNECTION_TYPE = 'default_connection_type'
 CAPABILITY_SETTINGS_VIEW = 'settings_view'
 CAPABILITY_SETTINGS_UPDATE_LOW_RISK = 'settings_update_low_risk'
 CAPABILITY_SETTINGS_UPDATE_HIGH_RISK = 'settings_update_high_risk'
+CAPABILITY_SETTINGS_AUTH_MANAGE = 'settings_auth_manage'
+SETTINGS_AUDIT_GRANT_CREATED = 'settings_grant_created'
+SETTINGS_AUDIT_GRANT_DENIED = 'settings_grant_denied'
+SETTINGS_AUDIT_GRANT_USED = 'settings_grant_used'
+SETTINGS_AUDIT_GRANT_EXPIRED = 'settings_grant_expired'
+SETTINGS_AUDIT_GRANT_REVOKED = 'settings_grant_revoked'
+SETTINGS_AUDIT_UPDATE_SUCCEEDED = 'settings_update_succeeded'
+SETTINGS_AUDIT_UPDATE_DENIED = 'settings_update_denied'
+SETTINGS_AUDIT_UPDATE_FAILED = 'settings_update_failed'
 AGENT_ERROR_NOT_ATTACHED = 'agent_not_attached'
 AGENT_ERROR_PAUSED = 'agent_paused'
 AGENT_ERROR_STALE_EPOCH = 'agent_stale_epoch'
@@ -499,6 +516,238 @@ finally:
     serial_port.close()
 '''
 
+def get_runtime_settings_version():
+    with runtime_settings_lock:
+        return runtime_settings_version
+
+def get_runtime_default_connection_type():
+    with runtime_settings_lock:
+        return runtime_settings.get(SETTING_DEFAULT_CONNECTION_TYPE) or DEFAULT_CONNECTION_TYPE
+
+def reset_runtime_settings_for_test():
+    global runtime_settings_version
+    with runtime_settings_lock:
+        runtime_settings.clear()
+        runtime_settings[SETTING_DEFAULT_CONNECTION_TYPE] = DEFAULT_CONNECTION_TYPE
+        runtime_settings_version = SETTINGS_VERSION
+
+def build_settings_precedence():
+    return {
+        SETTING_DEFAULT_CONNECTION_TYPE: [
+            'force_connection',
+            'runtime',
+            'cli_default',
+            'safe_fallback',
+        ],
+        'security_policy': [
+            'environment_overrides',
+            'browser_authorization',
+            'client_ip',
+        ],
+    }
+
+def build_settings_actor(session_token=None, sid=None, client_ip=None):
+    identity = socket_browser_identities.get(sid) if sid else None
+    browser_id = identity.get('browser_id') if isinstance(identity, dict) else None
+    return {
+        'session_token_present': bool(session_token),
+        'sid_present': bool(sid),
+        'client_ip': client_ip,
+        'browser_id': browser_id,
+    }
+
+def record_settings_audit_event(event_type, session_token=None, sid=None, client_ip=None, **fields):
+    audit_fields = build_settings_actor(
+        session_token=session_token,
+        sid=sid,
+        client_ip=client_ip,
+    )
+    audit_fields.update(fields)
+    return settings_audit_store.append(event_type, **audit_fields)
+
+def redact_setting_value(setting_key, value):
+    return value
+
+def get_browser_authorization_diagnostics(sid, browser_authorized=False):
+    identity = socket_browser_identities.get(sid) if sid else None
+    browser_id = identity.get('browser_id') if isinstance(identity, dict) else None
+    public_key = identity.get('public_key') if isinstance(identity, dict) else None
+    authorized_entry = get_authorized_browser(browser_id) if browser_id else None
+    return {
+        'available': True,
+        'authorized': bool(browser_authorized),
+        'browser_id': browser_id,
+        'browser_id_short': browser_id[:12] if browser_id else None,
+        'authorized_at': authorized_entry.get('authorized_at') if isinstance(authorized_entry, dict) else None,
+        'pairing_ttl_seconds': BROWSER_PAIRING_TTL_SECONDS,
+        'authorized_browser_ttl_seconds': None,
+        'public_key_registered': bool(public_key),
+        'revocation_supported': True,
+    }
+
+def prune_settings_admin_grants(now=None):
+    now = time.time() if now is None else now
+    expired = []
+    with settings_admin_grants_lock:
+        for grant_id, grant in list(settings_admin_grants.items()):
+            if now > grant.get('expires_at', 0):
+                expired.append((grant_id, grant))
+                settings_admin_grants.pop(grant_id, None)
+                if socket_settings_admin_grant_ids.get(grant.get('sid')) == grant_id:
+                    socket_settings_admin_grant_ids.pop(grant.get('sid'), None)
+    for grant_id, grant in expired:
+        record_settings_audit_event(
+            SETTINGS_AUDIT_GRANT_EXPIRED,
+            session_token=grant.get('session_token'),
+            sid=grant.get('sid'),
+            client_ip=grant.get('client_ip'),
+            grant_id=grant_id,
+            capabilities=list(grant.get('capabilities') or []),
+        )
+
+def create_settings_admin_grant(session_token, sid, client_ip, capabilities=None):
+    identity = socket_browser_identities.get(sid) or {}
+    now = time.time()
+    grant_id = secrets.token_urlsafe(24)
+    grant = {
+        'grant_id': grant_id,
+        'session_token': session_token,
+        'sid': sid,
+        'client_ip': client_ip,
+        'browser_id': identity.get('browser_id'),
+        'public_key': identity.get('public_key'),
+        'capabilities': tuple(capabilities or (CAPABILITY_SETTINGS_UPDATE_LOW_RISK,)),
+        'created_at': now,
+        'expires_at': now + SETTINGS_ADMIN_GRANT_TTL_SECONDS,
+    }
+    with settings_admin_grants_lock:
+        settings_admin_grants[grant_id] = grant
+        socket_settings_admin_grant_ids[sid] = grant_id
+    record_settings_audit_event(
+        SETTINGS_AUDIT_GRANT_CREATED,
+        session_token=session_token,
+        sid=sid,
+        client_ip=client_ip,
+        grant_id=grant_id,
+        capabilities=list(grant['capabilities']),
+        expires_at=grant['expires_at'],
+    )
+    return dict(grant)
+
+def get_valid_settings_admin_grant(sid, session_token, client_ip, capability, grant_id=None):
+    prune_settings_admin_grants()
+    if not grant_id:
+        grant_id = socket_settings_admin_grant_ids.get(sid)
+    if not isinstance(grant_id, str) or not grant_id:
+        return None, 'settings_admin_grant_required'
+    with settings_admin_grants_lock:
+        grant = settings_admin_grants.get(grant_id)
+        if grant:
+            grant = dict(grant)
+    if not grant:
+        return None, 'settings_admin_grant_not_found'
+    if grant.get('session_token') != session_token or grant.get('sid') != sid:
+        return None, 'settings_admin_grant_scope_mismatch'
+    if grant.get('client_ip') != client_ip:
+        return None, 'settings_admin_grant_client_mismatch'
+    identity = socket_browser_identities.get(sid) or {}
+    if grant.get('browser_id') != identity.get('browser_id') or grant.get('public_key') != identity.get('public_key'):
+        return None, 'settings_admin_grant_identity_mismatch'
+    if capability not in grant.get('capabilities', ()):
+        return None, 'settings_admin_grant_capability_mismatch'
+    return grant, None
+
+def revoke_settings_admin_grant(sid, session_token, client_ip, grant_id=None):
+    if not grant_id:
+        grant_id = socket_settings_admin_grant_ids.get(sid)
+    revoked = None
+    with settings_admin_grants_lock:
+        if isinstance(grant_id, str):
+            grant = settings_admin_grants.get(grant_id)
+            if grant and grant.get('session_token') == session_token and grant.get('sid') == sid:
+                revoked = settings_admin_grants.pop(grant_id, None)
+        if socket_settings_admin_grant_ids.get(sid) == grant_id:
+            socket_settings_admin_grant_ids.pop(sid, None)
+    if revoked:
+        record_settings_audit_event(
+            SETTINGS_AUDIT_GRANT_REVOKED,
+            session_token=session_token,
+            sid=sid,
+            client_ip=client_ip,
+            grant_id=grant_id,
+            capabilities=list(revoked.get('capabilities') or []),
+        )
+    return revoked
+
+def build_scoped_settings_admin_grant_state(sid, session_token, client_ip):
+    grant, error_code = get_valid_settings_admin_grant(
+        sid,
+        session_token,
+        client_ip,
+        CAPABILITY_SETTINGS_UPDATE_LOW_RISK,
+    )
+    if not grant:
+        return {
+            'active': False,
+            'error_code': error_code,
+            'ttl_seconds': SETTINGS_ADMIN_GRANT_TTL_SECONDS,
+        }
+    return {
+        'active': True,
+        'grant_id': grant.get('grant_id'),
+        'capabilities': list(grant.get('capabilities') or []),
+        'created_at': grant.get('created_at'),
+        'expires_at': grant.get('expires_at'),
+        'ttl_seconds': SETTINGS_ADMIN_GRANT_TTL_SECONDS,
+    }
+
+def validate_runtime_setting_update(setting_key, value):
+    if setting_key != SETTING_DEFAULT_CONNECTION_TYPE:
+        return None, {
+            'error_code': 'settings_unknown_key',
+            'message': 'Setting key is not supported.',
+        }
+    if FORCE_CONNECTION_TYPE:
+        return None, {
+            'error_code': 'settings_locked_by_force_connection',
+            'message': 'Default connection is controlled by force_connection.',
+        }
+    normalized = normalize_connection_type(value)
+    if not normalized:
+        return None, {
+            'error_code': 'settings_invalid_value',
+            'message': 'Default connection must be ssh, local_shell, or uart.',
+        }
+    if TERMINAL_BACKEND_REGISTRY.get(normalized) is None:
+        return None, {
+            'error_code': 'settings_invalid_value',
+            'message': 'Default connection backend is not registered.',
+        }
+    return normalized, None
+
+def apply_runtime_setting_update(setting_key, value, expected_version):
+    global runtime_settings_version
+    normalized, error = validate_runtime_setting_update(setting_key, value)
+    if error:
+        return None, error
+    with runtime_settings_lock:
+        current_version = runtime_settings_version
+        if expected_version != current_version:
+            return None, {
+                'error_code': 'settings_version_conflict',
+                'message': 'Settings version does not match current server state.',
+                'current_version': current_version,
+            }
+        old_value = runtime_settings.get(setting_key)
+        runtime_settings[setting_key] = normalized
+        runtime_settings_version += 1
+        return {
+            'setting_key': setting_key,
+            'old_value': old_value,
+            'new_value': normalized,
+            'settings_version': runtime_settings_version,
+        }, None
+
 def build_terminal_policy(browser_authorized=False, client_ip=None):
     authorized_dir_ready = ensure_authorized_dir()
     context = BackendPolicyContext(
@@ -516,7 +765,7 @@ def build_terminal_policy(browser_authorized=False, client_ip=None):
         for option in connection_options
         if option.get('authorization_available')
     ]
-    default_connection = DEFAULT_CONNECTION_TYPE
+    default_connection = get_runtime_default_connection_type()
     if not allowed_connections.get(default_connection):
         default_connection = TERMINAL_BACKEND_REGISTRY.get_default_connection(allowed_connections)
     force_connection = FORCE_CONNECTION_TYPE
@@ -539,7 +788,13 @@ def build_terminal_policy(browser_authorized=False, client_ip=None):
         'connection_options': connection_options,
     }
 
-def build_settings_capability_state(client_ip, browser_authorized=False):
+def build_settings_capability_state(client_ip, browser_authorized=False, sid=None, session_token=None):
+    scoped_grant, _grant_error = get_valid_settings_admin_grant(
+        sid,
+        session_token,
+        client_ip,
+        CAPABILITY_SETTINGS_UPDATE_LOW_RISK,
+    ) if sid and session_token else (None, None)
     return {
         CAPABILITY_SETTINGS_VIEW: {
             'allowed': is_settings_view_allowed_for_client(
@@ -552,6 +807,7 @@ def build_settings_capability_state(client_ip, browser_authorized=False):
             'allowed': is_settings_update_low_risk_allowed_for_client(
                 client_ip,
                 browser_authorized=browser_authorized,
+                settings_admin_grant=scoped_grant,
             ),
             'risk_level': 'low',
         },
@@ -562,12 +818,25 @@ def build_settings_capability_state(client_ip, browser_authorized=False):
             ),
             'risk_level': 'high',
         },
+        CAPABILITY_SETTINGS_AUTH_MANAGE: {
+            'allowed': is_settings_auth_manage_allowed_for_client(
+                client_ip,
+                browser_authorized=browser_authorized,
+            ),
+            'risk_level': 'admin',
+        },
     }
 
-def build_readonly_settings_snapshot(client_ip, browser_authorized=False):
+def build_readonly_settings_snapshot(client_ip, browser_authorized=False, sid=None, session_token=None):
     policy = build_terminal_policy(
         browser_authorized=browser_authorized,
         client_ip=client_ip,
+    )
+    capabilities = build_settings_capability_state(
+        client_ip,
+        browser_authorized=browser_authorized,
+        sid=sid,
+        session_token=session_token,
     )
     connection_types = []
     for option in policy.get('connection_options', []):
@@ -579,15 +848,14 @@ def build_readonly_settings_snapshot(client_ip, browser_authorized=False):
         })
     return {
         'status': 'ok',
-        'settings_version': SETTINGS_VERSION,
-        'read_only': True,
-        'capabilities': build_settings_capability_state(
-            client_ip,
-            browser_authorized=browser_authorized,
-        ),
+        'settings_version': get_runtime_settings_version(),
+        'schema_version': SETTINGS_VERSION,
+        'read_only': not bool(capabilities[CAPABILITY_SETTINGS_UPDATE_LOW_RISK]['allowed']),
+        'capabilities': capabilities,
         'effective_settings': {
             'default_connection_type': policy.get('default_connection'),
             'force_connection_type': policy.get('force_connection'),
+            'cli_default_connection_type': DEFAULT_CONNECTION_TYPE,
             'https_enabled': bool(policy.get('https_enabled')),
             'runtime_name': get_runtime_name(),
             'connection_types': connection_types,
@@ -595,8 +863,31 @@ def build_readonly_settings_snapshot(client_ip, browser_authorized=False):
                 'available': bool(policy.get('browser_authorization', {}).get('available')),
                 'authorized': bool(browser_authorized),
                 'required_for': list(policy.get('browser_authorization', {}).get('required_for') or []),
+                'diagnostics': get_browser_authorization_diagnostics(
+                    sid,
+                    browser_authorized=browser_authorized,
+                ),
             },
         },
+        'mutable_settings': {
+            SETTING_DEFAULT_CONNECTION_TYPE: {
+                'value': get_runtime_default_connection_type(),
+                'risk_level': 'low',
+                'required_capability': CAPABILITY_SETTINGS_UPDATE_LOW_RISK,
+                'allowed_values': list(CONNECTION_TYPES),
+                'locked': bool(FORCE_CONNECTION_TYPE),
+                'locked_by': 'force_connection' if FORCE_CONNECTION_TYPE else None,
+            },
+        },
+        'scoped_settings_admin_grant': build_scoped_settings_admin_grant_state(
+            sid,
+            session_token,
+            client_ip,
+        ) if sid and session_token else {
+            'active': False,
+            'ttl_seconds': SETTINGS_ADMIN_GRANT_TTL_SECONDS,
+        },
+        'settings_precedence': build_settings_precedence(),
     }
 
 def build_terminal_metadata(connection_type, terminal_id, terminal_kind, terminal_label, cols, rows):
@@ -979,6 +1270,20 @@ def authorize_browser(browser_id, public_key_b64):
     data['browsers'] = sorted(browsers, key=lambda entry: entry.get('browser_id', ''))
     save_authorized_browsers(data)
 
+def revoke_authorized_browser(browser_id):
+    if not isinstance(browser_id, str) or not browser_id:
+        return False
+    data = load_authorized_browsers()
+    browsers = [
+        entry for entry in data.get('browsers', [])
+        if not (isinstance(entry, dict) and entry.get('browser_id') == browser_id)
+    ]
+    if len(browsers) == len(data.get('browsers', [])):
+        return False
+    data['browsers'] = browsers
+    save_authorized_browsers(data)
+    return True
+
 def canonical_pairing_payload(pairing):
     payload = {
         'type': pairing['type'],
@@ -1335,6 +1640,44 @@ class AgentAuditStore:
             self._entries.pop(key, None)
 
 agent_audit_store = AgentAuditStore()
+
+class SettingsAuditStore:
+    def __init__(self):
+        self._entries = deque(maxlen=SETTINGS_AUDIT_EVENTS)
+        self._lock = threading.RLock()
+
+    def append(self, event_type, **fields):
+        if not isinstance(event_type, str) or not event_type:
+            return None
+        entry = {
+            'event_type': event_type,
+            'recorded_at': time.time(),
+        }
+        for field, value in fields.items():
+            if value is not None:
+                entry[field] = value
+        with self._lock:
+            self._entries.append(entry)
+        return dict(entry)
+
+    def get_recent(self):
+        with self._lock:
+            return [dict(entry) for entry in self._entries]
+
+    def clear(self):
+        with self._lock:
+            self._entries.clear()
+
+
+settings_audit_store = SettingsAuditStore()
+runtime_settings_lock = threading.RLock()
+runtime_settings = {
+    SETTING_DEFAULT_CONNECTION_TYPE: DEFAULT_CONNECTION_TYPE,
+}
+runtime_settings_version = SETTINGS_VERSION
+settings_admin_grants_lock = threading.RLock()
+settings_admin_grants = {}
+socket_settings_admin_grant_ids = {}
 
 class AgentTranscriptStore:
     def __init__(self):
@@ -3949,6 +4292,41 @@ def on_check_browser_pairing():
     )
     emit_terminal_policy(request.sid)
 
+@socketio.on('browser_authorization_revoke_current')
+def on_browser_authorization_revoke_current():
+    session_token = socket_session_tokens.get(request.sid)
+    identity = socket_browser_identities.get(request.sid)
+    if not session_token:
+        return
+    if not identity:
+        socketio.emit(
+            'browser_authorization_status',
+            {
+                'status': 'failed',
+                'message': 'Browser identity is not registered.',
+                'error_code': 'browser_identity_missing',
+            },
+            room=request.sid,
+        )
+        return
+    revoked = revoke_authorized_browser(identity.get('browser_id'))
+    socket_browser_authorized[request.sid] = False
+    revoke_settings_admin_grant(
+        request.sid,
+        session_token,
+        socket_client_ips.get(request.sid, 'unknown'),
+    )
+    socketio.emit(
+        'browser_authorization_status',
+        {
+            'status': 'revoked' if revoked else 'not_found',
+            'message': 'Browser authorization was revoked.' if revoked else 'Browser authorization was not present.',
+            'browser_id': identity.get('browser_id'),
+        },
+        room=request.sid,
+    )
+    emit_terminal_policy(request.sid)
+
 @socketio.on('list_terminals')
 def on_list_terminals():
     cleanup_expired_sessions()
@@ -3996,6 +4374,217 @@ def on_settings_snapshot_request():
         build_readonly_settings_snapshot(
             client_ip,
             browser_authorized=browser_authorized,
+            sid=request.sid,
+            session_token=session_token,
+        ),
+        room=request.sid,
+    )
+
+@socketio.on(SETTINGS_EVENT_ADMIN_GRANT_REQUEST)
+def on_settings_admin_grant_request(data=None):
+    session_token = socket_session_tokens.get(request.sid)
+    if not session_token:
+        return
+    client_ip = socket_client_ips.get(request.sid, 'unknown')
+    browser_authorized = socket_browser_authorized.get(request.sid, False)
+    if not is_settings_auth_manage_allowed_for_client(
+        client_ip,
+        browser_authorized=browser_authorized,
+    ):
+        record_settings_audit_event(
+            SETTINGS_AUDIT_GRANT_DENIED,
+            session_token=session_token,
+            sid=request.sid,
+            client_ip=client_ip,
+            capability=CAPABILITY_SETTINGS_AUTH_MANAGE,
+            error_code='settings_admin_grant_unauthorized',
+        )
+        socketio.emit(
+            SETTINGS_EVENT_ADMIN_GRANT_RESULT,
+            {
+                'status': 'failed',
+                'error_code': 'settings_admin_grant_unauthorized',
+                'message': 'Settings admin grant is not available for this client.',
+            },
+            room=request.sid,
+        )
+        return
+    grant = create_settings_admin_grant(
+        session_token,
+        request.sid,
+        client_ip,
+        capabilities=(CAPABILITY_SETTINGS_UPDATE_LOW_RISK,),
+    )
+    socketio.emit(
+        SETTINGS_EVENT_ADMIN_GRANT_RESULT,
+        {
+            'status': 'ok',
+            'grant_id': grant['grant_id'],
+            'capabilities': list(grant['capabilities']),
+            'created_at': grant['created_at'],
+            'expires_at': grant['expires_at'],
+            'ttl_seconds': SETTINGS_ADMIN_GRANT_TTL_SECONDS,
+        },
+        room=request.sid,
+    )
+
+@socketio.on(SETTINGS_EVENT_ADMIN_GRANT_REVOKE)
+def on_settings_admin_grant_revoke(data=None):
+    session_token = socket_session_tokens.get(request.sid)
+    if not session_token:
+        return
+    client_ip = socket_client_ips.get(request.sid, 'unknown')
+    grant_id = data.get('grant_id') if isinstance(data, dict) else None
+    revoked = revoke_settings_admin_grant(
+        request.sid,
+        session_token,
+        client_ip,
+        grant_id=grant_id,
+    )
+    socketio.emit(
+        SETTINGS_EVENT_ADMIN_GRANT_RESULT,
+        {
+            'status': 'ok',
+            'revoked': bool(revoked),
+        },
+        room=request.sid,
+    )
+
+@socketio.on(SETTINGS_EVENT_UPDATE_REQUEST)
+def on_settings_update_request(data=None):
+    session_token = socket_session_tokens.get(request.sid)
+    if not session_token:
+        return
+    payload = data if isinstance(data, dict) else {}
+    client_ip = socket_client_ips.get(request.sid, 'unknown')
+    browser_authorized = socket_browser_authorized.get(request.sid, False)
+    request_id = payload.get('request_id') if isinstance(payload.get('request_id'), str) else None
+    setting_key = payload.get('setting_key')
+    grant_id = payload.get('grant_id') if isinstance(payload.get('grant_id'), str) else None
+    grant, grant_error = get_valid_settings_admin_grant(
+        request.sid,
+        session_token,
+        client_ip,
+        CAPABILITY_SETTINGS_UPDATE_LOW_RISK,
+        grant_id=grant_id,
+    )
+    if grant:
+        record_settings_audit_event(
+            SETTINGS_AUDIT_GRANT_USED,
+            session_token=session_token,
+            sid=request.sid,
+            client_ip=client_ip,
+            grant_id=grant.get('grant_id'),
+            capability=CAPABILITY_SETTINGS_UPDATE_LOW_RISK,
+        )
+    allowed = is_settings_update_low_risk_allowed_for_client(
+        client_ip,
+        browser_authorized=browser_authorized,
+        settings_admin_grant=grant,
+    )
+    if not allowed:
+        error_code = grant_error if browser_authorized else 'settings_update_unauthorized'
+        record_settings_audit_event(
+            SETTINGS_AUDIT_UPDATE_DENIED,
+            session_token=session_token,
+            sid=request.sid,
+            client_ip=client_ip,
+            request_id=request_id,
+            setting_key=setting_key if isinstance(setting_key, str) else None,
+            capability=CAPABILITY_SETTINGS_UPDATE_LOW_RISK,
+            error_code=error_code,
+        )
+        socketio.emit(
+            SETTINGS_EVENT_UPDATE_RESULT,
+            {
+                'status': 'failed',
+                'request_id': request_id,
+                'error_code': error_code,
+                'message': 'Settings update is not available for this client.',
+                'settings_version': get_runtime_settings_version(),
+            },
+            room=request.sid,
+        )
+        return
+    try:
+        expected_version = int(payload.get('expected_version'))
+    except (TypeError, ValueError):
+        record_settings_audit_event(
+            SETTINGS_AUDIT_UPDATE_FAILED,
+            session_token=session_token,
+            sid=request.sid,
+            client_ip=client_ip,
+            request_id=request_id,
+            setting_key=setting_key if isinstance(setting_key, str) else None,
+            error_code='settings_invalid_expected_version',
+        )
+        socketio.emit(
+            SETTINGS_EVENT_UPDATE_RESULT,
+            {
+                'status': 'failed',
+                'request_id': request_id,
+                'error_code': 'settings_invalid_expected_version',
+                'message': 'expected_version must be an integer.',
+                'settings_version': get_runtime_settings_version(),
+            },
+            room=request.sid,
+        )
+        return
+    result, error = apply_runtime_setting_update(
+        setting_key,
+        payload.get('value'),
+        expected_version,
+    )
+    if error:
+        record_settings_audit_event(
+            SETTINGS_AUDIT_UPDATE_FAILED,
+            session_token=session_token,
+            sid=request.sid,
+            client_ip=client_ip,
+            request_id=request_id,
+            setting_key=setting_key if isinstance(setting_key, str) else None,
+            error_code=error.get('error_code'),
+        )
+        response = {
+            'status': 'failed',
+            'request_id': request_id,
+            'setting_key': setting_key,
+            'settings_version': get_runtime_settings_version(),
+        }
+        response.update(error)
+        socketio.emit(SETTINGS_EVENT_UPDATE_RESULT, response, room=request.sid)
+        return
+    record_settings_audit_event(
+        SETTINGS_AUDIT_UPDATE_SUCCEEDED,
+        session_token=session_token,
+        sid=request.sid,
+        client_ip=client_ip,
+        request_id=request_id,
+        setting_key=result['setting_key'],
+        risk_level='low',
+        old_value=redact_setting_value(result['setting_key'], result['old_value']),
+        new_value=redact_setting_value(result['setting_key'], result['new_value']),
+        settings_version=result['settings_version'],
+        grant_id=grant.get('grant_id') if grant else None,
+    )
+    socketio.emit(
+        SETTINGS_EVENT_UPDATE_RESULT,
+        {
+            'status': 'ok',
+            'request_id': request_id,
+            'setting_key': result['setting_key'],
+            'value': result['new_value'],
+            'settings_version': result['settings_version'],
+        },
+        room=request.sid,
+    )
+    socketio.emit(
+        SETTINGS_EVENT_SNAPSHOT,
+        build_readonly_settings_snapshot(
+            client_ip,
+            browser_authorized=browser_authorized,
+            sid=request.sid,
+            session_token=session_token,
         ),
         room=request.sid,
     )
@@ -5207,6 +5796,7 @@ def on_disconnect(reason=None):
     socket_browser_identities.pop(request.sid, None)
     socket_browser_authorized.pop(request.sid, None)
     socket_browser_auth_challenges.pop(request.sid, None)
+    socket_settings_admin_grant_ids.pop(request.sid, None)
     agent_viewer_ids.pop(request.sid, None)
     if session_token:
         with agent_lock:
@@ -5442,11 +6032,18 @@ def is_settings_view_allowed_for_client(client_ip, browser_authorized=False):
         return True
     return is_local_client_ip(client_ip)
 
-def is_settings_update_low_risk_allowed_for_client(client_ip, browser_authorized=False):
-    return is_local_client_ip(client_ip)
+def is_settings_update_low_risk_allowed_for_client(client_ip, browser_authorized=False, settings_admin_grant=None):
+    if is_local_client_ip(client_ip):
+        return True
+    if settings_admin_grant:
+        return True
+    return False
 
 def is_settings_update_high_risk_allowed_for_client(client_ip, browser_authorized=False):
     return False
+
+def is_settings_auth_manage_allowed_for_client(client_ip, browser_authorized=False):
+    return is_local_client_ip(client_ip)
 
 def is_local_shell_enabled():
     return DEFAULT_CONNECTION_TYPE == CONNECTION_TYPE_LOCAL_SHELL or FORCE_CONNECTION_TYPE == CONNECTION_TYPE_LOCAL_SHELL

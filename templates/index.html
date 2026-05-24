@@ -140,6 +140,8 @@
         .settings-list li { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px solid #2c2c2e; padding-bottom: 6px; }
         .settings-list li:last-child { border-bottom: none; padding-bottom: 0; }
         .settings-badge { color: #aaa; white-space: nowrap; }
+        .settings-inline-action { width: auto; margin-left: 8px; padding: 5px 10px; background: #3a3a3c; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+        .settings-inline-action:disabled { color: #777; cursor: default; opacity: 0.7; }
         .settings-footer { display: flex; justify-content: space-between; padding: 12px 20px; border-top: 1px solid #3a3a3c; }
         .settings-btn { padding: 7px 18px; border: none; border-radius: 5px; cursor: pointer; font-size: 13px; }
 
@@ -458,10 +460,21 @@
                             <div class="settings-row"><label>HTTPS</label><span class="settings-value" id="server-settings-https">--</span></div>
                         </fieldset>
                         <fieldset class="settings-fieldset">
+                            <legend>Low-risk runtime settings</legend>
+                            <div class="settings-row">
+                                <label for="server-setting-default-connection-select">Default connection</label>
+                                <span class="settings-value">
+                                    <select id="server-setting-default-connection-select"></select>
+                                    <button class="settings-inline-action" id="server-settings-apply-default" type="button">Apply</button>
+                                </span>
+                            </div>
+                        </fieldset>
+                        <fieldset class="settings-fieldset">
                             <legend>Capabilities</legend>
                             <div class="settings-row"><label>View settings</label><span class="settings-value" id="server-cap-settings-view">--</span></div>
                             <div class="settings-row"><label>Update low risk</label><span class="settings-value" id="server-cap-settings-update-low">--</span></div>
                             <div class="settings-row"><label>Update high risk</label><span class="settings-value" id="server-cap-settings-update-high">--</span></div>
+                            <div class="settings-row"><label>Manage settings grants</label><span class="settings-value" id="server-cap-settings-auth-manage">--</span></div>
                         </fieldset>
                         <fieldset class="settings-fieldset">
                             <legend>Connections</legend>
@@ -922,6 +935,8 @@
             let agentPanelPosition = null;
             let agentPanelDrag = null;
             let pendingPasteReview = null;
+            let serverSettingsSnapshot = null;
+            let currentSettingsAdminGrant = null;
 
             function normalizeConnectionType(value) {
                 return String(value || '').trim().toLowerCase().replace('-', '_');
@@ -2300,6 +2315,12 @@
             socket.on('settings_snapshot', data => {
                 renderServerSettingsSnapshot(data);
             });
+            socket.on('settings_update_result', data => {
+                handleServerSettingsUpdateResult(data);
+            });
+            socket.on('settings_admin_grant', data => {
+                handleServerSettingsAdminGrant(data);
+            });
             socket.on('browser_auth_challenge', data => {
                 if (!data || typeof data.nonce !== 'string') return;
                 getBrowserIdentity()
@@ -3041,11 +3062,42 @@
                 element.textContent = value === null || value === undefined || value === '' ? '--' : String(value);
             }
 
+            function populateDefaultConnectionSetting(data) {
+                const select = document.getElementById('server-setting-default-connection-select');
+                const applyBtn = document.getElementById('server-settings-apply-default');
+                if (!select || !applyBtn) return;
+                select.replaceChildren();
+                const mutable = data && data.mutable_settings ? data.mutable_settings.default_connection_type : null;
+                const allowedValues = mutable && Array.isArray(mutable.allowed_values) ? mutable.allowed_values : [];
+                const connectionLabels = new Map();
+                const connections = data && data.effective_settings && Array.isArray(data.effective_settings.connection_types)
+                    ? data.effective_settings.connection_types
+                    : [];
+                connections.forEach(connection => {
+                    if (typeof connection.connection_type === 'string') {
+                        connectionLabels.set(connection.connection_type, connection.label || connection.connection_type);
+                    }
+                });
+                allowedValues.forEach(value => {
+                    const option = document.createElement('option');
+                    option.value = value;
+                    option.textContent = connectionLabels.get(value) || value;
+                    select.appendChild(option);
+                });
+                if (mutable && typeof mutable.value === 'string') select.value = mutable.value;
+                const capabilities = data && data.capabilities ? data.capabilities : {};
+                const canUpdate = !!(capabilities.settings_update_low_risk && capabilities.settings_update_low_risk.allowed);
+                const locked = !!(mutable && mutable.locked);
+                select.disabled = !canUpdate || locked || !allowedValues.length;
+                applyBtn.disabled = select.disabled;
+            }
+
             function renderServerSettingsSnapshot(data) {
                 const statusEl = document.getElementById('server-settings-status');
                 const connectionsEl = document.getElementById('server-settings-connections');
                 if (!statusEl || !connectionsEl) return;
                 connectionsEl.replaceChildren();
+                serverSettingsSnapshot = data && data.status === 'ok' ? data : null;
                 if (!data || data.status !== 'ok') {
                     statusEl.textContent = data && data.message ? data.message : 'Settings unavailable.';
                     setSettingsText('server-settings-version', '--');
@@ -3056,6 +3108,8 @@
                     setSettingsText('server-cap-settings-view', '--');
                     setSettingsText('server-cap-settings-update-low', '--');
                     setSettingsText('server-cap-settings-update-high', '--');
+                    setSettingsText('server-cap-settings-auth-manage', '--');
+                    populateDefaultConnectionSetting(null);
                     return;
                 }
                 const settings = data.effective_settings || {};
@@ -3069,6 +3123,8 @@
                 setSettingsText('server-cap-settings-view', formatSettingsFlag(capabilities.settings_view && capabilities.settings_view.allowed));
                 setSettingsText('server-cap-settings-update-low', formatSettingsFlag(capabilities.settings_update_low_risk && capabilities.settings_update_low_risk.allowed));
                 setSettingsText('server-cap-settings-update-high', formatSettingsFlag(capabilities.settings_update_high_risk && capabilities.settings_update_high_risk.allowed));
+                setSettingsText('server-cap-settings-auth-manage', formatSettingsFlag(capabilities.settings_auth_manage && capabilities.settings_auth_manage.allowed));
+                populateDefaultConnectionSetting(data);
                 const connectionTypes = Array.isArray(settings.connection_types) ? settings.connection_types : [];
                 connectionTypes.forEach(connection => {
                     const item = document.createElement('li');
@@ -3085,6 +3141,72 @@
                     item.textContent = 'None';
                     connectionsEl.appendChild(item);
                 }
+            }
+
+            function handleServerSettingsUpdateResult(data) {
+                const statusEl = document.getElementById('server-settings-status');
+                if (!statusEl || !data) return;
+                if (data.status === 'ok') {
+                    statusEl.textContent = 'Saved';
+                    return;
+                }
+                statusEl.textContent = data.message || data.error_code || 'Settings update failed.';
+            }
+
+            function handleServerSettingsAdminGrant(data) {
+                if (data && data.status === 'ok' && data.grant_id) {
+                    currentSettingsAdminGrant = data;
+                    return;
+                }
+                currentSettingsAdminGrant = null;
+            }
+
+            function requestSettingsAdminGrant() {
+                return new Promise(resolve => {
+                    if (!socket || !socket.connected) {
+                        resolve(null);
+                        return;
+                    }
+                    const existing = currentSettingsAdminGrant;
+                    if (existing && existing.grant_id && Number(existing.expires_at) * 1000 > Date.now()) {
+                        resolve(existing);
+                        return;
+                    }
+                    const handler = data => {
+                        socket.off('settings_admin_grant', handler);
+                        if (data && data.status === 'ok' && data.grant_id) {
+                            currentSettingsAdminGrant = data;
+                            resolve(data);
+                        } else {
+                            resolve(null);
+                        }
+                    };
+                    socket.on('settings_admin_grant', handler);
+                    socket.emit('settings_admin_grant_request', {
+                        capability: 'settings_update_low_risk'
+                    });
+                });
+            }
+
+            async function applyServerDefaultConnectionSetting() {
+                const select = document.getElementById('server-setting-default-connection-select');
+                const statusEl = document.getElementById('server-settings-status');
+                if (!select || !serverSettingsSnapshot || !socket || !socket.connected) return;
+                const capabilities = serverSettingsSnapshot.capabilities || {};
+                const canUpdate = !!(capabilities.settings_update_low_risk && capabilities.settings_update_low_risk.allowed);
+                if (!canUpdate) {
+                    if (statusEl) statusEl.textContent = 'Low-risk settings update is denied.';
+                    return;
+                }
+                const grant = await requestSettingsAdminGrant();
+                if (statusEl) statusEl.textContent = 'Saving...';
+                socket.emit('settings_update_request', {
+                    request_id: `settings-${Date.now()}`,
+                    setting_key: 'default_connection_type',
+                    value: select.value,
+                    expected_version: serverSettingsSnapshot.settings_version,
+                    grant_id: grant ? grant.grant_id : null
+                });
             }
 
             function requestServerSettingsSnapshot() {
@@ -3116,6 +3238,7 @@
             document.getElementById('settings-option').onclick = openSettings;
             document.getElementById('quick-settings').onclick = openSettings;
             document.getElementById('settings-close').onclick = () => settingsModal.classList.remove('open');
+            document.getElementById('server-settings-apply-default').onclick = applyServerDefaultConnectionSetting;
             document.querySelectorAll('.settings-nav-item').forEach(item => {
                 item.onclick = () => {
                     document.querySelectorAll('.settings-nav-item').forEach(i => i.classList.remove('active'));

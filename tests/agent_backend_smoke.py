@@ -74,6 +74,10 @@ def reset_state():
     webssh.socket_browser_identities.clear()
     webssh.socket_browser_authorized.clear()
     webssh.socket_browser_auth_challenges.clear()
+    webssh.socket_settings_admin_grant_ids.clear()
+    webssh.settings_admin_grants.clear()
+    webssh.settings_audit_store.clear()
+    webssh.reset_runtime_settings_for_test()
     webssh.agent_states.clear()
     webssh.agent_session_ids.clear()
     webssh.agent_viewer_ids.clear()
@@ -2064,14 +2068,17 @@ def test_readonly_settings_snapshot_socket_event_is_typed():
     snapshot = last_payload(client, webssh.SETTINGS_EVENT_SNAPSHOT)
     assert snapshot['status'] == 'ok'
     assert snapshot['settings_version'] == webssh.SETTINGS_VERSION
-    assert snapshot['read_only'] is True
+    assert snapshot['schema_version'] == webssh.SETTINGS_VERSION
+    assert snapshot['read_only'] is False
     assert snapshot['capabilities'][webssh.CAPABILITY_SETTINGS_VIEW]['allowed'] is True
     assert snapshot['capabilities'][webssh.CAPABILITY_SETTINGS_UPDATE_HIGH_RISK]['allowed'] is False
+    assert snapshot['capabilities'][webssh.CAPABILITY_SETTINGS_AUTH_MANAGE]['allowed'] is True
     assert snapshot['effective_settings']['default_connection_type'] in {
         webssh.CONNECTION_TYPE_SSH,
         webssh.CONNECTION_TYPE_LOCAL_SHELL,
         webssh.CONNECTION_TYPE_UART,
     }
+    assert snapshot['mutable_settings'][webssh.SETTING_DEFAULT_CONNECTION_TYPE]['risk_level'] == 'low'
     assert [item['connection_type'] for item in snapshot['effective_settings']['connection_types']]
     assert 'authorized_dir' not in snapshot['effective_settings']
 
@@ -2096,6 +2103,111 @@ def test_settings_snapshot_requires_local_or_browser_authorized_client():
     assert allowed['status'] == 'ok'
     assert allowed['capabilities'][webssh.CAPABILITY_SETTINGS_VIEW]['allowed'] is True
     assert allowed['capabilities'][webssh.CAPABILITY_SETTINGS_UPDATE_LOW_RISK]['allowed'] is False
+
+    client.disconnect()
+
+
+def test_low_risk_settings_update_is_versioned_and_audited():
+    client = make_client()
+
+    client.emit(webssh.SETTINGS_EVENT_SNAPSHOT_REQUEST)
+    snapshot = last_payload(client, webssh.SETTINGS_EVENT_SNAPSHOT)
+    assert snapshot['settings_version'] == 1
+
+    target = webssh.CONNECTION_TYPE_SSH
+    client.emit(webssh.SETTINGS_EVENT_UPDATE_REQUEST, {
+        'request_id': 'settings-update-ok',
+        'setting_key': webssh.SETTING_DEFAULT_CONNECTION_TYPE,
+        'value': target,
+        'expected_version': snapshot['settings_version'],
+    })
+    result = last_payload(client, webssh.SETTINGS_EVENT_UPDATE_RESULT)
+    assert result['status'] == 'ok'
+    assert result['setting_key'] == webssh.SETTING_DEFAULT_CONNECTION_TYPE
+    assert result['value'] == target
+    assert result['settings_version'] == 2
+
+    client.emit(webssh.SETTINGS_EVENT_UPDATE_REQUEST, {
+        'request_id': 'settings-update-stale',
+        'setting_key': webssh.SETTING_DEFAULT_CONNECTION_TYPE,
+        'value': webssh.CONNECTION_TYPE_LOCAL_SHELL,
+        'expected_version': 1,
+    })
+    stale = last_payload(client, webssh.SETTINGS_EVENT_UPDATE_RESULT)
+    assert stale['status'] == 'failed'
+    assert stale['error_code'] == 'settings_version_conflict'
+
+    events = webssh.settings_audit_store.get_recent()
+    assert any(event['event_type'] == webssh.SETTINGS_AUDIT_UPDATE_SUCCEEDED for event in events)
+    assert any(
+        event['event_type'] == webssh.SETTINGS_AUDIT_UPDATE_FAILED
+        and event.get('error_code') == 'settings_version_conflict'
+        for event in events
+    )
+
+    client.disconnect()
+
+
+def test_remote_browser_authorization_alone_cannot_update_settings():
+    client = make_client()
+    session_token = current_session_token()
+    sid = current_sid_for_session(session_token)
+
+    webssh.socket_client_ips[sid] = '203.0.113.10'
+    webssh.socket_browser_authorized[sid] = True
+    client.emit(webssh.SETTINGS_EVENT_UPDATE_REQUEST, {
+        'request_id': 'settings-remote-denied',
+        'setting_key': webssh.SETTING_DEFAULT_CONNECTION_TYPE,
+        'value': webssh.CONNECTION_TYPE_SSH,
+        'expected_version': webssh.get_runtime_settings_version(),
+    })
+    denied = last_payload(client, webssh.SETTINGS_EVENT_UPDATE_RESULT)
+    assert denied['status'] == 'failed'
+    assert denied['error_code'] == 'settings_admin_grant_required'
+
+    client.disconnect()
+
+
+def test_settings_admin_grant_is_scoped_and_revocable():
+    client = make_client()
+    session_token = current_session_token()
+    sid = current_sid_for_session(session_token)
+    webssh.socket_browser_identities[sid] = {
+        'browser_id': 'a' * 64,
+        'public_key': 'public-key',
+    }
+
+    client.emit(webssh.SETTINGS_EVENT_ADMIN_GRANT_REQUEST, {
+        'capability': webssh.CAPABILITY_SETTINGS_UPDATE_LOW_RISK,
+    })
+    grant = last_payload(client, webssh.SETTINGS_EVENT_ADMIN_GRANT_RESULT)
+    assert grant['status'] == 'ok'
+    assert webssh.CAPABILITY_SETTINGS_UPDATE_LOW_RISK in grant['capabilities']
+
+    webssh.socket_client_ips[sid] = '203.0.113.10'
+    webssh.socket_browser_authorized[sid] = True
+    client.emit(webssh.SETTINGS_EVENT_UPDATE_REQUEST, {
+        'request_id': 'settings-grant-client-mismatch',
+        'setting_key': webssh.SETTING_DEFAULT_CONNECTION_TYPE,
+        'value': webssh.CONNECTION_TYPE_SSH,
+        'expected_version': webssh.get_runtime_settings_version(),
+        'grant_id': grant['grant_id'],
+    })
+    denied = last_payload(client, webssh.SETTINGS_EVENT_UPDATE_RESULT)
+    assert denied['status'] == 'failed'
+    assert denied['error_code'] == 'settings_admin_grant_client_mismatch'
+
+    webssh.socket_client_ips[sid] = '127.0.0.1'
+    client.emit(webssh.SETTINGS_EVENT_ADMIN_GRANT_REVOKE, {
+        'grant_id': grant['grant_id'],
+    })
+    revoked = last_payload(client, webssh.SETTINGS_EVENT_ADMIN_GRANT_RESULT)
+    assert revoked['status'] == 'ok'
+    assert revoked['revoked'] is True
+
+    events = webssh.settings_audit_store.get_recent()
+    assert any(event['event_type'] == webssh.SETTINGS_AUDIT_GRANT_CREATED for event in events)
+    assert any(event['event_type'] == webssh.SETTINGS_AUDIT_GRANT_REVOKED for event in events)
 
     client.disconnect()
 
@@ -2800,6 +2912,9 @@ def main():
         test_settings_capabilities_are_separate_from_local_resource_access,
         test_readonly_settings_snapshot_socket_event_is_typed,
         test_settings_snapshot_requires_local_or_browser_authorized_client,
+        test_low_risk_settings_update_is_versioned_and_audited,
+        test_remote_browser_authorization_alone_cannot_update_settings,
+        test_settings_admin_grant_is_scoped_and_revocable,
         test_ssh_backend_action_contract_uses_public_bridge_method,
         test_ssh_bridge_is_provided_by_backend_module,
         test_local_shell_bridge_is_provided_by_backend_module,
