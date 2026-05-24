@@ -484,6 +484,15 @@ def test_settings_server_tab_loads_readonly_snapshot(browser, access_url):
                 low: document.getElementById('server-cap-settings-update-low').textContent,
                 high: document.getElementById('server-cap-settings-update-high').textContent,
                 selectedDefault: document.getElementById('server-setting-default-connection-select').value,
+                mutableKeys: Array.from(
+                    document.querySelectorAll('#server-settings-mutable-controls .settings-row[data-setting-key]')
+                ).map(element => element.dataset.settingKey),
+                uartBaud: document.querySelector(
+                    '#server-settings-mutable-controls .server-setting-input[data-setting-key="uart.default_baud_rate"]'
+                )?.value,
+                schemaKeys: Array.from(
+                    document.querySelectorAll('#server-settings-schema li[data-setting-key]')
+                ).map(element => element.dataset.settingKey),
                 connectionCount: document.querySelectorAll('#server-settings-connections li').length
             })"""
         )
@@ -492,7 +501,38 @@ def test_settings_server_tab_loads_readonly_snapshot(browser, access_url):
         check(state['low'] == 'Allowed', 'settings server tab did not expose local low-risk writes')
         check(state['high'] == 'Denied', 'settings server tab exposed high-risk writes')
         check(state['selectedDefault'], 'settings server tab did not populate default connection control')
+        check('default_connection_type' in state['mutableKeys'], 'settings server tab did not render core mutable control')
+        check('uart.default_baud_rate' in state['mutableKeys'], 'settings server tab did not render UART mutable control')
+        check(state['uartBaud'], 'settings server tab did not populate UART baud control')
+        check('uart.remote_access' in state['schemaKeys'], 'settings server tab did not expose high-risk schema read-only')
         check(state['connectionCount'] > 0, 'settings server tab did not list connection types')
+        clear_emitted(page)
+        selected_baud = page.evaluate(
+            """() => {
+                const input = document.querySelector(
+                    '#server-settings-mutable-controls .server-setting-input[data-setting-key="uart.default_baud_rate"]'
+                );
+                const apply = document.querySelector(
+                    '#server-settings-mutable-controls button[data-setting-key="uart.default_baud_rate"]'
+                );
+                const option = Array.from(input.options).find(item => item.value !== input.value) || input.options[0];
+                input.value = option.value;
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                apply.click();
+                return option.value;
+            }"""
+        )
+        page.wait_for_function(
+            """() => window.websshTest.getEmitted().some(entry => (
+                entry.event === 'settings_update_request'
+                && entry.args?.[0]?.setting_key === 'uart.default_baud_rate'
+            ))""",
+            timeout=5000,
+        )
+        update_payload = get_emitted(page, 'settings_update_request')[-1]['args'][0]
+        check(update_payload['setting_key'] == 'uart.default_baud_rate', 'UART update did not use typed setting_key')
+        check(int(update_payload['value']) == int(selected_baud), 'UART update did not send selected baud value')
+        check(update_payload.get('expected_schema_digest'), 'UART update did not include expected schema digest')
     finally:
         close_context(context)
 
