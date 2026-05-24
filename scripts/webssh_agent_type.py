@@ -1,4 +1,39 @@
 #!/usr/bin/env python3
+"""Type text into a WebSSH external-agent terminal at a controlled, human-like
+pace.
+
+Why the cadence options exist
+-----------------------------
+Some terminal applications score input *rhythm* server-side. PTT BBS does this
+in its editor (pttbbs `mbbsd/edit.c`): while editing it keeps a per-keystroke
+reward counter and, crucially, an anti-bot guard that works at **whole-second**
+granularity:
+
+    if ((interval = (now - th))) {        // now/th are seconds (time4_t)
+        th = now;
+        if ((char)ch != last) { money++; last = (char)ch; }
+    }
+    if (interval && interval == tin) {     // same integer-second gap again
+        count++;
+        if (count > 60) { money = 0; count = 0; /* may also flag/kick */ }
+    } else if (interval) { count = 0; tin = interval; }
+
+Consequences:
+- `money` rises at most once per second (and only on a *different* char), so
+  bursting many chars in one second earns nothing extra.
+- If the integer-second gap between counted keystrokes stays identical for >60
+  in a row, `money` is wiped. A steady ~1-3 cps stream crosses second
+  boundaries at a constant 1-second interval and will trip this.
+- Sub-second `--jitter-ms` / `--punctuation-pause-ms` are INVISIBLE to this
+  check (it only sees whole seconds). To defeat it you must vary the cadence at
+  the *second* level: occasionally insert a >=2s pause so the integer-second
+  interval changes and the uniform run resets.
+
+`--max-uniform-seconds` is the robust defence: it guarantees a multi-second
+breaker pause at least that often, keeping the uniform run well under 60.
+`--dry-run` simulates the edit.c counter over the planned schedule and reports
+the worst-case uniform run so you can verify before sending.
+"""
 import argparse
 import json
 import random
@@ -9,6 +44,10 @@ import webssh_agent_cli as cli
 
 
 PUNCTUATION_PAUSE_CHARS = set('.!?;:,，。！？；：、')
+NEWLINE_UNITS = ('\r', '\n', '\r\n')
+# A pause is a reliable cadence "breaker" only if it advances the server's
+# integer second clock by >= 2, so the breaker pause must comfortably exceed 1s.
+BREAKER_THRESHOLD_SECONDS = 2.0
 
 
 def parse_args(argv=None):
@@ -35,9 +74,19 @@ def parse_args(argv=None):
     pace_group.add_argument('--cps', type=float, default=3.0, help='Characters per second, default: 3')
     pace_group.add_argument('--delay-ms', type=float, help='Delay between characters in milliseconds')
     parser.add_argument('--newline', choices=('cr', 'lf', 'crlf'), default='cr', help='Bytes sent for input newlines, default: cr')
-    parser.add_argument('--jitter-ms', type=float, default=0, help='Random +/- jitter added to each delay in milliseconds')
+    parser.add_argument('--jitter-ms', type=float, default=0, help='Random +/- jitter added to each delay in milliseconds (sub-second; invisible to second-granularity rhythm checks)')
     parser.add_argument('--punctuation-pause-ms', type=float, default=0, help='Extra delay after punctuation characters')
-    parser.add_argument('--dry-run', action='store_true', help='Print the typing plan without sending input')
+    parser.add_argument('--newline-pause-ms', type=float, default=0, help='Extra delay after a newline unit (human paragraph/line pause)')
+    parser.add_argument('--think-pause-prob', type=float, default=0.0, help='Probability [0..1] of inserting a random longer "think" pause after a unit')
+    parser.add_argument('--think-pause-ms-min', type=float, default=2200, help='Minimum think-pause length in ms (used when a think pause fires)')
+    parser.add_argument('--think-pause-ms-max', type=float, default=3800, help='Maximum think-pause length in ms')
+    parser.add_argument('--max-uniform-seconds', type=float, default=30,
+                        help='Cadence guard (default 30, ON): force a multi-second breaker pause at least this '
+                             'often so the whole-second input interval cannot stay uniform (defeats PTT edit.c '
+                             'money=0 after 60 equal intervals). Set 0 to disable.')
+    parser.add_argument('--breaker-ms-min', type=float, default=2200, help='Minimum forced breaker pause length in ms (must exceed 2000 to change the integer-second interval)')
+    parser.add_argument('--breaker-ms-max', type=float, default=3800, help='Maximum forced breaker pause length in ms')
+    parser.add_argument('--dry-run', action='store_true', help='Print the typing plan (and a simulated PTT edit.c cadence/reward check) without sending input')
     parser.add_argument('--progress', action='store_true', help='Print one JSONL progress record per sent unit to stderr')
     args = parser.parse_args(argv)
     cli.apply_handoff(args)
@@ -84,11 +133,18 @@ def base_delay_seconds(args):
 
 def delay_for_unit(unit, args, random_uniform=random.uniform):
     delay = base_delay_seconds(args)
-    jitter_ms = max(args.jitter_ms, 0)
+    jitter_ms = max(getattr(args, 'jitter_ms', 0) or 0, 0)
     if jitter_ms:
         delay += random_uniform(-jitter_ms, jitter_ms) / 1000.0
-    if unit in PUNCTUATION_PAUSE_CHARS and args.punctuation_pause_ms > 0:
+    if unit in PUNCTUATION_PAUSE_CHARS and (getattr(args, 'punctuation_pause_ms', 0) or 0) > 0:
         delay += args.punctuation_pause_ms / 1000.0
+    if unit in NEWLINE_UNITS and (getattr(args, 'newline_pause_ms', 0) or 0) > 0:
+        delay += args.newline_pause_ms / 1000.0
+    think_prob = getattr(args, 'think_pause_prob', 0) or 0
+    if think_prob > 0 and random_uniform(0, 1) < think_prob:
+        lo = getattr(args, 'think_pause_ms_min', 2200)
+        hi = max(getattr(args, 'think_pause_ms_max', 3800), lo)
+        delay += random_uniform(lo, hi) / 1000.0
     return max(delay, 0)
 
 
@@ -116,10 +172,32 @@ def stderr_json(payload):
     sys.stderr.flush()
 
 
+def guarded_delay(delay, secs_since_breaker, args, random_uniform=random.uniform):
+    """Apply the second-granularity cadence guard to a planned delay.
+
+    Returns (delay, secs_since_breaker). When the time since the last breaker
+    would exceed ``--max-uniform-seconds`` and this delay is not already a
+    breaker, the delay is replaced by a randomized multi-second breaker so the
+    integer-second input interval cannot stay uniform long enough to trip
+    PTT edit.c's `count > 60` money wipe. A no-op when the guard is disabled.
+    """
+    max_uniform = getattr(args, 'max_uniform_seconds', 0) or 0
+    if max_uniform <= 0:
+        return delay, secs_since_breaker
+    if delay >= BREAKER_THRESHOLD_SECONDS:
+        return delay, 0.0
+    if secs_since_breaker + delay >= max_uniform:
+        lo = max(getattr(args, 'breaker_ms_min', 2200), BREAKER_THRESHOLD_SECONDS * 1000.0)
+        hi = max(getattr(args, 'breaker_ms_max', 3800), lo)
+        return random_uniform(lo, hi) / 1000.0, 0.0
+    return delay, secs_since_breaker + delay
+
+
 def type_units(args, units, post_json=cli.post_json, sleep=time.sleep, random_uniform=random.uniform):
     sent_units = 0
     sent_bytes = 0
     last_result = None
+    secs_since_breaker = 0.0
     for index, unit in enumerate(units):
         status, result = post_json(
             args.url,
@@ -149,7 +227,11 @@ def type_units(args, units, post_json=cli.post_json, sleep=time.sleep, random_un
                 'sent_bytes': sent_bytes,
             })
         if index < len(units) - 1:
-            sleep(delay_for_unit(unit, args, random_uniform=random_uniform))
+            delay = delay_for_unit(unit, args, random_uniform=random_uniform)
+            delay, secs_since_breaker = guarded_delay(
+                delay, secs_since_breaker, args, random_uniform=random_uniform
+            )
+            sleep(delay)
 
     return {
         'status': 'completed',
@@ -159,14 +241,78 @@ def type_units(args, units, post_json=cli.post_json, sleep=time.sleep, random_un
     }
 
 
+def plan_delays(units, args, random_uniform=random.uniform):
+    """Produce a representative per-unit delay schedule (same logic the sender
+    uses), including jitter, pauses, and the cadence guard."""
+    delays = []
+    secs_since_breaker = 0.0
+    last_index = len(units) - 1
+    for index, unit in enumerate(units):
+        if index >= last_index:
+            delays.append(0.0)
+            break
+        delay = delay_for_unit(unit, args, random_uniform=random_uniform)
+        delay, secs_since_breaker = guarded_delay(
+            delay, secs_since_breaker, args, random_uniform=random_uniform
+        )
+        delays.append(delay)
+    return delays
+
+
+def simulate_ptt_cadence(units, delays):
+    """Replay PTT edit.c's whole-second reward/anti-bot counter over a planned
+    schedule. The cadence run is timing-driven and reliable; the money figure is
+    an approximation (the server counts per input byte, not per Unicode unit)."""
+    th = None
+    last = None
+    tin = 0
+    count = 0
+    money = 0
+    max_run = 0
+    wiped = False
+    t = 0.0
+    for index, unit in enumerate(units):
+        sec = int(t)
+        if th is None:
+            th = sec
+        interval = sec - th
+        if interval:
+            th = sec
+            ch = unit[-1] if unit else ''
+            if ch != last:
+                money += 1
+                last = ch
+        if interval and interval == tin:
+            count += 1
+            if count > max_run:
+                max_run = count
+            if count > 60:
+                money = 0
+                count = 0
+                wiped = True
+        elif interval:
+            count = 0
+            tin = interval
+        t += delays[index]
+    return {
+        'estimated_total_seconds': round(t, 1),
+        'simulated_money_raw': money,
+        'simulated_max_uniform_run': max_run,
+        'money_would_be_wiped': wiped,
+        'cadence_ok': (not wiped) and max_run <= 55,
+    }
+
+
 def run(args, post_json=cli.post_json, sleep=time.sleep, random_uniform=random.uniform):
     text = read_input_text(args)
     units = list(iter_type_units(text, newline_mode=args.newline))
     summary = summarize_units(units)
     if args.dry_run:
+        delays = plan_delays(units, args, random_uniform=random_uniform)
         output = {
             'status': 'dry_run',
             **summary,
+            **simulate_ptt_cadence(units, delays),
         }
         print(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
