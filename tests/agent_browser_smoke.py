@@ -467,6 +467,32 @@ def test_approval_payload_and_stale_rejections(browser, access_url):
         close_context(context)
 
 
+def test_settings_server_tab_loads_readonly_snapshot(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        page.click('#quick-settings')
+        page.wait_for_selector('#settings-modal.open', timeout=5000)
+        page.click('.settings-nav-item[data-tab="server"]')
+        page.wait_for_function(
+            "() => document.getElementById('server-settings-status')?.textContent === 'Read-only'",
+            timeout=5000,
+        )
+        state = page.evaluate(
+            """() => ({
+                version: document.getElementById('server-settings-version').textContent,
+                view: document.getElementById('server-cap-settings-view').textContent,
+                high: document.getElementById('server-cap-settings-update-high').textContent,
+                connectionCount: document.querySelectorAll('#server-settings-connections li').length
+            })"""
+        )
+        check(state['version'] == '1', 'settings server tab did not show settings version')
+        check(state['view'] == 'Allowed', 'settings server tab did not show view capability')
+        check(state['high'] == 'Denied', 'settings server tab exposed high-risk writes')
+        check(state['connectionCount'] > 0, 'settings server tab did not list connection types')
+    finally:
+        close_context(context)
+
+
 def test_terminal_payload_text_is_not_control(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
@@ -510,6 +536,7 @@ def main():
         test_rendered_viewport_snapshot_returns_png,
         test_paste_review_approve_and_cancel,
         test_approval_payload_and_stale_rejections,
+        test_settings_server_tab_loads_readonly_snapshot,
         test_terminal_payload_text_is_not_control,
     ]
     proc = None

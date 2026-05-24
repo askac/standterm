@@ -134,6 +134,12 @@
         .settings-row:last-child { border-bottom: none; }
         .settings-row label { flex: 1; color: #ddd; cursor: pointer; }
         .settings-row input, .settings-row select { background: #2c2c2e; border: 1px solid #555; color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px; outline: none; }
+        .settings-value { color: #f2f2f2; text-align: right; overflow-wrap: anywhere; max-width: 58%; }
+        .settings-status { color: #aaa; font-size: 12px; line-height: 1.4; margin-bottom: 10px; overflow-wrap: anywhere; }
+        .settings-list { display: grid; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; color: #ddd; }
+        .settings-list li { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px solid #2c2c2e; padding-bottom: 6px; }
+        .settings-list li:last-child { border-bottom: none; padding-bottom: 0; }
+        .settings-badge { color: #aaa; white-space: nowrap; }
         .settings-footer { display: flex; justify-content: space-between; padding: 12px 20px; border-top: 1px solid #3a3a3c; }
         .settings-btn { padding: 7px 18px; border: none; border-radius: 5px; cursor: pointer; font-size: 13px; }
 
@@ -401,6 +407,7 @@
                 <div class="settings-nav">
                     <div class="settings-nav-item active" data-tab="general">General</div>
                     <div class="settings-nav-item" data-tab="appearance">Appearance</div>
+                    <div class="settings-nav-item" data-tab="server">Server</div>
                 </div>
                 <div class="settings-content">
                     <div class="settings-tab active" id="tab-general">
@@ -438,6 +445,27 @@
                             </div>
                             <div class="settings-row"><label for="pref-fontFace">Font face</label><input type="text" id="pref-fontFace"></div>
                             <div class="settings-row"><label for="pref-fontSize">Font size</label><input type="number" id="pref-fontSize" min="8" max="32"></div>
+                        </fieldset>
+                    </div>
+                    <div class="settings-tab" id="tab-server">
+                        <div class="settings-status" id="server-settings-status">Loading...</div>
+                        <fieldset class="settings-fieldset">
+                            <legend>Runtime</legend>
+                            <div class="settings-row"><label>Version</label><span class="settings-value" id="server-settings-version">--</span></div>
+                            <div class="settings-row"><label>Runtime</label><span class="settings-value" id="server-settings-runtime">--</span></div>
+                            <div class="settings-row"><label>Default connection</label><span class="settings-value" id="server-settings-default-connection">--</span></div>
+                            <div class="settings-row"><label>Forced connection</label><span class="settings-value" id="server-settings-forced-connection">--</span></div>
+                            <div class="settings-row"><label>HTTPS</label><span class="settings-value" id="server-settings-https">--</span></div>
+                        </fieldset>
+                        <fieldset class="settings-fieldset">
+                            <legend>Capabilities</legend>
+                            <div class="settings-row"><label>View settings</label><span class="settings-value" id="server-cap-settings-view">--</span></div>
+                            <div class="settings-row"><label>Update low risk</label><span class="settings-value" id="server-cap-settings-update-low">--</span></div>
+                            <div class="settings-row"><label>Update high risk</label><span class="settings-value" id="server-cap-settings-update-high">--</span></div>
+                        </fieldset>
+                        <fieldset class="settings-fieldset">
+                            <legend>Connections</legend>
+                            <ul class="settings-list" id="server-settings-connections"></ul>
                         </fieldset>
                     </div>
                 </div>
@@ -2269,6 +2297,9 @@
             socket.on('terminal_policy', data => {
                 applyTerminalPolicy(data);
             });
+            socket.on('settings_snapshot', data => {
+                renderServerSettingsSnapshot(data);
+            });
             socket.on('browser_auth_challenge', data => {
                 if (!data || typeof data.nonce !== 'string') return;
                 getBrowserIdentity()
@@ -3000,6 +3031,75 @@
                 pipWindow.addEventListener('pagehide', () => { document.body.insertBefore(terminalContainer, document.getElementById('status-bar')); fitAndNotifyResize(); });
             });
 
+            function formatSettingsFlag(value) {
+                return value ? 'Allowed' : 'Denied';
+            }
+
+            function setSettingsText(id, value) {
+                const element = document.getElementById(id);
+                if (!element) return;
+                element.textContent = value === null || value === undefined || value === '' ? '--' : String(value);
+            }
+
+            function renderServerSettingsSnapshot(data) {
+                const statusEl = document.getElementById('server-settings-status');
+                const connectionsEl = document.getElementById('server-settings-connections');
+                if (!statusEl || !connectionsEl) return;
+                connectionsEl.replaceChildren();
+                if (!data || data.status !== 'ok') {
+                    statusEl.textContent = data && data.message ? data.message : 'Settings unavailable.';
+                    setSettingsText('server-settings-version', '--');
+                    setSettingsText('server-settings-runtime', '--');
+                    setSettingsText('server-settings-default-connection', '--');
+                    setSettingsText('server-settings-forced-connection', '--');
+                    setSettingsText('server-settings-https', '--');
+                    setSettingsText('server-cap-settings-view', '--');
+                    setSettingsText('server-cap-settings-update-low', '--');
+                    setSettingsText('server-cap-settings-update-high', '--');
+                    return;
+                }
+                const settings = data.effective_settings || {};
+                const capabilities = data.capabilities || {};
+                statusEl.textContent = data.read_only ? 'Read-only' : 'Writable';
+                setSettingsText('server-settings-version', data.settings_version);
+                setSettingsText('server-settings-runtime', settings.runtime_name);
+                setSettingsText('server-settings-default-connection', settings.default_connection_type);
+                setSettingsText('server-settings-forced-connection', settings.force_connection_type || 'None');
+                setSettingsText('server-settings-https', settings.https_enabled ? 'Enabled' : 'Disabled');
+                setSettingsText('server-cap-settings-view', formatSettingsFlag(capabilities.settings_view && capabilities.settings_view.allowed));
+                setSettingsText('server-cap-settings-update-low', formatSettingsFlag(capabilities.settings_update_low_risk && capabilities.settings_update_low_risk.allowed));
+                setSettingsText('server-cap-settings-update-high', formatSettingsFlag(capabilities.settings_update_high_risk && capabilities.settings_update_high_risk.allowed));
+                const connectionTypes = Array.isArray(settings.connection_types) ? settings.connection_types : [];
+                connectionTypes.forEach(connection => {
+                    const item = document.createElement('li');
+                    const label = document.createElement('span');
+                    const badge = document.createElement('span');
+                    label.textContent = connection.label || connection.connection_type || 'unknown';
+                    badge.className = 'settings-badge';
+                    badge.textContent = connection.allowed ? 'Allowed' : connection.authorization_available ? 'Authorization available' : 'Denied';
+                    item.append(label, badge);
+                    connectionsEl.appendChild(item);
+                });
+                if (!connectionTypes.length) {
+                    const item = document.createElement('li');
+                    item.textContent = 'None';
+                    connectionsEl.appendChild(item);
+                }
+            }
+
+            function requestServerSettingsSnapshot() {
+                const statusEl = document.getElementById('server-settings-status');
+                if (statusEl) statusEl.textContent = 'Loading...';
+                if (!socket || !socket.connected) {
+                    renderServerSettingsSnapshot({
+                        status: 'failed',
+                        message: 'Socket is disconnected.'
+                    });
+                    return;
+                }
+                socket.emit('settings_snapshot_request');
+            }
+
             const settingsModal = document.getElementById('settings-modal');
             const openSettings = () => {
                 document.getElementById('pref-useCustomMenu').checked = prefs.useCustomMenu;
@@ -3011,6 +3111,7 @@
                 document.getElementById('pref-fontFace').value = prefs.fontFace;
                 document.getElementById('pref-fontSize').value = prefs.fontSize;
                 settingsModal.classList.add('open');
+                requestServerSettingsSnapshot();
             };
             document.getElementById('settings-option').onclick = openSettings;
             document.getElementById('quick-settings').onclick = openSettings;
@@ -3020,6 +3121,7 @@
                     document.querySelectorAll('.settings-nav-item').forEach(i => i.classList.remove('active'));
                     document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
                     item.classList.add('active'); document.getElementById('tab-' + item.dataset.tab).classList.add('active');
+                    if (item.dataset.tab === 'server') requestServerSettingsSnapshot();
                 };
             });
             document.getElementById('settings-save').onclick = () => {

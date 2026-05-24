@@ -2031,6 +2031,75 @@ def test_wsl_client_ips_require_explicit_trust_for_local_resources():
             webssh.os.environ['WEBSSH_TRUST_WSL_CLIENT_IPS'] = original_env
 
 
+def test_settings_capabilities_are_separate_from_local_resource_access():
+    original_is_wsl = webssh.is_wsl
+    original_get_wsl_host_addresses = webssh.get_wsl_host_addresses
+    original_get_wsl_ip = webssh.get_wsl_ip
+    original_env = webssh.os.environ.get('WEBSSH_TRUST_WSL_CLIENT_IPS')
+    try:
+        webssh.is_wsl = lambda: True
+        webssh.get_wsl_host_addresses = lambda: {webssh.ipaddress.ip_address('172.20.0.1')}
+        webssh.get_wsl_ip = lambda: '172.20.5.10'
+        webssh.os.environ.pop('WEBSSH_TRUST_WSL_CLIENT_IPS', None)
+
+        assert webssh.is_settings_view_allowed_for_client('172.20.0.1', browser_authorized=False) is False
+        assert webssh.is_settings_view_allowed_for_client('172.20.0.1', browser_authorized=True) is True
+        assert webssh.is_settings_update_low_risk_allowed_for_client('172.20.0.1', browser_authorized=True) is False
+        assert webssh.is_settings_update_high_risk_allowed_for_client('127.0.0.1', browser_authorized=True) is False
+        assert webssh.is_settings_update_low_risk_allowed_for_client('127.0.0.1', browser_authorized=False) is True
+    finally:
+        webssh.is_wsl = original_is_wsl
+        webssh.get_wsl_host_addresses = original_get_wsl_host_addresses
+        webssh.get_wsl_ip = original_get_wsl_ip
+        if original_env is None:
+            webssh.os.environ.pop('WEBSSH_TRUST_WSL_CLIENT_IPS', None)
+        else:
+            webssh.os.environ['WEBSSH_TRUST_WSL_CLIENT_IPS'] = original_env
+
+
+def test_readonly_settings_snapshot_socket_event_is_typed():
+    client = make_client()
+
+    client.emit(webssh.SETTINGS_EVENT_SNAPSHOT_REQUEST)
+    snapshot = last_payload(client, webssh.SETTINGS_EVENT_SNAPSHOT)
+    assert snapshot['status'] == 'ok'
+    assert snapshot['settings_version'] == webssh.SETTINGS_VERSION
+    assert snapshot['read_only'] is True
+    assert snapshot['capabilities'][webssh.CAPABILITY_SETTINGS_VIEW]['allowed'] is True
+    assert snapshot['capabilities'][webssh.CAPABILITY_SETTINGS_UPDATE_HIGH_RISK]['allowed'] is False
+    assert snapshot['effective_settings']['default_connection_type'] in {
+        webssh.CONNECTION_TYPE_SSH,
+        webssh.CONNECTION_TYPE_LOCAL_SHELL,
+        webssh.CONNECTION_TYPE_UART,
+    }
+    assert [item['connection_type'] for item in snapshot['effective_settings']['connection_types']]
+    assert 'authorized_dir' not in snapshot['effective_settings']
+
+    client.disconnect()
+
+
+def test_settings_snapshot_requires_local_or_browser_authorized_client():
+    client = make_client()
+    session_token = current_session_token()
+    sid = current_sid_for_session(session_token)
+
+    webssh.socket_client_ips[sid] = '203.0.113.10'
+    webssh.socket_browser_authorized[sid] = False
+    client.emit(webssh.SETTINGS_EVENT_SNAPSHOT_REQUEST)
+    denied = last_payload(client, webssh.SETTINGS_EVENT_SNAPSHOT)
+    assert denied['status'] == 'failed'
+    assert denied['error_code'] == 'settings_view_unauthorized'
+
+    webssh.socket_browser_authorized[sid] = True
+    client.emit(webssh.SETTINGS_EVENT_SNAPSHOT_REQUEST)
+    allowed = last_payload(client, webssh.SETTINGS_EVENT_SNAPSHOT)
+    assert allowed['status'] == 'ok'
+    assert allowed['capabilities'][webssh.CAPABILITY_SETTINGS_VIEW]['allowed'] is True
+    assert allowed['capabilities'][webssh.CAPABILITY_SETTINGS_UPDATE_LOW_RISK]['allowed'] is False
+
+    client.disconnect()
+
+
 def test_ssh_backend_action_contract_uses_public_bridge_method():
     action_store = webssh.BackendActionStore(time_func=lambda: 1000)
     calls = []
@@ -2728,6 +2797,9 @@ def main():
         test_wsl_local_shell_choice_is_structured_and_wsl_only,
         test_terminal_policy_creates_authorized_dir_for_fresh_checkout,
         test_wsl_client_ips_require_explicit_trust_for_local_resources,
+        test_settings_capabilities_are_separate_from_local_resource_access,
+        test_readonly_settings_snapshot_socket_event_is_typed,
+        test_settings_snapshot_requires_local_or_browser_authorized_client,
         test_ssh_backend_action_contract_uses_public_bridge_method,
         test_ssh_bridge_is_provided_by_backend_module,
         test_local_shell_bridge_is_provided_by_backend_module,

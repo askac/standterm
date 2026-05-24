@@ -177,6 +177,12 @@ OPERATOR_OBSERVATION_EVENT_STOP = 'operator_observation_stop'
 OPERATOR_OBSERVATION_EVENT_MARK = 'operator_observation_mark'
 OPERATOR_OBSERVATION_EVENT_STATE_REQUEST = 'operator_observation_state_request'
 OPERATOR_OBSERVATION_EVENT_STATE = 'operator_observation_state'
+SETTINGS_EVENT_SNAPSHOT_REQUEST = 'settings_snapshot_request'
+SETTINGS_EVENT_SNAPSHOT = 'settings_snapshot'
+SETTINGS_VERSION = 1
+CAPABILITY_SETTINGS_VIEW = 'settings_view'
+CAPABILITY_SETTINGS_UPDATE_LOW_RISK = 'settings_update_low_risk'
+CAPABILITY_SETTINGS_UPDATE_HIGH_RISK = 'settings_update_high_risk'
 AGENT_ERROR_NOT_ATTACHED = 'agent_not_attached'
 AGENT_ERROR_PAUSED = 'agent_paused'
 AGENT_ERROR_STALE_EPOCH = 'agent_stale_epoch'
@@ -493,10 +499,10 @@ finally:
     serial_port.close()
 '''
 
-def build_terminal_policy(browser_authorized=False):
+def build_terminal_policy(browser_authorized=False, client_ip=None):
     authorized_dir_ready = ensure_authorized_dir()
     context = BackendPolicyContext(
-        client_ip=get_request_client_ip(),
+        client_ip=client_ip if client_ip is not None else get_request_client_ip(),
         browser_authorized=bool(browser_authorized),
         settings_snapshot={},
     )
@@ -531,6 +537,66 @@ def build_terminal_policy(browser_authorized=False):
             'required_for': browser_authorization_required_for,
         },
         'connection_options': connection_options,
+    }
+
+def build_settings_capability_state(client_ip, browser_authorized=False):
+    return {
+        CAPABILITY_SETTINGS_VIEW: {
+            'allowed': is_settings_view_allowed_for_client(
+                client_ip,
+                browser_authorized=browser_authorized,
+            ),
+            'risk_level': 'read_only',
+        },
+        CAPABILITY_SETTINGS_UPDATE_LOW_RISK: {
+            'allowed': is_settings_update_low_risk_allowed_for_client(
+                client_ip,
+                browser_authorized=browser_authorized,
+            ),
+            'risk_level': 'low',
+        },
+        CAPABILITY_SETTINGS_UPDATE_HIGH_RISK: {
+            'allowed': is_settings_update_high_risk_allowed_for_client(
+                client_ip,
+                browser_authorized=browser_authorized,
+            ),
+            'risk_level': 'high',
+        },
+    }
+
+def build_readonly_settings_snapshot(client_ip, browser_authorized=False):
+    policy = build_terminal_policy(
+        browser_authorized=browser_authorized,
+        client_ip=client_ip,
+    )
+    connection_types = []
+    for option in policy.get('connection_options', []):
+        connection_types.append({
+            'connection_type': option.get('connection_type'),
+            'label': option.get('label'),
+            'allowed': bool(option.get('allowed')),
+            'authorization_available': bool(option.get('authorization_available')),
+        })
+    return {
+        'status': 'ok',
+        'settings_version': SETTINGS_VERSION,
+        'read_only': True,
+        'capabilities': build_settings_capability_state(
+            client_ip,
+            browser_authorized=browser_authorized,
+        ),
+        'effective_settings': {
+            'default_connection_type': policy.get('default_connection'),
+            'force_connection_type': policy.get('force_connection'),
+            'https_enabled': bool(policy.get('https_enabled')),
+            'runtime_name': get_runtime_name(),
+            'connection_types': connection_types,
+            'browser_authorization': {
+                'available': bool(policy.get('browser_authorization', {}).get('available')),
+                'authorized': bool(browser_authorized),
+                'required_for': list(policy.get('browser_authorization', {}).get('required_for') or []),
+            },
+        },
     }
 
 def build_terminal_metadata(connection_type, terminal_id, terminal_kind, terminal_label, cols, rows):
@@ -3107,7 +3173,10 @@ def build_terminal_list(session_token):
 def emit_terminal_policy(sid):
     browser_authorized = socket_browser_authorized.get(sid, False)
     client_ip = socket_client_ips.get(sid, 'unknown')
-    policy = build_terminal_policy(browser_authorized=browser_authorized)
+    policy = build_terminal_policy(
+        browser_authorized=browser_authorized,
+        client_ip=client_ip,
+    )
     local_shell_option = next(
         (
             option for option in policy.get('connection_options', [])
@@ -3900,6 +3969,36 @@ def on_refresh_terminal_policy():
     if not session_token:
         return
     emit_terminal_policy(request.sid)
+
+@socketio.on(SETTINGS_EVENT_SNAPSHOT_REQUEST)
+def on_settings_snapshot_request():
+    session_token = socket_session_tokens.get(request.sid)
+    if not session_token:
+        return
+    client_ip = socket_client_ips.get(request.sid, 'unknown')
+    browser_authorized = socket_browser_authorized.get(request.sid, False)
+    if not is_settings_view_allowed_for_client(
+        client_ip,
+        browser_authorized=browser_authorized,
+    ):
+        socketio.emit(
+            SETTINGS_EVENT_SNAPSHOT,
+            {
+                'status': 'failed',
+                'error_code': 'settings_view_unauthorized',
+                'message': 'Settings are not available for this client.',
+            },
+            room=request.sid,
+        )
+        return
+    socketio.emit(
+        SETTINGS_EVENT_SNAPSHOT,
+        build_readonly_settings_snapshot(
+            client_ip,
+            browser_authorized=browser_authorized,
+        ),
+        room=request.sid,
+    )
 
 @socketio.on('replay_terminal')
 def on_replay_terminal(data):
@@ -5337,6 +5436,17 @@ def is_uart_allowed_for_client(client_ip, browser_authorized=False):
     if browser_authorized:
         return True
     return is_local_client_ip(client_ip)
+
+def is_settings_view_allowed_for_client(client_ip, browser_authorized=False):
+    if browser_authorized:
+        return True
+    return is_local_client_ip(client_ip)
+
+def is_settings_update_low_risk_allowed_for_client(client_ip, browser_authorized=False):
+    return is_local_client_ip(client_ip)
+
+def is_settings_update_high_risk_allowed_for_client(client_ip, browser_authorized=False):
+    return False
 
 def is_local_shell_enabled():
     return DEFAULT_CONNECTION_TYPE == CONNECTION_TYPE_LOCAL_SHELL or FORCE_CONNECTION_TYPE == CONNECTION_TYPE_LOCAL_SHELL
