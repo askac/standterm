@@ -3,7 +3,7 @@ import getpass
 import os
 from pathlib import Path
 
-from .base import BackendAction, TerminalBackendPlugin, TerminalBridge
+from .base import BackendAction, BackendSettingSchema, TerminalBackendPlugin, TerminalBridge
 
 
 class SSHBridge(TerminalBridge):
@@ -490,6 +490,8 @@ class SSHBackendPlugin(TerminalBackendPlugin):
         allowed_action_types,
         backend_action_store,
         bridge_kwargs,
+        low_risk_settings_capability,
+        high_risk_settings_capability,
         key_setup_ttl_seconds,
         token_urlsafe,
         time_func,
@@ -505,11 +507,63 @@ class SSHBackendPlugin(TerminalBackendPlugin):
         self._allowed_action_types = allowed_action_types
         self._backend_action_store = backend_action_store
         self._bridge_kwargs = bridge_kwargs
+        self._low_risk_settings_capability = low_risk_settings_capability
+        self._high_risk_settings_capability = high_risk_settings_capability
         self._key_setup_ttl_seconds = key_setup_ttl_seconds
         self._token_urlsafe = token_urlsafe
         self._time_func = time_func
 
-    def validate_start_payload(self, data, terminal_id, client_ip, browser_authorized=False):
+    def get_settings_schema(self):
+        return [
+            BackendSettingSchema(
+                setting_key='ssh.default_host',
+                label='Default host',
+                value_type='string',
+                risk_level='low',
+                required_capability=self._low_risk_settings_capability,
+                default_value=self._default_host,
+                restart_required=True,
+                apply_scope='restart',
+                readonly_when_remote=True,
+            ),
+            BackendSettingSchema(
+                setting_key='ssh.default_port',
+                label='Default port',
+                value_type='integer',
+                risk_level='low',
+                required_capability=self._low_risk_settings_capability,
+                default_value=self._default_port,
+                min_value=1,
+                max_value=65535,
+                restart_required=True,
+                apply_scope='restart',
+                readonly_when_remote=True,
+            ),
+            BackendSettingSchema(
+                setting_key='ssh.default_user',
+                label='Default user',
+                value_type='string',
+                risk_level='low',
+                required_capability=self._low_risk_settings_capability,
+                default_value=self._default_user,
+                restart_required=True,
+                apply_scope='restart',
+                readonly_when_remote=True,
+            ),
+            BackendSettingSchema(
+                setting_key='ssh.localhost_key_setup_action',
+                label='Localhost key setup action',
+                value_type='boolean',
+                risk_level='medium',
+                required_capability=self._high_risk_settings_capability,
+                default_value='offer_localhost_key_setup' in self._allowed_action_types,
+                restart_required=True,
+                apply_scope='restart',
+                readonly_when_remote=True,
+            ),
+        ]
+
+    def validate_start_payload(self, data, terminal_id, client_ip, browser_authorized=False, context=None):
         host = data.get('host', self._default_host)
         if not isinstance(host, str):
             return None, 'Host must be a string.'

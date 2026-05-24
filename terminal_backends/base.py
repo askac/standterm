@@ -22,6 +22,56 @@ class BackendAction:
     question: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class BackendSettingSchema:
+    setting_key: str
+    value_type: str
+    risk_level: str
+    required_capability: str
+    label: Optional[str] = None
+    default_value: Any = None
+    restart_required: bool = False
+    secret: bool = False
+    redact_in_audit: bool = False
+    readonly_when_remote: bool = False
+    mutable: bool = False
+    storage_owner: str = 'core'
+    storage_scope: str = 'runtime'
+    apply_scope: str = 'next_connection'
+    allowed_values: Optional[tuple] = None
+    min_value: Any = None
+    max_value: Any = None
+
+    def to_dict(self, plugin_connection_type=None):
+        payload = {
+            'setting_key': self.setting_key,
+            'value_type': self.value_type,
+            'risk_level': self.risk_level,
+            'required_capability': self.required_capability,
+            'restart_required': bool(self.restart_required),
+            'secret': bool(self.secret),
+            'redact_in_audit': bool(self.redact_in_audit),
+            'readonly_when_remote': bool(self.readonly_when_remote),
+            'mutable': bool(self.mutable),
+            'storage_owner': self.storage_owner,
+            'storage_scope': self.storage_scope,
+            'apply_scope': self.apply_scope,
+        }
+        if plugin_connection_type:
+            payload['connection_type'] = plugin_connection_type
+        if self.label is not None:
+            payload['label'] = self.label
+        if self.default_value is not None and not self.secret:
+            payload['default_value'] = self.default_value
+        if self.allowed_values is not None:
+            payload['allowed_values'] = list(self.allowed_values)
+        if self.min_value is not None:
+            payload['min_value'] = self.min_value
+        if self.max_value is not None:
+            payload['max_value'] = self.max_value
+        return payload
+
+
 class BackendActionStore:
     def __init__(self, time_func=None):
         self._actions_by_sid = {}
@@ -197,7 +247,16 @@ class TerminalBackendPlugin:
             'allowed': True,
         }
 
-    def validate_start_payload(self, data, terminal_id, client_ip, browser_authorized=False):
+    def get_settings_schema(self):
+        return []
+
+    def validate_setting_update(self, setting_key, value, current_value=None):
+        return None, {
+            'error_code': 'settings_unknown_key',
+            'message': 'Setting key is not supported by this backend.',
+        }
+
+    def validate_start_payload(self, data, terminal_id, client_ip, browser_authorized=False, context=None):
         raise NotImplementedError
 
     def create_bridge(self, session_token, terminal_id, payload):
@@ -235,9 +294,20 @@ class TerminalBackendPlugin:
 
 
 class TerminalBackendRegistry:
-    def __init__(self, plugins, normalize_connection_type, default_preference=()):
+    def __init__(
+        self,
+        plugins,
+        normalize_connection_type,
+        default_preference=(),
+        known_settings_capabilities=(),
+        risk_capability_rules=None,
+        mutable_setting_keys=(),
+    ):
         self._plugins = {}
         self._default_preference = tuple(default_preference)
+        self._known_settings_capabilities = set(known_settings_capabilities)
+        self._risk_capability_rules = dict(risk_capability_rules or {})
+        self._mutable_setting_keys = set(mutable_setting_keys)
         for plugin in plugins:
             connection_type = getattr(plugin, 'connection_type', None)
             label = getattr(plugin, 'label', None)
@@ -273,6 +343,69 @@ class TerminalBackendRegistry:
                 raise ValueError(f'Terminal backend {plugin.connection_type} returned non-bool allowed flag.')
             options.append(option)
         return options
+
+    def build_settings_schema(self):
+        schema = []
+        seen_keys = set()
+        for plugin in self._plugins.values():
+            for item in plugin.get_settings_schema():
+                payload = self._normalize_settings_schema_item(plugin, item)
+                setting_key = payload['setting_key']
+                if setting_key in seen_keys:
+                    raise ValueError(f'Duplicate backend setting key: {setting_key}')
+                seen_keys.add(setting_key)
+                schema.append(payload)
+        return schema
+
+    def _normalize_settings_schema_item(self, plugin, item):
+        if isinstance(item, BackendSettingSchema):
+            payload = item.to_dict(plugin_connection_type=plugin.connection_type)
+        elif isinstance(item, dict):
+            payload = dict(item)
+            payload.setdefault('connection_type', plugin.connection_type)
+        else:
+            raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid settings schema.')
+
+        setting_key = payload.get('setting_key')
+        if not isinstance(setting_key, str) or not setting_key.startswith(f'{plugin.connection_type}.'):
+            raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid setting key.')
+        if payload.get('connection_type') != plugin.connection_type:
+            raise ValueError(f'Terminal backend {plugin.connection_type} returned mismatched settings schema.')
+        if payload.get('value_type') not in {'boolean', 'integer', 'number', 'string', 'enum'}:
+            raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid setting value type.')
+        if payload.get('risk_level') not in {'low', 'medium', 'high'}:
+            raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid setting risk level.')
+        required_capability = payload.get('required_capability')
+        if not isinstance(required_capability, str) or not required_capability:
+            raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid setting capability.')
+        if self._known_settings_capabilities and required_capability not in self._known_settings_capabilities:
+            raise ValueError(f'Terminal backend {plugin.connection_type} returned unknown setting capability.')
+        allowed_capabilities = self._risk_capability_rules.get(payload.get('risk_level'))
+        if allowed_capabilities and required_capability not in allowed_capabilities:
+            raise ValueError(f'Terminal backend {plugin.connection_type} returned mismatched setting risk/capability.')
+
+        for flag in (
+            'restart_required',
+            'secret',
+            'redact_in_audit',
+            'readonly_when_remote',
+            'mutable',
+        ):
+            payload[flag] = bool(payload.get(flag))
+        if payload['mutable'] and setting_key not in self._mutable_setting_keys:
+            raise ValueError(f'Terminal backend {plugin.connection_type} returned unauthorized mutable setting.')
+        if payload['secret']:
+            payload.pop('default_value', None)
+        if payload.get('storage_owner') not in {'core', 'plugin_external'}:
+            raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid storage owner.')
+        if payload.get('storage_scope') not in {'runtime', 'persistent', 'external'}:
+            raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid storage scope.')
+        if payload.get('apply_scope') not in {'live', 'next_connection', 'restart'}:
+            raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid apply scope.')
+        allowed_values = payload.get('allowed_values')
+        if allowed_values is not None and not isinstance(allowed_values, list):
+            raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid allowed values.')
+        return payload
 
     def get_default_connection(self, allowed_connections):
         for connection_type in self._default_preference:

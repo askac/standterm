@@ -3205,6 +3205,7 @@
                     setting_key: 'default_connection_type',
                     value: select.value,
                     expected_version: serverSettingsSnapshot.settings_version,
+                    expected_schema_digest: serverSettingsSnapshot.settings_schema_digest,
                     grant_id: grant ? grant.grant_id : null
                 });
             }

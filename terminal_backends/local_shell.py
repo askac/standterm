@@ -3,7 +3,7 @@ import select
 import sys
 from pathlib import Path
 
-from .base import TerminalBackendPlugin, TerminalBridge
+from .base import BackendSettingSchema, TerminalBackendPlugin, TerminalBridge
 
 try:
     from ptyprocess import PtyProcessUnicode
@@ -236,6 +236,8 @@ class LocalShellBackendPlugin(TerminalBackendPlugin):
         is_wsl,
         get_wsl_local_shell_options,
         default_shell_kind,
+        low_risk_settings_capability,
+        high_risk_settings_capability,
     ):
         self._bridge_cls = bridge_cls
         self._is_allowed_for_client = is_allowed_for_client
@@ -244,6 +246,35 @@ class LocalShellBackendPlugin(TerminalBackendPlugin):
         self._is_wsl = is_wsl
         self._get_wsl_local_shell_options = get_wsl_local_shell_options
         self._default_shell_kind = default_shell_kind
+        self._low_risk_settings_capability = low_risk_settings_capability
+        self._high_risk_settings_capability = high_risk_settings_capability
+
+    def get_settings_schema(self):
+        allowed_kinds = [item['kind'] for item in self._get_wsl_local_shell_options()] if self._is_wsl() else []
+        return [
+            BackendSettingSchema(
+                setting_key='local_shell.default_kind',
+                label='Default shell kind',
+                value_type='enum',
+                risk_level='low',
+                required_capability=self._low_risk_settings_capability,
+                default_value=self._default_shell_kind,
+                allowed_values=tuple(allowed_kinds),
+                restart_required=False,
+                readonly_when_remote=True,
+            ),
+            BackendSettingSchema(
+                setting_key='local_shell.remote_access',
+                label='Remote Local Shell access',
+                value_type='boolean',
+                risk_level='high',
+                required_capability=self._high_risk_settings_capability,
+                default_value=False,
+                restart_required=True,
+                apply_scope='restart',
+                readonly_when_remote=True,
+            ),
+        ]
 
     def build_policy_option(self, context=None, browser_authorized=False):
         client_ip = context.client_ip if context else 'unknown'
@@ -261,7 +292,7 @@ class LocalShellBackendPlugin(TerminalBackendPlugin):
             option['default_shell_kind'] = self._default_shell_kind
         return option
 
-    def validate_start_payload(self, data, terminal_id, client_ip, browser_authorized=False):
+    def validate_start_payload(self, data, terminal_id, client_ip, browser_authorized=False, context=None):
         if not self._is_allowed_for_client(client_ip, browser_authorized=browser_authorized):
             return None, {
                 'message': 'Local Shell is not available for this client.',

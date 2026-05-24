@@ -2,7 +2,7 @@ import json
 import select
 import subprocess
 
-from .base import TerminalBackendPlugin, TerminalBridge
+from .base import BackendSettingSchema, TerminalBackendPlugin, TerminalBridge
 
 
 class UARTBridge(TerminalBridge):
@@ -236,6 +236,8 @@ class UARTBackendPlugin(TerminalBackendPlugin):
         max_baud_rate,
         baud_rates,
         bridge_kwargs,
+        low_risk_settings_capability,
+        high_risk_settings_capability,
     ):
         self._bridge_cls = bridge_cls
         self._is_allowed_for_client = is_allowed_for_client
@@ -246,10 +248,68 @@ class UARTBackendPlugin(TerminalBackendPlugin):
         self._max_baud_rate = max_baud_rate
         self._baud_rates = baud_rates
         self._bridge_kwargs = bridge_kwargs
+        self._low_risk_settings_capability = low_risk_settings_capability
+        self._high_risk_settings_capability = high_risk_settings_capability
+
+    def get_settings_schema(self):
+        return [
+            BackendSettingSchema(
+                setting_key='uart.default_baud_rate',
+                label='Default baud rate',
+                value_type='integer',
+                risk_level='low',
+                required_capability=self._low_risk_settings_capability,
+                default_value=self._default_baud_rate,
+                allowed_values=tuple(self._baud_rates),
+                min_value=self._min_baud_rate,
+                max_value=self._max_baud_rate,
+                restart_required=False,
+                readonly_when_remote=True,
+                mutable=True,
+            ),
+            BackendSettingSchema(
+                setting_key='uart.manual_port_policy',
+                label='Manual port policy',
+                value_type='enum',
+                risk_level='high',
+                required_capability=self._high_risk_settings_capability,
+                default_value='detected_only',
+                allowed_values=('detected_only', 'manual'),
+                restart_required=True,
+                apply_scope='restart',
+                readonly_when_remote=True,
+            ),
+            BackendSettingSchema(
+                setting_key='uart.remote_access',
+                label='Remote UART access',
+                value_type='boolean',
+                risk_level='high',
+                required_capability=self._high_risk_settings_capability,
+                default_value=False,
+                restart_required=True,
+                apply_scope='restart',
+                readonly_when_remote=True,
+            ),
+        ]
+
+    def _get_default_baud_rate(self, context=None):
+        settings_snapshot = context.settings_snapshot if context else None
+        if isinstance(settings_snapshot, dict):
+            value = settings_snapshot.get('uart.default_baud_rate')
+            if value is not None:
+                normalized, error = self.validate_setting_update(
+                    'uart.default_baud_rate',
+                    value,
+                    current_value=self._default_baud_rate,
+                )
+                if not error:
+                    return normalized
+        return self._default_baud_rate
 
     def build_policy_option(self, context=None, browser_authorized=False):
         client_ip = context.client_ip if context else 'unknown'
         browser_authorized = context.browser_authorized if context else browser_authorized
+        default_baud_rate = self._get_default_baud_rate(context=context)
         allowed = self._is_allowed_for_client(client_ip, browser_authorized=browser_authorized)
         return {
             'connection_type': self.connection_type,
@@ -258,11 +318,33 @@ class UARTBackendPlugin(TerminalBackendPlugin):
             'authorization_available': not allowed,
             'browser_authorized': bool(browser_authorized),
             'available_ports': self._detect_serial_ports() if allowed else [],
-            'default_baud_rate': self._default_baud_rate,
+            'default_baud_rate': default_baud_rate,
             'baud_rates': self._baud_rates,
         }
 
-    def validate_start_payload(self, data, terminal_id, client_ip, browser_authorized=False):
+    def validate_setting_update(self, setting_key, value, current_value=None):
+        if setting_key != 'uart.default_baud_rate':
+            return super().validate_setting_update(setting_key, value, current_value=current_value)
+        try:
+            baud_rate = int(value)
+        except (TypeError, ValueError):
+            return None, {
+                'error_code': 'settings_invalid_value',
+                'message': 'UART default baud rate must be a number.',
+            }
+        if baud_rate < self._min_baud_rate or baud_rate > self._max_baud_rate:
+            return None, {
+                'error_code': 'settings_invalid_value',
+                'message': 'UART default baud rate is outside the supported range.',
+            }
+        if baud_rate not in self._baud_rates:
+            return None, {
+                'error_code': 'settings_invalid_value',
+                'message': 'UART default baud rate must be one of the declared baud rates.',
+            }
+        return baud_rate, None
+
+    def validate_start_payload(self, data, terminal_id, client_ip, browser_authorized=False, context=None):
         if not self._is_allowed_for_client(client_ip, browser_authorized=browser_authorized):
             return None, {
                 'message': 'UART is not available for this client.',
@@ -276,8 +358,9 @@ class UARTBackendPlugin(TerminalBackendPlugin):
                 'error_code': 'uart_port_unavailable',
             }
 
+        default_baud_rate = self._get_default_baud_rate(context=context)
         try:
-            baud_rate = int(data.get('baud_rate', self._default_baud_rate))
+            baud_rate = int(data.get('baud_rate', default_baud_rate))
         except (TypeError, ValueError):
             return None, {
                 'message': 'UART baud rate must be a number.',

@@ -24,6 +24,7 @@ from terminal_backends import (
     BackendAction,
     BackendActionStore,
     BackendPolicyContext,
+    BackendSettingSchema,
     LocalShellBackendPlugin,
     LocalShellBridge,
     SSHBackendPlugin,
@@ -188,10 +189,20 @@ SETTINGS_VERSION = 1
 SETTINGS_ADMIN_GRANT_TTL_SECONDS = 120
 SETTINGS_AUDIT_EVENTS = 500
 SETTING_DEFAULT_CONNECTION_TYPE = 'default_connection_type'
+SETTING_UART_DEFAULT_BAUD_RATE = 'uart.default_baud_rate'
 CAPABILITY_SETTINGS_VIEW = 'settings_view'
 CAPABILITY_SETTINGS_UPDATE_LOW_RISK = 'settings_update_low_risk'
 CAPABILITY_SETTINGS_UPDATE_HIGH_RISK = 'settings_update_high_risk'
 CAPABILITY_SETTINGS_AUTH_MANAGE = 'settings_auth_manage'
+SETTINGS_KNOWN_UPDATE_CAPABILITIES = (
+    CAPABILITY_SETTINGS_UPDATE_LOW_RISK,
+    CAPABILITY_SETTINGS_UPDATE_HIGH_RISK,
+)
+SETTINGS_RISK_CAPABILITY_RULES = {
+    'low': {CAPABILITY_SETTINGS_UPDATE_LOW_RISK},
+    'medium': {CAPABILITY_SETTINGS_UPDATE_HIGH_RISK},
+    'high': {CAPABILITY_SETTINGS_UPDATE_HIGH_RISK},
+}
 SETTINGS_AUDIT_GRANT_CREATED = 'settings_grant_created'
 SETTINGS_AUDIT_GRANT_DENIED = 'settings_grant_denied'
 SETTINGS_AUDIT_GRANT_USED = 'settings_grant_used'
@@ -524,11 +535,25 @@ def get_runtime_default_connection_type():
     with runtime_settings_lock:
         return runtime_settings.get(SETTING_DEFAULT_CONNECTION_TYPE) or DEFAULT_CONNECTION_TYPE
 
+def get_runtime_uart_default_baud_rate():
+    with runtime_settings_lock:
+        try:
+            return int(runtime_settings.get(SETTING_UART_DEFAULT_BAUD_RATE, DEFAULT_UART_BAUD_RATE))
+        except (TypeError, ValueError):
+            return DEFAULT_UART_BAUD_RATE
+
+def build_effective_runtime_settings():
+    return {
+        SETTING_DEFAULT_CONNECTION_TYPE: get_runtime_default_connection_type(),
+        SETTING_UART_DEFAULT_BAUD_RATE: get_runtime_uart_default_baud_rate(),
+    }
+
 def reset_runtime_settings_for_test():
     global runtime_settings_version
     with runtime_settings_lock:
         runtime_settings.clear()
         runtime_settings[SETTING_DEFAULT_CONNECTION_TYPE] = DEFAULT_CONNECTION_TYPE
+        runtime_settings[SETTING_UART_DEFAULT_BAUD_RATE] = DEFAULT_UART_BAUD_RATE
         runtime_settings_version = SETTINGS_VERSION
 
 def build_settings_precedence():
@@ -539,12 +564,56 @@ def build_settings_precedence():
             'cli_default',
             'safe_fallback',
         ],
+        SETTING_UART_DEFAULT_BAUD_RATE: [
+            'runtime',
+            'cli_default',
+        ],
         'security_policy': [
             'environment_overrides',
             'browser_authorization',
             'client_ip',
         ],
     }
+
+def build_core_settings_schema():
+    return [
+        BackendSettingSchema(
+            setting_key=SETTING_DEFAULT_CONNECTION_TYPE,
+            label='Default connection',
+            value_type='enum',
+            risk_level='low',
+            required_capability=CAPABILITY_SETTINGS_UPDATE_LOW_RISK,
+        default_value=DEFAULT_CONNECTION_TYPE,
+        allowed_values=tuple(CONNECTION_TYPES),
+        restart_required=False,
+        readonly_when_remote=True,
+        mutable=not bool(FORCE_CONNECTION_TYPE),
+        apply_scope='next_connection',
+    ).to_dict()
+    ]
+
+def build_settings_schema_payload():
+    return {
+        'core': build_core_settings_schema(),
+        'plugins': TERMINAL_BACKEND_REGISTRY.build_settings_schema(),
+    }
+
+def build_settings_schema_digest(schema_payload):
+    encoded = json.dumps(
+        schema_payload,
+        sort_keys=True,
+        separators=(',', ':'),
+    ).encode('utf-8')
+    return hashlib.sha256(encoded).hexdigest()
+
+def build_settings_schema_by_key(schema_payload=None):
+    schema_payload = schema_payload or build_settings_schema_payload()
+    by_key = {}
+    for item in schema_payload.get('core', []) + schema_payload.get('plugins', []):
+        setting_key = item.get('setting_key') if isinstance(item, dict) else None
+        if isinstance(setting_key, str):
+            by_key[setting_key] = item
+    return by_key
 
 def build_settings_actor(session_token=None, sid=None, client_ip=None):
     identity = socket_browser_identities.get(sid) if sid else None
@@ -566,6 +635,9 @@ def record_settings_audit_event(event_type, session_token=None, sid=None, client
     return settings_audit_store.append(event_type, **audit_fields)
 
 def redact_setting_value(setting_key, value):
+    schema = build_settings_schema_by_key().get(setting_key)
+    if isinstance(schema, dict) and (schema.get('secret') or schema.get('redact_in_audit')):
+        return '<redacted>'
     return value
 
 def get_browser_authorization_diagnostics(sid, browser_authorized=False):
@@ -702,28 +774,51 @@ def build_scoped_settings_admin_grant_state(sid, session_token, client_ip):
     }
 
 def validate_runtime_setting_update(setting_key, value):
-    if setting_key != SETTING_DEFAULT_CONNECTION_TYPE:
+    if setting_key == SETTING_DEFAULT_CONNECTION_TYPE:
+        if FORCE_CONNECTION_TYPE:
+            return None, {
+                'error_code': 'settings_locked_by_force_connection',
+                'message': 'Default connection is controlled by force_connection.',
+            }
+        normalized = normalize_connection_type(value)
+        if not normalized:
+            return None, {
+                'error_code': 'settings_invalid_value',
+                'message': 'Default connection must be ssh, local_shell, or uart.',
+            }
+        if TERMINAL_BACKEND_REGISTRY.get(normalized) is None:
+            return None, {
+                'error_code': 'settings_invalid_value',
+                'message': 'Default connection backend is not registered.',
+            }
+        return normalized, None
+
+    schema = build_settings_schema_by_key().get(setting_key)
+    if not schema:
         return None, {
             'error_code': 'settings_unknown_key',
             'message': 'Setting key is not supported.',
         }
-    if FORCE_CONNECTION_TYPE:
+    if not schema.get('mutable'):
         return None, {
-            'error_code': 'settings_locked_by_force_connection',
-            'message': 'Default connection is controlled by force_connection.',
+            'error_code': 'settings_not_mutable',
+            'message': 'Setting key is not mutable at runtime.',
         }
-    normalized = normalize_connection_type(value)
-    if not normalized:
+    if schema.get('required_capability') != CAPABILITY_SETTINGS_UPDATE_LOW_RISK:
         return None, {
-            'error_code': 'settings_invalid_value',
-            'message': 'Default connection must be ssh, local_shell, or uart.',
+            'error_code': 'settings_capability_not_supported',
+            'message': 'Setting key does not use the low-risk update path.',
         }
-    if TERMINAL_BACKEND_REGISTRY.get(normalized) is None:
+    connection_type = schema.get('connection_type')
+    plugin = TERMINAL_BACKEND_REGISTRY.get(connection_type) if connection_type else None
+    if not plugin:
         return None, {
-            'error_code': 'settings_invalid_value',
-            'message': 'Default connection backend is not registered.',
+            'error_code': 'settings_unknown_key',
+            'message': 'Setting key is not supported.',
         }
-    return normalized, None
+    with runtime_settings_lock:
+        current_value = runtime_settings.get(setting_key, schema.get('default_value'))
+    return plugin.validate_setting_update(setting_key, value, current_value=current_value)
 
 def apply_runtime_setting_update(setting_key, value, expected_version):
     global runtime_settings_version
@@ -753,7 +848,7 @@ def build_terminal_policy(browser_authorized=False, client_ip=None):
     context = BackendPolicyContext(
         client_ip=client_ip if client_ip is not None else get_request_client_ip(),
         browser_authorized=bool(browser_authorized),
-        settings_snapshot={},
+        settings_snapshot=build_effective_runtime_settings(),
     )
     connection_options = TERMINAL_BACKEND_REGISTRY.build_policy_options(context=context)
     allowed_connections = {
@@ -846,16 +941,51 @@ def build_readonly_settings_snapshot(client_ip, browser_authorized=False, sid=No
             'allowed': bool(option.get('allowed')),
             'authorization_available': bool(option.get('authorization_available')),
         })
+    settings_schema = build_settings_schema_payload()
+    schema_digest = build_settings_schema_digest(settings_schema)
+    schema_by_key = build_settings_schema_by_key(settings_schema)
+    mutable_settings = {
+        SETTING_DEFAULT_CONNECTION_TYPE: {
+            'value': get_runtime_default_connection_type(),
+            'risk_level': 'low',
+            'required_capability': CAPABILITY_SETTINGS_UPDATE_LOW_RISK,
+            'allowed_values': list(CONNECTION_TYPES),
+            'locked': bool(FORCE_CONNECTION_TYPE),
+            'locked_by': 'force_connection' if FORCE_CONNECTION_TYPE else None,
+            'storage_owner': 'core',
+            'apply_scope': 'next_connection',
+        },
+    }
+    uart_default_schema = schema_by_key.get(SETTING_UART_DEFAULT_BAUD_RATE)
+    if isinstance(uart_default_schema, dict) and uart_default_schema.get('mutable'):
+        mutable_settings[SETTING_UART_DEFAULT_BAUD_RATE] = {
+            'value': get_runtime_uart_default_baud_rate(),
+            'risk_level': uart_default_schema.get('risk_level'),
+            'required_capability': uart_default_schema.get('required_capability'),
+            'allowed_values': list(uart_default_schema.get('allowed_values') or []),
+            'locked': False,
+            'locked_by': None,
+            'storage_owner': uart_default_schema.get('storage_owner'),
+            'apply_scope': uart_default_schema.get('apply_scope'),
+        }
     return {
         'status': 'ok',
         'settings_version': get_runtime_settings_version(),
         'schema_version': SETTINGS_VERSION,
+        'settings_schema_version': SETTINGS_VERSION,
+        'settings_schema_digest': schema_digest,
+        'settings_versions': {
+            'runtime': get_runtime_settings_version(),
+            'schema': SETTINGS_VERSION,
+            'schema_digest': schema_digest,
+        },
         'read_only': not bool(capabilities[CAPABILITY_SETTINGS_UPDATE_LOW_RISK]['allowed']),
         'capabilities': capabilities,
         'effective_settings': {
             'default_connection_type': policy.get('default_connection'),
             'force_connection_type': policy.get('force_connection'),
             'cli_default_connection_type': DEFAULT_CONNECTION_TYPE,
+            SETTING_UART_DEFAULT_BAUD_RATE: get_runtime_uart_default_baud_rate(),
             'https_enabled': bool(policy.get('https_enabled')),
             'runtime_name': get_runtime_name(),
             'connection_types': connection_types,
@@ -869,16 +999,8 @@ def build_readonly_settings_snapshot(client_ip, browser_authorized=False, sid=No
                 ),
             },
         },
-        'mutable_settings': {
-            SETTING_DEFAULT_CONNECTION_TYPE: {
-                'value': get_runtime_default_connection_type(),
-                'risk_level': 'low',
-                'required_capability': CAPABILITY_SETTINGS_UPDATE_LOW_RISK,
-                'allowed_values': list(CONNECTION_TYPES),
-                'locked': bool(FORCE_CONNECTION_TYPE),
-                'locked_by': 'force_connection' if FORCE_CONNECTION_TYPE else None,
-            },
-        },
+        'mutable_settings': mutable_settings,
+        'settings_schema': settings_schema,
         'scoped_settings_admin_grant': build_scoped_settings_admin_grant_state(
             sid,
             session_token,
@@ -1526,6 +1648,8 @@ TERMINAL_BACKEND_REGISTRY = TerminalBackendRegistry([
             'ssh_term': SSH_TERM,
             'local_public_key_types': LOCAL_PUBLIC_KEY_TYPES,
         },
+        low_risk_settings_capability=CAPABILITY_SETTINGS_UPDATE_LOW_RISK,
+        high_risk_settings_capability=CAPABILITY_SETTINGS_UPDATE_HIGH_RISK,
         key_setup_ttl_seconds=LOCALHOST_KEY_SETUP_TTL_SECONDS,
         token_urlsafe=secrets.token_urlsafe,
         time_func=time.time,
@@ -1544,6 +1668,8 @@ TERMINAL_BACKEND_REGISTRY = TerminalBackendRegistry([
         is_wsl=lambda: is_wsl(),
         get_wsl_local_shell_options=get_wsl_local_shell_options,
         default_shell_kind=LOCAL_SHELL_KIND_BASH,
+        low_risk_settings_capability=CAPABILITY_SETTINGS_UPDATE_LOW_RISK,
+        high_risk_settings_capability=CAPABILITY_SETTINGS_UPDATE_HIGH_RISK,
     ),
     UARTBackendPlugin(
         bridge_cls=UARTBridge,
@@ -1565,11 +1691,19 @@ TERMINAL_BACKEND_REGISTRY = TerminalBackendRegistry([
             'windows_serial_helper': WINDOWS_SERIAL_HELPER,
             'time_func': time.time,
         },
+        low_risk_settings_capability=CAPABILITY_SETTINGS_UPDATE_LOW_RISK,
+        high_risk_settings_capability=CAPABILITY_SETTINGS_UPDATE_HIGH_RISK,
     ),
-], normalize_connection_type, default_preference=(
-    CONNECTION_TYPE_LOCAL_SHELL,
-    CONNECTION_TYPE_SSH,
-))
+],
+    normalize_connection_type,
+    default_preference=(
+        CONNECTION_TYPE_LOCAL_SHELL,
+        CONNECTION_TYPE_SSH,
+    ),
+    known_settings_capabilities=SETTINGS_KNOWN_UPDATE_CAPABILITIES,
+    risk_capability_rules=SETTINGS_RISK_CAPABILITY_RULES,
+    mutable_setting_keys=(SETTING_UART_DEFAULT_BAUD_RATE,),
+)
 
 bridges = {}
 active_sessions = {}
@@ -1673,6 +1807,7 @@ settings_audit_store = SettingsAuditStore()
 runtime_settings_lock = threading.RLock()
 runtime_settings = {
     SETTING_DEFAULT_CONNECTION_TYPE: DEFAULT_CONNECTION_TYPE,
+    SETTING_UART_DEFAULT_BAUD_RATE: DEFAULT_UART_BAUD_RATE,
 }
 runtime_settings_version = SETTINGS_VERSION
 settings_admin_grants_lock = threading.RLock()
@@ -3628,6 +3763,11 @@ def validate_start_ssh_payload(data, client_ip, browser_authorized=False):
         terminal_id,
         client_ip,
         browser_authorized=browser_authorized,
+        context=BackendPolicyContext(
+            client_ip=client_ip,
+            browser_authorized=bool(browser_authorized),
+            settings_snapshot=build_effective_runtime_settings(),
+        ),
     )
     if validation_error:
         return None, validation_error
@@ -4530,6 +4670,35 @@ def on_settings_update_request(data=None):
             room=request.sid,
         )
         return
+    expected_schema_digest = payload.get('expected_schema_digest')
+    current_schema_digest = build_settings_schema_digest(build_settings_schema_payload())
+    if (
+        isinstance(expected_schema_digest, str)
+        and expected_schema_digest
+        and expected_schema_digest != current_schema_digest
+    ):
+        record_settings_audit_event(
+            SETTINGS_AUDIT_UPDATE_FAILED,
+            session_token=session_token,
+            sid=request.sid,
+            client_ip=client_ip,
+            request_id=request_id,
+            setting_key=setting_key if isinstance(setting_key, str) else None,
+            error_code='settings_schema_conflict',
+        )
+        socketio.emit(
+            SETTINGS_EVENT_UPDATE_RESULT,
+            {
+                'status': 'failed',
+                'request_id': request_id,
+                'error_code': 'settings_schema_conflict',
+                'message': 'Settings schema no longer matches current server state.',
+                'settings_version': get_runtime_settings_version(),
+                'settings_schema_digest': current_schema_digest,
+            },
+            room=request.sid,
+        )
+        return
     result, error = apply_runtime_setting_update(
         setting_key,
         payload.get('value'),
@@ -4554,6 +4723,7 @@ def on_settings_update_request(data=None):
         response.update(error)
         socketio.emit(SETTINGS_EVENT_UPDATE_RESULT, response, room=request.sid)
         return
+    result_schema = build_settings_schema_by_key().get(result['setting_key'], {})
     record_settings_audit_event(
         SETTINGS_AUDIT_UPDATE_SUCCEEDED,
         session_token=session_token,
@@ -4561,7 +4731,10 @@ def on_settings_update_request(data=None):
         client_ip=client_ip,
         request_id=request_id,
         setting_key=result['setting_key'],
-        risk_level='low',
+        risk_level=result_schema.get('risk_level', 'low'),
+        required_capability=result_schema.get('required_capability', CAPABILITY_SETTINGS_UPDATE_LOW_RISK),
+        storage_owner=result_schema.get('storage_owner', 'core'),
+        apply_scope=result_schema.get('apply_scope', 'next_connection'),
         old_value=redact_setting_value(result['setting_key'], result['old_value']),
         new_value=redact_setting_value(result['setting_key'], result['new_value']),
         settings_version=result['settings_version'],
@@ -4575,6 +4748,7 @@ def on_settings_update_request(data=None):
             'setting_key': result['setting_key'],
             'value': result['new_value'],
             'settings_version': result['settings_version'],
+            'settings_schema_digest': current_schema_digest,
         },
         room=request.sid,
     )

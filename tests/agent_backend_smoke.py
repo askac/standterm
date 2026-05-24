@@ -2069,6 +2069,9 @@ def test_readonly_settings_snapshot_socket_event_is_typed():
     assert snapshot['status'] == 'ok'
     assert snapshot['settings_version'] == webssh.SETTINGS_VERSION
     assert snapshot['schema_version'] == webssh.SETTINGS_VERSION
+    assert snapshot['settings_schema_version'] == webssh.SETTINGS_VERSION
+    assert len(snapshot['settings_schema_digest']) == 64
+    assert snapshot['settings_versions']['schema_digest'] == snapshot['settings_schema_digest']
     assert snapshot['read_only'] is False
     assert snapshot['capabilities'][webssh.CAPABILITY_SETTINGS_VIEW]['allowed'] is True
     assert snapshot['capabilities'][webssh.CAPABILITY_SETTINGS_UPDATE_HIGH_RISK]['allowed'] is False
@@ -2079,8 +2082,83 @@ def test_readonly_settings_snapshot_socket_event_is_typed():
         webssh.CONNECTION_TYPE_UART,
     }
     assert snapshot['mutable_settings'][webssh.SETTING_DEFAULT_CONNECTION_TYPE]['risk_level'] == 'low'
+    assert snapshot['mutable_settings'][webssh.SETTING_UART_DEFAULT_BAUD_RATE]['value'] == webssh.DEFAULT_UART_BAUD_RATE
+    assert snapshot['mutable_settings'][webssh.SETTING_UART_DEFAULT_BAUD_RATE]['apply_scope'] == 'next_connection'
+    assert snapshot['effective_settings'][webssh.SETTING_UART_DEFAULT_BAUD_RATE] == webssh.DEFAULT_UART_BAUD_RATE
+    assert snapshot['settings_schema']['core'][0]['setting_key'] == webssh.SETTING_DEFAULT_CONNECTION_TYPE
+    assert snapshot['settings_schema']['core'][0]['mutable'] is True
+    assert snapshot['settings_schema']['core'][0]['storage_owner'] == 'core'
     assert [item['connection_type'] for item in snapshot['effective_settings']['connection_types']]
     assert 'authorized_dir' not in snapshot['effective_settings']
+
+    client.disconnect()
+
+
+def test_backend_settings_schema_is_declared_and_typed():
+    original_is_wsl = webssh.is_wsl
+    try:
+        webssh.is_wsl = lambda: True
+        schema = webssh.TERMINAL_BACKEND_REGISTRY.build_settings_schema()
+    finally:
+        webssh.is_wsl = original_is_wsl
+
+    by_key = {item['setting_key']: item for item in schema}
+    assert by_key['ssh.default_host']['connection_type'] == webssh.CONNECTION_TYPE_SSH
+    assert by_key['ssh.default_port']['value_type'] == 'integer'
+    assert by_key['local_shell.default_kind']['allowed_values'] == ['bash', 'cmd', 'powershell']
+    assert by_key['local_shell.default_kind']['apply_scope'] == 'next_connection'
+    assert by_key['local_shell.default_kind']['storage_owner'] == 'core'
+    assert by_key['local_shell.remote_access']['risk_level'] == 'high'
+    assert by_key['local_shell.remote_access']['apply_scope'] == 'restart'
+    assert by_key['uart.default_baud_rate']['allowed_values'] == webssh.UART_BAUD_RATES
+    assert by_key['uart.default_baud_rate']['mutable'] is True
+    assert by_key['uart.default_baud_rate']['storage_owner'] == 'core'
+    assert by_key['uart.manual_port_policy']['required_capability'] == webssh.CAPABILITY_SETTINGS_UPDATE_HIGH_RISK
+    assert all('required_capability' in item for item in schema)
+    assert all('value' not in item for item in schema)
+    assert [item['setting_key'] for item in schema if item['mutable']] == [webssh.SETTING_UART_DEFAULT_BAUD_RATE]
+
+
+def test_backend_settings_schema_rejects_unsafe_capability_mapping():
+    class FakePlugin:
+        connection_type = 'fake'
+        label = 'Fake'
+
+        def get_settings_schema(self):
+            return [{
+                'setting_key': 'fake.remote_access',
+                'value_type': 'boolean',
+                'risk_level': 'high',
+                'required_capability': webssh.CAPABILITY_SETTINGS_UPDATE_LOW_RISK,
+            }]
+
+    registry = webssh.TerminalBackendRegistry(
+        [FakePlugin()],
+        lambda value: value,
+        known_settings_capabilities=webssh.SETTINGS_KNOWN_UPDATE_CAPABILITIES,
+        risk_capability_rules=webssh.SETTINGS_RISK_CAPABILITY_RULES,
+    )
+    try:
+        registry.build_settings_schema()
+    except ValueError as exc:
+        assert 'mismatched setting risk/capability' in str(exc)
+    else:
+        raise AssertionError('unsafe high-risk capability mapping was accepted')
+
+
+def test_settings_snapshot_exposes_plugin_schema_without_high_risk_write():
+    client = make_client()
+
+    client.emit(webssh.SETTINGS_EVENT_SNAPSHOT_REQUEST)
+    snapshot = last_payload(client, webssh.SETTINGS_EVENT_SNAPSHOT)
+    plugin_schema = snapshot['settings_schema']['plugins']
+    by_key = {item['setting_key']: item for item in plugin_schema}
+
+    assert by_key['uart.remote_access']['risk_level'] == 'high'
+    assert by_key['uart.remote_access']['required_capability'] == webssh.CAPABILITY_SETTINGS_UPDATE_HIGH_RISK
+    assert snapshot['capabilities'][webssh.CAPABILITY_SETTINGS_UPDATE_HIGH_RISK]['allowed'] is False
+    assert webssh.SETTING_DEFAULT_CONNECTION_TYPE in snapshot['mutable_settings']
+    assert 'uart.remote_access' not in snapshot['mutable_settings']
 
     client.disconnect()
 
@@ -2114,12 +2192,25 @@ def test_low_risk_settings_update_is_versioned_and_audited():
     snapshot = last_payload(client, webssh.SETTINGS_EVENT_SNAPSHOT)
     assert snapshot['settings_version'] == 1
 
+    client.emit(webssh.SETTINGS_EVENT_UPDATE_REQUEST, {
+        'request_id': 'settings-schema-stale',
+        'setting_key': webssh.SETTING_DEFAULT_CONNECTION_TYPE,
+        'value': webssh.CONNECTION_TYPE_SSH,
+        'expected_version': snapshot['settings_version'],
+        'expected_schema_digest': '0' * 64,
+    })
+    schema_stale = last_payload(client, webssh.SETTINGS_EVENT_UPDATE_RESULT)
+    assert schema_stale['status'] == 'failed'
+    assert schema_stale['error_code'] == 'settings_schema_conflict'
+    assert schema_stale['settings_version'] == 1
+
     target = webssh.CONNECTION_TYPE_SSH
     client.emit(webssh.SETTINGS_EVENT_UPDATE_REQUEST, {
         'request_id': 'settings-update-ok',
         'setting_key': webssh.SETTING_DEFAULT_CONNECTION_TYPE,
         'value': target,
         'expected_version': snapshot['settings_version'],
+        'expected_schema_digest': snapshot['settings_schema_digest'],
     })
     result = last_payload(client, webssh.SETTINGS_EVENT_UPDATE_RESULT)
     assert result['status'] == 'ok'
@@ -2142,6 +2233,62 @@ def test_low_risk_settings_update_is_versioned_and_audited():
     assert any(
         event['event_type'] == webssh.SETTINGS_AUDIT_UPDATE_FAILED
         and event.get('error_code') == 'settings_version_conflict'
+        for event in events
+    )
+
+    client.disconnect()
+
+
+def test_uart_default_baud_rate_runtime_update_uses_plugin_validation():
+    client = make_client()
+
+    client.emit(webssh.SETTINGS_EVENT_SNAPSHOT_REQUEST)
+    snapshot = last_payload(client, webssh.SETTINGS_EVENT_SNAPSHOT)
+    assert snapshot['mutable_settings'][webssh.SETTING_UART_DEFAULT_BAUD_RATE]['value'] == webssh.DEFAULT_UART_BAUD_RATE
+
+    target = 230400
+    client.emit(webssh.SETTINGS_EVENT_UPDATE_REQUEST, {
+        'request_id': 'uart-baud-ok',
+        'setting_key': webssh.SETTING_UART_DEFAULT_BAUD_RATE,
+        'value': str(target),
+        'expected_version': snapshot['settings_version'],
+        'expected_schema_digest': snapshot['settings_schema_digest'],
+    })
+    result = last_payload(client, webssh.SETTINGS_EVENT_UPDATE_RESULT)
+    assert result['status'] == 'ok'
+    assert result['setting_key'] == webssh.SETTING_UART_DEFAULT_BAUD_RATE
+    assert result['value'] == target
+    assert result['settings_version'] == 2
+
+    client.emit(webssh.SETTINGS_EVENT_SNAPSHOT_REQUEST)
+    updated = last_payload(client, webssh.SETTINGS_EVENT_SNAPSHOT)
+    assert updated['mutable_settings'][webssh.SETTING_UART_DEFAULT_BAUD_RATE]['value'] == target
+    assert updated['effective_settings'][webssh.SETTING_UART_DEFAULT_BAUD_RATE] == target
+
+    with webssh.app.test_request_context('/'):
+        policy = webssh.build_terminal_policy(browser_authorized=False, client_ip='127.0.0.1')
+    uart_option = next(
+        item for item in policy['connection_options']
+        if item['connection_type'] == webssh.CONNECTION_TYPE_UART
+    )
+    assert uart_option['default_baud_rate'] == target
+
+    client.emit(webssh.SETTINGS_EVENT_UPDATE_REQUEST, {
+        'request_id': 'uart-baud-invalid',
+        'setting_key': webssh.SETTING_UART_DEFAULT_BAUD_RATE,
+        'value': 12345,
+        'expected_version': webssh.get_runtime_settings_version(),
+        'expected_schema_digest': updated['settings_schema_digest'],
+    })
+    invalid = last_payload(client, webssh.SETTINGS_EVENT_UPDATE_RESULT)
+    assert invalid['status'] == 'failed'
+    assert invalid['error_code'] == 'settings_invalid_value'
+
+    events = webssh.settings_audit_store.get_recent()
+    assert any(
+        event['event_type'] == webssh.SETTINGS_AUDIT_UPDATE_SUCCEEDED
+        and event.get('setting_key') == webssh.SETTING_UART_DEFAULT_BAUD_RATE
+        and event.get('storage_owner') == 'core'
         for event in events
     )
 
@@ -2245,6 +2392,8 @@ def test_ssh_backend_action_contract_uses_public_bridge_method():
         allowed_action_types={'offer_localhost_key_setup'},
         backend_action_store=action_store,
         bridge_kwargs={},
+        low_risk_settings_capability=webssh.CAPABILITY_SETTINGS_UPDATE_LOW_RISK,
+        high_risk_settings_capability=webssh.CAPABILITY_SETTINGS_UPDATE_HIGH_RISK,
         key_setup_ttl_seconds=120,
         token_urlsafe=lambda _length: 'action-token',
         time_func=lambda: 1000,
@@ -2911,8 +3060,12 @@ def main():
         test_wsl_client_ips_require_explicit_trust_for_local_resources,
         test_settings_capabilities_are_separate_from_local_resource_access,
         test_readonly_settings_snapshot_socket_event_is_typed,
+        test_backend_settings_schema_is_declared_and_typed,
+        test_backend_settings_schema_rejects_unsafe_capability_mapping,
+        test_settings_snapshot_exposes_plugin_schema_without_high_risk_write,
         test_settings_snapshot_requires_local_or_browser_authorized_client,
         test_low_risk_settings_update_is_versioned_and_audited,
+        test_uart_default_baud_rate_runtime_update_uses_plugin_validation,
         test_remote_browser_authorization_alone_cannot_update_settings,
         test_settings_admin_grant_is_scoped_and_revocable,
         test_ssh_backend_action_contract_uses_public_bridge_method,
