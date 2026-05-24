@@ -7,12 +7,13 @@ from .base import (
     TerminalBridge,
     TerminalBridgeRuntime,
 )
-from .local_shell import LocalShellBackendPlugin
+from .local_shell import LocalShellBackendPlugin, LocalShellBridge
 from .ssh import SSHBackendPlugin, SSHBridge
 from .uart import UARTBackendPlugin
 
 __all__ = [
     'LocalShellBackendPlugin',
+    'LocalShellBridge',
     'SSHBackendPlugin',
     'SSHBridge',
     'BackendAction',

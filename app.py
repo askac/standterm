@@ -26,6 +26,7 @@ from terminal_backends import (
     BackendActionStore,
     BackendPolicyContext,
     LocalShellBackendPlugin,
+    LocalShellBridge,
     SSHBackendPlugin,
     SSHBridge,
     TerminalBackendRegistry,
@@ -33,16 +34,6 @@ from terminal_backends import (
     TerminalBridgeRuntime,
     UARTBackendPlugin,
 )
-
-try:
-    from ptyprocess import PtyProcessUnicode
-except Exception:
-    PtyProcessUnicode = None
-
-try:
-    from winpty import PtyProcess as WinPtyProcess
-except Exception:
-    WinPtyProcess = None
 
 paramiko = None
 serial_module = None
@@ -1145,202 +1136,6 @@ TERMINAL_BRIDGE_RUNTIME = TerminalBridgeRuntime(
 )
 TerminalBridge.set_default_runtime(TERMINAL_BRIDGE_RUNTIME)
 
-class LocalShellBridge(TerminalBridge):
-    connection_type = CONNECTION_TYPE_LOCAL_SHELL
-
-    def __init__(self, sid, terminal_id=TERMINAL_ID_MAIN, shell_config=None):
-        super().__init__(sid, terminal_id)
-        self.process = None
-        shell_config = shell_config or get_default_local_shell_config()[0]
-        self.shell = shell_config['shell_display']
-        self.shell_command = shell_config['shell_command']
-        self.terminal_kind = shell_config['terminal_kind']
-        self.terminal_label = shell_config['terminal_label']
-
-    def connect(self, cols=80, rows=24):
-        if sys.platform.startswith('win'):
-            return self._connect_windows(cols, rows)
-        if PtyProcessUnicode is None:
-            return False, {
-                'message': 'Local Shell requires ptyprocess. Re-run the launcher with --force to install dependencies.',
-                'error_code': 'local_shell_dependency_missing',
-            }
-
-        try:
-            env = dict(os.environ)
-            env['TERM'] = SSH_TERM
-            cwd = str(Path.home())
-            self.process = PtyProcessUnicode.spawn(
-                self.shell_command,
-                cwd=cwd,
-                env=env,
-                dimensions=(rows, cols),
-            )
-            print(f"[+] Local shell started for {self.sid}: {self.shell}")
-            return True, None
-        except Exception as exc:
-            print(f"[!] Local shell start error: {exc}")
-            return False, {'message': str(exc), 'error_code': 'local_shell_start_failed'}
-
-    def _connect_windows(self, cols, rows):
-        if WinPtyProcess is None:
-            return False, {
-                'message': 'Local Shell on Windows requires pywinpty. Re-run run.bat with --force to install dependencies.',
-                'error_code': 'local_shell_dependency_missing',
-            }
-
-        try:
-            env = dict(os.environ)
-            env['TERM'] = SSH_TERM
-            cwd = str(Path.home())
-            self.process = self._spawn_windows_process(cols, rows, cwd, env)
-            self.resize(cols, rows)
-            print(f"[+] Windows local shell started for {self.sid}: {self.shell}")
-            return True, None
-        except Exception as exc:
-            print(f"[!] Windows local shell start error: {exc}")
-            return False, {'message': str(exc), 'error_code': 'local_shell_start_failed'}
-
-    def _spawn_windows_process(self, cols, rows, cwd, env):
-        spawn_attempts = (
-            lambda: WinPtyProcess.spawn(self.shell, cwd=cwd, env=env, dimensions=(rows, cols)),
-            lambda: WinPtyProcess.spawn(self.shell, cwd=cwd, env=env),
-            lambda: WinPtyProcess.spawn(self.shell, dimensions=(rows, cols)),
-            lambda: WinPtyProcess.spawn(self.shell),
-        )
-        last_error = None
-        for spawn in spawn_attempts:
-            try:
-                return spawn()
-            except TypeError as exc:
-                last_error = exc
-        raise last_error
-
-    def read_loop(self):
-        print(f"[*] Starting local shell read loop for {self.sid}")
-        while True:
-            self.runtime.sleep(0.01)
-            if not self.process:
-                break
-
-            if sys.platform.startswith('win'):
-                if not self._read_windows_once():
-                    break
-                continue
-
-            try:
-                readable, _, _ = select.select([self.process.fd], [], [], 0)
-                if not readable:
-                    if self.closing:
-                        break
-                    if not self.process.isalive():
-                        self.emit_output({
-                            'message_type': 'ssh_closed',
-                            'message': 'Local shell session closed.',
-                        })
-                        break
-                    continue
-
-                data = self.process.read(size=4096)
-                if data:
-                    self.emit_output({
-                        'message_type': 'terminal',
-                        'data': data,
-                    })
-            except EOFError:
-                if self.closing:
-                    break
-                self.emit_output({
-                    'message_type': 'ssh_closed',
-                    'message': 'Local shell session closed.',
-                })
-                break
-            except Exception as exc:
-                if self.closing:
-                    break
-                print(f"[!] Local shell read error: {exc}")
-                self.emit_output({
-                    'message_type': 'ssh_closed',
-                    'message': 'Local shell closed due to a read error.',
-                    'error_code': 'local_shell_read_error',
-                })
-                break
-
-        print(f"[*] Local shell read loop terminated for {self.sid}")
-        self.runtime.unregister_bridge(self.owner_session, self.terminal_id, self)
-
-    def _read_windows_once(self):
-        try:
-            data = self.process.read(4096)
-            if data:
-                self.emit_output({
-                    'message_type': 'terminal',
-                    'data': data,
-                })
-            if not self.process.isalive():
-                self.emit_output({
-                    'message_type': 'ssh_closed',
-                    'message': 'Local shell session closed.',
-                })
-                return False
-            return True
-        except EOFError:
-            if self.closing:
-                return False
-            self.emit_output({
-                'message_type': 'ssh_closed',
-                'message': 'Local shell session closed.',
-            })
-            return False
-        except Exception as exc:
-            if self.closing:
-                return False
-            print(f"[!] Windows local shell read error: {exc}")
-            self.emit_output({
-                'message_type': 'ssh_closed',
-                'message': 'Local shell closed due to a read error.',
-                'error_code': 'local_shell_read_error',
-            })
-            return False
-
-    def write(self, data):
-        if self.process:
-            try:
-                self.process.write(data)
-            except Exception as exc:
-                print(f"[!] Local shell write error: {exc}")
-
-    def resize(self, cols, rows):
-        if self.process:
-            try:
-                if sys.platform.startswith('win'):
-                    if hasattr(self.process, 'set_size'):
-                        self.process.set_size(cols, rows)
-                    elif hasattr(self.process, 'setwinsize'):
-                        self.process.setwinsize(rows, cols)
-                    elif hasattr(self.process, 'resize'):
-                        self.process.resize(cols, rows)
-                else:
-                    self.process.setwinsize(rows, cols)
-            except Exception as exc:
-                print(f"[!] Local shell resize error: {exc}")
-
-    def close(self):
-        if not self.process:
-            return
-        try:
-            if sys.platform.startswith('win') and hasattr(self.process, 'terminate'):
-                self.process.terminate()
-            elif sys.platform.startswith('win') and hasattr(self.process, 'kill'):
-                self.process.kill()
-            else:
-                self.process.close(force=True)
-        except TypeError:
-            self.process.close()
-        except Exception:
-            pass
-        self.process = None
-
 class UARTBridge(TerminalBridge):
     connection_type = CONNECTION_TYPE_UART
     terminal_kind = 'uart'
@@ -1553,6 +1348,10 @@ TERMINAL_BACKEND_REGISTRY = TerminalBackendRegistry([
             browser_authorized=browser_authorized,
         ),
         get_local_shell_config=get_local_shell_config,
+        bridge_kwargs={
+            'ssh_term': SSH_TERM,
+            'get_default_local_shell_config': get_default_local_shell_config,
+        },
         is_wsl=lambda: is_wsl(),
         get_wsl_local_shell_options=get_wsl_local_shell_options,
         default_shell_kind=LOCAL_SHELL_KIND_BASH,

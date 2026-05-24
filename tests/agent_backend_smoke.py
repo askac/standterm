@@ -2108,6 +2108,22 @@ def test_ssh_bridge_is_provided_by_backend_module():
     bridge.close()
 
 
+def test_local_shell_bridge_is_provided_by_backend_module():
+    assert webssh.LocalShellBridge.__module__ == 'terminal_backends.local_shell'
+    plugin = webssh.TERMINAL_BACKEND_REGISTRY.get(webssh.CONNECTION_TYPE_LOCAL_SHELL)
+    shell_config, error = webssh.get_default_local_shell_config()
+    assert error is None
+    bridge = plugin.create_bridge(
+        webssh.ACCESS_TOKEN,
+        webssh.TERMINAL_ID_MAIN,
+        {'local_shell_config': shell_config},
+    )
+    assert isinstance(bridge, webssh.TerminalBridge)
+    assert bridge.connection_type == webssh.CONNECTION_TYPE_LOCAL_SHELL
+    assert bridge.terminal_label == shell_config['terminal_label']
+    bridge.close()
+
+
 def test_agent_audit_records_typed_events_without_raw_action_data():
     client = make_client()
     session_token = current_session_token()
@@ -2694,6 +2710,7 @@ def main():
         test_wsl_client_ips_require_explicit_trust_for_local_resources,
         test_ssh_backend_action_contract_uses_public_bridge_method,
         test_ssh_bridge_is_provided_by_backend_module,
+        test_local_shell_bridge_is_provided_by_backend_module,
         test_agent_audit_records_typed_events_without_raw_action_data,
         test_wrong_sid_cannot_approve_action,
         test_stale_mode_version_cannot_approve_action,
