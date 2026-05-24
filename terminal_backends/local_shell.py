@@ -9,7 +9,6 @@ class LocalShellBackendPlugin(TerminalBackendPlugin):
         self,
         *,
         bridge_cls,
-        get_request_client_ip,
         is_allowed_for_client,
         get_local_shell_config,
         is_wsl,
@@ -17,15 +16,15 @@ class LocalShellBackendPlugin(TerminalBackendPlugin):
         default_shell_kind,
     ):
         self._bridge_cls = bridge_cls
-        self._get_request_client_ip = get_request_client_ip
         self._is_allowed_for_client = is_allowed_for_client
         self._get_local_shell_config = get_local_shell_config
         self._is_wsl = is_wsl
         self._get_wsl_local_shell_options = get_wsl_local_shell_options
         self._default_shell_kind = default_shell_kind
 
-    def build_policy_option(self, browser_authorized=False):
-        client_ip = self._get_request_client_ip()
+    def build_policy_option(self, context=None, browser_authorized=False):
+        client_ip = context.client_ip if context else 'unknown'
+        browser_authorized = context.browser_authorized if context else browser_authorized
         allowed = self._is_allowed_for_client(client_ip, browser_authorized=browser_authorized)
         option = {
             'connection_type': self.connection_type,

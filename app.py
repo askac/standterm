@@ -22,7 +22,17 @@ from collections import deque
 from pathlib import Path
 from flask import Flask, render_template, request, abort, make_response, redirect, send_file, jsonify
 from flask_socketio import SocketIO
-from terminal_backends import LocalShellBackendPlugin, SSHBackendPlugin, TerminalBackendRegistry, UARTBackendPlugin
+from terminal_backends import (
+    BackendAction,
+    BackendActionStore,
+    BackendPolicyContext,
+    LocalShellBackendPlugin,
+    SSHBackendPlugin,
+    TerminalBackendRegistry,
+    TerminalBridge,
+    TerminalBridgeRuntime,
+    UARTBackendPlugin,
+)
 
 try:
     from ptyprocess import PtyProcessUnicode
@@ -494,7 +504,12 @@ finally:
 
 def build_terminal_policy(browser_authorized=False):
     authorized_dir_ready = ensure_authorized_dir()
-    connection_options = TERMINAL_BACKEND_REGISTRY.build_policy_options(browser_authorized=browser_authorized)
+    context = BackendPolicyContext(
+        client_ip=get_request_client_ip(),
+        browser_authorized=bool(browser_authorized),
+        settings_snapshot={},
+    )
+    connection_options = TERMINAL_BACKEND_REGISTRY.build_policy_options(context=context)
     allowed_connections = {
         option['connection_type']: bool(option.get('allowed'))
         for option in connection_options
@@ -1111,110 +1126,24 @@ def get_local_shell_config(shell_kind=None):
         }
     return get_default_local_shell_config()
 
-class TerminalBridge:
-    connection_type = None
-    terminal_kind = None
-    terminal_label = None
+def append_terminal_transcript(session_token, terminal_id, data):
+    agent_transcript_store.append_terminal_output(session_token, terminal_id, data)
 
-    def __init__(self, owner_session, terminal_id):
-        self.owner_session = owner_session
-        self.terminal_id = terminal_id
-        self.attached_sids = set()
-        self.sid = None
-        self.closing = False
-        self.cols = 80
-        self.rows = 24
-        self.output_seq = 0
-        self.replay_buffer = deque()
-        self.replay_buffer_bytes = 0
-        self.input_lock = threading.RLock()
-        self.output_condition = threading.Condition(threading.RLock())
-
-    def metadata(self, cols=None, rows=None):
-        cols = self.cols if cols is None else cols
-        rows = self.rows if rows is None else rows
-        return build_terminal_metadata(
-            self.connection_type,
-            self.terminal_id,
-            self.terminal_kind,
-            self.terminal_label,
-            cols,
-            rows,
-        )
-
-    def session_metadata(self):
-        return {
-            'session_token': self.owner_session,
-            'terminal_id': self.terminal_id,
-            'connection_type': self.connection_type,
-            'terminal_kind': self.terminal_kind,
-            'terminal_label': self.terminal_label,
-            'cols': self.cols,
-            'rows': self.rows,
-            'output_seq': self.output_seq,
-        }
-
-    def update_terminal_size(self, cols, rows):
-        self.cols = cols
-        self.rows = rows
-
-    def attach(self, sid):
-        self.sid = sid
-        self.attached_sids.add(sid)
-
-    def detach(self, sid):
-        self.attached_sids.discard(sid)
-        if self.sid == sid:
-            self.sid = next(iter(self.attached_sids), None)
-
-    def emit_output(self, payload):
-        payload = dict(payload)
-        payload.setdefault('connection_type', self.connection_type)
-        payload.setdefault('terminal_id', self.terminal_id)
-        if payload.get('message_type') == 'terminal':
-            with self.output_condition:
-                self.output_seq += 1
-                payload.setdefault('output_seq', self.output_seq)
-                self._remember_terminal_payload(payload)
-                agent_transcript_store.append_terminal_output(
-                    self.owner_session,
-                    self.terminal_id,
-                    payload.get('data'),
-                )
-                self.output_condition.notify_all()
-        for sid in list(self.attached_sids):
-            socketio.emit('ssh_output', payload, room=sid)
-
-    def _remember_terminal_payload(self, payload):
-        data = payload.get('data')
-        if not isinstance(data, str) or not data:
-            return
-        payload_size = len(data.encode('utf-8', errors='ignore'))
-        self.replay_buffer.append(dict(payload))
-        self.replay_buffer_bytes += payload_size
-        while (
-            len(self.replay_buffer) > MAX_TERMINAL_REPLAY_EVENTS
-            or self.replay_buffer_bytes > MAX_TERMINAL_REPLAY_BYTES
-        ):
-            removed = self.replay_buffer.popleft()
-            removed_data = removed.get('data', '')
-            self.replay_buffer_bytes -= len(removed_data.encode('utf-8', errors='ignore'))
-
-    def replay_to(self, sid):
-        for payload in list(self.replay_buffer):
-            socketio.emit('ssh_output', payload, room=sid)
-
-    def read_loop(self):
-        raise NotImplementedError
-
-    def write(self, data):
-        raise NotImplementedError
-
-    def resize(self, cols, rows):
-        raise NotImplementedError
-
-    def close(self):
-        raise NotImplementedError
+TERMINAL_BRIDGE_RUNTIME = TerminalBridgeRuntime(
+    emit_socket=socketio.emit,
+    build_metadata=build_terminal_metadata,
+    append_transcript=append_terminal_transcript,
+    unregister_bridge=lambda owner_session, terminal_id, bridge: unregister_terminal_bridge(
+        owner_session,
+        terminal_id,
+        bridge,
+    ),
+    sleep=socketio.sleep,
+    close_process=close_process,
+    max_replay_events=MAX_TERMINAL_REPLAY_EVENTS,
+    max_replay_bytes=MAX_TERMINAL_REPLAY_BYTES,
+)
+TerminalBridge.set_default_runtime(TERMINAL_BRIDGE_RUNTIME)
 
 class SSHBridge(TerminalBridge):
     connection_type = CONNECTION_TYPE_SSH
@@ -1418,6 +1347,53 @@ class SSHBridge(TerminalBridge):
 
         return self._append_public_key_entry_to_authorized_keys(missing_entries[0])
 
+    def prepare_backend_action(self, action_type, payload, expires_at, message=None, question=None):
+        if action_type != 'offer_localhost_key_setup':
+            return None
+        missing_entries = self._get_missing_local_public_keys()
+        if not missing_entries:
+            return None
+        return BackendAction(
+            action_type=action_type,
+            terminal_id=payload['terminal_id'],
+            metadata={
+                'host': payload['host'],
+                'port': payload['port'],
+                'username': payload['username'],
+                'key_entry': missing_entries[0],
+            },
+            expires_at=expires_at,
+            message=message,
+            question=question,
+        )
+
+    @classmethod
+    def execute_backend_action(cls, action):
+        if action.action_type != 'offer_localhost_key_setup':
+            return {
+                'status': 'failed',
+                'message': 'Unsupported SSH backend action.',
+                'error_code': 'backend_action_unsupported',
+            }
+        metadata = action.metadata if isinstance(action.metadata, dict) else {}
+        username = metadata.get('username')
+        key_entry = metadata.get('key_entry')
+        bridge = cls(None, action.terminal_id)
+        if not isinstance(key_entry, dict):
+            return {
+                'status': 'failed',
+                'message': 'Localhost key setup action is invalid.',
+                'error_code': 'localhost_key_setup_invalid_action',
+            }
+        if not bridge._can_offer_local_key_setup(username):
+            return {
+                'status': 'failed',
+                'message': 'Automatic localhost key setup is only available for the current local user.',
+                'error_code': 'localhost_key_setup_unavailable',
+            }
+        _, result = bridge._append_public_key_entry_to_authorized_keys(key_entry)
+        return result
+
     def _build_local_key_setup_hint(self):
         message = (
             'Local public key authentication for localhost failed, and your local public key was not '
@@ -1565,7 +1541,7 @@ class SSHBridge(TerminalBridge):
         print(f"[*] Starting SSH read loop for {self.sid}")
         while True:
             # Short sleep to prevent CPU hogging while allowing high responsiveness
-            socketio.sleep(0.01)
+            self.runtime.sleep(0.01)
             if not self.channel:
                 break
             
@@ -1596,7 +1572,7 @@ class SSHBridge(TerminalBridge):
                 })
                 break
         print(f"[*] SSH read loop terminated for {self.sid}")
-        unregister_terminal_bridge(self.owner_session, self.terminal_id, self)
+        self.runtime.unregister_bridge(self.owner_session, self.terminal_id, self)
 
     def write(self, data):
         if self.channel:
@@ -1699,7 +1675,7 @@ class LocalShellBridge(TerminalBridge):
     def read_loop(self):
         print(f"[*] Starting local shell read loop for {self.sid}")
         while True:
-            socketio.sleep(0.01)
+            self.runtime.sleep(0.01)
             if not self.process:
                 break
 
@@ -1747,7 +1723,7 @@ class LocalShellBridge(TerminalBridge):
                 break
 
         print(f"[*] Local shell read loop terminated for {self.sid}")
-        unregister_terminal_bridge(self.owner_session, self.terminal_id, self)
+        self.runtime.unregister_bridge(self.owner_session, self.terminal_id, self)
 
     def _read_windows_once(self):
         try:
@@ -1896,7 +1872,7 @@ class UARTBridge(TerminalBridge):
             return True, None
 
         message = status.get('message') or 'Windows UART helper did not become ready.'
-        close_process(self.serial)
+        self.runtime.close_process(self.serial)
         self.serial = None
         return False, {'message': message, 'error_code': 'uart_open_failed'}
 
@@ -1930,7 +1906,7 @@ class UARTBridge(TerminalBridge):
     def read_loop(self):
         print(f"[*] Starting UART read loop for {self.sid}")
         while True:
-            socketio.sleep(0.01)
+            self.runtime.sleep(0.01)
             if not self.serial:
                 break
 
@@ -1964,7 +1940,7 @@ class UARTBridge(TerminalBridge):
                 break
 
         print(f"[*] UART read loop terminated for {self.sid}")
-        unregister_terminal_bridge(self.owner_session, self.terminal_id, self)
+        self.runtime.unregister_bridge(self.owner_session, self.terminal_id, self)
 
     def _read_windows_helper_once(self):
         if not self.serial or not self.serial.stdout:
@@ -1996,14 +1972,15 @@ class UARTBridge(TerminalBridge):
             return
         try:
             if isinstance(self.serial, subprocess.Popen):
-                close_process(self.serial)
+                self.runtime.close_process(self.serial)
             else:
                 self.serial.close()
         except Exception:
             pass
         self.serial = None
 
-pending_localhost_key_setups = {}
+pending_backend_actions = BackendActionStore(time_func=time.time)
+pending_localhost_key_setups = pending_backend_actions
 TERMINAL_BACKEND_REGISTRY = TerminalBackendRegistry([
     SSHBackendPlugin(
         bridge_cls=SSHBridge,
@@ -2015,14 +1992,13 @@ TERMINAL_BACKEND_REGISTRY = TerminalBackendRegistry([
         max_password_bytes=MAX_PASSWORD_BYTES,
         has_control_chars=lambda value: has_control_chars(value),
         allowed_action_types=ALLOWED_CONNECTION_ACTION_TYPES,
-        pending_key_setups=pending_localhost_key_setups,
+        backend_action_store=pending_backend_actions,
         key_setup_ttl_seconds=LOCALHOST_KEY_SETUP_TTL_SECONDS,
         token_urlsafe=secrets.token_urlsafe,
         time_func=time.time,
     ),
     LocalShellBackendPlugin(
         bridge_cls=LocalShellBridge,
-        get_request_client_ip=get_request_client_ip,
         is_allowed_for_client=lambda client_ip, browser_authorized=False: is_local_shell_allowed_for_client(
             client_ip,
             browser_authorized=browser_authorized,
@@ -2034,7 +2010,6 @@ TERMINAL_BACKEND_REGISTRY = TerminalBackendRegistry([
     ),
     UARTBackendPlugin(
         bridge_cls=UARTBridge,
-        get_request_client_ip=get_request_client_ip,
         is_allowed_for_client=lambda client_ip, browser_authorized=False: is_uart_allowed_for_client(
             client_ip,
             browser_authorized=browser_authorized,
@@ -4123,16 +4098,15 @@ def build_session_response():
     )
     return add_common_headers(response)
 
-def get_pending_localhost_key_setup(sid, action_id):
-    pending_setup = pending_localhost_key_setups.get(sid)
-    if not pending_setup:
+def get_pending_backend_action(sid, action_id, expected_action_type=None):
+    action, error_code = pending_backend_actions.get(sid, action_id, secrets.compare_digest)
+    if error_code:
+        if error_code == 'backend_action_expired':
+            return None, 'localhost_key_setup_expired'
         return None, 'localhost_key_setup_no_pending_action'
-    if time.time() > pending_setup['expires_at']:
-        pending_localhost_key_setups.pop(sid, None)
-        return None, 'localhost_key_setup_expired'
-    if not isinstance(action_id, str) or not secrets.compare_digest(action_id, pending_setup['action_id']):
+    if expected_action_type and action.action_type != expected_action_type:
         return None, 'localhost_key_setup_no_pending_action'
-    return pending_setup, None
+    return action, None
 
 @app.route('/')
 def index():
@@ -5773,7 +5747,7 @@ def on_start_ssh(data):
         emit_connection_error(request.sid, message, error_code=error_code, terminal_id=terminal_id)
         return
 
-    pending_localhost_key_setups.pop(request.sid, None)
+    pending_backend_actions.discard(request.sid)
     terminal_id = payload['terminal_id']
     replacing_existing = get_bridge(session_token, terminal_id) is not None
     if not replacing_existing and len(bridges.get(session_token, {})) >= MAX_TERMINALS_PER_CLIENT:
@@ -5847,31 +5821,28 @@ def on_setup_localhost_key_access(data):
         return
     data = data if isinstance(data, dict) else {}
     action_id = data.get('action_id')
-    pending_setup, pending_error_code = get_pending_localhost_key_setup(request.sid, action_id)
-    bridge = SSHBridge(session_token, pending_setup.get('terminal_id', TERMINAL_ID_MAIN) if pending_setup else TERMINAL_ID_MAIN)
+    action, pending_error_code = get_pending_backend_action(
+        request.sid,
+        action_id,
+        expected_action_type='offer_localhost_key_setup',
+    )
 
-    if not pending_setup:
+    if not action:
         result = {
             'status': 'failed',
             'message': 'No pending localhost key setup request is available.',
             'error_code': pending_error_code,
         }
-    elif not bridge._can_offer_local_key_setup(pending_setup['username']):
-        pending_localhost_key_setups.pop(request.sid, None)
-        result = {
-            'status': 'failed',
-            'message': 'Automatic localhost key setup is only available for the current local user.',
-            'error_code': 'localhost_key_setup_unavailable',
-        }
     else:
-        pending_localhost_key_setups.pop(request.sid, None)
-        _, result = bridge._append_public_key_entry_to_authorized_keys(pending_setup['key_entry'])
+        pending_backend_actions.discard(request.sid)
+        plugin = TERMINAL_BACKEND_REGISTRY.get(CONNECTION_TYPE_SSH)
+        result = plugin.execute_backend_action(action)
 
     socketio.emit(
         'ssh_output',
         {
             'message_type': 'setup_result',
-            'terminal_id': bridge.terminal_id,
+            'terminal_id': action.terminal_id if action else TERMINAL_ID_MAIN,
             'message': result['message'],
             'setup_status': result['status'],
             'error_code': result.get('error_code'),
@@ -5957,7 +5928,7 @@ def on_close_all_terminals():
 
 @socketio.on('disconnect')
 def on_disconnect(reason=None):
-    pending_localhost_key_setups.pop(request.sid, None)
+    pending_backend_actions.discard(request.sid)
     session_token = socket_session_tokens.pop(request.sid, None)
     client_ip = socket_client_ips.pop(request.sid, 'unknown')
     socket_browser_identities.pop(request.sid, None)

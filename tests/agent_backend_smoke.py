@@ -2031,6 +2031,73 @@ def test_wsl_client_ips_require_explicit_trust_for_local_resources():
             webssh.os.environ['WEBSSH_TRUST_WSL_CLIENT_IPS'] = original_env
 
 
+def test_ssh_backend_action_contract_uses_public_bridge_method():
+    action_store = webssh.BackendActionStore(time_func=lambda: 1000)
+    calls = []
+
+    class ActionBridge:
+        def prepare_backend_action(self, action_type, payload, expires_at, message=None, question=None):
+            calls.append((action_type, payload, expires_at, message, question))
+            return webssh.BackendAction(
+                action_type=action_type,
+                terminal_id=payload['terminal_id'],
+                metadata={'username': payload['username'], 'key_entry': {'line': 'ssh-ed25519 AAAA test'}},
+                expires_at=expires_at,
+                message=message,
+                question=question,
+            )
+
+        def __getattr__(self, name):
+            if name.startswith('_'):
+                raise AssertionError(f'Backend plugin used private bridge method: {name}')
+            raise AttributeError(name)
+
+    plugin = webssh.SSHBackendPlugin(
+        bridge_cls=ActionBridge,
+        default_host=webssh.SSH_HOST,
+        default_port=webssh.SSH_PORT,
+        default_user=webssh.SSH_USER,
+        max_host_length=webssh.MAX_HOST_LENGTH,
+        max_username_length=webssh.MAX_USERNAME_LENGTH,
+        max_password_bytes=webssh.MAX_PASSWORD_BYTES,
+        has_control_chars=webssh.has_control_chars,
+        allowed_action_types={'offer_localhost_key_setup'},
+        backend_action_store=action_store,
+        key_setup_ttl_seconds=120,
+        token_urlsafe=lambda _length: 'action-token',
+        time_func=lambda: 1000,
+    )
+    payload = {
+        'connection_type': webssh.CONNECTION_TYPE_SSH,
+        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'host': '127.0.0.1',
+        'port': 22,
+        'username': webssh.SSH_USER,
+    }
+
+    failure = plugin.prepare_connection_failure(
+        'sid-1',
+        ActionBridge(),
+        payload,
+        {
+            'message': 'key failed',
+            'error_code': 'localhost_key_not_authorized',
+            'action_type': 'offer_localhost_key_setup',
+            'action_message': 'message',
+            'action_question': 'question',
+        },
+    )
+
+    assert failure['action_id'] == 'action-token'
+    action, error = action_store.get('sid-1', 'action-token', webssh.secrets.compare_digest)
+    assert error is None
+    assert action.action_type == 'offer_localhost_key_setup'
+    assert action.metadata['username'] == webssh.SSH_USER
+    assert calls == [
+        ('offer_localhost_key_setup', payload, 1120, 'message', 'question'),
+    ]
+
+
 def test_agent_audit_records_typed_events_without_raw_action_data():
     client = make_client()
     session_token = current_session_token()
@@ -2615,6 +2682,7 @@ def main():
         test_wsl_local_shell_choice_is_structured_and_wsl_only,
         test_terminal_policy_creates_authorized_dir_for_fresh_checkout,
         test_wsl_client_ips_require_explicit_trust_for_local_resources,
+        test_ssh_backend_action_contract_uses_public_bridge_method,
         test_agent_audit_records_typed_events_without_raw_action_data,
         test_wrong_sid_cannot_approve_action,
         test_stale_mode_version_cannot_approve_action,

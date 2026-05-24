@@ -17,7 +17,7 @@ class SSHBackendPlugin(TerminalBackendPlugin):
         max_password_bytes,
         has_control_chars,
         allowed_action_types,
-        pending_key_setups,
+        backend_action_store,
         key_setup_ttl_seconds,
         token_urlsafe,
         time_func,
@@ -31,7 +31,7 @@ class SSHBackendPlugin(TerminalBackendPlugin):
         self._max_password_bytes = max_password_bytes
         self._has_control_chars = has_control_chars
         self._allowed_action_types = allowed_action_types
-        self._pending_key_setups = pending_key_setups
+        self._backend_action_store = backend_action_store
         self._key_setup_ttl_seconds = key_setup_ttl_seconds
         self._token_urlsafe = token_urlsafe
         self._time_func = time_func
@@ -88,8 +88,8 @@ class SSHBackendPlugin(TerminalBackendPlugin):
             rows=rows,
         )
 
-    def build_connection_failure(self, sid, bridge, payload, result):
-        failure = super().build_connection_failure(sid, bridge, payload, result)
+    def prepare_connection_failure(self, sid, bridge, payload, result):
+        failure = super().prepare_connection_failure(sid, bridge, payload, result)
         action_type = None
         action_message = None
         action_question = None
@@ -105,18 +105,16 @@ class SSHBackendPlugin(TerminalBackendPlugin):
 
         action_id = None
         if action_type == 'offer_localhost_key_setup':
-            missing_entries = bridge._get_missing_local_public_keys()
-            if missing_entries:
+            action = bridge.prepare_backend_action(
+                action_type,
+                payload,
+                expires_at=self._time_func() + self._key_setup_ttl_seconds,
+                message=action_message,
+                question=action_question,
+            )
+            if action:
                 action_id = self._token_urlsafe(16)
-                self._pending_key_setups[sid] = {
-                    'action_id': action_id,
-                    'host': payload['host'],
-                    'port': payload['port'],
-                    'username': payload['username'],
-                    'terminal_id': payload['terminal_id'],
-                    'key_entry': missing_entries[0],
-                    'expires_at': self._time_func() + self._key_setup_ttl_seconds,
-                }
+                self._backend_action_store.set(sid, action_id, action)
             else:
                 action_type = None
                 action_message = None
@@ -129,3 +127,8 @@ class SSHBackendPlugin(TerminalBackendPlugin):
             'action_id': action_id,
         })
         return failure
+
+    def execute_backend_action(self, action):
+        if action.action_type != 'offer_localhost_key_setup':
+            return super().execute_backend_action(action)
+        return self._bridge_cls.execute_backend_action(action)

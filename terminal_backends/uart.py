@@ -9,7 +9,6 @@ class UARTBackendPlugin(TerminalBackendPlugin):
         self,
         *,
         bridge_cls,
-        get_request_client_ip,
         is_allowed_for_client,
         detect_serial_ports,
         get_detected_serial_port,
@@ -19,7 +18,6 @@ class UARTBackendPlugin(TerminalBackendPlugin):
         baud_rates,
     ):
         self._bridge_cls = bridge_cls
-        self._get_request_client_ip = get_request_client_ip
         self._is_allowed_for_client = is_allowed_for_client
         self._detect_serial_ports = detect_serial_ports
         self._get_detected_serial_port = get_detected_serial_port
@@ -28,8 +26,9 @@ class UARTBackendPlugin(TerminalBackendPlugin):
         self._max_baud_rate = max_baud_rate
         self._baud_rates = baud_rates
 
-    def build_policy_option(self, browser_authorized=False):
-        client_ip = self._get_request_client_ip()
+    def build_policy_option(self, context=None, browser_authorized=False):
+        client_ip = context.client_ip if context else 'unknown'
+        browser_authorized = context.browser_authorized if context else browser_authorized
         allowed = self._is_allowed_for_client(client_ip, browser_authorized=browser_authorized)
         return {
             'connection_type': self.connection_type,
