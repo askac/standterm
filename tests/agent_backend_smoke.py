@@ -2124,6 +2124,26 @@ def test_local_shell_bridge_is_provided_by_backend_module():
     bridge.close()
 
 
+def test_uart_bridge_is_provided_by_backend_module():
+    assert webssh.UARTBridge.__module__ == 'terminal_backends.uart'
+    plugin = webssh.TERMINAL_BACKEND_REGISTRY.get(webssh.CONNECTION_TYPE_UART)
+    bridge = plugin.create_bridge(
+        webssh.ACCESS_TOKEN,
+        webssh.TERMINAL_ID_MAIN,
+        {
+            'serial_port_info': {
+                'device': '/dev/ttyS0',
+                'label': 'COM1 (/dev/ttyS0)',
+            },
+            'baud_rate': webssh.DEFAULT_UART_BAUD_RATE,
+        },
+    )
+    assert isinstance(bridge, webssh.TerminalBridge)
+    assert bridge.connection_type == webssh.CONNECTION_TYPE_UART
+    assert bridge.terminal_label == 'UART COM1 (/dev/ttyS0)'
+    bridge.close()
+
+
 def test_agent_audit_records_typed_events_without_raw_action_data():
     client = make_client()
     session_token = current_session_token()
@@ -2711,6 +2731,7 @@ def main():
         test_ssh_backend_action_contract_uses_public_bridge_method,
         test_ssh_bridge_is_provided_by_backend_module,
         test_local_shell_bridge_is_provided_by_backend_module,
+        test_uart_bridge_is_provided_by_backend_module,
         test_agent_audit_records_typed_events_without_raw_action_data,
         test_wrong_sid_cannot_approve_action,
         test_stale_mode_version_cannot_approve_action,

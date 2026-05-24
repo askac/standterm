@@ -7,7 +7,6 @@ import secrets
 import socket
 import time
 import argparse
-import select
 import shutil
 import re
 import ipaddress
@@ -33,6 +32,7 @@ from terminal_backends import (
     TerminalBridge,
     TerminalBridgeRuntime,
     UARTBackendPlugin,
+    UARTBridge,
 )
 
 paramiko = None
@@ -1136,188 +1136,6 @@ TERMINAL_BRIDGE_RUNTIME = TerminalBridgeRuntime(
 )
 TerminalBridge.set_default_runtime(TERMINAL_BRIDGE_RUNTIME)
 
-class UARTBridge(TerminalBridge):
-    connection_type = CONNECTION_TYPE_UART
-    terminal_kind = 'uart'
-
-    def __init__(self, sid, terminal_id, port_info, baud_rate):
-        super().__init__(sid, terminal_id)
-        self.serial = None
-        self.device = port_info['device']
-        self.baud_rate = baud_rate
-        self.terminal_label = f'UART {port_info.get("label") or self.device}'
-
-    def connect(self, cols=80, rows=24):
-        if is_wsl() and is_windows_com_device(self.device):
-            return self._connect_wsl_windows_com()
-
-        try:
-            serial_lib, _ = get_serial_modules()
-        except Exception:
-            return False, {
-                'message': 'UART requires pyserial. Re-run the launcher with --force to install dependencies.',
-                'error_code': 'uart_dependency_missing',
-            }
-
-        try:
-            self.serial = serial_lib.Serial(
-                port=self.device,
-                baudrate=self.baud_rate,
-                timeout=0,
-                write_timeout=1,
-            )
-            print(f"[+] UART opened for {self.sid}: {self.device} @ {self.baud_rate}")
-            return True, None
-        except serial_lib.SerialException as exc:
-            print(f"[!] UART open error: {exc}")
-            return False, {'message': str(exc), 'error_code': 'uart_open_failed'}
-        except PermissionError as exc:
-            print(f"[!] UART permission error: {exc}")
-            return False, {'message': str(exc), 'error_code': 'uart_permission_denied'}
-        except Exception as exc:
-            print(f"[!] UART start error: {exc}")
-            return False, {'message': str(exc), 'error_code': 'uart_open_failed'}
-
-    def _connect_wsl_windows_com(self):
-        helper_python, helper_error = find_windows_python_with_pyserial()
-        if not helper_python:
-            return False, {
-                'message': helper_error or 'WSL Windows COM access requires Windows Python with pyserial installed.',
-                'error_code': 'uart_windows_python_unavailable',
-            }
-
-        try:
-            self.serial = subprocess.Popen(
-                [
-                    helper_python,
-                    '-u',
-                    '-c',
-                    WINDOWS_SERIAL_HELPER,
-                    self.device,
-                    str(self.baud_rate),
-                ],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                bufsize=0,
-            )
-        except Exception as exc:
-            print(f"[!] Windows UART helper start error: {exc}")
-            return False, {'message': str(exc), 'error_code': 'uart_helper_start_failed'}
-
-        status = self._read_helper_status(timeout_seconds=5)
-        if status.get('event') == 'ready':
-            print(f"[+] Windows UART helper opened for {self.sid}: {self.device} @ {self.baud_rate}")
-            return True, None
-
-        message = status.get('message') or 'Windows UART helper did not become ready.'
-        self.runtime.close_process(self.serial)
-        self.serial = None
-        return False, {'message': message, 'error_code': 'uart_open_failed'}
-
-    def _read_helper_status(self, timeout_seconds):
-        if not self.serial or not self.serial.stderr:
-            return {'event': 'error', 'message': 'Windows UART helper stderr is unavailable.'}
-
-        deadline = time.time() + timeout_seconds
-        while time.time() < deadline:
-            timeout = max(0, deadline - time.time())
-            try:
-                readable, _, _ = select.select([self.serial.stderr], [], [], timeout)
-            except Exception as exc:
-                return {'event': 'error', 'message': str(exc)}
-            if not readable:
-                continue
-            line = self.serial.stderr.readline()
-            if not line:
-                break
-            try:
-                data = json.loads(line.decode('utf-8', errors='replace'))
-            except json.JSONDecodeError:
-                continue
-            if isinstance(data, dict) and data.get('event') in {'ready', 'error'}:
-                return data
-
-        if self.serial and self.serial.poll() is not None:
-            return {'event': 'error', 'message': 'Windows UART helper exited before opening the port.'}
-        return {'event': 'error', 'message': 'Timed out while opening Windows UART port.'}
-
-    def read_loop(self):
-        print(f"[*] Starting UART read loop for {self.sid}")
-        while True:
-            self.runtime.sleep(0.01)
-            if not self.serial:
-                break
-
-            try:
-                if isinstance(self.serial, subprocess.Popen):
-                    data = self._read_windows_helper_once()
-                else:
-                    waiting = self.serial.in_waiting
-                    data = self.serial.read(waiting or 1)
-                if data:
-                    self.emit_output({
-                        'message_type': 'terminal',
-                        'data': data.decode('utf-8', errors='replace'),
-                    })
-                elif isinstance(self.serial, subprocess.Popen) and self.serial.poll() is not None:
-                    self.emit_output({
-                        'message_type': 'ssh_closed',
-                        'message': 'UART helper exited.',
-                        'error_code': 'uart_helper_exited',
-                    })
-                    break
-            except Exception as exc:
-                if self.closing:
-                    break
-                print(f"[!] UART read error: {exc}")
-                self.emit_output({
-                    'message_type': 'ssh_closed',
-                    'message': 'UART connection closed due to a read error.',
-                    'error_code': 'uart_read_error',
-                })
-                break
-
-        print(f"[*] UART read loop terminated for {self.sid}")
-        self.runtime.unregister_bridge(self.owner_session, self.terminal_id, self)
-
-    def _read_windows_helper_once(self):
-        if not self.serial or not self.serial.stdout:
-            return b''
-        readable, _, _ = select.select([self.serial.stdout], [], [], 0)
-        if not readable:
-            return b''
-        return self.serial.stdout.read(4096)
-
-    def write(self, data):
-        if not self.serial:
-            return
-        try:
-            encoded = data.encode('utf-8', errors='replace')
-            if isinstance(self.serial, subprocess.Popen):
-                if self.serial.stdin:
-                    self.serial.stdin.write(encoded)
-                    self.serial.stdin.flush()
-            else:
-                self.serial.write(encoded)
-        except Exception as exc:
-            print(f"[!] UART write error: {exc}")
-
-    def resize(self, cols, rows):
-        return
-
-    def close(self):
-        if not self.serial:
-            return
-        try:
-            if isinstance(self.serial, subprocess.Popen):
-                self.runtime.close_process(self.serial)
-            else:
-                self.serial.close()
-        except Exception:
-            pass
-        self.serial = None
-
 pending_backend_actions = BackendActionStore(time_func=time.time)
 pending_localhost_key_setups = pending_backend_actions
 TERMINAL_BACKEND_REGISTRY = TerminalBackendRegistry([
@@ -1368,6 +1186,14 @@ TERMINAL_BACKEND_REGISTRY = TerminalBackendRegistry([
         min_baud_rate=MIN_UART_BAUD_RATE,
         max_baud_rate=MAX_UART_BAUD_RATE,
         baud_rates=UART_BAUD_RATES,
+        bridge_kwargs={
+            'is_wsl': lambda: is_wsl(),
+            'is_windows_com_device': is_windows_com_device,
+            'get_serial_modules': get_serial_modules,
+            'find_windows_python_with_pyserial': find_windows_python_with_pyserial,
+            'windows_serial_helper': WINDOWS_SERIAL_HELPER,
+            'time_func': time.time,
+        },
     ),
 ], normalize_connection_type, default_preference=(
     CONNECTION_TYPE_LOCAL_SHELL,

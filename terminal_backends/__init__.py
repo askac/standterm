@@ -9,7 +9,7 @@ from .base import (
 )
 from .local_shell import LocalShellBackendPlugin, LocalShellBridge
 from .ssh import SSHBackendPlugin, SSHBridge
-from .uart import UARTBackendPlugin
+from .uart import UARTBackendPlugin, UARTBridge
 
 __all__ = [
     'LocalShellBackendPlugin',
@@ -24,4 +24,5 @@ __all__ = [
     'TerminalBridge',
     'TerminalBridgeRuntime',
     'UARTBackendPlugin',
+    'UARTBridge',
 ]
