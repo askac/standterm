@@ -8,12 +8,13 @@ from .base import (
     TerminalBridgeRuntime,
 )
 from .local_shell import LocalShellBackendPlugin
-from .ssh import SSHBackendPlugin
+from .ssh import SSHBackendPlugin, SSHBridge
 from .uart import UARTBackendPlugin
 
 __all__ = [
     'LocalShellBackendPlugin',
     'SSHBackendPlugin',
+    'SSHBridge',
     'BackendAction',
     'BackendActionStore',
     'BackendPolicyContext',

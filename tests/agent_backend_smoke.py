@@ -2063,6 +2063,7 @@ def test_ssh_backend_action_contract_uses_public_bridge_method():
         has_control_chars=webssh.has_control_chars,
         allowed_action_types={'offer_localhost_key_setup'},
         backend_action_store=action_store,
+        bridge_kwargs={},
         key_setup_ttl_seconds=120,
         token_urlsafe=lambda _length: 'action-token',
         time_func=lambda: 1000,
@@ -2096,6 +2097,15 @@ def test_ssh_backend_action_contract_uses_public_bridge_method():
     assert calls == [
         ('offer_localhost_key_setup', payload, 1120, 'message', 'question'),
     ]
+
+
+def test_ssh_bridge_is_provided_by_backend_module():
+    assert webssh.SSHBridge.__module__ == 'terminal_backends.ssh'
+    plugin = webssh.TERMINAL_BACKEND_REGISTRY.get(webssh.CONNECTION_TYPE_SSH)
+    bridge = plugin.create_bridge(webssh.ACCESS_TOKEN, webssh.TERMINAL_ID_MAIN, {})
+    assert isinstance(bridge, webssh.TerminalBridge)
+    assert bridge.connection_type == webssh.CONNECTION_TYPE_SSH
+    bridge.close()
 
 
 def test_agent_audit_records_typed_events_without_raw_action_data():
@@ -2683,6 +2693,7 @@ def main():
         test_terminal_policy_creates_authorized_dir_for_fresh_checkout,
         test_wsl_client_ips_require_explicit_trust_for_local_resources,
         test_ssh_backend_action_contract_uses_public_bridge_method,
+        test_ssh_bridge_is_provided_by_backend_module,
         test_agent_audit_records_typed_events_without_raw_action_data,
         test_wrong_sid_cannot_approve_action,
         test_stale_mode_version_cannot_approve_action,
