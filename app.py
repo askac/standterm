@@ -312,6 +312,7 @@ AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS = parse_optional_seconds_env(
 )
 AGENT_EXTERNAL_TAIL_MAX_EVENTS = 200
 AGENT_EXTERNAL_TAIL_MAX_WAIT_MS = 30000
+AGENT_EXTERNAL_SCREEN_MAX_QUIET_MS = 5000
 AGENT_HUMAN_INPUT_LEASE_SECONDS = 2.0
 AGENT_AUDIT_VIEWER_ATTACH = 'viewer_attach'
 AGENT_AUDIT_VIEWER_DETACH = 'viewer_detach'
@@ -339,7 +340,7 @@ AGENT_AUDIT_DIRECT_WRITE = 'direct_write'
 AGENT_AUDIT_TERMINAL_CLEANUP = 'terminal_cleanup'
 AGENT_AUDIT_ERROR = 'error'
 EXTERNAL_AGENT_PROTOCOL_VERSION = 1
-EXTERNAL_AGENT_CAPABILITIES = ['state', 'screen', 'headless_screen', 'render', 'tail', 'send', 'send_capture', 'submit_after', 'strip_ansi', 'revoke']
+EXTERNAL_AGENT_CAPABILITIES = ['state', 'screen', 'headless_screen', 'screen_wait', 'render', 'tail', 'send', 'send_capture', 'submit_after', 'strip_ansi', 'revoke']
 AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_WAIT_MS = 3000
 AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_SETTLE_MS = 150
 AGENT_EXTERNAL_SEND_CAPTURE_MAX_SETTLE_MS = 5000
@@ -2181,6 +2182,7 @@ class HeadlessTerminalGrid:
         self.cursor_y = 0
         self.saved_cursor = (0, 0)
         self.output_seq = 0
+        self.screen_seq = 0
         self.updated_at = None
 
     def resize(self, cols, rows):
@@ -2205,6 +2207,7 @@ class HeadlessTerminalGrid:
         if isinstance(output_seq, int) and output_seq > self.output_seq:
             self.output_seq = output_seq
         self.updated_at = time.time()
+        self.screen_seq += 1
         index = 0
         while index < len(data):
             char = data[index]
@@ -2238,6 +2241,7 @@ class HeadlessTerminalGrid:
             'viewport_y': 0,
             'base_y': 0,
             'output_seq': output_seq,
+            'screen_seq': self.screen_seq,
             'updated_at': self.updated_at,
             'line_count': len(lines),
             'byte_length': byte_length,
@@ -2966,6 +2970,7 @@ class BrowserViewportMirrorAdapter(AgentTerminalMirror):
             'viewport_y': snapshot.get('viewport_y'),
             'base_y': snapshot.get('base_y'),
             'snapshot_seq': snapshot.get('snapshot_seq'),
+            'screen_seq': snapshot.get('snapshot_seq'),
             'output_seq': snapshot.get('output_seq'),
             'captured_at': snapshot.get('captured_at'),
             'line_count': snapshot.get('line_count'),
@@ -3065,6 +3070,46 @@ def apply_external_agent_screen_options(screen, options):
     sliced['region'] = region
     sliced['truncated'] = len(selected) != original_line_count
     return sliced
+
+def build_external_agent_screen_wait_payload(bridge, state, wait_ms=None, quiet_ms=None):
+    wait_ms = parse_external_agent_tail_wait_ms(wait_ms)
+    quiet_ms = parse_external_agent_screen_quiet_ms(quiet_ms)
+    payload = {
+        'wait_ms': wait_ms,
+        'quiet_ms': quiet_ms,
+        'settled': quiet_ms <= 0,
+        'timed_out': False,
+    }
+    if wait_ms <= 0 or quiet_ms <= 0:
+        return payload, None
+
+    deadline = time.monotonic() + wait_ms / 1000.0
+    while True:
+        if state.paused or state.mode == AGENT_MODE_PAUSED:
+            return None, AGENT_ERROR_PAUSED
+        if state.mode == AGENT_MODE_DISABLED:
+            return None, AGENT_ERROR_EXTERNAL_AGENT_DISABLED
+        if not is_agent_context_allowed(state):
+            return None, AGENT_ERROR_PRIVACY_BLOCKED
+        with bridge.output_condition:
+            now = time.time()
+            last_output_at = bridge.last_output_at
+            terminal_quiet_ms = None
+            if last_output_at is not None:
+                terminal_quiet_ms = max(0, int((now - last_output_at) * 1000))
+            if last_output_at is None or terminal_quiet_ms >= quiet_ms:
+                payload['settled'] = True
+                payload['terminal_quiet_ms'] = terminal_quiet_ms
+                payload['output_seq'] = bridge.output_seq
+                return payload, None
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                payload['timed_out'] = True
+                payload['terminal_quiet_ms'] = terminal_quiet_ms
+                payload['output_seq'] = bridge.output_seq
+                return payload, None
+            quiet_remaining = max(0.0, (quiet_ms - terminal_quiet_ms) / 1000.0)
+            bridge.output_condition.wait(timeout=min(remaining, quiet_remaining, 0.25))
 
 def build_agent_context(session_token, terminal_id, sid):
     bridge = get_bridge(session_token, terminal_id)
@@ -3257,9 +3302,26 @@ def build_external_agent_terminal_session_payload(record):
     session['session_id'] = get_agent_session_id(record.get('session_token'))
     return session
 
+def build_external_agent_token_state_payload(record, now=None):
+    if not isinstance(record, dict):
+        return None
+    now = time.time() if now is None else now
+    expires_at = record.get('expires_at')
+    remaining_idle_ms = None
+    if expires_at is not None:
+        remaining_idle_ms = max(0, int((expires_at - now) * 1000))
+    return {
+        'token_lifetime': 'session' if record.get('idle_timeout_seconds') is None else 'idle_timeout',
+        'idle_timeout_seconds': record.get('idle_timeout_seconds'),
+        'expires_at': expires_at,
+        'last_used_at': record.get('last_used_at'),
+        'remaining_idle_ms': remaining_idle_ms,
+    }
+
 def build_external_agent_state_payload(record, state):
     payload = state.public_state()
     payload['external_agent_id'] = record.get('external_agent_id')
+    payload['external_agent_token'] = build_external_agent_token_state_payload(record)
     terminal_session = build_external_agent_terminal_session_payload(record)
     if terminal_session:
         payload['terminal_session'] = terminal_session
@@ -3336,6 +3398,13 @@ def parse_external_agent_tail_wait_ms(value):
     except (TypeError, ValueError):
         wait_ms = 0
     return max(0, min(wait_ms, AGENT_EXTERNAL_TAIL_MAX_WAIT_MS))
+
+def parse_external_agent_screen_quiet_ms(value):
+    try:
+        quiet_ms = int(value if value is not None else 0)
+    except (TypeError, ValueError):
+        quiet_ms = 0
+    return max(0, min(quiet_ms, AGENT_EXTERNAL_SCREEN_MAX_QUIET_MS))
 
 def parse_external_agent_send_capture_wait_ms(value):
     try:
@@ -4366,6 +4435,13 @@ def build_external_agent_cli_commands(base_url, token, terminal_id):
             op='screen',
             extra_args=['--region', '0:12'],
         ),
+        'screen_wait': build_external_agent_cli_command(
+            base_url,
+            token,
+            terminal_id,
+            op='screen',
+            extra_args=['--wait-ms', '3000', '--quiet-ms', '500'],
+        ),
         'render': build_external_agent_cli_command(base_url, token, terminal_id, op='render'),
         'tail': build_external_agent_cli_command(base_url, token, terminal_id, op='tail'),
         'tail_wait': build_external_agent_cli_command(
@@ -4427,6 +4503,7 @@ def build_external_agent_discovery_payload(base_url, token, terminal_id):
             'screen': {'op': 'screen'},
             'screen_tail': {'op': 'screen', 'tail_lines': 12},
             'screen_region': {'op': 'screen', 'region': {'top': 0, 'bottom': 12}},
+            'screen_wait': {'op': 'screen', 'wait_ms': 3000, 'quiet_ms': 500},
             'render': {'op': 'render', 'wait_ms': AGENT_VIEWPORT_RENDER_WAIT_MS},
             'tail': {
                 'op': 'tail',
@@ -5683,6 +5760,14 @@ def process_external_agent_command(command):
             screen_options, screen_options_error = parse_external_agent_screen_options(command)
             if screen_options_error:
                 return external_agent_error(screen_options_error, terminal_id=terminal_id)
+            screen_wait, screen_wait_error = build_external_agent_screen_wait_payload(
+                bridge,
+                state,
+                wait_ms=command.get('wait_ms'),
+                quiet_ms=command.get('quiet_ms'),
+            )
+            if screen_wait_error:
+                return external_agent_error(screen_wait_error, terminal_id=terminal_id)
             context = build_agent_context(record.get('session_token'), terminal_id, record.get('sid'))
             active_screen = apply_external_agent_screen_options(
                 context.get('active_screen'),
@@ -5694,8 +5779,9 @@ def process_external_agent_command(command):
                 external_agent_id=record.get('external_agent_id'),
                 context=summarize_agent_context_for_audit(context),
                 screen_options=screen_options,
+                screen_wait=screen_wait,
             )
-            return {
+            payload = {
                 'status': 'ok',
                 'terminal_id': terminal_id,
                 'external_agent_id': record.get('external_agent_id'),
@@ -5703,6 +5789,9 @@ def process_external_agent_command(command):
                 'state': state.public_state(),
                 'screen': active_screen,
             }
+            if screen_wait and (screen_wait.get('wait_ms') or screen_wait.get('quiet_ms')):
+                payload['screen_wait'] = screen_wait
+            return payload
         if op == 'render':
             render, render_error, request_payload, wait_ms = build_external_agent_viewport_render_payload(
                 record,

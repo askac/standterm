@@ -204,6 +204,7 @@ python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json rend
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json render --save viewport.png
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json screen --tail-lines 12
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json screen --region 0:12
+python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json screen --wait-ms 3000 --quiet-ms 500
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json tail --since 0 --limit 50
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json tail --since 0 --wait-ms 25000
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json tail --since 0 --limit 50 --strip-ansi
@@ -245,6 +246,12 @@ or helper. For progress checks, prefer `tail`; `screen` returns the latest
 browser snapshot when available and otherwise falls back to a provisional
 server-side headless terminal grid. Use `render` when xterm/browser visual
 fidelity matters.
+For animated full-screen TUIs, `screen --wait-ms 3000 --quiet-ms 500` returns
+after the terminal has been quiet for the requested interval or reports a typed
+timeout.
+`agent_repl.py` also runs a hidden `state` heartbeat by default to keep the
+external-agent token alive during long idle periods. It does not write terminal
+input or terminal output; use `--keepalive-ms` or `--no-keepalive` to tune it.
 
 For repeated machine-driven operations, prefer `agent_jsonl.py`: it
 starts one persistent local process, reads the handoff once, accepts one JSON

@@ -130,6 +130,69 @@ def test_tail_worker_stops_on_not_attached_error():
     assert stop_event.is_set() is True
 
 
+def test_keepalive_worker_sends_hidden_state_heartbeat():
+    client = FakeClient(responses=[
+        {'status': 'ok'},
+    ])
+    stop_event = threading.Event()
+    waits = []
+
+    def wait_func(interval):
+        waits.append(interval)
+        if len(waits) == 1:
+            return False
+        return True
+
+    repl.keepalive_worker(
+        client,
+        stop_event,
+        interval_seconds=12.5,
+        debug=False,
+        wait_func=wait_func,
+    )
+    assert client.requests == [
+        ('state', {}),
+    ]
+    assert waits == [12.5, 12.5]
+    assert stop_event.is_set() is False
+
+
+def test_keepalive_worker_stops_on_fatal_error():
+    client = FakeClient(responses=[
+        {'status': 'failed', 'error_code': 'agent_external_expired'},
+    ])
+    stop_event = threading.Event()
+
+    def wait_func(_interval):
+        return False
+
+    repl.keepalive_worker(
+        client,
+        stop_event,
+        interval_seconds=1,
+        debug=False,
+        wait_func=wait_func,
+    )
+    assert client.requests == [
+        ('state', {}),
+    ]
+    assert stop_event.is_set() is True
+
+
+def test_format_token_status_reports_idle_countdown():
+    assert repl.format_token_status({
+        'external_agent_token': {
+            'remaining_idle_ms': 124000,
+        },
+    }) == ' token_idle_s=124'
+    assert repl.format_token_status({
+        'external_agent_token': {
+            'token_lifetime': 'session',
+        },
+    }) == ' token_lifetime=session'
+    assert repl.format_token_status({}) == ''
+
+
 def test_cli_and_repl_apply_handoff_defaults(tmp_path=None):
     handoff_path = Path('/tmp/standterm_agent_handoff_unit.json') if tmp_path is None else tmp_path / 'handoff.json'
     handoff_path.write_text(
@@ -244,6 +307,26 @@ def test_cli_screen_region_payload():
             'top': 2,
             'bottom': 8,
         },
+    }
+
+
+def test_cli_screen_wait_payload():
+    args = SimpleNamespace(
+        command='screen',
+        terminal='main',
+        token='agt_unit',
+        tail_lines=4,
+        region=None,
+        wait_ms=3000,
+        quiet_ms=500,
+    )
+    assert cli.command_payload(args) == {
+        'op': 'screen',
+        'terminal_id': 'main',
+        'token': 'agt_unit',
+        'wait_ms': 3000,
+        'quiet_ms': 500,
+        'tail_lines': 4,
     }
 
 
@@ -576,10 +659,14 @@ def main():
         test_send_worker_drops_queued_input_after_fatal_error,
         test_send_worker_keeps_running_on_transient_human_lease,
         test_tail_worker_stops_on_not_attached_error,
+        test_keepalive_worker_sends_hidden_state_heartbeat,
+        test_keepalive_worker_stops_on_fatal_error,
+        test_format_token_status_reports_idle_countdown,
         test_cli_and_repl_apply_handoff_defaults,
         test_cli_plain_send_payload_stays_compatible,
         test_cli_screen_tail_lines_payload,
         test_cli_screen_region_payload,
+        test_cli_screen_wait_payload,
         test_cli_tail_strip_ansi_payload,
         test_cli_send_capture_payload,
         test_cli_send_wait_payload_requests_capture,

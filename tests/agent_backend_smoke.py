@@ -598,6 +598,9 @@ def test_external_agent_can_attach_and_read_authorized_screen():
     assert attach['terminal_session']['output_seq'] == 1
     assert attach['terminal_session']['last_output_at'] is not None
     assert attach['terminal_session']['terminal_quiet_ms'] >= 0
+    assert attach['external_agent_token']['token_lifetime'] == 'idle_timeout'
+    assert attach['external_agent_token']['idle_timeout_seconds'] == standterm.AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS
+    assert attach['external_agent_token']['remaining_idle_ms'] > 0
 
     screen = standterm.process_external_agent_command({
         'op': 'screen',
@@ -672,6 +675,7 @@ def test_external_agent_screen_falls_back_to_headless_grid_without_browser_snaps
     assert screen['screen']['cols'] == 12
     assert screen['screen']['rows'] == 4
     assert screen['screen']['output_seq'] == 3
+    assert screen['screen']['screen_seq'] == 3
     assert screen['screen']['lines'] == ['first', 'done', '', '']
     assert screen['screen']['cursor_x'] == len('done')
     assert screen['screen']['cursor_y'] == 1
@@ -690,6 +694,20 @@ def test_external_agent_screen_falls_back_to_headless_grid_without_browser_snaps
         'bottom': 4,
         'tail_lines': 2,
     }
+
+    quiet_screen = standterm.process_external_agent_command({
+        'op': 'screen',
+        'token': token,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'wait_ms': 1000,
+        'quiet_ms': 20,
+    })
+    assert quiet_screen['status'] == 'ok'
+    assert quiet_screen['screen_wait']['wait_ms'] == 1000
+    assert quiet_screen['screen_wait']['quiet_ms'] == 20
+    assert quiet_screen['screen_wait']['settled'] is True
+    assert quiet_screen['screen_wait']['timed_out'] is False
+    assert quiet_screen['screen_wait']['terminal_quiet_ms'] >= 20
 
     client.disconnect()
 
@@ -1855,6 +1873,8 @@ def test_external_agent_expired_and_wrong_terminal_tokens_are_rejected():
     })
     assert result['status'] == 'ok'
     assert stored['expires_at'] > first_expires_at
+    assert result['external_agent_token']['expires_at'] == stored['expires_at']
+    assert result['external_agent_token']['remaining_idle_ms'] > 0
 
     token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
@@ -1904,6 +1924,7 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             assert token_payload['schema_version'] == 1
             assert token_payload['protocol_version'] == standterm.EXTERNAL_AGENT_PROTOCOL_VERSION
             assert 'headless_screen' in token_payload['capabilities']
+            assert 'screen_wait' in token_payload['capabilities']
             assert 'render' in token_payload['capabilities']
             assert 'send_capture' in token_payload['capabilities']
             assert 'submit_after' in token_payload['capabilities']
@@ -1921,6 +1942,11 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
                     'top': 0,
                     'bottom': 12,
                 },
+            }
+            assert token_payload['operations']['screen_wait'] == {
+                'op': 'screen',
+                'wait_ms': 3000,
+                'quiet_ms': 500,
             }
             assert token_payload['operations']['tail']['wait_ms'] == standterm.AGENT_EXTERNAL_TAIL_MAX_WAIT_MS
             assert token_payload['operations']['tail_plain']['strip_ansi'] is True
@@ -1940,6 +1966,7 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             assert token_payload['cli_commands']['render'].endswith('render')
             assert token_payload['cli_commands']['screen_tail'].endswith("screen --tail-lines 12")
             assert token_payload['cli_commands']['screen_region'].endswith("screen --region 0:12")
+            assert token_payload['cli_commands']['screen_wait'].endswith("screen --wait-ms 3000 --quiet-ms 500")
             assert token_payload['cli_commands']['tail_wait'].endswith(
                 f"tail --wait-ms {standterm.AGENT_EXTERNAL_TAIL_MAX_WAIT_MS}"
             )

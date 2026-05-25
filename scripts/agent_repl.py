@@ -104,6 +104,8 @@ def parse_args():
     parser.add_argument('--insecure', action='store_true', help='Disable HTTPS certificate verification')
     parser.add_argument('--poll-ms', type=int, default=150, help='Tail polling interval in milliseconds')
     parser.add_argument('--tail-wait-ms', type=int, default=25000, help='Server-side long-poll wait for tail output in milliseconds')
+    parser.add_argument('--keepalive-ms', type=int, default=60000, help='Background state heartbeat interval in milliseconds')
+    parser.add_argument('--no-keepalive', action='store_true', help='Disable the background state heartbeat')
     parser.add_argument('--limit', type=int, default=200, help='Maximum tail events per poll')
     parser.add_argument('--coalesce-ms', type=int, default=20, help='Input coalescing window in milliseconds')
     parser.add_argument('--enter', choices=('cr', 'lf', 'crlf'), default='cr', help='Bytes sent when local Enter is pressed')
@@ -206,6 +208,19 @@ def assert_repl_ready(client, allow_non_direct):
     return result
 
 
+def format_token_status(state):
+    token_state = state.get('external_agent_token') if isinstance(state, dict) else None
+    if not isinstance(token_state, dict):
+        return ''
+    remaining_idle_ms = token_state.get('remaining_idle_ms')
+    if isinstance(remaining_idle_ms, int):
+        return f" token_idle_s={max(0, remaining_idle_ms // 1000)}"
+    token_lifetime = token_state.get('token_lifetime')
+    if token_lifetime == 'session':
+        return ' token_lifetime=session'
+    return ''
+
+
 def warn_tail_gap(result, last_seq):
     gap = result.get('gap')
     if isinstance(gap, dict) and gap.get('detected'):
@@ -255,6 +270,25 @@ def tail_worker(client, last_seq, stop_event, poll_seconds, limit, tail_wait_ms)
             last_seq = max(last_seq, output_seq if not events else last_seq)
         if tail_wait_ms <= 0:
             time.sleep(poll_seconds)
+
+
+def keepalive_worker(client, stop_event, interval_seconds, debug, wait_func=None):
+    if interval_seconds <= 0:
+        return
+    wait_func = wait_func or stop_event.wait
+    while not stop_event.is_set():
+        if wait_func(interval_seconds):
+            return
+        _status, result = client.request('state')
+        if result.get('status') == 'failed':
+            error_code = result.get('error_code') or 'keepalive failed'
+            stderr_line(f"[external-agent] keepalive failed: {error_code}")
+            if error_code in FATAL_AGENT_ERRORS:
+                stop_event.set()
+                return
+            continue
+        if debug:
+            stderr_line('[external-agent] keepalive: ' + json.dumps(result, sort_keys=True))
 
 
 def handle_send_result(result, stop_event):
@@ -363,7 +397,10 @@ def run_repl(args):
         insecure=args.insecure,
     )
     state = assert_repl_ready(client, args.allow_non_direct)
-    stderr_line(f"[external-agent] attached to {args.terminal} mode={state.get('mode')}")
+    stderr_line(
+        f"[external-agent] attached to {args.terminal} "
+        f"mode={state.get('mode')}{format_token_status(state)}"
+    )
     last_seq = current_output_seq(client) if args.no_initial_screen else print_initial_screen(client)
 
     stop_event = threading.Event()
@@ -371,6 +408,8 @@ def run_repl(args):
     poll_seconds = max(args.poll_ms, 20) / 1000.0
     coalesce_seconds = max(args.coalesce_ms, 0) / 1000.0
     tail_wait_ms = max(args.tail_wait_ms, 0)
+    keepalive_ms = 0 if args.no_keepalive else max(args.keepalive_ms, 0)
+    keepalive_seconds = keepalive_ms / 1000.0
 
     tail_thread = threading.Thread(
         target=tail_worker,
@@ -382,8 +421,17 @@ def run_repl(args):
         args=(client, input_queue, stop_event, coalesce_seconds, args.debug),
         daemon=True,
     )
+    keepalive_thread = None
+    if keepalive_seconds > 0:
+        keepalive_thread = threading.Thread(
+            target=keepalive_worker,
+            args=(client, stop_event, keepalive_seconds, args.debug),
+            daemon=True,
+        )
     tail_thread.start()
     sender_thread.start()
+    if keepalive_thread:
+        keepalive_thread.start()
 
     try:
         if sys.stdin.isatty() and termios and tty:
@@ -399,6 +447,8 @@ def run_repl(args):
         input_queue.put(STOP)
         sender_thread.join(timeout=2)
         tail_thread.join(timeout=2)
+        if keepalive_thread:
+            keepalive_thread.join(timeout=2)
 
 
 def main():

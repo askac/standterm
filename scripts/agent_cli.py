@@ -45,6 +45,8 @@ def parse_args():
     screen_group = screen_parser.add_mutually_exclusive_group()
     screen_group.add_argument('--tail-lines', type=int, help='Only return the last N viewport lines')
     screen_group.add_argument('--region', help='Only return zero-based line range TOP:BOTTOM, with BOTTOM exclusive')
+    screen_parser.add_argument('--wait-ms', type=int, help='Wait up to this long for a quiet screen')
+    screen_parser.add_argument('--quiet-ms', type=int, help='Required terminal quiet time before returning screen')
 
     render_parser = subparsers.add_parser('render')
     render_parser.add_argument('--wait-ms', type=int, default=3000, help='Maximum browser render wait time')
@@ -132,6 +134,10 @@ def command_payload(args):
         if getattr(args, 'strip_ansi', False):
             payload['strip_ansi'] = True
     elif args.command == 'screen':
+        if getattr(args, 'wait_ms', None) is not None:
+            payload['wait_ms'] = args.wait_ms
+        if getattr(args, 'quiet_ms', None) is not None:
+            payload['quiet_ms'] = args.quiet_ms
         if getattr(args, 'tail_lines', None) is not None:
             payload['tail_lines'] = args.tail_lines
         elif getattr(args, 'region', None):

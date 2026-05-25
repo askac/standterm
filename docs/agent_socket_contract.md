@@ -163,7 +163,11 @@ tools/.venv_wsl/bin/python scripts/agent_repl.py \
 
 The REPL keeps one local process alive, coalesces local keyboard input before
 calling `send`, and renders remote output from long-poll `tail` using
-`output_seq` as its cursor. `screen` is only a provisional initial
+`output_seq` as its cursor. Its attach banner includes typed token lifetime
+metadata when the server provides it, such as remaining idle seconds. It also
+runs a hidden `state` heartbeat by default to renew the external-agent token
+without writing terminal input or terminal output; use `--keepalive-ms` or
+`--no-keepalive` to tune it. `screen` is only a provisional initial
 viewport/debug source; it is not the authoritative terminal stream. The local
 detach key is `Ctrl-]`. In dev
 servers started with `STANDTERM_AGENT_DEV_TOKEN=1`, the REPL may omit `--token` and
@@ -244,8 +248,8 @@ Discover protocol/capabilities:
 
 `hello` returns `version`, `external_agent_id`, `terminal_id`, current public
 Agent state, and a typed `capabilities` array such as `state`, `screen`,
-`headless_screen`, `render`, `tail`, `send`, `send_capture`, `submit_after`,
-`strip_ansi`, and `revoke`.
+`headless_screen`, `screen_wait`, `render`, `tail`, `send`, `send_capture`,
+`submit_after`, `strip_ansi`, and `revoke`.
 
 Attach:
 
@@ -271,6 +275,10 @@ Read state:
 object when the terminal bridge is still present. It includes the current
 `output_seq`, `last_output_at`, and `terminal_quiet_ms` so CLI clients can
 distinguish an idle terminal from a slow task without scraping display text.
+They also include `external_agent_token` with typed idle-timeout metadata:
+`token_lifetime`, `idle_timeout_seconds`, `expires_at`, `last_used_at`, and
+`remaining_idle_ms`. These fields are not secrets and do not include the bearer
+token or token hash.
 Because every valid command renews the token idle timeout, `state` is the
 lightweight typed heartbeat for long local reasoning gaps. Use `tail` with
 `wait_ms` instead when the caller also wants to wait for terminal output.
@@ -318,10 +326,29 @@ request a slice of the latest screen:
 
 `region.top` is inclusive and `region.bottom` is exclusive. Sliced responses
 preserve screen metadata such as `source`, `provisional`, `snapshot_seq` when
-present, `output_seq`, `rows`, and `cols`, and add `region`,
+present, `screen_seq`, `output_seq`, `rows`, and `cols`, and add `region`,
 `original_line_count`, and `truncated` fields. `tail_lines` and `region` are
 mutually exclusive. Diff reads are intentionally not defined yet; use `tail`
 with `output_seq` for event-cursor reads.
+
+Callers may ask `screen` to wait for a stable TUI display by passing `wait_ms`
+and `quiet_ms`:
+
+```json
+{
+  "op": "screen",
+  "token": "agt_...",
+  "terminal_id": "main",
+  "wait_ms": 3000,
+  "quiet_ms": 500
+}
+```
+
+The server returns after the terminal has produced no output for `quiet_ms`, or
+after `wait_ms` expires. Responses that requested waiting include a typed
+`screen_wait` object with `wait_ms`, `quiet_ms`, `settled`, `timed_out`,
+`terminal_quiet_ms`, and `output_seq`. This is only a timing contract for the
+display stream; it is not a semantic prompt detector.
 
 Read rendered xterm viewport:
 
