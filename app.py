@@ -1472,7 +1472,7 @@ def validate_pairing_file(data, browser_id, public_key_b64):
 def accept_browser_pairing_file(browser_id, public_key_b64):
     if not AUTHORIZED_DIR.is_dir():
         return False
-    pairing_paths = sorted(AUTHORIZED_DIR.glob('standterm-authorize_*.json'))
+    pairing_paths = sorted(AUTHORIZED_DIR.glob('browser-authorize_*.json'))
     for pairing_path in pairing_paths:
         try:
             data = json.loads(pairing_path.read_text(encoding='utf-8'))
@@ -4395,7 +4395,7 @@ def on_request_browser_pairing():
         )
         return
     pairing = build_pairing_file(identity['browser_id'], identity['public_key'])
-    filename = f"standterm-authorize_{pairing['pairing_id']}.json"
+    filename = f"browser-authorize_{pairing['pairing_id']}.json"
     socketio.emit(
         'browser_pairing_file',
         {

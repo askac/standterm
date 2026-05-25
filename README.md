@@ -129,7 +129,7 @@ To authorize a browser from the WSL IP URL:
 1. Open the HTTPS Access URL printed by `run.sh`.
 2. If the page is not trusted, download the StandTerm CA from the Authorizer panel
    and import it into Windows Trusted Root Certification Authorities.
-3. Click `Authorize` to download `standterm-authorize_*.json`.
+3. Click `Authorize` to download `browser-authorize_*.json`.
 4. Move that file into the repo-local `authorized/` directory.
 5. Click `Check`.
 

@@ -1802,7 +1802,7 @@
                     appendBrowserAuthDetail('If the browser does not trust this page yet, download the local CA certificate:', 'Download StandTerm CA', terminalPolicy.ca_download_url);
                     appendBrowserAuthDetail('Import standterm-local-ca.crt into Windows Trusted Root Certification Authorities, then reload the HTTPS URL.');
                 }
-                appendBrowserAuthDetail('Click Authorize to download standterm-authorize_*.json.');
+                appendBrowserAuthDetail('Click Authorize to download browser-authorize_*.json.');
                 if (terminalPolicy.authorized_dir_ready === false) {
                     appendBrowserAuthDetail('The server could not create the authorization directory. Check server filesystem permissions before clicking Authorize.');
                 }
