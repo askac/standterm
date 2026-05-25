@@ -661,7 +661,7 @@
         };
 
         // --- Preferences ---
-        const PREF_KEY = 'webssh.pref.v1';
+        const PREF_KEY = 'terminal.pref.v1';
         const PREF_DEFAULTS = { 
             useCustomMenu: true,
             copyOnSelect: false, 
@@ -699,7 +699,7 @@
             document.body.removeChild(ta);
         }
 
-        const BROWSER_AUTH_DB = 'webssh-browser-auth-v1';
+        const BROWSER_AUTH_DB = 'browser-auth-v1';
         const BROWSER_AUTH_STORE = 'keys';
         const BROWSER_AUTH_KEY = 'identity';
         const BROWSER_KEY_ALGORITHM = { name: 'ECDSA', namedCurve: 'P-256' };
@@ -1111,7 +1111,7 @@
 
             function loadAgentPanelPosition() {
                 try {
-                    const payload = JSON.parse(localStorage.getItem('webssh.agentPanelPosition.v1') || 'null');
+                    const payload = JSON.parse(localStorage.getItem('agentPanelPosition.v1') || 'null');
                     if (!payload || typeof payload.left !== 'number' || typeof payload.top !== 'number') return null;
                     return {
                         left: payload.left,
@@ -1124,7 +1124,7 @@
 
             function saveAgentPanelPosition(position) {
                 try {
-                    localStorage.setItem('webssh.agentPanelPosition.v1', JSON.stringify(position));
+                    localStorage.setItem('agentPanelPosition.v1', JSON.stringify(position));
                 } catch (_error) {
                     // Manual positioning still works for the current page load.
                 }
@@ -2231,8 +2231,8 @@
                 };
             }
 
-            function installWebsshBrowserTestHook() {
-                if (!debugEnabled || !socket || window.websshTest) return;
+            function installBrowserTestHook() {
+                if (!debugEnabled || !socket || window.terminalTest) return;
                 const emitted = [];
                 const originalEmit = socket.emit.bind(socket);
                 socket.emit = (eventName, ...args) => {
@@ -2244,7 +2244,7 @@
                     if (emitted.length > 100) emitted.shift();
                     return originalEmit(eventName, ...args);
                 };
-                window.websshTest = {
+                window.terminalTest = {
                     clearEmitted() {
                         emitted.length = 0;
                     },
@@ -2300,7 +2300,7 @@
             requestAnimationFrame(fitAndNotifyResize);
 
             socket = io({ transports: ['polling', 'websocket'], reconnectionAttempts: 5 });
-            installWebsshBrowserTestHook();
+            installBrowserTestHook();
             socket.on('connect', () => {
                 socketStatusEl.innerText = "Connected";
                 socketStatusEl.style.color = "#34c759";

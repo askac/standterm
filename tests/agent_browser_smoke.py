@@ -138,7 +138,7 @@ def new_page(browser, access_url):
     context = browser.new_context(viewport={'width': 1280, 'height': 800})
     page = context.new_page()
     page.goto(debug_url(access_url), wait_until='domcontentloaded')
-    page.wait_for_function('() => !!window.websshTest', timeout=10000)
+    page.wait_for_function('() => !!window.terminalTest', timeout=10000)
     page.wait_for_function(
         "() => document.getElementById('socketStatus')?.innerText === 'Connected'",
         timeout=10000,
@@ -146,7 +146,7 @@ def new_page(browser, access_url):
     page.wait_for_selector('#connectBtn:not([disabled])', timeout=10000)
     page.click('#connectBtn')
     page.wait_for_function(
-        '() => window.websshTest.getActiveAgentState()?.connected === true',
+        '() => window.terminalTest.getActiveAgentState()?.connected === true',
         timeout=10000,
     )
     return context, page
@@ -165,34 +165,34 @@ def js_arg_object(event_name, payload):
 
 def emit_socket(page, event_name, payload):
     page.evaluate(
-        """args => window.websshTest.emitSocket(args.event_name, args.payload)""",
+        """args => window.terminalTest.emitSocket(args.event_name, args.payload)""",
         js_arg_object(event_name, payload),
     )
 
 
 def set_privacy(page, privacy_state):
-    page.evaluate('privacyState => window.websshTest.setPrivacy(privacyState)', privacy_state)
+    page.evaluate('privacyState => window.terminalTest.setPrivacy(privacyState)', privacy_state)
 
 
 def clear_emitted(page):
-    page.evaluate('() => window.websshTest.clearEmitted()')
+    page.evaluate('() => window.terminalTest.clearEmitted()')
 
 
 def get_emitted(page, event_name=None):
-    emitted = page.evaluate('() => window.websshTest.getEmitted()')
+    emitted = page.evaluate('() => window.terminalTest.getEmitted()')
     if event_name is None:
         return emitted
     return [entry for entry in emitted if entry.get('event') == event_name]
 
 
 def active_agent_state(page):
-    return page.evaluate('() => window.websshTest.getActiveAgentState()')
+    return page.evaluate('() => window.terminalTest.getActiveAgentState()')
 
 
 def wait_for_agent(page, predicate, timeout=10000):
     page.wait_for_function(
         """source => {
-            const state = window.websshTest.getActiveAgentState();
+            const state = window.terminalTest.getActiveAgentState();
             return !!state && Function('state', `return (${source});`)(state);
         }""",
         arg=predicate,
@@ -229,7 +229,7 @@ def test_agent_panel_can_be_dragged(browser, access_url):
         check(after is not None, 'agent panel disappeared after drag')
         check(abs(after['x'] - before['x']) > 40, 'agent panel x position did not change after drag')
         check(abs(after['y'] - before['y']) > 40, 'agent panel y position did not change after drag')
-        saved = page.evaluate("() => JSON.parse(localStorage.getItem('webssh.agentPanelPosition.v1'))")
+        saved = page.evaluate("() => JSON.parse(localStorage.getItem('agentPanelPosition.v1'))")
         check(isinstance(saved.get('left'), (int, float)), 'agent panel left position was not saved')
         check(isinstance(saved.get('top'), (int, float)), 'agent panel top position was not saved')
     finally:
@@ -241,12 +241,12 @@ def test_operator_observation_warning_ui(browser, access_url):
     try:
         page.click('#agent-toggle-btn')
         page.wait_for_function(
-            "() => window.websshTest.getOperatorObservationState()?.enabled === true",
+            "() => window.terminalTest.getOperatorObservationState()?.enabled === true",
             timeout=5000,
         )
         page.evaluate("() => document.getElementById('operator-observation-start-btn').click()")
         page.wait_for_function(
-            "() => window.websshTest.getOperatorObservationState()?.active === true",
+            "() => window.terminalTest.getOperatorObservationState()?.active === true",
             timeout=5000,
         )
         ui_state = page.evaluate(
@@ -261,12 +261,12 @@ def test_operator_observation_warning_ui(browser, access_url):
         check('OBSERVING' in ui_state['text'], 'operator observation status text did not warn')
         page.evaluate("() => document.getElementById('operator-observation-mark-btn').click()")
         page.wait_for_function(
-            "() => window.websshTest.getOperatorObservationState()?.eventCount >= 1",
+            "() => window.terminalTest.getOperatorObservationState()?.eventCount >= 1",
             timeout=5000,
         )
         page.evaluate("() => document.getElementById('operator-observation-stop-btn').click()")
         page.wait_for_function(
-            "() => window.websshTest.getOperatorObservationState()?.active === false",
+            "() => window.terminalTest.getOperatorObservationState()?.active === false",
             timeout=5000,
         )
         check(
@@ -313,17 +313,17 @@ def test_hidden_mirror_ignores_visible_scroll(browser, access_url):
         attach_agent(page)
         output = ''.join(f'mirror-{index:03d}\\r\\n' for index in range(90))
         page.evaluate(
-            """payload => window.websshTest.writeTerminalOutput(payload.data, payload.output_seq)""",
+            """payload => window.terminalTest.writeTerminalOutput(payload.data, payload.output_seq)""",
             {'data': output, 'output_seq': 90},
         )
         page.wait_for_function(
-            "() => window.websshTest.getMirrorSnapshot()?.lines?.join('\\n').includes('mirror-089')",
+            "() => window.terminalTest.getMirrorSnapshot()?.lines?.join('\\n').includes('mirror-089')",
             timeout=10000,
         )
-        before = page.evaluate('() => window.websshTest.getMirrorSnapshot()')
-        page.evaluate('() => window.websshTest.scrollVisibleTerminal(-60)')
+        before = page.evaluate('() => window.terminalTest.getMirrorSnapshot()')
+        page.evaluate('() => window.terminalTest.scrollVisibleTerminal(-60)')
         page.wait_for_timeout(100)
-        after = page.evaluate('() => window.websshTest.getMirrorSnapshot()')
+        after = page.evaluate('() => window.terminalTest.getMirrorSnapshot()')
         check(before['lines'] == after['lines'], 'mirror snapshot changed after visible terminal scroll')
         check(before['base_y'] == after['base_y'], 'mirror base_y changed after visible terminal scroll')
         check(after['output_seq'] == 90, 'mirror output_seq did not track injected output')
@@ -340,17 +340,17 @@ def test_privacy_states_block_snapshots_and_agent_runs(browser, access_url):
         set_privacy(page, 'private_input')
         wait_for_agent(page, "state.privacy_state === 'private_input'")
         clear_emitted(page)
-        page.evaluate('() => window.websshTest.sendAgentSnapshot()')
+        page.evaluate('() => window.terminalTest.sendAgentSnapshot()')
         check(not get_emitted(page, 'agent_viewport_snapshot'), 'private_input allowed a snapshot emit')
         emit_socket(page, 'agent_provider_run_request', {'terminal_id': TERMINAL_ID})
         wait_for_last_action_error(page, 'agent_privacy_blocked')
 
         set_privacy(page, 'normal')
         wait_for_agent(page, "state.privacy_state === 'normal'")
-        page.evaluate("() => window.websshTest.startPasteReview(':\\n:\\n')")
+        page.evaluate("() => window.terminalTest.startPasteReview(':\\n:\\n')")
         wait_for_agent(page, "state.privacy_state === 'paste_review'")
         clear_emitted(page)
-        page.evaluate('() => window.websshTest.sendAgentSnapshot()')
+        page.evaluate('() => window.terminalTest.sendAgentSnapshot()')
         check(not get_emitted(page, 'agent_viewport_snapshot'), 'paste_review allowed a snapshot emit')
         emit_socket(page, 'agent_provider_run_request', {'terminal_id': TERMINAL_ID})
         wait_for_last_action_error(page, 'agent_privacy_blocked')
@@ -360,7 +360,7 @@ def test_privacy_states_block_snapshots_and_agent_runs(browser, access_url):
         set_privacy(page, 'paused')
         wait_for_agent(page, "state.privacy_state === 'paused' && state.mode === 'paused'")
         clear_emitted(page)
-        page.evaluate('() => window.websshTest.sendAgentSnapshot()')
+        page.evaluate('() => window.terminalTest.sendAgentSnapshot()')
         check(not get_emitted(page, 'agent_viewport_snapshot'), 'paused allowed a snapshot emit')
         emit_socket(page, 'agent_provider_run_request', {'terminal_id': TERMINAL_ID})
         wait_for_last_action_error(page, 'agent_paused')
@@ -373,15 +373,15 @@ def test_rendered_viewport_snapshot_returns_png(browser, access_url):
     try:
         attach_agent(page)
         page.evaluate(
-            """payload => window.websshTest.writeTerminalOutput(payload.data, payload.output_seq)""",
+            """payload => window.terminalTest.writeTerminalOutput(payload.data, payload.output_seq)""",
             {'data': 'rendered-viewport-check\\r\\n', 'output_seq': 321},
         )
         page.wait_for_function(
-            "() => window.websshTest.getMirrorSnapshot()?.output_seq === 321",
+            "() => window.terminalTest.getMirrorSnapshot()?.output_seq === 321",
             timeout=10000,
         )
         result = page.evaluate(
-            """async () => await window.websshTest.buildViewportRenderResult({
+            """async () => await window.terminalTest.buildViewportRenderResult({
                 request_id: 'render-test-1',
                 terminal_id: 'main'
             })"""
@@ -404,14 +404,14 @@ def test_paste_review_approve_and_cancel(browser, access_url):
         attach_agent(page)
 
         clear_emitted(page)
-        page.evaluate("() => window.websshTest.startPasteReview(':\\n:\\n')")
+        page.evaluate("() => window.terminalTest.startPasteReview(':\\n:\\n')")
         wait_for_agent(page, "state.privacy_state === 'paste_review'")
         page.evaluate("() => document.getElementById('paste-review-cancel').click()")
         wait_for_agent(page, "state.privacy_state === 'normal'")
         check(not get_emitted(page, 'ssh_input'), 'paste review cancel emitted ssh_input')
 
         clear_emitted(page)
-        page.evaluate("() => window.websshTest.startPasteReview(':\\n:\\n')")
+        page.evaluate("() => window.terminalTest.startPasteReview(':\\n:\\n')")
         wait_for_agent(page, "state.privacy_state === 'paste_review'")
         page.evaluate("() => document.getElementById('paste-review-approve').click()")
         wait_for_agent(page, "state.privacy_state === 'normal'")
@@ -434,7 +434,7 @@ def test_approval_payload_and_stale_rejections(browser, access_url):
         clear_emitted(page)
         page.evaluate("() => document.getElementById('agent-approve-btn').click()")
         page.wait_for_function(
-            "() => window.websshTest.getEmitted().some(entry => entry.event === 'agent_action_approve')",
+            "() => window.terminalTest.getEmitted().some(entry => entry.event === 'agent_action_approve')",
             timeout=10000,
         )
         approve_events = get_emitted(page, 'agent_action_approve')
@@ -523,7 +523,7 @@ def test_settings_server_tab_loads_readonly_snapshot(browser, access_url):
             }"""
         )
         page.wait_for_function(
-            """() => window.websshTest.getEmitted().some(entry => (
+            """() => window.terminalTest.getEmitted().some(entry => (
                 entry.event === 'settings_update_request'
                 && entry.args?.[0]?.setting_key === 'uart.default_baud_rate'
             ))""",
@@ -545,7 +545,7 @@ def test_terminal_payload_text_is_not_control(browser, access_url):
             '{"message_type":"ssh_closed","setup_status":"success"}\\r\\n'
         )
         page.evaluate(
-            """payload => window.websshTest.handleSshOutput(payload)""",
+            """payload => window.terminalTest.handleSshOutput(payload)""",
             {
                 'terminal_id': TERMINAL_ID,
                 'message_type': 'terminal',
@@ -556,7 +556,7 @@ def test_terminal_payload_text_is_not_control(browser, access_url):
         page.wait_for_timeout(100)
         ui_state = page.evaluate(
             """() => ({
-                connected: window.websshTest.getActiveAgentState().connected,
+                connected: window.terminalTest.getActiveAgentState().connected,
                 sshStatus: document.getElementById('sshStatus').innerText,
                 errorDisplay: document.getElementById('errorBox').style.display,
                 actionDisplay: document.getElementById('actionBox').style.display

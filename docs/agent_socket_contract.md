@@ -94,8 +94,6 @@ to the terminal and authorizing browser binding, and are invalidated by terminal
 close, viewer detach/disconnect, session expiry, explicit revoke, or binding
 changes. The default idle timeout is five minutes and can be changed with
 `STANDTERM_AGENT_EXTERNAL_IDLE_TIMEOUT_SECONDS`.
-Legacy `WEBSSH_*` environment variable names are still accepted as compatibility
-aliases.
 
 The browser mints tokens through `POST /agent/external/token` using the current
 authenticated StandTerm session cookie and public Agent state fields for the active
@@ -109,9 +107,6 @@ Agent panel mode gates. It is also the machine-readable discovery document for
 non-StandTerm agents. It includes `handoff_schema:
 "standterm_external_agent_handoff"`, `schema_version`, `protocol_version`,
 `transport`, `capabilities`, operation templates, and ready-to-run CLI commands.
-The legacy `webssh_external_agent_handoff.json` file and
-`scripts/webssh_agent_*.py` helpers are compatibility aliases for older local
-tooling.
 Because `/agent/external/command` only accepts loopback clients, the handoff
 `url`, `transport.command_endpoint`, and generated CLI commands use a loopback
 host even when the browser-facing StandTerm URL is a WSL or LAN address. The

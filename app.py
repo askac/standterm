@@ -42,13 +42,9 @@ serial_list_ports_module = None
 
 APP_NAME = 'StandTerm'
 ENV_PREFIX = 'STANDTERM'
-LEGACY_ENV_PREFIX = 'WEBSSH'
 
 def get_prefixed_env(name, default=''):
-    value = os.getenv(f'{ENV_PREFIX}_{name}')
-    if value is not None:
-        return value
-    return os.getenv(f'{LEGACY_ENV_PREFIX}_{name}', default)
+    return os.getenv(f'{ENV_PREFIX}_{name}', default)
 
 def is_prefixed_env_enabled(name):
     return get_prefixed_env(name).strip().lower() in {'1', 'true', 'yes', 'on'}
@@ -106,7 +102,7 @@ MAX_SSH_INPUT_BYTES = 65536
 MAX_PASSWORD_BYTES = 4096
 MAX_HOST_LENGTH = 255
 MAX_USERNAME_LENGTH = 128
-SESSION_COOKIE_NAME = 'webssh_session'
+SESSION_COOKIE_NAME = 'standterm_session'
 SESSION_COOKIE_MAX_AGE = 12 * 60 * 60
 SESSION_CLEANUP_INTERVAL_SECONDS = 60
 LOCALHOST_KEY_SETUP_TTL_SECONDS = 120
@@ -356,7 +352,7 @@ MAX_UART_BAUD_RATE = 4000000
 UART_BAUD_RATES = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600]
 SERIAL_PORT_CACHE_TTL_SECONDS = 10
 WINDOWS_COM_PATTERN = re.compile(r'^COM([1-9][0-9]*)$', re.IGNORECASE)
-BROWSER_PAIRING_TYPE = 'webssh_browser_authorization'
+BROWSER_PAIRING_TYPE = 'browser_authorization'
 BROWSER_PAIRING_VERSION = 1
 BROWSER_PAIRING_TTL_SECONDS = 10 * 60
 MAX_BROWSER_PUBLIC_KEY_BYTES = 4096
@@ -444,7 +440,6 @@ HTTPS_ENABLED = HTTPS_REQUESTED
 HTTPS_AUTO_DISABLED = get_prefixed_env('DISABLE_AUTO_HTTPS') == '1'
 APP_DIR = Path(__file__).resolve().parent
 EXTERNAL_AGENT_HANDOFF_PATH = APP_DIR / 'standterm_external_agent_handoff.json'
-LEGACY_EXTERNAL_AGENT_HANDOFF_NAME = 'webssh_external_agent_handoff.json'
 AUTHORIZED_DIR = APP_DIR / 'authorized'
 AUTHORIZED_BROWSERS_PATH = AUTHORIZED_DIR / 'browsers.json'
 
@@ -1478,7 +1473,6 @@ def accept_browser_pairing_file(browser_id, public_key_b64):
     if not AUTHORIZED_DIR.is_dir():
         return False
     pairing_paths = sorted(AUTHORIZED_DIR.glob('standterm-authorize_*.json'))
-    pairing_paths.extend(sorted(AUTHORIZED_DIR.glob('webssh-authorize_*.json')))
     for pairing_path in pairing_paths:
         try:
             data = json.loads(pairing_path.read_text(encoding='utf-8'))
@@ -3920,10 +3914,6 @@ def get_external_agent_local_base_url():
     scheme = 'https' if HTTPS_ENABLED else 'http'
     return f'{scheme}://127.0.0.1:{DEFAULT_PORT}'
 
-def get_legacy_external_agent_handoff_path(handoff_path=None):
-    path = handoff_path or EXTERNAL_AGENT_HANDOFF_PATH
-    return path.with_name(LEGACY_EXTERNAL_AGENT_HANDOFF_NAME)
-
 def build_external_agent_cli_command(base_url, token, terminal_id, op='send', text='pwd\n',
                                      extra_args=None):
     args = [
@@ -4096,28 +4086,7 @@ def build_external_agent_discovery_payload(base_url, token, terminal_id):
 def write_external_agent_handoff(payload):
     handoff_path = EXTERNAL_AGENT_HANDOFF_PATH
     write_external_agent_handoff_file(handoff_path, payload)
-    legacy_payload = build_legacy_external_agent_handoff_payload(payload, handoff_path)
-    write_external_agent_handoff_file(get_legacy_external_agent_handoff_path(handoff_path), legacy_payload)
     return str(handoff_path)
-
-def build_legacy_external_agent_handoff_payload(payload, canonical_handoff_path):
-    legacy_payload = dict(payload)
-    legacy_payload['handoff_schema'] = 'webssh_external_agent_handoff'
-    legacy_payload['legacy_alias'] = True
-    legacy_payload['canonical_handoff_schema'] = 'standterm_external_agent_handoff'
-    legacy_payload['canonical_handoff_path'] = str(canonical_handoff_path)
-    if isinstance(legacy_payload.get('cli_command'), str):
-        legacy_payload['cli_command'] = legacy_payload['cli_command'].replace(
-            'scripts/agent_cli.py',
-            'scripts/webssh_agent_cli.py',
-        )
-    cli_commands = legacy_payload.get('cli_commands')
-    if isinstance(cli_commands, dict):
-        legacy_payload['cli_commands'] = {
-            key: value.replace('scripts/agent_', 'scripts/webssh_agent_') if isinstance(value, str) else value
-            for key, value in cli_commands.items()
-        }
-    return legacy_payload
 
 def write_external_agent_handoff_file(handoff_path, payload):
     tmp_path = handoff_path.with_suffix(handoff_path.suffix + '.tmp')
@@ -4144,7 +4113,6 @@ def build_external_agent_token_payload(token, record, terminal_id, base_url):
     }
     payload.update(discovery)
     payload['handoff_path'] = write_external_agent_handoff(payload)
-    payload['legacy_handoff_path'] = str(get_legacy_external_agent_handoff_path())
     return payload
 
 def quote_local_command(args, platform_name=None):

@@ -25,10 +25,6 @@ If the user only provides this skill prompt and asks you to operate StandTerm:
    startup banner includes `--ca-file`, preserve it exactly.
 5. Never print the bearer token or full handoff JSON.
 
-Older StandTerm builds may print `webssh_external_agent_handoff.json` and
-`scripts/webssh_agent_*.py` paths. Treat those only as compatibility aliases for
-`standterm_external_agent_handoff.json` and `scripts/agent_*.py`.
-
 ## Workflow
 
 1. Inspect `standterm_external_agent_handoff.json` only as a local secret-bearing

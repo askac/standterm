@@ -7,11 +7,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import app as webssh
+import app as standterm
 
 
-class DummyBridge(webssh.TerminalBridge):
-    connection_type = webssh.CONNECTION_TYPE_LOCAL_SHELL
+class DummyBridge(standterm.TerminalBridge):
+    connection_type = standterm.CONNECTION_TYPE_LOCAL_SHELL
     terminal_kind = 'local'
     terminal_label = 'Dummy'
 
@@ -26,7 +26,7 @@ class DummyBridge(webssh.TerminalBridge):
         self.closing = True
 
 
-class RecordingProvider(webssh.AgentProvider):
+class RecordingProvider(standterm.AgentProvider):
     name = 'recording'
     version = 'test-1'
 
@@ -39,21 +39,21 @@ class RecordingProvider(webssh.AgentProvider):
         self.contexts.append(context)
         self.runs.append(run)
         return {
-            'action_type': webssh.AGENT_ACTION_TERMINAL_INPUT,
+            'action_type': standterm.AGENT_ACTION_TERMINAL_INPUT,
             'terminal_id': context['terminal_id'],
             'data': self.terminal_input,
         }
 
 
-class FailingProvider(webssh.AgentProvider):
+class FailingProvider(standterm.AgentProvider):
     name = 'failing'
     version = 'test-1'
 
     def create_terminal_input_proposal(self, context, run):
-        raise webssh.AgentProviderError(webssh.AGENT_ERROR_PROVIDER_FAILED, 'provider failed')
+        raise standterm.AgentProviderError(standterm.AGENT_ERROR_PROVIDER_FAILED, 'provider failed')
 
 
-class InvalidProvider(webssh.AgentProvider):
+class InvalidProvider(standterm.AgentProvider):
     name = 'invalid'
     version = 'test-1'
 
@@ -66,61 +66,61 @@ class InvalidProvider(webssh.AgentProvider):
 
 
 def reset_state():
-    webssh.bridges.clear()
-    webssh.pending_localhost_key_setups.clear()
-    webssh.active_sessions.clear()
-    webssh.socket_session_tokens.clear()
-    webssh.socket_client_ips.clear()
-    webssh.socket_browser_identities.clear()
-    webssh.socket_browser_authorized.clear()
-    webssh.socket_browser_auth_challenges.clear()
-    webssh.socket_settings_admin_grant_ids.clear()
-    webssh.settings_admin_grants.clear()
-    webssh.settings_audit_store.clear()
-    webssh.reset_runtime_settings_for_test()
-    webssh.agent_states.clear()
-    webssh.agent_session_ids.clear()
-    webssh.agent_viewer_ids.clear()
-    webssh.agent_audit_store.clear()
-    webssh.agent_transcript_store.clear()
-    webssh.agent_user_input_metadata_store.clear()
-    webssh.agent_viewport_snapshot_store.clear()
-    webssh.agent_viewport_render_request_store.clear()
-    webssh.external_agent_attach_store.clear()
-    webssh.operator_observations.clear()
-    webssh.set_agent_provider_for_test(webssh.MockAgentProvider())
+    standterm.bridges.clear()
+    standterm.pending_localhost_key_setups.clear()
+    standterm.active_sessions.clear()
+    standterm.socket_session_tokens.clear()
+    standterm.socket_client_ips.clear()
+    standterm.socket_browser_identities.clear()
+    standterm.socket_browser_authorized.clear()
+    standterm.socket_browser_auth_challenges.clear()
+    standterm.socket_settings_admin_grant_ids.clear()
+    standterm.settings_admin_grants.clear()
+    standterm.settings_audit_store.clear()
+    standterm.reset_runtime_settings_for_test()
+    standterm.agent_states.clear()
+    standterm.agent_session_ids.clear()
+    standterm.agent_viewer_ids.clear()
+    standterm.agent_audit_store.clear()
+    standterm.agent_transcript_store.clear()
+    standterm.agent_user_input_metadata_store.clear()
+    standterm.agent_viewport_snapshot_store.clear()
+    standterm.agent_viewport_render_request_store.clear()
+    standterm.external_agent_attach_store.clear()
+    standterm.operator_observations.clear()
+    standterm.set_agent_provider_for_test(standterm.MockAgentProvider())
 
 
 def make_client():
-    flask_client = webssh.app.test_client()
-    response = flask_client.get('/?token=' + webssh.ACCESS_TOKEN)
+    flask_client = standterm.app.test_client()
+    response = flask_client.get('/?token=' + standterm.ACCESS_TOKEN)
     assert response.status_code == 200, response.status_code
-    socket_client = webssh.socketio.test_client(webssh.app, flask_test_client=flask_client)
+    socket_client = standterm.socketio.test_client(standterm.app, flask_test_client=flask_client)
     assert socket_client.is_connected()
     return socket_client
 
 
 def make_flask_client():
-    flask_client = webssh.app.test_client()
-    response = flask_client.get('/?token=' + webssh.ACCESS_TOKEN)
+    flask_client = standterm.app.test_client()
+    response = flask_client.get('/?token=' + standterm.ACCESS_TOKEN)
     assert response.status_code == 200, response.status_code
     return flask_client
 
 
 def make_socket_client(flask_client):
-    socket_client = webssh.socketio.test_client(webssh.app, flask_test_client=flask_client)
+    socket_client = standterm.socketio.test_client(standterm.app, flask_test_client=flask_client)
     assert socket_client.is_connected()
     return socket_client
 
 
 def current_session_token():
-    assert webssh.socket_session_tokens
-    return next(reversed(webssh.socket_session_tokens.values()))
+    assert standterm.socket_session_tokens
+    return next(reversed(standterm.socket_session_tokens.values()))
 
 
 def current_sid_for_session(session_token):
     matches = [
-        sid for sid, token in webssh.socket_session_tokens.items()
+        sid for sid, token in standterm.socket_session_tokens.items()
         if token == session_token
     ]
     assert matches
@@ -156,8 +156,8 @@ def wait_until(predicate, description, timeout=2):
 
 
 def add_dummy_bridge(session_token):
-    bridge = DummyBridge(session_token, webssh.TERMINAL_ID_MAIN)
-    webssh.set_bridge(session_token, webssh.TERMINAL_ID_MAIN, bridge)
+    bridge = DummyBridge(session_token, standterm.TERMINAL_ID_MAIN)
+    standterm.set_bridge(session_token, standterm.TERMINAL_ID_MAIN, bridge)
     return bridge
 
 
@@ -165,7 +165,7 @@ def valid_viewport_snapshot(seq=1, rows=2, cols=4, fill='line', lines=None):
     if lines is not None:
         rows = len(lines)
     return {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'cols': cols,
         'rows': rows,
         'viewport_y': 0,
@@ -182,65 +182,65 @@ def test_pause_blocks_pending_approval():
     session_token = current_session_token()
     bridge = add_dummy_bridge(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    assert last_payload(client, webssh.AGENT_EVENT_STATE)['mode'] == webssh.AGENT_MODE_OBSERVE
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    assert last_payload(client, standterm.AGENT_EVENT_STATE)['mode'] == standterm.AGENT_MODE_OBSERVE
 
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'approval',
     })
-    client.emit(webssh.AGENT_EVENT_SUGGESTION_REQUEST, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_SUGGESTION_REQUEST, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mock_input': 'blocked\n',
     })
-    action = last_payload(client, webssh.AGENT_EVENT_ACTION_REQUEST)
+    action = last_payload(client, standterm.AGENT_EVENT_ACTION_REQUEST)
 
-    client.emit(webssh.AGENT_EVENT_PAUSE, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    assert last_payload(client, webssh.AGENT_EVENT_STATE)['mode'] == webssh.AGENT_MODE_PAUSED
+    client.emit(standterm.AGENT_EVENT_PAUSE, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    assert last_payload(client, standterm.AGENT_EVENT_STATE)['mode'] == standterm.AGENT_MODE_PAUSED
 
-    client.emit(webssh.AGENT_EVENT_ACTION_APPROVE, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'action_id': action['action_id'],
     })
     assert bridge.writes == []
-    result = last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)
-    assert result['error_code'] in {webssh.AGENT_ERROR_PAUSED, webssh.AGENT_ERROR_ACTION_NOT_PENDING}
+    result = last_payload(client, standterm.AGENT_EVENT_ACTION_RESULT)
+    assert result['error_code'] in {standterm.AGENT_ERROR_PAUSED, standterm.AGENT_ERROR_ACTION_NOT_PENDING}
 
     client.disconnect()
 
 
 def test_operator_observation_logs_metadata_without_input_preview():
-    previous_dir = webssh.OPERATOR_OBSERVATION_DIR
+    previous_dir = standterm.OPERATOR_OBSERVATION_DIR
     with tempfile.TemporaryDirectory() as temp_dir:
-        webssh.OPERATOR_OBSERVATION_DIR = Path(temp_dir)
+        standterm.OPERATOR_OBSERVATION_DIR = Path(temp_dir)
         client = make_client()
         session_token = current_session_token()
         bridge = add_dummy_bridge(session_token)
 
-        client.emit(webssh.OPERATOR_OBSERVATION_EVENT_START, {
-            'terminal_id': webssh.TERMINAL_ID_MAIN,
+        client.emit(standterm.OPERATOR_OBSERVATION_EVENT_START, {
+            'terminal_id': standterm.TERMINAL_ID_MAIN,
         })
-        state = last_payload(client, webssh.OPERATOR_OBSERVATION_EVENT_STATE)
+        state = last_payload(client, standterm.OPERATOR_OBSERVATION_EVENT_STATE)
         assert state['active'] is True
         assert state['enabled'] is True
         observation_id = state['observation_id']
 
-        client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-        client.emit(webssh.AGENT_EVENT_MODE_SET, {
-            'terminal_id': webssh.TERMINAL_ID_MAIN,
+        client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+        client.emit(standterm.AGENT_EVENT_MODE_SET, {
+            'terminal_id': standterm.TERMINAL_ID_MAIN,
             'mode': 'observe',
         })
         client.emit('ssh_input', {
-            'terminal_id': webssh.TERMINAL_ID_MAIN,
+            'terminal_id': standterm.TERMINAL_ID_MAIN,
             'data': 'secret command\n',
         })
-        client.emit(webssh.OPERATOR_OBSERVATION_EVENT_MARK, {
-            'terminal_id': webssh.TERMINAL_ID_MAIN,
+        client.emit(standterm.OPERATOR_OBSERVATION_EVENT_MARK, {
+            'terminal_id': standterm.TERMINAL_ID_MAIN,
         })
-        client.emit(webssh.OPERATOR_OBSERVATION_EVENT_STOP, {
-            'terminal_id': webssh.TERMINAL_ID_MAIN,
+        client.emit(standterm.OPERATOR_OBSERVATION_EVENT_STOP, {
+            'terminal_id': standterm.TERMINAL_ID_MAIN,
         })
-        state = last_payload(client, webssh.OPERATOR_OBSERVATION_EVENT_STATE)
+        state = last_payload(client, standterm.OPERATOR_OBSERVATION_EVENT_STATE)
         assert state['active'] is False
 
         paths = list(Path(temp_dir).glob(f'*/{observation_id}.jsonl'))
@@ -255,36 +255,36 @@ def test_operator_observation_logs_metadata_without_input_preview():
         input_event = next(line for line in lines if line.get('kind') == 'terminal_input')
         assert input_event['metadata']['byte_length'] == len('secret command\n')
         assert input_event['metadata']['raw_preview_recorded'] is False
-    webssh.OPERATOR_OBSERVATION_DIR = previous_dir
+    standterm.OPERATOR_OBSERVATION_DIR = previous_dir
 
 
 def test_operator_observation_state_syncs_across_viewers():
-    previous_dir = webssh.OPERATOR_OBSERVATION_DIR
+    previous_dir = standterm.OPERATOR_OBSERVATION_DIR
     with tempfile.TemporaryDirectory() as temp_dir:
-        webssh.OPERATOR_OBSERVATION_DIR = Path(temp_dir)
-        flask_client = webssh.app.test_client()
-        response = flask_client.get('/?token=' + webssh.ACCESS_TOKEN)
+        standterm.OPERATOR_OBSERVATION_DIR = Path(temp_dir)
+        flask_client = standterm.app.test_client()
+        response = flask_client.get('/?token=' + standterm.ACCESS_TOKEN)
         assert response.status_code == 200
         client_a = make_socket_client(flask_client)
         client_b = make_socket_client(flask_client)
         session_token = current_session_token()
         add_dummy_bridge(session_token)
 
-        client_a.emit(webssh.OPERATOR_OBSERVATION_EVENT_START, {
-            'terminal_id': webssh.TERMINAL_ID_MAIN,
+        client_a.emit(standterm.OPERATOR_OBSERVATION_EVENT_START, {
+            'terminal_id': standterm.TERMINAL_ID_MAIN,
         })
-        state_a = last_payload(client_a, webssh.OPERATOR_OBSERVATION_EVENT_STATE)
-        state_b = last_payload(client_b, webssh.OPERATOR_OBSERVATION_EVENT_STATE)
+        state_a = last_payload(client_a, standterm.OPERATOR_OBSERVATION_EVENT_STATE)
+        state_b = last_payload(client_b, standterm.OPERATOR_OBSERVATION_EVENT_STATE)
         assert state_a['active'] is True
         assert state_b['active'] is True
         assert state_a['observation_id'] == state_b['observation_id']
 
-        client_b.emit(webssh.OPERATOR_OBSERVATION_EVENT_STOP, {
-            'terminal_id': webssh.TERMINAL_ID_MAIN,
+        client_b.emit(standterm.OPERATOR_OBSERVATION_EVENT_STOP, {
+            'terminal_id': standterm.TERMINAL_ID_MAIN,
         })
-        assert last_payload(client_a, webssh.OPERATOR_OBSERVATION_EVENT_STATE)['active'] is False
-        assert last_payload(client_b, webssh.OPERATOR_OBSERVATION_EVENT_STATE)['active'] is False
-    webssh.OPERATOR_OBSERVATION_DIR = previous_dir
+        assert last_payload(client_a, standterm.OPERATOR_OBSERVATION_EVENT_STATE)['active'] is False
+        assert last_payload(client_b, standterm.OPERATOR_OBSERVATION_EVENT_STATE)['active'] is False
+    standterm.OPERATOR_OBSERVATION_DIR = previous_dir
 
 
 def test_approval_and_direct_writes_use_gate():
@@ -292,29 +292,29 @@ def test_approval_and_direct_writes_use_gate():
     session_token = current_session_token()
     bridge = add_dummy_bridge(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'approval',
     })
-    state = last_payload(client, webssh.AGENT_EVENT_STATE)
-    client.emit(webssh.AGENT_EVENT_SUGGESTION_REQUEST, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    state = last_payload(client, standterm.AGENT_EVENT_STATE)
+    client.emit(standterm.AGENT_EVENT_SUGGESTION_REQUEST, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mock_input': 'approved\n',
     })
-    action = last_payload(client, webssh.AGENT_EVENT_ACTION_REQUEST)
+    action = last_payload(client, standterm.AGENT_EVENT_ACTION_REQUEST)
     assert action['requires_approval'] is True
     assert action['session_id'].startswith('ags_')
     assert action['viewer_id'].startswith('agv_')
     assert action['agent_binding_id'].startswith('agb_')
     assert action['proposal_id'].startswith('agp_')
     assert action['mode_version'] == state['mode_version']
-    assert action['privacy_state'] == webssh.AGENT_PRIVACY_NORMAL
+    assert action['privacy_state'] == standterm.AGENT_PRIVACY_NORMAL
     assert action['privacy_version'] == state['privacy_version']
     assert action['escaped_preview'] == 'approved\\n'
 
-    client.emit(webssh.AGENT_EVENT_ACTION_APPROVE, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'action_id': action['action_id'],
         'proposal_id': action['proposal_id'],
         'session_id': action['session_id'],
@@ -324,18 +324,18 @@ def test_approval_and_direct_writes_use_gate():
         'privacy_version': action['privacy_version'],
     })
     assert ''.join(bridge.writes) == 'approved\n'
-    assert last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)['status'] == webssh.AGENT_STATUS_COMPLETED
+    assert last_payload(client, standterm.AGENT_EVENT_ACTION_RESULT)['status'] == standterm.AGENT_STATUS_COMPLETED
 
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'direct',
     })
-    client.emit(webssh.AGENT_EVENT_SUGGESTION_REQUEST, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_SUGGESTION_REQUEST, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mock_input': 'direct\n',
     })
     assert ''.join(bridge.writes) == 'approved\ndirect\n'
-    assert last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)['status'] == webssh.AGENT_STATUS_COMPLETED
+    assert last_payload(client, standterm.AGENT_EVENT_ACTION_RESULT)['status'] == standterm.AGENT_STATUS_COMPLETED
 
     client.disconnect()
 
@@ -345,77 +345,77 @@ def test_provider_run_uses_agent_gate():
     session_token = current_session_token()
     bridge = add_dummy_bridge(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot())
-    assert last_payload(client, webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)['status'] == 'accepted'
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit('replay_terminal', {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot())
+    assert last_payload(client, standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)['status'] == 'accepted'
 
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'approval',
     })
-    client.emit(webssh.AGENT_EVENT_PROVIDER_RUN_REQUEST, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_PROVIDER_RUN_REQUEST, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
     })
-    action = last_payload(client, webssh.AGENT_EVENT_ACTION_REQUEST)
+    action = last_payload(client, standterm.AGENT_EVENT_ACTION_REQUEST)
     assert action['requires_approval'] is True
     assert action['escaped_preview'] == 'pwd\\n'
     assert bridge.writes == []
 
-    client.emit(webssh.AGENT_EVENT_ACTION_APPROVE, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'action_id': action['action_id'],
     })
     assert ''.join(bridge.writes) == 'pwd\n'
 
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'direct',
     })
-    client.emit(webssh.AGENT_EVENT_PROVIDER_RUN_REQUEST, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_PROVIDER_RUN_REQUEST, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
     })
     assert ''.join(bridge.writes) == 'pwd\npwd\n'
-    assert last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)['status'] == webssh.AGENT_STATUS_COMPLETED
+    assert last_payload(client, standterm.AGENT_EVENT_ACTION_RESULT)['status'] == standterm.AGENT_STATUS_COMPLETED
 
     client.disconnect()
 
 
 def test_provider_adapter_receives_context_and_exposes_run_metadata():
     provider = RecordingProvider('adapter\n')
-    webssh.set_agent_provider_for_test(provider)
+    standterm.set_agent_provider_for_test(provider)
     client = make_client()
     session_token = current_session_token()
     bridge = add_dummy_bridge(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot(fill='screen'))
-    assert last_payload(client, webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)['status'] == 'accepted'
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit('replay_terminal', {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot(fill='screen'))
+    assert last_payload(client, standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)['status'] == 'accepted'
 
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'approval',
     })
-    client.emit(webssh.AGENT_EVENT_PROVIDER_RUN_REQUEST, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_PROVIDER_RUN_REQUEST, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
     })
-    action = last_payload(client, webssh.AGENT_EVENT_ACTION_REQUEST)
+    action = last_payload(client, standterm.AGENT_EVENT_ACTION_REQUEST)
 
     assert provider.contexts
-    assert provider.contexts[-1]['terminal_id'] == webssh.TERMINAL_ID_MAIN
+    assert provider.contexts[-1]['terminal_id'] == standterm.TERMINAL_ID_MAIN
     assert provider.contexts[-1]['active_screen']['lines'] == ['screen', 'screen']
     assert provider.contexts[-1]['terminal_session']['session_id'] == action['session_id']
     assert provider.runs[-1]['run_id'].startswith('agr_')
     assert action['run_id'] == provider.runs[-1]['run_id']
     assert action['provider_name'] == 'recording'
     assert action['provider_version'] == 'test-1'
-    assert action['provider_status'] == webssh.AGENT_RUN_STATUS_COMPLETED
+    assert action['provider_status'] == standterm.AGENT_RUN_STATUS_COMPLETED
     assert action['escaped_preview'] == 'adapter\\n'
     assert bridge.writes == []
 
-    client.emit(webssh.AGENT_EVENT_ACTION_APPROVE, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'action_id': action['action_id'],
         'proposal_id': action['proposal_id'],
         'session_id': action['session_id'],
@@ -426,17 +426,17 @@ def test_provider_adapter_receives_context_and_exposes_run_metadata():
     })
     assert ''.join(bridge.writes) == 'adapter\n'
 
-    audit_events = webssh.agent_audit_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    audit_events = standterm.agent_audit_store.get_recent(session_token, standterm.TERMINAL_ID_MAIN)
     event_types = [event['event_type'] for event in audit_events]
-    assert webssh.AGENT_AUDIT_PROVIDER_RUN_REQUEST in event_types
-    assert webssh.AGENT_AUDIT_PROVIDER_RUN_START in event_types
-    assert webssh.AGENT_AUDIT_PROVIDER_RUN_COMPLETE in event_types
+    assert standterm.AGENT_AUDIT_PROVIDER_RUN_REQUEST in event_types
+    assert standterm.AGENT_AUDIT_PROVIDER_RUN_START in event_types
+    assert standterm.AGENT_AUDIT_PROVIDER_RUN_COMPLETE in event_types
     provider_events = [
         event for event in audit_events
         if event['event_type'] in {
-            webssh.AGENT_AUDIT_PROVIDER_RUN_REQUEST,
-            webssh.AGENT_AUDIT_PROVIDER_RUN_START,
-            webssh.AGENT_AUDIT_PROVIDER_RUN_COMPLETE,
+            standterm.AGENT_AUDIT_PROVIDER_RUN_REQUEST,
+            standterm.AGENT_AUDIT_PROVIDER_RUN_START,
+            standterm.AGENT_AUDIT_PROVIDER_RUN_COMPLETE,
         }
     ]
     assert provider_events
@@ -449,83 +449,83 @@ def test_provider_adapter_receives_context_and_exposes_run_metadata():
 
 
 def test_static_env_provider_is_explicit_adapter():
-    provider = webssh.StaticEnvAgentProvider('static-adapter\n')
-    webssh.set_agent_provider_for_test(provider)
+    provider = standterm.StaticEnvAgentProvider('static-adapter\n')
+    standterm.set_agent_provider_for_test(provider)
     client = make_client()
     session_token = current_session_token()
     bridge = add_dummy_bridge(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'direct',
     })
-    client.emit(webssh.AGENT_EVENT_PROVIDER_RUN_REQUEST, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_PROVIDER_RUN_REQUEST, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
     })
 
     assert ''.join(bridge.writes) == 'static-adapter\n'
-    result = last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)
-    assert result['status'] == webssh.AGENT_STATUS_COMPLETED
+    result = last_payload(client, standterm.AGENT_EVENT_ACTION_RESULT)
+    assert result['status'] == standterm.AGENT_STATUS_COMPLETED
     assert result['provider_name'] == 'static_env'
 
     client.disconnect()
 
 
 def test_provider_failure_is_typed_and_does_not_write():
-    webssh.set_agent_provider_for_test(FailingProvider())
+    standterm.set_agent_provider_for_test(FailingProvider())
     client = make_client()
     session_token = current_session_token()
     bridge = add_dummy_bridge(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'approval',
     })
-    client.emit(webssh.AGENT_EVENT_PROVIDER_RUN_REQUEST, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_PROVIDER_RUN_REQUEST, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
     })
 
     assert bridge.writes == []
-    result = last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)
-    assert result['error_code'] == webssh.AGENT_ERROR_PROVIDER_FAILED
-    assert received_events(client, webssh.AGENT_EVENT_ACTION_REQUEST) == []
-    audit_events = webssh.agent_audit_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    result = last_payload(client, standterm.AGENT_EVENT_ACTION_RESULT)
+    assert result['error_code'] == standterm.AGENT_ERROR_PROVIDER_FAILED
+    assert received_events(client, standterm.AGENT_EVENT_ACTION_REQUEST) == []
+    audit_events = standterm.agent_audit_store.get_recent(session_token, standterm.TERMINAL_ID_MAIN)
     errors = [
         event for event in audit_events
-        if event['event_type'] == webssh.AGENT_AUDIT_PROVIDER_RUN_ERROR
+        if event['event_type'] == standterm.AGENT_AUDIT_PROVIDER_RUN_ERROR
     ]
     assert errors
-    assert errors[-1]['error_code'] == webssh.AGENT_ERROR_PROVIDER_FAILED
-    assert errors[-1]['status'] == webssh.AGENT_RUN_STATUS_FAILED
+    assert errors[-1]['error_code'] == standterm.AGENT_ERROR_PROVIDER_FAILED
+    assert errors[-1]['status'] == standterm.AGENT_RUN_STATUS_FAILED
 
     client.disconnect()
 
 
 def test_invalid_provider_proposal_is_rejected_before_action_creation():
-    webssh.set_agent_provider_for_test(InvalidProvider())
+    standterm.set_agent_provider_for_test(InvalidProvider())
     client = make_client()
     session_token = current_session_token()
     bridge = add_dummy_bridge(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'approval',
     })
-    client.emit(webssh.AGENT_EVENT_PROVIDER_RUN_REQUEST, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_PROVIDER_RUN_REQUEST, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
     })
 
     assert bridge.writes == []
-    result = last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)
-    assert result['error_code'] == webssh.AGENT_ERROR_PROVIDER_INVALID_PROPOSAL
-    assert received_events(client, webssh.AGENT_EVENT_ACTION_REQUEST) == []
-    audit_events = webssh.agent_audit_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    result = last_payload(client, standterm.AGENT_EVENT_ACTION_RESULT)
+    assert result['error_code'] == standterm.AGENT_ERROR_PROVIDER_INVALID_PROPOSAL
+    assert received_events(client, standterm.AGENT_EVENT_ACTION_REQUEST) == []
+    audit_events = standterm.agent_audit_store.get_recent(session_token, standterm.TERMINAL_ID_MAIN)
     assert not [
         event for event in audit_events
-        if event['event_type'] == webssh.AGENT_AUDIT_PROPOSAL_CREATED
+        if event['event_type'] == standterm.AGENT_AUDIT_PROPOSAL_CREATED
     ]
 
     client.disconnect()
@@ -537,28 +537,28 @@ def test_external_agent_token_requires_enabled_agent_panel():
     add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
 
-    token, record, error_code = webssh.mint_external_agent_attach_token(
+    token, record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert token is None
     assert record is None
-    assert error_code == webssh.AGENT_ERROR_NOT_ATTACHED
+    assert error_code == standterm.AGENT_ERROR_NOT_ATTACHED
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'disabled',
     })
-    token, record, error_code = webssh.mint_external_agent_attach_token(
+    token, record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert token is None
     assert record is None
-    assert error_code == webssh.AGENT_ERROR_EXTERNAL_AGENT_DISABLED
+    assert error_code == standterm.AGENT_ERROR_EXTERNAL_AGENT_DISABLED
 
     client.disconnect()
 
@@ -569,45 +569,45 @@ def test_external_agent_can_attach_and_read_authorized_screen():
     bridge = add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot(fill='screen'))
-    assert last_payload(client, webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)['status'] == 'accepted'
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit('replay_terminal', {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot(fill='screen'))
+    assert last_payload(client, standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)['status'] == 'accepted'
     bridge.emit_output({
         'message_type': 'terminal',
         'data': 'terminal-output\n',
     })
 
-    token, record, error_code = webssh.mint_external_agent_attach_token(
+    token, record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
-    assert record['idle_timeout_seconds'] == webssh.AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS
-    assert record['expires_at'] > webssh.time.time()
-    attach = webssh.process_external_agent_command({
+    assert record['idle_timeout_seconds'] == standterm.AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS
+    assert record['expires_at'] > standterm.time.time()
+    attach = standterm.process_external_agent_command({
         'op': 'attach',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
     })
     assert attach['status'] == 'ok'
     assert attach['external_agent_id'] == record['external_agent_id']
-    assert attach['mode'] == webssh.AGENT_MODE_OBSERVE
+    assert attach['mode'] == standterm.AGENT_MODE_OBSERVE
 
-    screen = webssh.process_external_agent_command({
+    screen = standterm.process_external_agent_command({
         'op': 'screen',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
     })
     assert screen['status'] == 'ok'
     assert screen['screen']['lines'] == ['screen', 'screen']
     assert screen['state']['session_id'] == attach['session_id']
 
-    tail = webssh.process_external_agent_command({
+    tail = standterm.process_external_agent_command({
         'op': 'tail',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'since_output_seq': 0,
     })
     assert tail['status'] == 'ok'
@@ -617,12 +617,12 @@ def test_external_agent_can_attach_and_read_authorized_screen():
     assert tail['gap']['detected'] is False
     assert tail['events'][-1]['data'] == 'terminal-output\n'
 
-    audit_events = webssh.agent_audit_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    audit_events = standterm.agent_audit_store.get_recent(session_token, standterm.TERMINAL_ID_MAIN)
     event_types = [event['event_type'] for event in audit_events]
-    assert webssh.AGENT_AUDIT_EXTERNAL_AGENT_TOKEN_CREATED in event_types
-    assert webssh.AGENT_AUDIT_EXTERNAL_AGENT_ATTACHED in event_types
-    assert webssh.AGENT_AUDIT_EXTERNAL_AGENT_SCREEN in event_types
-    assert webssh.AGENT_AUDIT_EXTERNAL_AGENT_TAIL in event_types
+    assert standterm.AGENT_AUDIT_EXTERNAL_AGENT_TOKEN_CREATED in event_types
+    assert standterm.AGENT_AUDIT_EXTERNAL_AGENT_ATTACHED in event_types
+    assert standterm.AGENT_AUDIT_EXTERNAL_AGENT_SCREEN in event_types
+    assert standterm.AGENT_AUDIT_EXTERNAL_AGENT_TAIL in event_types
     for event in audit_events:
         assert 'token' not in event
         assert 'token_hash' not in event
@@ -637,24 +637,24 @@ def test_external_agent_screen_tail_lines_and_region_reduce_viewport_payload():
     sid = current_sid_for_session(session_token)
 
     lines = ['line-0', 'line-1', 'line-2', 'line-3', 'line-4']
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit('replay_terminal', {'terminal_id': standterm.TERMINAL_ID_MAIN})
     client.emit(
-        webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT,
+        standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT,
         valid_viewport_snapshot(seq=1, cols=10, lines=lines),
     )
-    assert last_payload(client, webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)['status'] == 'accepted'
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    assert last_payload(client, standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)['status'] == 'accepted'
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
 
-    tail_screen = webssh.process_external_agent_command({
+    tail_screen = standterm.process_external_agent_command({
         'op': 'screen',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'tail_lines': 2,
     })
     assert tail_screen['status'] == 'ok'
@@ -670,10 +670,10 @@ def test_external_agent_screen_tail_lines_and_region_reduce_viewport_payload():
     assert tail_screen['screen']['provisional'] is True
     assert tail_screen['screen']['snapshot_seq'] == 1
 
-    region_screen = webssh.process_external_agent_command({
+    region_screen = standterm.process_external_agent_command({
         'op': 'screen',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'region': {
             'top': 1,
             'bottom': 4,
@@ -685,18 +685,18 @@ def test_external_agent_screen_tail_lines_and_region_reduce_viewport_payload():
     assert region_screen['screen']['original_line_count'] == 5
     assert region_screen['screen']['region'] == {'top': 1, 'bottom': 4}
 
-    invalid = webssh.process_external_agent_command({
+    invalid = standterm.process_external_agent_command({
         'op': 'screen',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'tail_lines': 1,
         'region': {
             'top': 0,
             'bottom': 1,
         },
     })
-    assert invalid['status'] == webssh.AGENT_STATUS_FAILED
-    assert invalid['error_code'] == webssh.AGENT_ERROR_ACTION_INVALID_DATA
+    assert invalid['status'] == standterm.AGENT_STATUS_FAILED
+    assert invalid['error_code'] == standterm.AGENT_ERROR_ACTION_INVALID_DATA
 
     client.disconnect()
 
@@ -711,20 +711,20 @@ def test_external_agent_render_requests_browser_viewport_png():
         '/x8AAwMCAO+/p9sAAAAASUVORK5CYII='
     )
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit('replay_terminal', {'terminal_id': standterm.TERMINAL_ID_MAIN})
     bridge.update_terminal_size(100, 30)
     bridge.emit_output({
         'message_type': 'terminal',
         'data': 'render-source\n',
     })
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
-    hello = webssh.process_external_agent_command({
+    hello = standterm.process_external_agent_command({
         'op': 'hello',
         'token': token,
     })
@@ -733,27 +733,27 @@ def test_external_agent_render_requests_browser_viewport_png():
     result_box = {}
 
     def request_render():
-        result_box['render'] = webssh.process_external_agent_command({
+        result_box['render'] = standterm.process_external_agent_command({
             'op': 'render',
             'token': token,
-            'terminal_id': webssh.TERMINAL_ID_MAIN,
+            'terminal_id': standterm.TERMINAL_ID_MAIN,
             'wait_ms': 1000,
         })
 
     thread = threading.Thread(target=request_render)
     thread.start()
-    request_event = wait_for_event(client, webssh.AGENT_EVENT_VIEWPORT_RENDER_REQUEST)
+    request_event = wait_for_event(client, standterm.AGENT_EVENT_VIEWPORT_RENDER_REQUEST)
     request_payload = request_event['args'][0]
-    assert request_payload['terminal_id'] == webssh.TERMINAL_ID_MAIN
+    assert request_payload['terminal_id'] == standterm.TERMINAL_ID_MAIN
     assert request_payload['render_type'] == 'xterm_viewport'
     assert request_payload['mime_type'] == 'image/png'
     assert request_payload['cols'] == 100
     assert request_payload['rows'] == 30
     assert request_payload['output_seq'] == bridge.output_seq
 
-    client.emit(webssh.AGENT_EVENT_VIEWPORT_RENDER_RESULT, {
+    client.emit(standterm.AGENT_EVENT_VIEWPORT_RENDER_RESULT, {
         'request_id': request_payload['request_id'],
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'render_type': 'xterm_viewport',
         'mime_type': 'image/png',
         'image_base64': one_pixel_png,
@@ -776,10 +776,10 @@ def test_external_agent_render_requests_browser_viewport_png():
     assert result['render']['image_byte_length'] > 0
     assert result['render']['output_seq'] == bridge.output_seq
 
-    audit_events = webssh.agent_audit_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    audit_events = standterm.agent_audit_store.get_recent(session_token, standterm.TERMINAL_ID_MAIN)
     render_audit = [
         event for event in audit_events
-        if event['event_type'] == webssh.AGENT_AUDIT_EXTERNAL_AGENT_RENDER
+        if event['event_type'] == standterm.AGENT_AUDIT_EXTERNAL_AGENT_RENDER
     ][-1]
     assert render_audit['request_id'] == request_payload['request_id']
     assert render_audit['image_byte_length'] == result['render']['image_byte_length']
@@ -794,23 +794,23 @@ def test_external_agent_render_timeout_is_typed():
     add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit('replay_terminal', {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
 
-    result = webssh.process_external_agent_command({
+    result = standterm.process_external_agent_command({
         'op': 'render',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'wait_ms': 10,
     })
-    assert result['status'] == webssh.AGENT_STATUS_FAILED
-    assert result['error_code'] == webssh.AGENT_ERROR_RENDER_TIMEOUT
+    assert result['status'] == standterm.AGENT_STATUS_FAILED
+    assert result['error_code'] == standterm.AGENT_ERROR_RENDER_TIMEOUT
 
     client.disconnect()
 
@@ -821,27 +821,27 @@ def test_external_agent_tail_reports_gap_metadata():
     bridge = add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
     bridge.output_seq = 5
     bridge.replay_buffer.clear()
     bridge.replay_buffer.append({
         'message_type': 'terminal',
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'data': 'fifth\n',
         'output_seq': 5,
     })
     bridge.replay_buffer_bytes = len('fifth\n')
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
 
-    tail = webssh.process_external_agent_command({
+    tail = standterm.process_external_agent_command({
         'op': 'tail',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'since_output_seq': 1,
         'limit': 10,
     })
@@ -858,15 +858,15 @@ def test_external_agent_tail_reports_gap_metadata():
     }
     assert tail['events'] == [{
         'message_type': 'terminal',
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'data': 'fifth\n',
         'output_seq': 5,
     }]
 
-    audit_events = webssh.agent_audit_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    audit_events = standterm.agent_audit_store.get_recent(session_token, standterm.TERMINAL_ID_MAIN)
     tail_audit = [
         event for event in audit_events
-        if event['event_type'] == webssh.AGENT_AUDIT_EXTERNAL_AGENT_TAIL
+        if event['event_type'] == standterm.AGENT_AUDIT_EXTERNAL_AGENT_TAIL
     ][-1]
     assert tail_audit['gap']['detected'] is True
 
@@ -879,10 +879,10 @@ def test_external_agent_tail_strip_ansi_is_explicit_plain_format():
     bridge = add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
@@ -892,20 +892,20 @@ def test_external_agent_tail_strip_ansi_is_explicit_plain_format():
         'data': raw_data,
     })
 
-    raw_tail = webssh.process_external_agent_command({
+    raw_tail = standterm.process_external_agent_command({
         'op': 'tail',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'since_output_seq': 0,
     })
     assert raw_tail['status'] == 'ok'
     assert raw_tail['events'][-1]['data'] == raw_data
     assert 'strip_ansi' not in raw_tail
 
-    plain_tail = webssh.process_external_agent_command({
+    plain_tail = standterm.process_external_agent_command({
         'op': 'tail',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'since_output_seq': 0,
         'strip_ansi': True,
     })
@@ -923,23 +923,23 @@ def test_external_agent_tail_limit_preserves_cursor_order():
     bridge = add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
     for index in range(1, 5):
         bridge.emit_output({
             'message_type': 'terminal',
             'data': f'line-{index}\n',
         })
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
 
-    first_page = webssh.process_external_agent_command({
+    first_page = standterm.process_external_agent_command({
         'op': 'tail',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'since_output_seq': 0,
         'limit': 2,
     })
@@ -947,10 +947,10 @@ def test_external_agent_tail_limit_preserves_cursor_order():
     assert first_page['gap']['detected'] is False
     assert [event['output_seq'] for event in first_page['events']] == [1, 2]
 
-    second_page = webssh.process_external_agent_command({
+    second_page = standterm.process_external_agent_command({
         'op': 'tail',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'since_output_seq': first_page['events'][-1]['output_seq'],
         'limit': 2,
     })
@@ -967,10 +967,10 @@ def test_external_agent_tail_wait_returns_after_new_output():
     bridge = add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
@@ -978,10 +978,10 @@ def test_external_agent_tail_wait_returns_after_new_output():
     result_box = {}
 
     def request_tail():
-        result_box['tail'] = webssh.process_external_agent_command({
+        result_box['tail'] = standterm.process_external_agent_command({
             'op': 'tail',
             'token': token,
-            'terminal_id': webssh.TERMINAL_ID_MAIN,
+            'terminal_id': standterm.TERMINAL_ID_MAIN,
             'since_output_seq': 0,
             'limit': 10,
             'wait_ms': 1000,
@@ -1010,19 +1010,19 @@ def test_external_agent_tail_wait_times_out_without_output():
     add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
 
     started = time.monotonic()
-    tail = webssh.process_external_agent_command({
+    tail = standterm.process_external_agent_command({
         'op': 'tail',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'since_output_seq': 0,
         'limit': 10,
         'wait_ms': 20,
@@ -1042,10 +1042,10 @@ def test_external_agent_tail_wait_stops_on_pause():
     add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
@@ -1053,10 +1053,10 @@ def test_external_agent_tail_wait_stops_on_pause():
     result_box = {}
 
     def request_tail():
-        result_box['tail'] = webssh.process_external_agent_command({
+        result_box['tail'] = standterm.process_external_agent_command({
             'op': 'tail',
             'token': token,
-            'terminal_id': webssh.TERMINAL_ID_MAIN,
+            'terminal_id': standterm.TERMINAL_ID_MAIN,
             'since_output_seq': 0,
             'limit': 10,
             'wait_ms': 1000,
@@ -1065,11 +1065,11 @@ def test_external_agent_tail_wait_stops_on_pause():
     thread = threading.Thread(target=request_tail)
     thread.start()
     time.sleep(0.05)
-    client.emit(webssh.AGENT_EVENT_PAUSE, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_PAUSE, {'terminal_id': standterm.TERMINAL_ID_MAIN})
     thread.join(timeout=2)
     assert not thread.is_alive()
-    assert result_box['tail']['status'] == webssh.AGENT_STATUS_FAILED
-    assert result_box['tail']['error_code'] == webssh.AGENT_ERROR_PAUSED
+    assert result_box['tail']['status'] == standterm.AGENT_STATUS_FAILED
+    assert result_box['tail']['error_code'] == standterm.AGENT_ERROR_PAUSED
 
     client.disconnect()
 
@@ -1080,21 +1080,21 @@ def test_external_agent_observe_cannot_send():
     bridge = add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
 
-    result = webssh.process_external_agent_command({
+    result = standterm.process_external_agent_command({
         'op': 'send',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'data': 'blocked\n',
     })
-    assert result['error_code'] == webssh.AGENT_ERROR_MODE_NOT_WRITABLE
+    assert result['error_code'] == standterm.AGENT_ERROR_MODE_NOT_WRITABLE
     assert bridge.writes == []
 
     client.disconnect()
@@ -1106,33 +1106,33 @@ def test_external_agent_approval_send_waits_for_human_approval():
     bridge = add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'approval',
     })
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
 
-    result = webssh.process_external_agent_command({
+    result = standterm.process_external_agent_command({
         'op': 'send',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'data': 'approved-external\n',
     })
-    assert result['status'] == webssh.AGENT_STATUS_PENDING_APPROVAL
+    assert result['status'] == standterm.AGENT_STATUS_PENDING_APPROVAL
     assert result['requires_approval'] is True
     assert result['provider_name'] == 'external_agent'
     assert bridge.writes == []
-    action = last_payload(client, webssh.AGENT_EVENT_ACTION_REQUEST)
+    action = last_payload(client, standterm.AGENT_EVENT_ACTION_REQUEST)
     assert action['proposal_id'] == result['proposal_id']
 
-    client.emit(webssh.AGENT_EVENT_ACTION_APPROVE, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'action_id': action['action_id'],
         'proposal_id': action['proposal_id'],
         'session_id': action['session_id'],
@@ -1152,28 +1152,28 @@ def test_external_agent_direct_send_uses_agent_gate():
     bridge = add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'direct',
     })
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
 
-    result = webssh.process_external_agent_command({
+    result = standterm.process_external_agent_command({
         'op': 'send',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'data': 'direct-external\n',
     })
-    assert result['status'] == webssh.AGENT_STATUS_COMPLETED
+    assert result['status'] == standterm.AGENT_STATUS_COMPLETED
     assert result['bytes_written'] == len('direct-external\n')
     assert ''.join(bridge.writes) == 'direct-external\n'
-    action_result = last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)
+    action_result = last_payload(client, standterm.AGENT_EVENT_ACTION_RESULT)
     assert action_result['proposal_id'] == result['proposal_id']
 
     client.disconnect()
@@ -1185,14 +1185,14 @@ def test_external_agent_direct_send_capture_returns_tail_after_write():
     bridge = add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'direct',
     })
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
@@ -1204,10 +1204,10 @@ def test_external_agent_direct_send_capture_returns_tail_after_write():
     result_box = {}
 
     def request_send_capture():
-        result_box['send'] = webssh.process_external_agent_command({
+        result_box['send'] = standterm.process_external_agent_command({
             'op': 'send',
             'token': token,
-            'terminal_id': webssh.TERMINAL_ID_MAIN,
+            'terminal_id': standterm.TERMINAL_ID_MAIN,
             'data': 'pwd\n',
             'capture': True,
             'wait_ms': 1000,
@@ -1226,7 +1226,7 @@ def test_external_agent_direct_send_capture_returns_tail_after_write():
     assert not thread.is_alive()
 
     result = result_box['send']
-    assert result['status'] == webssh.AGENT_STATUS_COMPLETED
+    assert result['status'] == standterm.AGENT_STATUS_COMPLETED
     assert result['bytes_written'] == len('pwd\n')
     assert result['before_output_seq'] == 1
     assert result['after_output_seq'] == 2
@@ -1248,14 +1248,14 @@ def test_external_agent_send_wait_strip_ansi_formats_capture_only_when_requested
     bridge = add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'direct',
     })
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
@@ -1263,10 +1263,10 @@ def test_external_agent_send_wait_strip_ansi_formats_capture_only_when_requested
     result_box = {}
 
     def request_send_wait():
-        result_box['send'] = webssh.process_external_agent_command({
+        result_box['send'] = standterm.process_external_agent_command({
             'op': 'send-wait',
             'token': token,
-            'terminal_id': webssh.TERMINAL_ID_MAIN,
+            'terminal_id': standterm.TERMINAL_ID_MAIN,
             'data': 'pwd\n',
             'wait_ms': 1000,
             'settle_ms': 10,
@@ -1284,7 +1284,7 @@ def test_external_agent_send_wait_strip_ansi_formats_capture_only_when_requested
     assert not thread.is_alive()
 
     result = result_box['send']
-    assert result['status'] == webssh.AGENT_STATUS_COMPLETED
+    assert result['status'] == standterm.AGENT_STATUS_COMPLETED
     assert result['capture']['requested'] is True
     assert result['capture']['status'] == 'ok'
     assert result['capture']['strip_ansi'] is True
@@ -1300,27 +1300,27 @@ def test_external_agent_send_wait_times_out_without_output():
     bridge = add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'direct',
     })
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
 
-    result = webssh.process_external_agent_command({
+    result = standterm.process_external_agent_command({
         'op': 'send-wait',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'data': 'no-output\n',
         'wait_ms': 10,
         'settle_ms': 0,
     })
-    assert result['status'] == webssh.AGENT_STATUS_COMPLETED
+    assert result['status'] == standterm.AGENT_STATUS_COMPLETED
     assert result['bytes_written'] == len('no-output\n')
     assert ''.join(bridge.writes) == 'no-output\n'
     assert result['capture']['requested'] is True
@@ -1338,26 +1338,26 @@ def test_external_agent_approval_send_capture_is_pending_without_capture():
     bridge = add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'approval',
     })
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
 
-    result = webssh.process_external_agent_command({
+    result = standterm.process_external_agent_command({
         'op': 'send',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'data': 'needs-human\n',
         'capture': True,
     })
-    assert result['status'] == webssh.AGENT_STATUS_PENDING_APPROVAL
+    assert result['status'] == standterm.AGENT_STATUS_PENDING_APPROVAL
     assert result['requires_approval'] is True
     assert result['capture'] == {
         'status': 'skipped',
@@ -1375,14 +1375,14 @@ def test_external_agent_send_capture_reports_pause_as_nested_capture_error():
     bridge = add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'direct',
     })
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
@@ -1390,10 +1390,10 @@ def test_external_agent_send_capture_reports_pause_as_nested_capture_error():
     result_box = {}
 
     def request_send_capture():
-        result_box['send'] = webssh.process_external_agent_command({
+        result_box['send'] = standterm.process_external_agent_command({
             'op': 'send',
             'token': token,
-            'terminal_id': webssh.TERMINAL_ID_MAIN,
+            'terminal_id': standterm.TERMINAL_ID_MAIN,
             'data': 'pause-after-write\n',
             'capture': True,
             'wait_ms': 1000,
@@ -1403,16 +1403,16 @@ def test_external_agent_send_capture_reports_pause_as_nested_capture_error():
     thread = threading.Thread(target=request_send_capture)
     thread.start()
     wait_until(lambda: ''.join(bridge.writes) == 'pause-after-write\n', 'send capture did not write before pause')
-    client.emit(webssh.AGENT_EVENT_PAUSE, {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_PAUSE, {'terminal_id': standterm.TERMINAL_ID_MAIN})
     thread.join(timeout=2)
     assert not thread.is_alive()
 
     result = result_box['send']
-    assert result['status'] == webssh.AGENT_STATUS_COMPLETED
+    assert result['status'] == standterm.AGENT_STATUS_COMPLETED
     assert result['bytes_written'] == len('pause-after-write\n')
     assert result['capture'] == {
-        'status': webssh.AGENT_STATUS_FAILED,
-        'error_code': webssh.AGENT_ERROR_PAUSED,
+        'status': standterm.AGENT_STATUS_FAILED,
+        'error_code': standterm.AGENT_ERROR_PAUSED,
         'requested': True,
     }
 
@@ -1425,48 +1425,48 @@ def test_human_input_lease_blocks_external_agent_send():
     bridge = add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'direct',
     })
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
 
     client.emit('ssh_input', {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'data': 'human\n',
     })
-    state = last_payload(client, webssh.AGENT_EVENT_STATE)
+    state = last_payload(client, standterm.AGENT_EVENT_STATE)
     assert state['human_activity_seq'] == 1
     assert state['human_input_lease_active'] is True
     assert ''.join(bridge.writes) == 'human\n'
 
-    blocked = webssh.process_external_agent_command({
+    blocked = standterm.process_external_agent_command({
         'op': 'send',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'data': 'agent\n',
     })
-    assert blocked['status'] == webssh.AGENT_STATUS_FAILED
-    assert blocked['error_code'] == webssh.AGENT_ERROR_HUMAN_INPUT_ACTIVE
+    assert blocked['status'] == standterm.AGENT_STATUS_FAILED
+    assert blocked['error_code'] == standterm.AGENT_ERROR_HUMAN_INPUT_ACTIVE
     assert ''.join(bridge.writes) == 'human\n'
 
-    with webssh.agent_lock:
-        state = webssh.get_agent_state(session_token, webssh.TERMINAL_ID_MAIN, sid)
-        state.human_input_lease_expires_at = webssh.time.time() - 1
+    with standterm.agent_lock:
+        state = standterm.get_agent_state(session_token, standterm.TERMINAL_ID_MAIN, sid)
+        state.human_input_lease_expires_at = standterm.time.time() - 1
 
-    allowed = webssh.process_external_agent_command({
+    allowed = standterm.process_external_agent_command({
         'op': 'send',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'data': 'agent\n',
     })
-    assert allowed['status'] == webssh.AGENT_STATUS_COMPLETED
+    assert allowed['status'] == standterm.AGENT_STATUS_COMPLETED
     assert ''.join(bridge.writes) == 'human\nagent\n'
 
     client.disconnect()
@@ -1480,35 +1480,35 @@ def test_human_input_lease_is_terminal_scoped_across_viewers():
     sid_a = current_sid_for_session(session_token)
     client_b = make_socket_client(flask_client)
 
-    client_a.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client_a.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client_a.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client_a.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'direct',
     })
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid_a,
     )
     assert error_code is None
 
     client_b.emit('ssh_input', {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'data': 'viewer-b\n',
     })
-    state = last_payload(client_a, webssh.AGENT_EVENT_STATE)
+    state = last_payload(client_a, standterm.AGENT_EVENT_STATE)
     assert state['human_activity_seq'] == 1
     assert state['human_input_lease_active'] is True
     assert ''.join(bridge.writes) == 'viewer-b\n'
 
-    blocked = webssh.process_external_agent_command({
+    blocked = standterm.process_external_agent_command({
         'op': 'send',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'data': 'agent\n',
     })
-    assert blocked['status'] == webssh.AGENT_STATUS_FAILED
-    assert blocked['error_code'] == webssh.AGENT_ERROR_HUMAN_INPUT_ACTIVE
+    assert blocked['status'] == standterm.AGENT_STATUS_FAILED
+    assert blocked['error_code'] == standterm.AGENT_ERROR_HUMAN_INPUT_ACTIVE
     assert ''.join(bridge.writes) == 'viewer-b\n'
 
     client_a.disconnect()
@@ -1521,33 +1521,33 @@ def test_human_input_lease_blocks_external_approval_proposal():
     add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'approval',
     })
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
 
     client.emit('ssh_input', {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'data': 'human\n',
     })
     client.get_received()
 
-    blocked = webssh.process_external_agent_command({
+    blocked = standterm.process_external_agent_command({
         'op': 'send',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'data': 'agent\n',
     })
-    assert blocked['status'] == webssh.AGENT_STATUS_FAILED
-    assert blocked['error_code'] == webssh.AGENT_ERROR_HUMAN_INPUT_ACTIVE
-    assert received_events(client, webssh.AGENT_EVENT_ACTION_REQUEST) == []
+    assert blocked['status'] == standterm.AGENT_STATUS_FAILED
+    assert blocked['error_code'] == standterm.AGENT_ERROR_HUMAN_INPUT_ACTIVE
+    assert received_events(client, standterm.AGENT_EVENT_ACTION_REQUEST) == []
 
     client.disconnect()
 
@@ -1558,47 +1558,47 @@ def test_human_input_lock_blocks_external_approval_until_lease_recorded():
     bridge = add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'approval',
     })
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
     client.get_received()
 
-    human_started = webssh.threading.Event()
-    human_can_record = webssh.threading.Event()
-    send_done = webssh.threading.Event()
+    human_started = standterm.threading.Event()
+    human_can_record = standterm.threading.Event()
+    send_done = standterm.threading.Event()
     result_holder = {}
 
     def hold_human_input_lock():
         with bridge.input_lock:
             human_started.set()
             assert human_can_record.wait(timeout=2)
-            with webssh.agent_lock:
-                webssh.note_agent_human_input_for_terminal(session_token, webssh.TERMINAL_ID_MAIN)
+            with standterm.agent_lock:
+                standterm.note_agent_human_input_for_terminal(session_token, standterm.TERMINAL_ID_MAIN)
             bridge.write('human\n')
 
     def external_send():
-        result_holder['result'] = webssh.process_external_agent_command({
+        result_holder['result'] = standterm.process_external_agent_command({
             'op': 'send',
             'token': token,
-            'terminal_id': webssh.TERMINAL_ID_MAIN,
+            'terminal_id': standterm.TERMINAL_ID_MAIN,
             'data': 'agent\n',
         })
         send_done.set()
 
-    human_thread = webssh.threading.Thread(target=hold_human_input_lock)
-    send_thread = webssh.threading.Thread(target=external_send)
+    human_thread = standterm.threading.Thread(target=hold_human_input_lock)
+    send_thread = standterm.threading.Thread(target=external_send)
     human_thread.start()
     assert human_started.wait(timeout=2)
     send_thread.start()
-    webssh.time.sleep(0.05)
+    standterm.time.sleep(0.05)
     assert not send_done.is_set()
 
     human_can_record.set()
@@ -1606,9 +1606,9 @@ def test_human_input_lock_blocks_external_approval_until_lease_recorded():
     send_thread.join(timeout=2)
     assert send_done.is_set()
     blocked = result_holder['result']
-    assert blocked['status'] == webssh.AGENT_STATUS_FAILED
-    assert blocked['error_code'] == webssh.AGENT_ERROR_HUMAN_INPUT_ACTIVE
-    assert received_events(client, webssh.AGENT_EVENT_ACTION_REQUEST) == []
+    assert blocked['status'] == standterm.AGENT_STATUS_FAILED
+    assert blocked['error_code'] == standterm.AGENT_ERROR_HUMAN_INPUT_ACTIVE
+    assert received_events(client, standterm.AGENT_EVENT_ACTION_REQUEST) == []
     assert ''.join(bridge.writes) == 'human\n'
 
     client.disconnect()
@@ -1620,58 +1620,58 @@ def test_external_agent_privacy_and_disabled_state_block_visibility_and_send():
     bridge = add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'approval',
     })
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
 
-    client.emit(webssh.AGENT_EVENT_PRIVACY_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
-        'privacy_state': webssh.AGENT_PRIVACY_PRIVATE_INPUT,
+    client.emit(standterm.AGENT_EVENT_PRIVACY_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'privacy_state': standterm.AGENT_PRIVACY_PRIVATE_INPUT,
     })
-    screen = webssh.process_external_agent_command({
+    screen = standterm.process_external_agent_command({
         'op': 'screen',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
     })
-    render = webssh.process_external_agent_command({
+    render = standterm.process_external_agent_command({
         'op': 'render',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'wait_ms': 10,
     })
-    send = webssh.process_external_agent_command({
+    send = standterm.process_external_agent_command({
         'op': 'send',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'data': 'blocked\n',
     })
-    assert screen['error_code'] == webssh.AGENT_ERROR_PRIVACY_BLOCKED
-    assert render['error_code'] == webssh.AGENT_ERROR_PRIVACY_BLOCKED
-    assert send['error_code'] == webssh.AGENT_ERROR_PRIVACY_BLOCKED
+    assert screen['error_code'] == standterm.AGENT_ERROR_PRIVACY_BLOCKED
+    assert render['error_code'] == standterm.AGENT_ERROR_PRIVACY_BLOCKED
+    assert send['error_code'] == standterm.AGENT_ERROR_PRIVACY_BLOCKED
     assert bridge.writes == []
 
-    client.emit(webssh.AGENT_EVENT_PRIVACY_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
-        'privacy_state': webssh.AGENT_PRIVACY_NORMAL,
+    client.emit(standterm.AGENT_EVENT_PRIVACY_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'privacy_state': standterm.AGENT_PRIVACY_NORMAL,
     })
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'disabled',
     })
-    result = webssh.process_external_agent_command({
+    result = standterm.process_external_agent_command({
         'op': 'screen',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
     })
-    assert result['error_code'] == webssh.AGENT_ERROR_EXTERNAL_AGENT_DISABLED
+    assert result['error_code'] == standterm.AGENT_ERROR_EXTERNAL_AGENT_DISABLED
 
     client.disconnect()
 
@@ -1682,40 +1682,40 @@ def test_external_agent_token_revoke_and_terminal_close_invalidate_access():
     add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
 
-    revoked = webssh.process_external_agent_command({
+    revoked = standterm.process_external_agent_command({
         'op': 'revoke',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
     })
     assert revoked['status'] == 'ok'
-    result = webssh.process_external_agent_command({
+    result = standterm.process_external_agent_command({
         'op': 'state',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
     })
-    assert result['error_code'] == webssh.AGENT_ERROR_EXTERNAL_AGENT_REVOKED
+    assert result['error_code'] == standterm.AGENT_ERROR_EXTERNAL_AGENT_REVOKED
 
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
-    client.emit('close_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    result = webssh.process_external_agent_command({
+    client.emit('close_terminal', {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    result = standterm.process_external_agent_command({
         'op': 'state',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
     })
-    assert result['error_code'] == webssh.AGENT_ERROR_EXTERNAL_AGENT_UNAUTHORIZED
+    assert result['error_code'] == standterm.AGENT_ERROR_EXTERNAL_AGENT_UNAUTHORIZED
 
     client.disconnect()
 
@@ -1726,51 +1726,51 @@ def test_external_agent_expired_and_wrong_terminal_tokens_are_rejected():
     add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
         idle_timeout_seconds=-1,
     )
     assert error_code is None
-    result = webssh.process_external_agent_command({
+    result = standterm.process_external_agent_command({
         'op': 'state',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
     })
-    assert result['error_code'] == webssh.AGENT_ERROR_EXTERNAL_AGENT_EXPIRED
+    assert result['error_code'] == standterm.AGENT_ERROR_EXTERNAL_AGENT_EXPIRED
 
-    token, record, error_code = webssh.mint_external_agent_attach_token(
+    token, record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
         idle_timeout_seconds=60,
     )
     assert error_code is None
     first_expires_at = record['expires_at']
-    stored = webssh.external_agent_attach_store._tokens[record['token_hash']]
-    stored['expires_at'] = webssh.time.time() + 1
-    result = webssh.process_external_agent_command({
+    stored = standterm.external_agent_attach_store._tokens[record['token_hash']]
+    stored['expires_at'] = standterm.time.time() + 1
+    result = standterm.process_external_agent_command({
         'op': 'state',
         'token': token,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
     })
     assert result['status'] == 'ok'
     assert stored['expires_at'] > first_expires_at
 
-    token, _record, error_code = webssh.mint_external_agent_attach_token(
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
-    result = webssh.process_external_agent_command({
+    result = standterm.process_external_agent_command({
         'op': 'state',
         'token': token,
         'terminal_id': 'other',
     })
-    assert result['error_code'] == webssh.AGENT_ERROR_TERMINAL_MISMATCH
+    assert result['error_code'] == standterm.AGENT_ERROR_TERMINAL_MISMATCH
 
     client.disconnect()
 
@@ -1781,19 +1781,19 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
     session_token = current_session_token()
     bridge = add_dummy_bridge(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'direct',
     })
-    state = last_payload(client, webssh.AGENT_EVENT_STATE)
+    state = last_payload(client, standterm.AGENT_EVENT_STATE)
 
-    original_handoff_path = webssh.EXTERNAL_AGENT_HANDOFF_PATH
+    original_handoff_path = standterm.EXTERNAL_AGENT_HANDOFF_PATH
     with tempfile.TemporaryDirectory(prefix='standterm-agent-smoke-') as handoff_dir:
-        webssh.EXTERNAL_AGENT_HANDOFF_PATH = Path(handoff_dir) / 'standterm_external_agent_handoff.json'
+        standterm.EXTERNAL_AGENT_HANDOFF_PATH = Path(handoff_dir) / 'standterm_external_agent_handoff.json'
         try:
             response = flask_client.post('/agent/external/token', json={
-                'terminal_id': webssh.TERMINAL_ID_MAIN,
+                'terminal_id': standterm.TERMINAL_ID_MAIN,
                 'viewer_id': state['viewer_id'],
                 'agent_binding_id': state['agent_binding_id'],
                 'mode_version': state['mode_version'],
@@ -1805,7 +1805,7 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             assert token_payload['token'].startswith('agt_')
             assert token_payload['handoff_schema'] == 'standterm_external_agent_handoff'
             assert token_payload['schema_version'] == 1
-            assert token_payload['protocol_version'] == webssh.EXTERNAL_AGENT_PROTOCOL_VERSION
+            assert token_payload['protocol_version'] == standterm.EXTERNAL_AGENT_PROTOCOL_VERSION
             assert 'render' in token_payload['capabilities']
             assert 'send_capture' in token_payload['capabilities']
             assert 'strip_ansi' in token_payload['capabilities']
@@ -1823,14 +1823,14 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
                     'bottom': 12,
                 },
             }
-            assert token_payload['operations']['tail']['wait_ms'] == webssh.AGENT_EXTERNAL_TAIL_MAX_WAIT_MS
+            assert token_payload['operations']['tail']['wait_ms'] == standterm.AGENT_EXTERNAL_TAIL_MAX_WAIT_MS
             assert token_payload['operations']['tail_plain']['strip_ansi'] is True
             assert token_payload['operations']['send_wait']['op'] == 'send-wait'
             assert token_payload['operations']['send_wait_plain']['strip_ansi'] is True
-            assert token_payload['expires_at'] > webssh.time.time()
+            assert token_payload['expires_at'] > standterm.time.time()
             assert token_payload['security']['token_lifetime'] == 'idle_timeout'
             assert token_payload['security']['idle_timeout_seconds'] == (
-                webssh.AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS
+                standterm.AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS
             )
             assert token_payload['security']['remote_use_requires_loopback_tunnel'] is True
             assert token_payload['cli_command'].endswith("send --text 'pwd\n'")
@@ -1845,54 +1845,43 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             assert 'scripts/agent_repl.py' in token_payload['cli_commands']['repl']
             assert 'scripts/agent_jsonl.py' in token_payload['cli_commands']['jsonl']
             handoff = Path(token_payload['handoff_path'])
-            assert handoff == webssh.EXTERNAL_AGENT_HANDOFF_PATH
+            assert handoff == standterm.EXTERNAL_AGENT_HANDOFF_PATH
             assert handoff.parent == Path(handoff_dir)
             assert handoff.is_file()
-            handoff_payload = webssh.json.loads(handoff.read_text(encoding='utf-8'))
+            handoff_payload = standterm.json.loads(handoff.read_text(encoding='utf-8'))
             assert handoff_payload['token'] == token_payload['token']
             assert handoff_payload['url'] == token_payload['url']
             assert handoff_payload['browser_url'] == token_payload['browser_url']
             assert handoff_payload['cli_command'] == token_payload['cli_command']
             assert handoff_payload['capabilities'] == token_payload['capabilities']
             assert handoff_payload['cli_commands']['render'] == token_payload['cli_commands']['render']
-            legacy_handoff = Path(token_payload['legacy_handoff_path'])
-            assert legacy_handoff == webssh.get_legacy_external_agent_handoff_path()
-            assert legacy_handoff.parent == Path(handoff_dir)
-            assert legacy_handoff.is_file()
-            legacy_payload = webssh.json.loads(legacy_handoff.read_text(encoding='utf-8'))
-            assert legacy_payload['handoff_schema'] == 'webssh_external_agent_handoff'
-            assert legacy_payload['canonical_handoff_schema'] == 'standterm_external_agent_handoff'
-            assert legacy_payload['canonical_handoff_path'] == str(handoff)
-            assert legacy_payload['legacy_alias'] is True
-            assert 'scripts/webssh_agent_cli.py' in legacy_payload['cli_command']
-            assert 'scripts/webssh_agent_repl.py' in legacy_payload['cli_commands']['repl']
-            assert 'scripts/webssh_agent_jsonl.py' in legacy_payload['cli_commands']['jsonl']
+            assert 'legacy_handoff_path' not in token_payload
         finally:
-            webssh.EXTERNAL_AGENT_HANDOFF_PATH = original_handoff_path
+            standterm.EXTERNAL_AGENT_HANDOFF_PATH = original_handoff_path
 
     response = flask_client.post('/agent/external/command', json={
         'op': 'send',
         'token': token_payload['token'],
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'data': 'http-external\n',
     })
     assert response.status_code == 200
     result = response.get_json()
-    assert result['status'] == webssh.AGENT_STATUS_COMPLETED
+    assert result['status'] == standterm.AGENT_STATUS_COMPLETED
     assert ''.join(bridge.writes) == 'http-external\n'
 
-    webssh.AGENT_EXTERNAL_DEV_TOKEN_ENABLED = True
+    standterm.AGENT_EXTERNAL_DEV_TOKEN_ENABLED = True
     try:
         response = flask_client.post('/agent/external/dev-command', json={
             'op': 'send',
-            'terminal_id': webssh.TERMINAL_ID_MAIN,
+            'terminal_id': standterm.TERMINAL_ID_MAIN,
             'data': 'http-dev-external\n',
         })
     finally:
-        webssh.AGENT_EXTERNAL_DEV_TOKEN_ENABLED = False
+        standterm.AGENT_EXTERNAL_DEV_TOKEN_ENABLED = False
     assert response.status_code == 200
     result = response.get_json()
-    assert result['status'] == webssh.AGENT_STATUS_COMPLETED
+    assert result['status'] == standterm.AGENT_STATUS_COMPLETED
     assert result['dev_token'] is True
     assert ''.join(bridge.writes) == 'http-external\nhttp-dev-external\n'
 
@@ -1900,10 +1889,10 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
 
 
 def test_external_agent_handoff_uses_loopback_command_url_for_non_loopback_browser_url():
-    payload = webssh.build_external_agent_discovery_payload(
+    payload = standterm.build_external_agent_discovery_payload(
         'https://172.17.186.221:5000',
         'agt_unit',
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
     )
     assert payload['transport']['command_endpoint'] == 'https://127.0.0.1:5000/agent/external/command'
     assert "--url https://127.0.0.1:5000" in payload['cli_commands']['hello']
@@ -1911,46 +1900,46 @@ def test_external_agent_handoff_uses_loopback_command_url_for_non_loopback_brows
 
 
 def test_external_agent_startup_lines_point_to_launch_handoff():
-    original_https_enabled = webssh.HTTPS_ENABLED
-    lines = webssh.build_external_agent_startup_lines()
+    original_https_enabled = standterm.HTTPS_ENABLED
+    lines = standterm.build_external_agent_startup_lines()
     joined = '\n'.join(lines)
     hello_line = next(line for line in lines if line.startswith('External Agent CLI hello: '))
     render_line = next(line for line in lines if line.startswith('External Agent CLI render: '))
 
-    assert webssh.quote_local_command(['C:\\Program Files\\Python\\python.exe'], platform_name='win32') == (
+    assert standterm.quote_local_command(['C:\\Program Files\\Python\\python.exe'], platform_name='win32') == (
         '"C:\\Program Files\\Python\\python.exe"'
     )
-    assert str(webssh.EXTERNAL_AGENT_HANDOFF_PATH) in joined
-    assert str(webssh.APP_DIR / 'scripts' / 'agent_cli.py') in joined
-    assert webssh.sys.executable in joined
+    assert str(standterm.EXTERNAL_AGENT_HANDOFF_PATH) in joined
+    assert str(standterm.APP_DIR / 'scripts' / 'agent_cli.py') in joined
+    assert standterm.sys.executable in joined
     assert '--handoff' in hello_line
-    assert f'--url http://127.0.0.1:{webssh.DEFAULT_PORT}' in hello_line
-    assert str(webssh.EXTERNAL_AGENT_HANDOFF_PATH) in hello_line
+    assert f'--url http://127.0.0.1:{standterm.DEFAULT_PORT}' in hello_line
+    assert str(standterm.EXTERNAL_AGENT_HANDOFF_PATH) in hello_line
     assert hello_line.endswith(' hello')
     assert '--handoff' in render_line
-    assert f'--url http://127.0.0.1:{webssh.DEFAULT_PORT}' in render_line
-    assert str(webssh.EXTERNAL_AGENT_HANDOFF_PATH) in render_line
+    assert f'--url http://127.0.0.1:{standterm.DEFAULT_PORT}' in render_line
+    assert str(standterm.EXTERNAL_AGENT_HANDOFF_PATH) in render_line
     assert render_line.endswith(' render')
     assert 'after browser Agent attach and external token mint' in joined
     assert 'explicit --url, --token, and --terminal' in joined
     try:
-        webssh.HTTPS_ENABLED = True
-        tls_lines = webssh.build_external_agent_startup_lines()
+        standterm.HTTPS_ENABLED = True
+        tls_lines = standterm.build_external_agent_startup_lines()
     finally:
-        webssh.HTTPS_ENABLED = original_https_enabled
+        standterm.HTTPS_ENABLED = original_https_enabled
     tls_joined = '\n'.join(tls_lines)
-    assert f'--url https://127.0.0.1:{webssh.DEFAULT_PORT}' in tls_joined
-    if webssh.LOCAL_CA_CERT_PATH.is_file() and not (webssh.CLI_ARGS.certfile or webssh.CLI_ARGS.keyfile):
+    assert f'--url https://127.0.0.1:{standterm.DEFAULT_PORT}' in tls_joined
+    if standterm.LOCAL_CA_CERT_PATH.is_file() and not (standterm.CLI_ARGS.certfile or standterm.CLI_ARGS.keyfile):
         assert '--ca-file' in tls_joined
-        assert str(webssh.LOCAL_CA_CERT_PATH) in tls_joined
+        assert str(standterm.LOCAL_CA_CERT_PATH) in tls_joined
 
 
 def test_wsl_local_shell_choice_is_structured_and_wsl_only():
-    original_is_wsl = webssh.is_wsl
-    plugin = webssh.TERMINAL_BACKEND_REGISTRY.get(webssh.CONNECTION_TYPE_LOCAL_SHELL)
+    original_is_wsl = standterm.is_wsl
+    plugin = standterm.TERMINAL_BACKEND_REGISTRY.get(standterm.CONNECTION_TYPE_LOCAL_SHELL)
     try:
-        webssh.is_wsl = lambda: True
-        with webssh.app.test_request_context('/'):
+        standterm.is_wsl = lambda: True
+        with standterm.app.test_request_context('/'):
             option = plugin.build_policy_option(browser_authorized=False)
         shell_options = option['shell_options']
         assert [item['kind'] for item in shell_options] == ['bash', 'cmd', 'powershell']
@@ -1958,7 +1947,7 @@ def test_wsl_local_shell_choice_is_structured_and_wsl_only():
 
         payload, error = plugin.validate_start_payload(
             {'local_shell_kind': 'cmd'},
-            webssh.TERMINAL_ID_MAIN,
+            standterm.TERMINAL_ID_MAIN,
             '127.0.0.1',
             browser_authorized=False,
         )
@@ -1968,7 +1957,7 @@ def test_wsl_local_shell_choice_is_structured_and_wsl_only():
 
         payload, error = plugin.validate_start_payload(
             {},
-            webssh.TERMINAL_ID_MAIN,
+            standterm.TERMINAL_ID_MAIN,
             '127.0.0.1',
             browser_authorized=False,
         )
@@ -1977,158 +1966,128 @@ def test_wsl_local_shell_choice_is_structured_and_wsl_only():
 
         _payload, error = plugin.validate_start_payload(
             {'local_shell_kind': 'zsh'},
-            webssh.TERMINAL_ID_MAIN,
+            standterm.TERMINAL_ID_MAIN,
             '127.0.0.1',
             browser_authorized=False,
         )
         assert error['error_code'] == 'local_shell_invalid_kind'
 
-        webssh.is_wsl = lambda: False
+        standterm.is_wsl = lambda: False
         _payload, error = plugin.validate_start_payload(
             {'local_shell_kind': 'cmd'},
-            webssh.TERMINAL_ID_MAIN,
+            standterm.TERMINAL_ID_MAIN,
             '127.0.0.1',
             browser_authorized=False,
         )
         assert error['error_code'] == 'local_shell_kind_not_supported'
     finally:
-        webssh.is_wsl = original_is_wsl
+        standterm.is_wsl = original_is_wsl
 
 
 def test_terminal_policy_creates_authorized_dir_for_fresh_checkout():
-    original_authorized_dir = webssh.AUTHORIZED_DIR
-    original_authorized_browsers_path = webssh.AUTHORIZED_BROWSERS_PATH
+    original_authorized_dir = standterm.AUTHORIZED_DIR
+    original_authorized_browsers_path = standterm.AUTHORIZED_BROWSERS_PATH
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             authorized_dir = Path(temp_dir) / 'authorized'
-            webssh.AUTHORIZED_DIR = authorized_dir
-            webssh.AUTHORIZED_BROWSERS_PATH = authorized_dir / 'browsers.json'
+            standterm.AUTHORIZED_DIR = authorized_dir
+            standterm.AUTHORIZED_BROWSERS_PATH = authorized_dir / 'browsers.json'
             assert not authorized_dir.exists()
 
-            with webssh.app.test_request_context('/'):
-                policy = webssh.build_terminal_policy(browser_authorized=False)
+            with standterm.app.test_request_context('/'):
+                policy = standterm.build_terminal_policy(browser_authorized=False)
 
             assert authorized_dir.is_dir()
             assert policy['authorized_dir'] == str(authorized_dir)
             assert policy['authorized_dir_ready'] is True
     finally:
-        webssh.AUTHORIZED_DIR = original_authorized_dir
-        webssh.AUTHORIZED_BROWSERS_PATH = original_authorized_browsers_path
+        standterm.AUTHORIZED_DIR = original_authorized_dir
+        standterm.AUTHORIZED_BROWSERS_PATH = original_authorized_browsers_path
 
 
 def test_wsl_client_ips_require_explicit_trust_for_local_resources():
-    original_is_wsl = webssh.is_wsl
-    original_get_wsl_host_addresses = webssh.get_wsl_host_addresses
-    original_get_wsl_ip = webssh.get_wsl_ip
-    original_standterm_env = webssh.os.environ.get('STANDTERM_TRUST_WSL_CLIENT_IPS')
-    original_webssh_env = webssh.os.environ.get('WEBSSH_TRUST_WSL_CLIENT_IPS')
+    original_is_wsl = standterm.is_wsl
+    original_get_wsl_host_addresses = standterm.get_wsl_host_addresses
+    original_get_wsl_ip = standterm.get_wsl_ip
+    original_standterm_env = standterm.os.environ.get('STANDTERM_TRUST_WSL_CLIENT_IPS')
     try:
-        webssh.is_wsl = lambda: True
-        webssh.get_wsl_host_addresses = lambda: {webssh.ipaddress.ip_address('172.20.0.1')}
-        webssh.get_wsl_ip = lambda: '172.20.5.10'
-        webssh.os.environ.pop('STANDTERM_TRUST_WSL_CLIENT_IPS', None)
-        webssh.os.environ.pop('WEBSSH_TRUST_WSL_CLIENT_IPS', None)
+        standterm.is_wsl = lambda: True
+        standterm.get_wsl_host_addresses = lambda: {standterm.ipaddress.ip_address('172.20.0.1')}
+        standterm.get_wsl_ip = lambda: '172.20.5.10'
+        standterm.os.environ.pop('STANDTERM_TRUST_WSL_CLIENT_IPS', None)
 
-        assert webssh.is_local_client_ip('127.0.0.1') is True
-        assert webssh.is_local_client_ip('172.20.0.1') is False
-        assert webssh.is_local_client_ip('172.20.5.20') is False
-        assert webssh.is_local_shell_allowed_for_client('172.20.0.1', browser_authorized=False) is False
-        assert webssh.is_uart_allowed_for_client('172.20.0.1', browser_authorized=False) is False
-        assert webssh.is_local_shell_allowed_for_client('172.20.0.1', browser_authorized=True) is True
-        assert webssh.is_uart_allowed_for_client('172.20.0.1', browser_authorized=True) is True
+        assert standterm.is_local_client_ip('127.0.0.1') is True
+        assert standterm.is_local_client_ip('172.20.0.1') is False
+        assert standterm.is_local_client_ip('172.20.5.20') is False
+        assert standterm.is_local_shell_allowed_for_client('172.20.0.1', browser_authorized=False) is False
+        assert standterm.is_uart_allowed_for_client('172.20.0.1', browser_authorized=False) is False
+        assert standterm.is_local_shell_allowed_for_client('172.20.0.1', browser_authorized=True) is True
+        assert standterm.is_uart_allowed_for_client('172.20.0.1', browser_authorized=True) is True
 
-        webssh.os.environ['STANDTERM_TRUST_WSL_CLIENT_IPS'] = '1'
-        assert webssh.is_local_client_ip('172.20.0.1') is True
-        assert webssh.is_local_client_ip('172.20.5.20') is True
+        standterm.os.environ['STANDTERM_TRUST_WSL_CLIENT_IPS'] = '1'
+        assert standterm.is_local_client_ip('172.20.0.1') is True
+        assert standterm.is_local_client_ip('172.20.5.20') is True
     finally:
-        webssh.is_wsl = original_is_wsl
-        webssh.get_wsl_host_addresses = original_get_wsl_host_addresses
-        webssh.get_wsl_ip = original_get_wsl_ip
+        standterm.is_wsl = original_is_wsl
+        standterm.get_wsl_host_addresses = original_get_wsl_host_addresses
+        standterm.get_wsl_ip = original_get_wsl_ip
         if original_standterm_env is None:
-            webssh.os.environ.pop('STANDTERM_TRUST_WSL_CLIENT_IPS', None)
+            standterm.os.environ.pop('STANDTERM_TRUST_WSL_CLIENT_IPS', None)
         else:
-            webssh.os.environ['STANDTERM_TRUST_WSL_CLIENT_IPS'] = original_standterm_env
-        if original_webssh_env is None:
-            webssh.os.environ.pop('WEBSSH_TRUST_WSL_CLIENT_IPS', None)
-        else:
-            webssh.os.environ['WEBSSH_TRUST_WSL_CLIENT_IPS'] = original_webssh_env
+            standterm.os.environ['STANDTERM_TRUST_WSL_CLIENT_IPS'] = original_standterm_env
 
 
 def test_settings_capabilities_are_separate_from_local_resource_access():
-    original_is_wsl = webssh.is_wsl
-    original_get_wsl_host_addresses = webssh.get_wsl_host_addresses
-    original_get_wsl_ip = webssh.get_wsl_ip
-    original_standterm_env = webssh.os.environ.get('STANDTERM_TRUST_WSL_CLIENT_IPS')
-    original_webssh_env = webssh.os.environ.get('WEBSSH_TRUST_WSL_CLIENT_IPS')
+    original_is_wsl = standterm.is_wsl
+    original_get_wsl_host_addresses = standterm.get_wsl_host_addresses
+    original_get_wsl_ip = standterm.get_wsl_ip
+    original_standterm_env = standterm.os.environ.get('STANDTERM_TRUST_WSL_CLIENT_IPS')
     try:
-        webssh.is_wsl = lambda: True
-        webssh.get_wsl_host_addresses = lambda: {webssh.ipaddress.ip_address('172.20.0.1')}
-        webssh.get_wsl_ip = lambda: '172.20.5.10'
-        webssh.os.environ.pop('STANDTERM_TRUST_WSL_CLIENT_IPS', None)
-        webssh.os.environ.pop('WEBSSH_TRUST_WSL_CLIENT_IPS', None)
+        standterm.is_wsl = lambda: True
+        standterm.get_wsl_host_addresses = lambda: {standterm.ipaddress.ip_address('172.20.0.1')}
+        standterm.get_wsl_ip = lambda: '172.20.5.10'
+        standterm.os.environ.pop('STANDTERM_TRUST_WSL_CLIENT_IPS', None)
 
-        assert webssh.is_settings_view_allowed_for_client('172.20.0.1', browser_authorized=False) is False
-        assert webssh.is_settings_view_allowed_for_client('172.20.0.1', browser_authorized=True) is True
-        assert webssh.is_settings_update_low_risk_allowed_for_client('172.20.0.1', browser_authorized=True) is False
-        assert webssh.is_settings_update_high_risk_allowed_for_client('127.0.0.1', browser_authorized=True) is False
-        assert webssh.is_settings_update_low_risk_allowed_for_client('127.0.0.1', browser_authorized=False) is True
+        assert standterm.is_settings_view_allowed_for_client('172.20.0.1', browser_authorized=False) is False
+        assert standterm.is_settings_view_allowed_for_client('172.20.0.1', browser_authorized=True) is True
+        assert standterm.is_settings_update_low_risk_allowed_for_client('172.20.0.1', browser_authorized=True) is False
+        assert standterm.is_settings_update_high_risk_allowed_for_client('127.0.0.1', browser_authorized=True) is False
+        assert standterm.is_settings_update_low_risk_allowed_for_client('127.0.0.1', browser_authorized=False) is True
     finally:
-        webssh.is_wsl = original_is_wsl
-        webssh.get_wsl_host_addresses = original_get_wsl_host_addresses
-        webssh.get_wsl_ip = original_get_wsl_ip
+        standterm.is_wsl = original_is_wsl
+        standterm.get_wsl_host_addresses = original_get_wsl_host_addresses
+        standterm.get_wsl_ip = original_get_wsl_ip
         if original_standterm_env is None:
-            webssh.os.environ.pop('STANDTERM_TRUST_WSL_CLIENT_IPS', None)
+            standterm.os.environ.pop('STANDTERM_TRUST_WSL_CLIENT_IPS', None)
         else:
-            webssh.os.environ['STANDTERM_TRUST_WSL_CLIENT_IPS'] = original_standterm_env
-        if original_webssh_env is None:
-            webssh.os.environ.pop('WEBSSH_TRUST_WSL_CLIENT_IPS', None)
-        else:
-            webssh.os.environ['WEBSSH_TRUST_WSL_CLIENT_IPS'] = original_webssh_env
-
-
-def test_legacy_webssh_env_alias_controls_wsl_trust():
-    original_standterm_env = webssh.os.environ.get('STANDTERM_TRUST_WSL_CLIENT_IPS')
-    original_webssh_env = webssh.os.environ.get('WEBSSH_TRUST_WSL_CLIENT_IPS')
-    try:
-        webssh.os.environ.pop('STANDTERM_TRUST_WSL_CLIENT_IPS', None)
-        webssh.os.environ['WEBSSH_TRUST_WSL_CLIENT_IPS'] = '1'
-        assert webssh.is_wsl_client_ip_trust_enabled() is True
-    finally:
-        if original_standterm_env is None:
-            webssh.os.environ.pop('STANDTERM_TRUST_WSL_CLIENT_IPS', None)
-        else:
-            webssh.os.environ['STANDTERM_TRUST_WSL_CLIENT_IPS'] = original_standterm_env
-        if original_webssh_env is None:
-            webssh.os.environ.pop('WEBSSH_TRUST_WSL_CLIENT_IPS', None)
-        else:
-            webssh.os.environ['WEBSSH_TRUST_WSL_CLIENT_IPS'] = original_webssh_env
+            standterm.os.environ['STANDTERM_TRUST_WSL_CLIENT_IPS'] = original_standterm_env
 
 
 def test_readonly_settings_snapshot_socket_event_is_typed():
     client = make_client()
 
-    client.emit(webssh.SETTINGS_EVENT_SNAPSHOT_REQUEST)
-    snapshot = last_payload(client, webssh.SETTINGS_EVENT_SNAPSHOT)
+    client.emit(standterm.SETTINGS_EVENT_SNAPSHOT_REQUEST)
+    snapshot = last_payload(client, standterm.SETTINGS_EVENT_SNAPSHOT)
     assert snapshot['status'] == 'ok'
-    assert snapshot['settings_version'] == webssh.SETTINGS_VERSION
-    assert snapshot['schema_version'] == webssh.SETTINGS_VERSION
-    assert snapshot['settings_schema_version'] == webssh.SETTINGS_VERSION
+    assert snapshot['settings_version'] == standterm.SETTINGS_VERSION
+    assert snapshot['schema_version'] == standterm.SETTINGS_VERSION
+    assert snapshot['settings_schema_version'] == standterm.SETTINGS_VERSION
     assert len(snapshot['settings_schema_digest']) == 64
     assert snapshot['settings_versions']['schema_digest'] == snapshot['settings_schema_digest']
     assert snapshot['read_only'] is False
-    assert snapshot['capabilities'][webssh.CAPABILITY_SETTINGS_VIEW]['allowed'] is True
-    assert snapshot['capabilities'][webssh.CAPABILITY_SETTINGS_UPDATE_HIGH_RISK]['allowed'] is False
-    assert snapshot['capabilities'][webssh.CAPABILITY_SETTINGS_AUTH_MANAGE]['allowed'] is True
+    assert snapshot['capabilities'][standterm.CAPABILITY_SETTINGS_VIEW]['allowed'] is True
+    assert snapshot['capabilities'][standterm.CAPABILITY_SETTINGS_UPDATE_HIGH_RISK]['allowed'] is False
+    assert snapshot['capabilities'][standterm.CAPABILITY_SETTINGS_AUTH_MANAGE]['allowed'] is True
     assert snapshot['effective_settings']['default_connection_type'] in {
-        webssh.CONNECTION_TYPE_SSH,
-        webssh.CONNECTION_TYPE_LOCAL_SHELL,
-        webssh.CONNECTION_TYPE_UART,
+        standterm.CONNECTION_TYPE_SSH,
+        standterm.CONNECTION_TYPE_LOCAL_SHELL,
+        standterm.CONNECTION_TYPE_UART,
     }
-    assert snapshot['mutable_settings'][webssh.SETTING_DEFAULT_CONNECTION_TYPE]['risk_level'] == 'low'
-    assert snapshot['mutable_settings'][webssh.SETTING_UART_DEFAULT_BAUD_RATE]['value'] == webssh.DEFAULT_UART_BAUD_RATE
-    assert snapshot['mutable_settings'][webssh.SETTING_UART_DEFAULT_BAUD_RATE]['apply_scope'] == 'next_connection'
-    assert snapshot['effective_settings'][webssh.SETTING_UART_DEFAULT_BAUD_RATE] == webssh.DEFAULT_UART_BAUD_RATE
-    assert snapshot['settings_schema']['core'][0]['setting_key'] == webssh.SETTING_DEFAULT_CONNECTION_TYPE
+    assert snapshot['mutable_settings'][standterm.SETTING_DEFAULT_CONNECTION_TYPE]['risk_level'] == 'low'
+    assert snapshot['mutable_settings'][standterm.SETTING_UART_DEFAULT_BAUD_RATE]['value'] == standterm.DEFAULT_UART_BAUD_RATE
+    assert snapshot['mutable_settings'][standterm.SETTING_UART_DEFAULT_BAUD_RATE]['apply_scope'] == 'next_connection'
+    assert snapshot['effective_settings'][standterm.SETTING_UART_DEFAULT_BAUD_RATE] == standterm.DEFAULT_UART_BAUD_RATE
+    assert snapshot['settings_schema']['core'][0]['setting_key'] == standterm.SETTING_DEFAULT_CONNECTION_TYPE
     assert snapshot['settings_schema']['core'][0]['mutable'] is True
     assert snapshot['settings_schema']['core'][0]['storage_owner'] == 'core'
     assert [item['connection_type'] for item in snapshot['effective_settings']['connection_types']]
@@ -2138,28 +2097,28 @@ def test_readonly_settings_snapshot_socket_event_is_typed():
 
 
 def test_backend_settings_schema_is_declared_and_typed():
-    original_is_wsl = webssh.is_wsl
+    original_is_wsl = standterm.is_wsl
     try:
-        webssh.is_wsl = lambda: True
-        schema = webssh.TERMINAL_BACKEND_REGISTRY.build_settings_schema()
+        standterm.is_wsl = lambda: True
+        schema = standterm.TERMINAL_BACKEND_REGISTRY.build_settings_schema()
     finally:
-        webssh.is_wsl = original_is_wsl
+        standterm.is_wsl = original_is_wsl
 
     by_key = {item['setting_key']: item for item in schema}
-    assert by_key['ssh.default_host']['connection_type'] == webssh.CONNECTION_TYPE_SSH
+    assert by_key['ssh.default_host']['connection_type'] == standterm.CONNECTION_TYPE_SSH
     assert by_key['ssh.default_port']['value_type'] == 'integer'
     assert by_key['local_shell.default_kind']['allowed_values'] == ['bash', 'cmd', 'powershell']
     assert by_key['local_shell.default_kind']['apply_scope'] == 'next_connection'
     assert by_key['local_shell.default_kind']['storage_owner'] == 'core'
     assert by_key['local_shell.remote_access']['risk_level'] == 'high'
     assert by_key['local_shell.remote_access']['apply_scope'] == 'restart'
-    assert by_key['uart.default_baud_rate']['allowed_values'] == webssh.UART_BAUD_RATES
+    assert by_key['uart.default_baud_rate']['allowed_values'] == standterm.UART_BAUD_RATES
     assert by_key['uart.default_baud_rate']['mutable'] is True
     assert by_key['uart.default_baud_rate']['storage_owner'] == 'core'
-    assert by_key['uart.manual_port_policy']['required_capability'] == webssh.CAPABILITY_SETTINGS_UPDATE_HIGH_RISK
+    assert by_key['uart.manual_port_policy']['required_capability'] == standterm.CAPABILITY_SETTINGS_UPDATE_HIGH_RISK
     assert all('required_capability' in item for item in schema)
     assert all('value' not in item for item in schema)
-    assert [item['setting_key'] for item in schema if item['mutable']] == [webssh.SETTING_UART_DEFAULT_BAUD_RATE]
+    assert [item['setting_key'] for item in schema if item['mutable']] == [standterm.SETTING_UART_DEFAULT_BAUD_RATE]
 
 
 def test_backend_settings_schema_rejects_unsafe_capability_mapping():
@@ -2172,14 +2131,14 @@ def test_backend_settings_schema_rejects_unsafe_capability_mapping():
                 'setting_key': 'fake.remote_access',
                 'value_type': 'boolean',
                 'risk_level': 'high',
-                'required_capability': webssh.CAPABILITY_SETTINGS_UPDATE_LOW_RISK,
+                'required_capability': standterm.CAPABILITY_SETTINGS_UPDATE_LOW_RISK,
             }]
 
-    registry = webssh.TerminalBackendRegistry(
+    registry = standterm.TerminalBackendRegistry(
         [FakePlugin()],
         lambda value: value,
-        known_settings_capabilities=webssh.SETTINGS_KNOWN_UPDATE_CAPABILITIES,
-        risk_capability_rules=webssh.SETTINGS_RISK_CAPABILITY_RULES,
+        known_settings_capabilities=standterm.SETTINGS_KNOWN_UPDATE_CAPABILITIES,
+        risk_capability_rules=standterm.SETTINGS_RISK_CAPABILITY_RULES,
     )
     try:
         registry.build_settings_schema()
@@ -2192,15 +2151,15 @@ def test_backend_settings_schema_rejects_unsafe_capability_mapping():
 def test_settings_snapshot_exposes_plugin_schema_without_high_risk_write():
     client = make_client()
 
-    client.emit(webssh.SETTINGS_EVENT_SNAPSHOT_REQUEST)
-    snapshot = last_payload(client, webssh.SETTINGS_EVENT_SNAPSHOT)
+    client.emit(standterm.SETTINGS_EVENT_SNAPSHOT_REQUEST)
+    snapshot = last_payload(client, standterm.SETTINGS_EVENT_SNAPSHOT)
     plugin_schema = snapshot['settings_schema']['plugins']
     by_key = {item['setting_key']: item for item in plugin_schema}
 
     assert by_key['uart.remote_access']['risk_level'] == 'high'
-    assert by_key['uart.remote_access']['required_capability'] == webssh.CAPABILITY_SETTINGS_UPDATE_HIGH_RISK
-    assert snapshot['capabilities'][webssh.CAPABILITY_SETTINGS_UPDATE_HIGH_RISK]['allowed'] is False
-    assert webssh.SETTING_DEFAULT_CONNECTION_TYPE in snapshot['mutable_settings']
+    assert by_key['uart.remote_access']['required_capability'] == standterm.CAPABILITY_SETTINGS_UPDATE_HIGH_RISK
+    assert snapshot['capabilities'][standterm.CAPABILITY_SETTINGS_UPDATE_HIGH_RISK]['allowed'] is False
+    assert standterm.SETTING_DEFAULT_CONNECTION_TYPE in snapshot['mutable_settings']
     assert 'uart.remote_access' not in snapshot['mutable_settings']
 
     client.disconnect()
@@ -2211,19 +2170,19 @@ def test_settings_snapshot_requires_local_or_browser_authorized_client():
     session_token = current_session_token()
     sid = current_sid_for_session(session_token)
 
-    webssh.socket_client_ips[sid] = '203.0.113.10'
-    webssh.socket_browser_authorized[sid] = False
-    client.emit(webssh.SETTINGS_EVENT_SNAPSHOT_REQUEST)
-    denied = last_payload(client, webssh.SETTINGS_EVENT_SNAPSHOT)
+    standterm.socket_client_ips[sid] = '203.0.113.10'
+    standterm.socket_browser_authorized[sid] = False
+    client.emit(standterm.SETTINGS_EVENT_SNAPSHOT_REQUEST)
+    denied = last_payload(client, standterm.SETTINGS_EVENT_SNAPSHOT)
     assert denied['status'] == 'failed'
     assert denied['error_code'] == 'settings_view_unauthorized'
 
-    webssh.socket_browser_authorized[sid] = True
-    client.emit(webssh.SETTINGS_EVENT_SNAPSHOT_REQUEST)
-    allowed = last_payload(client, webssh.SETTINGS_EVENT_SNAPSHOT)
+    standterm.socket_browser_authorized[sid] = True
+    client.emit(standterm.SETTINGS_EVENT_SNAPSHOT_REQUEST)
+    allowed = last_payload(client, standterm.SETTINGS_EVENT_SNAPSHOT)
     assert allowed['status'] == 'ok'
-    assert allowed['capabilities'][webssh.CAPABILITY_SETTINGS_VIEW]['allowed'] is True
-    assert allowed['capabilities'][webssh.CAPABILITY_SETTINGS_UPDATE_LOW_RISK]['allowed'] is False
+    assert allowed['capabilities'][standterm.CAPABILITY_SETTINGS_VIEW]['allowed'] is True
+    assert allowed['capabilities'][standterm.CAPABILITY_SETTINGS_UPDATE_LOW_RISK]['allowed'] is False
 
     client.disconnect()
 
@@ -2231,50 +2190,50 @@ def test_settings_snapshot_requires_local_or_browser_authorized_client():
 def test_low_risk_settings_update_is_versioned_and_audited():
     client = make_client()
 
-    client.emit(webssh.SETTINGS_EVENT_SNAPSHOT_REQUEST)
-    snapshot = last_payload(client, webssh.SETTINGS_EVENT_SNAPSHOT)
+    client.emit(standterm.SETTINGS_EVENT_SNAPSHOT_REQUEST)
+    snapshot = last_payload(client, standterm.SETTINGS_EVENT_SNAPSHOT)
     assert snapshot['settings_version'] == 1
 
-    client.emit(webssh.SETTINGS_EVENT_UPDATE_REQUEST, {
+    client.emit(standterm.SETTINGS_EVENT_UPDATE_REQUEST, {
         'request_id': 'settings-schema-stale',
-        'setting_key': webssh.SETTING_DEFAULT_CONNECTION_TYPE,
-        'value': webssh.CONNECTION_TYPE_SSH,
+        'setting_key': standterm.SETTING_DEFAULT_CONNECTION_TYPE,
+        'value': standterm.CONNECTION_TYPE_SSH,
         'expected_version': snapshot['settings_version'],
         'expected_schema_digest': '0' * 64,
     })
-    schema_stale = last_payload(client, webssh.SETTINGS_EVENT_UPDATE_RESULT)
+    schema_stale = last_payload(client, standterm.SETTINGS_EVENT_UPDATE_RESULT)
     assert schema_stale['status'] == 'failed'
     assert schema_stale['error_code'] == 'settings_schema_conflict'
     assert schema_stale['settings_version'] == 1
 
-    target = webssh.CONNECTION_TYPE_SSH
-    client.emit(webssh.SETTINGS_EVENT_UPDATE_REQUEST, {
+    target = standterm.CONNECTION_TYPE_SSH
+    client.emit(standterm.SETTINGS_EVENT_UPDATE_REQUEST, {
         'request_id': 'settings-update-ok',
-        'setting_key': webssh.SETTING_DEFAULT_CONNECTION_TYPE,
+        'setting_key': standterm.SETTING_DEFAULT_CONNECTION_TYPE,
         'value': target,
         'expected_version': snapshot['settings_version'],
         'expected_schema_digest': snapshot['settings_schema_digest'],
     })
-    result = last_payload(client, webssh.SETTINGS_EVENT_UPDATE_RESULT)
+    result = last_payload(client, standterm.SETTINGS_EVENT_UPDATE_RESULT)
     assert result['status'] == 'ok'
-    assert result['setting_key'] == webssh.SETTING_DEFAULT_CONNECTION_TYPE
+    assert result['setting_key'] == standterm.SETTING_DEFAULT_CONNECTION_TYPE
     assert result['value'] == target
     assert result['settings_version'] == 2
 
-    client.emit(webssh.SETTINGS_EVENT_UPDATE_REQUEST, {
+    client.emit(standterm.SETTINGS_EVENT_UPDATE_REQUEST, {
         'request_id': 'settings-update-stale',
-        'setting_key': webssh.SETTING_DEFAULT_CONNECTION_TYPE,
-        'value': webssh.CONNECTION_TYPE_LOCAL_SHELL,
+        'setting_key': standterm.SETTING_DEFAULT_CONNECTION_TYPE,
+        'value': standterm.CONNECTION_TYPE_LOCAL_SHELL,
         'expected_version': 1,
     })
-    stale = last_payload(client, webssh.SETTINGS_EVENT_UPDATE_RESULT)
+    stale = last_payload(client, standterm.SETTINGS_EVENT_UPDATE_RESULT)
     assert stale['status'] == 'failed'
     assert stale['error_code'] == 'settings_version_conflict'
 
-    events = webssh.settings_audit_store.get_recent()
-    assert any(event['event_type'] == webssh.SETTINGS_AUDIT_UPDATE_SUCCEEDED for event in events)
+    events = standterm.settings_audit_store.get_recent()
+    assert any(event['event_type'] == standterm.SETTINGS_AUDIT_UPDATE_SUCCEEDED for event in events)
     assert any(
-        event['event_type'] == webssh.SETTINGS_AUDIT_UPDATE_FAILED
+        event['event_type'] == standterm.SETTINGS_AUDIT_UPDATE_FAILED
         and event.get('error_code') == 'settings_version_conflict'
         for event in events
     )
@@ -2285,52 +2244,52 @@ def test_low_risk_settings_update_is_versioned_and_audited():
 def test_uart_default_baud_rate_runtime_update_uses_plugin_validation():
     client = make_client()
 
-    client.emit(webssh.SETTINGS_EVENT_SNAPSHOT_REQUEST)
-    snapshot = last_payload(client, webssh.SETTINGS_EVENT_SNAPSHOT)
-    assert snapshot['mutable_settings'][webssh.SETTING_UART_DEFAULT_BAUD_RATE]['value'] == webssh.DEFAULT_UART_BAUD_RATE
+    client.emit(standterm.SETTINGS_EVENT_SNAPSHOT_REQUEST)
+    snapshot = last_payload(client, standterm.SETTINGS_EVENT_SNAPSHOT)
+    assert snapshot['mutable_settings'][standterm.SETTING_UART_DEFAULT_BAUD_RATE]['value'] == standterm.DEFAULT_UART_BAUD_RATE
 
     target = 230400
-    client.emit(webssh.SETTINGS_EVENT_UPDATE_REQUEST, {
+    client.emit(standterm.SETTINGS_EVENT_UPDATE_REQUEST, {
         'request_id': 'uart-baud-ok',
-        'setting_key': webssh.SETTING_UART_DEFAULT_BAUD_RATE,
+        'setting_key': standterm.SETTING_UART_DEFAULT_BAUD_RATE,
         'value': str(target),
         'expected_version': snapshot['settings_version'],
         'expected_schema_digest': snapshot['settings_schema_digest'],
     })
-    result = last_payload(client, webssh.SETTINGS_EVENT_UPDATE_RESULT)
+    result = last_payload(client, standterm.SETTINGS_EVENT_UPDATE_RESULT)
     assert result['status'] == 'ok'
-    assert result['setting_key'] == webssh.SETTING_UART_DEFAULT_BAUD_RATE
+    assert result['setting_key'] == standterm.SETTING_UART_DEFAULT_BAUD_RATE
     assert result['value'] == target
     assert result['settings_version'] == 2
 
-    client.emit(webssh.SETTINGS_EVENT_SNAPSHOT_REQUEST)
-    updated = last_payload(client, webssh.SETTINGS_EVENT_SNAPSHOT)
-    assert updated['mutable_settings'][webssh.SETTING_UART_DEFAULT_BAUD_RATE]['value'] == target
-    assert updated['effective_settings'][webssh.SETTING_UART_DEFAULT_BAUD_RATE] == target
+    client.emit(standterm.SETTINGS_EVENT_SNAPSHOT_REQUEST)
+    updated = last_payload(client, standterm.SETTINGS_EVENT_SNAPSHOT)
+    assert updated['mutable_settings'][standterm.SETTING_UART_DEFAULT_BAUD_RATE]['value'] == target
+    assert updated['effective_settings'][standterm.SETTING_UART_DEFAULT_BAUD_RATE] == target
 
-    with webssh.app.test_request_context('/'):
-        policy = webssh.build_terminal_policy(browser_authorized=False, client_ip='127.0.0.1')
+    with standterm.app.test_request_context('/'):
+        policy = standterm.build_terminal_policy(browser_authorized=False, client_ip='127.0.0.1')
     uart_option = next(
         item for item in policy['connection_options']
-        if item['connection_type'] == webssh.CONNECTION_TYPE_UART
+        if item['connection_type'] == standterm.CONNECTION_TYPE_UART
     )
     assert uart_option['default_baud_rate'] == target
 
-    client.emit(webssh.SETTINGS_EVENT_UPDATE_REQUEST, {
+    client.emit(standterm.SETTINGS_EVENT_UPDATE_REQUEST, {
         'request_id': 'uart-baud-invalid',
-        'setting_key': webssh.SETTING_UART_DEFAULT_BAUD_RATE,
+        'setting_key': standterm.SETTING_UART_DEFAULT_BAUD_RATE,
         'value': 12345,
-        'expected_version': webssh.get_runtime_settings_version(),
+        'expected_version': standterm.get_runtime_settings_version(),
         'expected_schema_digest': updated['settings_schema_digest'],
     })
-    invalid = last_payload(client, webssh.SETTINGS_EVENT_UPDATE_RESULT)
+    invalid = last_payload(client, standterm.SETTINGS_EVENT_UPDATE_RESULT)
     assert invalid['status'] == 'failed'
     assert invalid['error_code'] == 'settings_invalid_value'
 
-    events = webssh.settings_audit_store.get_recent()
+    events = standterm.settings_audit_store.get_recent()
     assert any(
-        event['event_type'] == webssh.SETTINGS_AUDIT_UPDATE_SUCCEEDED
-        and event.get('setting_key') == webssh.SETTING_UART_DEFAULT_BAUD_RATE
+        event['event_type'] == standterm.SETTINGS_AUDIT_UPDATE_SUCCEEDED
+        and event.get('setting_key') == standterm.SETTING_UART_DEFAULT_BAUD_RATE
         and event.get('storage_owner') == 'core'
         for event in events
     )
@@ -2343,15 +2302,15 @@ def test_remote_browser_authorization_alone_cannot_update_settings():
     session_token = current_session_token()
     sid = current_sid_for_session(session_token)
 
-    webssh.socket_client_ips[sid] = '203.0.113.10'
-    webssh.socket_browser_authorized[sid] = True
-    client.emit(webssh.SETTINGS_EVENT_UPDATE_REQUEST, {
+    standterm.socket_client_ips[sid] = '203.0.113.10'
+    standterm.socket_browser_authorized[sid] = True
+    client.emit(standterm.SETTINGS_EVENT_UPDATE_REQUEST, {
         'request_id': 'settings-remote-denied',
-        'setting_key': webssh.SETTING_DEFAULT_CONNECTION_TYPE,
-        'value': webssh.CONNECTION_TYPE_SSH,
-        'expected_version': webssh.get_runtime_settings_version(),
+        'setting_key': standterm.SETTING_DEFAULT_CONNECTION_TYPE,
+        'value': standterm.CONNECTION_TYPE_SSH,
+        'expected_version': standterm.get_runtime_settings_version(),
     })
-    denied = last_payload(client, webssh.SETTINGS_EVENT_UPDATE_RESULT)
+    denied = last_payload(client, standterm.SETTINGS_EVENT_UPDATE_RESULT)
     assert denied['status'] == 'failed'
     assert denied['error_code'] == 'settings_admin_grant_required'
 
@@ -2362,54 +2321,54 @@ def test_settings_admin_grant_is_scoped_and_revocable():
     client = make_client()
     session_token = current_session_token()
     sid = current_sid_for_session(session_token)
-    webssh.socket_browser_identities[sid] = {
+    standterm.socket_browser_identities[sid] = {
         'browser_id': 'a' * 64,
         'public_key': 'public-key',
     }
 
-    client.emit(webssh.SETTINGS_EVENT_ADMIN_GRANT_REQUEST, {
-        'capability': webssh.CAPABILITY_SETTINGS_UPDATE_LOW_RISK,
+    client.emit(standterm.SETTINGS_EVENT_ADMIN_GRANT_REQUEST, {
+        'capability': standterm.CAPABILITY_SETTINGS_UPDATE_LOW_RISK,
     })
-    grant = last_payload(client, webssh.SETTINGS_EVENT_ADMIN_GRANT_RESULT)
+    grant = last_payload(client, standterm.SETTINGS_EVENT_ADMIN_GRANT_RESULT)
     assert grant['status'] == 'ok'
-    assert webssh.CAPABILITY_SETTINGS_UPDATE_LOW_RISK in grant['capabilities']
+    assert standterm.CAPABILITY_SETTINGS_UPDATE_LOW_RISK in grant['capabilities']
 
-    webssh.socket_client_ips[sid] = '203.0.113.10'
-    webssh.socket_browser_authorized[sid] = True
-    client.emit(webssh.SETTINGS_EVENT_UPDATE_REQUEST, {
+    standterm.socket_client_ips[sid] = '203.0.113.10'
+    standterm.socket_browser_authorized[sid] = True
+    client.emit(standterm.SETTINGS_EVENT_UPDATE_REQUEST, {
         'request_id': 'settings-grant-client-mismatch',
-        'setting_key': webssh.SETTING_DEFAULT_CONNECTION_TYPE,
-        'value': webssh.CONNECTION_TYPE_SSH,
-        'expected_version': webssh.get_runtime_settings_version(),
+        'setting_key': standterm.SETTING_DEFAULT_CONNECTION_TYPE,
+        'value': standterm.CONNECTION_TYPE_SSH,
+        'expected_version': standterm.get_runtime_settings_version(),
         'grant_id': grant['grant_id'],
     })
-    denied = last_payload(client, webssh.SETTINGS_EVENT_UPDATE_RESULT)
+    denied = last_payload(client, standterm.SETTINGS_EVENT_UPDATE_RESULT)
     assert denied['status'] == 'failed'
     assert denied['error_code'] == 'settings_admin_grant_client_mismatch'
 
-    webssh.socket_client_ips[sid] = '127.0.0.1'
-    client.emit(webssh.SETTINGS_EVENT_ADMIN_GRANT_REVOKE, {
+    standterm.socket_client_ips[sid] = '127.0.0.1'
+    client.emit(standterm.SETTINGS_EVENT_ADMIN_GRANT_REVOKE, {
         'grant_id': grant['grant_id'],
     })
-    revoked = last_payload(client, webssh.SETTINGS_EVENT_ADMIN_GRANT_RESULT)
+    revoked = last_payload(client, standterm.SETTINGS_EVENT_ADMIN_GRANT_RESULT)
     assert revoked['status'] == 'ok'
     assert revoked['revoked'] is True
 
-    events = webssh.settings_audit_store.get_recent()
-    assert any(event['event_type'] == webssh.SETTINGS_AUDIT_GRANT_CREATED for event in events)
-    assert any(event['event_type'] == webssh.SETTINGS_AUDIT_GRANT_REVOKED for event in events)
+    events = standterm.settings_audit_store.get_recent()
+    assert any(event['event_type'] == standterm.SETTINGS_AUDIT_GRANT_CREATED for event in events)
+    assert any(event['event_type'] == standterm.SETTINGS_AUDIT_GRANT_REVOKED for event in events)
 
     client.disconnect()
 
 
 def test_ssh_backend_action_contract_uses_public_bridge_method():
-    action_store = webssh.BackendActionStore(time_func=lambda: 1000)
+    action_store = standterm.BackendActionStore(time_func=lambda: 1000)
     calls = []
 
     class ActionBridge:
         def prepare_backend_action(self, action_type, payload, expires_at, message=None, question=None):
             calls.append((action_type, payload, expires_at, message, question))
-            return webssh.BackendAction(
+            return standterm.BackendAction(
                 action_type=action_type,
                 terminal_id=payload['terminal_id'],
                 metadata={'username': payload['username'], 'key_entry': {'line': 'ssh-ed25519 AAAA test'}},
@@ -2423,30 +2382,30 @@ def test_ssh_backend_action_contract_uses_public_bridge_method():
                 raise AssertionError(f'Backend plugin used private bridge method: {name}')
             raise AttributeError(name)
 
-    plugin = webssh.SSHBackendPlugin(
+    plugin = standterm.SSHBackendPlugin(
         bridge_cls=ActionBridge,
-        default_host=webssh.SSH_HOST,
-        default_port=webssh.SSH_PORT,
-        default_user=webssh.SSH_USER,
-        max_host_length=webssh.MAX_HOST_LENGTH,
-        max_username_length=webssh.MAX_USERNAME_LENGTH,
-        max_password_bytes=webssh.MAX_PASSWORD_BYTES,
-        has_control_chars=webssh.has_control_chars,
+        default_host=standterm.SSH_HOST,
+        default_port=standterm.SSH_PORT,
+        default_user=standterm.SSH_USER,
+        max_host_length=standterm.MAX_HOST_LENGTH,
+        max_username_length=standterm.MAX_USERNAME_LENGTH,
+        max_password_bytes=standterm.MAX_PASSWORD_BYTES,
+        has_control_chars=standterm.has_control_chars,
         allowed_action_types={'offer_localhost_key_setup'},
         backend_action_store=action_store,
         bridge_kwargs={},
-        low_risk_settings_capability=webssh.CAPABILITY_SETTINGS_UPDATE_LOW_RISK,
-        high_risk_settings_capability=webssh.CAPABILITY_SETTINGS_UPDATE_HIGH_RISK,
+        low_risk_settings_capability=standterm.CAPABILITY_SETTINGS_UPDATE_LOW_RISK,
+        high_risk_settings_capability=standterm.CAPABILITY_SETTINGS_UPDATE_HIGH_RISK,
         key_setup_ttl_seconds=120,
         token_urlsafe=lambda _length: 'action-token',
         time_func=lambda: 1000,
     )
     payload = {
-        'connection_type': webssh.CONNECTION_TYPE_SSH,
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'connection_type': standterm.CONNECTION_TYPE_SSH,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'host': '127.0.0.1',
         'port': 22,
-        'username': webssh.SSH_USER,
+        'username': standterm.SSH_USER,
     }
 
     failure = plugin.prepare_connection_failure(
@@ -2463,56 +2422,56 @@ def test_ssh_backend_action_contract_uses_public_bridge_method():
     )
 
     assert failure['action_id'] == 'action-token'
-    action, error = action_store.get('sid-1', 'action-token', webssh.secrets.compare_digest)
+    action, error = action_store.get('sid-1', 'action-token', standterm.secrets.compare_digest)
     assert error is None
     assert action.action_type == 'offer_localhost_key_setup'
-    assert action.metadata['username'] == webssh.SSH_USER
+    assert action.metadata['username'] == standterm.SSH_USER
     assert calls == [
         ('offer_localhost_key_setup', payload, 1120, 'message', 'question'),
     ]
 
 
 def test_ssh_bridge_is_provided_by_backend_module():
-    assert webssh.SSHBridge.__module__ == 'terminal_backends.ssh'
-    plugin = webssh.TERMINAL_BACKEND_REGISTRY.get(webssh.CONNECTION_TYPE_SSH)
-    bridge = plugin.create_bridge(webssh.ACCESS_TOKEN, webssh.TERMINAL_ID_MAIN, {})
-    assert isinstance(bridge, webssh.TerminalBridge)
-    assert bridge.connection_type == webssh.CONNECTION_TYPE_SSH
+    assert standterm.SSHBridge.__module__ == 'terminal_backends.ssh'
+    plugin = standterm.TERMINAL_BACKEND_REGISTRY.get(standterm.CONNECTION_TYPE_SSH)
+    bridge = plugin.create_bridge(standterm.ACCESS_TOKEN, standterm.TERMINAL_ID_MAIN, {})
+    assert isinstance(bridge, standterm.TerminalBridge)
+    assert bridge.connection_type == standterm.CONNECTION_TYPE_SSH
     bridge.close()
 
 
 def test_local_shell_bridge_is_provided_by_backend_module():
-    assert webssh.LocalShellBridge.__module__ == 'terminal_backends.local_shell'
-    plugin = webssh.TERMINAL_BACKEND_REGISTRY.get(webssh.CONNECTION_TYPE_LOCAL_SHELL)
-    shell_config, error = webssh.get_default_local_shell_config()
+    assert standterm.LocalShellBridge.__module__ == 'terminal_backends.local_shell'
+    plugin = standterm.TERMINAL_BACKEND_REGISTRY.get(standterm.CONNECTION_TYPE_LOCAL_SHELL)
+    shell_config, error = standterm.get_default_local_shell_config()
     assert error is None
     bridge = plugin.create_bridge(
-        webssh.ACCESS_TOKEN,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.ACCESS_TOKEN,
+        standterm.TERMINAL_ID_MAIN,
         {'local_shell_config': shell_config},
     )
-    assert isinstance(bridge, webssh.TerminalBridge)
-    assert bridge.connection_type == webssh.CONNECTION_TYPE_LOCAL_SHELL
+    assert isinstance(bridge, standterm.TerminalBridge)
+    assert bridge.connection_type == standterm.CONNECTION_TYPE_LOCAL_SHELL
     assert bridge.terminal_label == shell_config['terminal_label']
     bridge.close()
 
 
 def test_uart_bridge_is_provided_by_backend_module():
-    assert webssh.UARTBridge.__module__ == 'terminal_backends.uart'
-    plugin = webssh.TERMINAL_BACKEND_REGISTRY.get(webssh.CONNECTION_TYPE_UART)
+    assert standterm.UARTBridge.__module__ == 'terminal_backends.uart'
+    plugin = standterm.TERMINAL_BACKEND_REGISTRY.get(standterm.CONNECTION_TYPE_UART)
     bridge = plugin.create_bridge(
-        webssh.ACCESS_TOKEN,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.ACCESS_TOKEN,
+        standterm.TERMINAL_ID_MAIN,
         {
             'serial_port_info': {
                 'device': '/dev/ttyS0',
                 'label': 'COM1 (/dev/ttyS0)',
             },
-            'baud_rate': webssh.DEFAULT_UART_BAUD_RATE,
+            'baud_rate': standterm.DEFAULT_UART_BAUD_RATE,
         },
     )
-    assert isinstance(bridge, webssh.TerminalBridge)
-    assert bridge.connection_type == webssh.CONNECTION_TYPE_UART
+    assert isinstance(bridge, standterm.TerminalBridge)
+    assert bridge.connection_type == standterm.CONNECTION_TYPE_UART
     assert bridge.terminal_label == 'UART COM1 (/dev/ttyS0)'
     bridge.close()
 
@@ -2522,40 +2481,40 @@ def test_agent_audit_records_typed_events_without_raw_action_data():
     session_token = current_session_token()
     add_dummy_bridge(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot())
-    assert last_payload(client, webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)['status'] == 'accepted'
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit('replay_terminal', {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot())
+    assert last_payload(client, standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)['status'] == 'accepted'
 
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'approval',
     })
-    client.emit(webssh.AGENT_EVENT_PROVIDER_RUN_REQUEST, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_PROVIDER_RUN_REQUEST, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
     })
-    action = last_payload(client, webssh.AGENT_EVENT_ACTION_REQUEST)
-    client.emit(webssh.AGENT_EVENT_ACTION_APPROVE, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    action = last_payload(client, standterm.AGENT_EVENT_ACTION_REQUEST)
+    client.emit(standterm.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'action_id': action['action_id'],
         'proposal_id': action['proposal_id'],
         'mode_version': action['mode_version'],
     })
-    assert last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)['status'] == webssh.AGENT_STATUS_COMPLETED
+    assert last_payload(client, standterm.AGENT_EVENT_ACTION_RESULT)['status'] == standterm.AGENT_STATUS_COMPLETED
 
-    audit_events = webssh.agent_audit_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    audit_events = standterm.agent_audit_store.get_recent(session_token, standterm.TERMINAL_ID_MAIN)
     event_types = [event['event_type'] for event in audit_events]
-    assert webssh.AGENT_AUDIT_VIEWER_ATTACH in event_types
-    assert webssh.AGENT_AUDIT_MODE_SET in event_types
-    assert webssh.AGENT_AUDIT_PROVIDER_RUN_REQUEST in event_types
-    assert webssh.AGENT_AUDIT_CONTEXT_BUILT in event_types
-    assert webssh.AGENT_AUDIT_PROPOSAL_CREATED in event_types
-    assert webssh.AGENT_AUDIT_ACTION_APPROVE in event_types
-    assert webssh.AGENT_AUDIT_ACTION_RESULT in event_types
+    assert standterm.AGENT_AUDIT_VIEWER_ATTACH in event_types
+    assert standterm.AGENT_AUDIT_MODE_SET in event_types
+    assert standterm.AGENT_AUDIT_PROVIDER_RUN_REQUEST in event_types
+    assert standterm.AGENT_AUDIT_CONTEXT_BUILT in event_types
+    assert standterm.AGENT_AUDIT_PROPOSAL_CREATED in event_types
+    assert standterm.AGENT_AUDIT_ACTION_APPROVE in event_types
+    assert standterm.AGENT_AUDIT_ACTION_RESULT in event_types
 
     context_events = [
         event for event in audit_events
-        if event['event_type'] == webssh.AGENT_AUDIT_CONTEXT_BUILT
+        if event['event_type'] == standterm.AGENT_AUDIT_CONTEXT_BUILT
     ]
     assert context_events[-1]['context']['active_screen_source'] == 'browser_viewport_snapshot'
     assert context_events[-1]['context']['context_allowed'] is True
@@ -2578,23 +2537,23 @@ def test_wrong_sid_cannot_approve_action():
     client_b = make_client()
     bridge = add_dummy_bridge(session_token)
 
-    client_a.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client_a.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client_a.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client_a.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'approval',
     })
-    client_a.emit(webssh.AGENT_EVENT_SUGGESTION_REQUEST, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client_a.emit(standterm.AGENT_EVENT_SUGGESTION_REQUEST, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mock_input': 'secret\n',
     })
-    action = last_payload(client_a, webssh.AGENT_EVENT_ACTION_REQUEST)
+    action = last_payload(client_a, standterm.AGENT_EVENT_ACTION_REQUEST)
 
-    client_b.emit(webssh.AGENT_EVENT_ACTION_APPROVE, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client_b.emit(standterm.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'action_id': action['action_id'],
     })
     assert bridge.writes == []
-    assert last_payload(client_b, webssh.AGENT_EVENT_ACTION_RESULT)['error_code'] == webssh.AGENT_ERROR_NOT_ATTACHED
+    assert last_payload(client_b, standterm.AGENT_EVENT_ACTION_RESULT)['error_code'] == standterm.AGENT_ERROR_NOT_ATTACHED
 
     client_a.disconnect()
     client_b.disconnect()
@@ -2605,27 +2564,27 @@ def test_stale_mode_version_cannot_approve_action():
     session_token = current_session_token()
     bridge = add_dummy_bridge(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'approval',
     })
-    client.emit(webssh.AGENT_EVENT_SUGGESTION_REQUEST, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_SUGGESTION_REQUEST, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mock_input': 'versioned\n',
     })
-    action = last_payload(client, webssh.AGENT_EVENT_ACTION_REQUEST)
+    action = last_payload(client, standterm.AGENT_EVENT_ACTION_REQUEST)
 
-    client.emit(webssh.AGENT_EVENT_ACTION_APPROVE, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'proposal_id': action['proposal_id'],
         'mode_version': action['mode_version'] + 1,
     })
     assert bridge.writes == []
-    assert last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)['error_code'] == webssh.AGENT_ERROR_STALE_MODE_VERSION
+    assert last_payload(client, standterm.AGENT_EVENT_ACTION_RESULT)['error_code'] == standterm.AGENT_ERROR_STALE_MODE_VERSION
 
-    client.emit(webssh.AGENT_EVENT_ACTION_APPROVE, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'proposal_id': action['proposal_id'],
         'mode_version': action['mode_version'],
     })
@@ -2639,31 +2598,31 @@ def test_stale_privacy_version_cannot_approve_action():
     session_token = current_session_token()
     bridge = add_dummy_bridge(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'approval',
     })
-    client.emit(webssh.AGENT_EVENT_SUGGESTION_REQUEST, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_SUGGESTION_REQUEST, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mock_input': 'privacy-versioned\n',
     })
-    action = last_payload(client, webssh.AGENT_EVENT_ACTION_REQUEST)
+    action = last_payload(client, standterm.AGENT_EVENT_ACTION_REQUEST)
 
-    client.emit(webssh.AGENT_EVENT_PRIVACY_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
-        'privacy_state': webssh.AGENT_PRIVACY_PRIVATE_INPUT,
+    client.emit(standterm.AGENT_EVENT_PRIVACY_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'privacy_state': standterm.AGENT_PRIVACY_PRIVATE_INPUT,
     })
-    assert last_payload(client, webssh.AGENT_EVENT_STATE)['privacy_version'] == action['privacy_version'] + 1
+    assert last_payload(client, standterm.AGENT_EVENT_STATE)['privacy_version'] == action['privacy_version'] + 1
 
-    client.emit(webssh.AGENT_EVENT_ACTION_APPROVE, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'proposal_id': action['proposal_id'],
         'mode_version': action['mode_version'],
         'privacy_version': action['privacy_version'],
     })
     assert bridge.writes == []
-    assert last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)['error_code'] == webssh.AGENT_ERROR_STALE_PROPOSAL
+    assert last_payload(client, standterm.AGENT_EVENT_ACTION_RESULT)['error_code'] == standterm.AGENT_ERROR_STALE_PROPOSAL
 
     client.disconnect()
 
@@ -2673,29 +2632,29 @@ def test_mode_change_cancels_pending_action():
     session_token = current_session_token()
     bridge = add_dummy_bridge(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'approval',
     })
-    client.emit(webssh.AGENT_EVENT_SUGGESTION_REQUEST, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_SUGGESTION_REQUEST, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mock_input': 'stale\n',
     })
-    action = last_payload(client, webssh.AGENT_EVENT_ACTION_REQUEST)
+    action = last_payload(client, standterm.AGENT_EVENT_ACTION_REQUEST)
 
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'observe',
     })
-    assert last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)['error_code'] == webssh.AGENT_REASON_MODE_CHANGED
+    assert last_payload(client, standterm.AGENT_EVENT_ACTION_RESULT)['error_code'] == standterm.AGENT_REASON_MODE_CHANGED
 
-    client.emit(webssh.AGENT_EVENT_ACTION_APPROVE, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'action_id': action['action_id'],
     })
     assert bridge.writes == []
-    assert last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)['error_code'] == webssh.AGENT_ERROR_ACTION_NOT_PENDING
+    assert last_payload(client, standterm.AGENT_EVENT_ACTION_RESULT)['error_code'] == standterm.AGENT_ERROR_ACTION_NOT_PENDING
 
     client.disconnect()
 
@@ -2705,32 +2664,32 @@ def test_terminal_close_invalidates_pending_action():
     session_token = current_session_token()
     bridge = add_dummy_bridge(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'approval',
     })
-    client.emit(webssh.AGENT_EVENT_SUGGESTION_REQUEST, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_SUGGESTION_REQUEST, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mock_input': 'after-close\n',
     })
-    action = last_payload(client, webssh.AGENT_EVENT_ACTION_REQUEST)
-    webssh.agent_user_input_metadata_store.append_input(
+    action = last_payload(client, standterm.AGENT_EVENT_ACTION_REQUEST)
+    standterm.agent_user_input_metadata_store.append_input(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         'manual-input\n',
     )
 
-    client.emit('close_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    audit_events = webssh.agent_audit_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
-    assert any(event['event_type'] == webssh.AGENT_AUDIT_TERMINAL_CLEANUP for event in audit_events)
-    client.emit(webssh.AGENT_EVENT_ACTION_APPROVE, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit('close_terminal', {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    audit_events = standterm.agent_audit_store.get_recent(session_token, standterm.TERMINAL_ID_MAIN)
+    assert any(event['event_type'] == standterm.AGENT_AUDIT_TERMINAL_CLEANUP for event in audit_events)
+    client.emit(standterm.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'action_id': action['action_id'],
     })
     assert bridge.writes == []
-    assert webssh.agent_user_input_metadata_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN) == []
-    assert last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)['error_code'] == webssh.AGENT_ERROR_NOT_ATTACHED
+    assert standterm.agent_user_input_metadata_store.get_recent(session_token, standterm.TERMINAL_ID_MAIN) == []
+    assert last_payload(client, standterm.AGENT_EVENT_ACTION_RESULT)['error_code'] == standterm.AGENT_ERROR_NOT_ATTACHED
 
     client.disconnect()
 
@@ -2740,23 +2699,23 @@ def test_disconnect_invalidates_agent_state():
     session_token = current_session_token()
     add_dummy_bridge(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    assert webssh.agent_states
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    assert standterm.agent_states
     client.disconnect()
-    assert not webssh.agent_states
+    assert not standterm.agent_states
 
 
 def test_stale_epoch_write_is_rejected():
     session_token = 'session-a'
     sid = 'sid-a'
     bridge = add_dummy_bridge(session_token)
-    state = webssh.get_or_create_agent_state(session_token, webssh.TERMINAL_ID_MAIN, sid)
-    state.mode = webssh.AGENT_MODE_DIRECT_ACTIVE
-    action, error_code = webssh.build_agent_action(
+    state = standterm.get_or_create_agent_state(session_token, standterm.TERMINAL_ID_MAIN, sid)
+    state.mode = standterm.AGENT_MODE_DIRECT_ACTIVE
+    action, error_code = standterm.build_agent_action(
         state,
         {
-            'action_type': webssh.AGENT_ACTION_TERMINAL_INPUT,
-            'terminal_id': webssh.TERMINAL_ID_MAIN,
+            'action_type': standterm.AGENT_ACTION_TERMINAL_INPUT,
+            'terminal_id': standterm.TERMINAL_ID_MAIN,
             'data': 'stale\n',
         },
         requires_approval=False,
@@ -2765,15 +2724,15 @@ def test_stale_epoch_write_is_rejected():
     stale_epoch = action['control_epoch']
     state.control_epoch += 1
 
-    ok, result = webssh.write_agent_terminal_input(
+    ok, result = standterm.write_agent_terminal_input(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
         action['action_id'],
         stale_epoch,
     )
     assert ok is False
-    assert result['error_code'] == webssh.AGENT_ERROR_STALE_EPOCH
+    assert result['error_code'] == standterm.AGENT_ERROR_STALE_EPOCH
     assert bridge.writes == []
 
 
@@ -2785,7 +2744,7 @@ def test_transcript_store_sanitizes_terminal_output():
         'data': '\x1b[31mred\x1b[0m\r\nnext\x00\x1b]0;title\x07\n',
     })
 
-    transcript = webssh.agent_transcript_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    transcript = standterm.agent_transcript_store.get_recent(session_token, standterm.TERMINAL_ID_MAIN)
     assert len(transcript) == 1
     assert transcript[0]['data'] == 'red\nnext\n'
     assert transcript[0]['untrusted'] is True
@@ -2820,14 +2779,14 @@ def test_ssh_input_records_agent_metadata_after_validation():
     bridge = add_dummy_bridge(session_token)
 
     client.emit('ssh_input', {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'data': 'whoami\nnext',
     })
 
-    metadata = webssh.agent_user_input_metadata_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    metadata = standterm.agent_user_input_metadata_store.get_recent(session_token, standterm.TERMINAL_ID_MAIN)
     assert bridge.writes == ['whoami\nnext']
     assert len(metadata) == 1
-    assert metadata[0]['terminal_id'] == webssh.TERMINAL_ID_MAIN
+    assert metadata[0]['terminal_id'] == standterm.TERMINAL_ID_MAIN
     assert metadata[0]['byte_length'] == len('whoami\nnext'.encode('utf-8'))
     assert metadata[0]['line_count'] == 2
     assert metadata[0]['contains_control_chars'] is False
@@ -2839,34 +2798,34 @@ def test_ssh_input_records_agent_metadata_after_validation():
 
 def test_agent_input_metadata_bounds_and_sanitized_preview():
     session_token = 'session-a'
-    long_input = 'x' * (webssh.AGENT_USER_INPUT_PREVIEW_CHARS + 20)
+    long_input = 'x' * (standterm.AGENT_USER_INPUT_PREVIEW_CHARS + 20)
 
-    webssh.agent_user_input_metadata_store.append_input(
+    standterm.agent_user_input_metadata_store.append_input(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         long_input,
     )
-    metadata = webssh.agent_user_input_metadata_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    metadata = standterm.agent_user_input_metadata_store.get_recent(session_token, standterm.TERMINAL_ID_MAIN)
     assert metadata[0]['escaped_preview'].endswith('...')
-    assert len(metadata[0]['escaped_preview']) == webssh.AGENT_USER_INPUT_PREVIEW_CHARS + 3
+    assert len(metadata[0]['escaped_preview']) == standterm.AGENT_USER_INPUT_PREVIEW_CHARS + 3
 
-    webssh.agent_user_input_metadata_store.append_input(
+    standterm.agent_user_input_metadata_store.append_input(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         'stop\x03',
     )
-    metadata = webssh.agent_user_input_metadata_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    metadata = standterm.agent_user_input_metadata_store.get_recent(session_token, standterm.TERMINAL_ID_MAIN)
     assert metadata[-1]['contains_control_chars'] is True
     assert 'escaped_preview' not in metadata[-1]
 
-    for index in range(webssh.AGENT_USER_INPUT_METADATA_MAX_EVENTS + 1):
-        webssh.agent_user_input_metadata_store.append_input(
+    for index in range(standterm.AGENT_USER_INPUT_METADATA_MAX_EVENTS + 1):
+        standterm.agent_user_input_metadata_store.append_input(
             session_token,
-            webssh.TERMINAL_ID_MAIN,
+            standterm.TERMINAL_ID_MAIN,
             f'cmd-{index}\n',
         )
-    metadata = webssh.agent_user_input_metadata_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
-    assert len(metadata) == webssh.AGENT_USER_INPUT_METADATA_MAX_EVENTS
+    metadata = standterm.agent_user_input_metadata_store.get_recent(session_token, standterm.TERMINAL_ID_MAIN)
+    assert len(metadata) == standterm.AGENT_USER_INPUT_METADATA_MAX_EVENTS
     assert metadata[0]['escaped_preview'] == 'cmd-1\\n'
 
 
@@ -2875,38 +2834,38 @@ def test_privacy_state_blocks_agent_context_and_redacts_input_metadata():
     session_token = current_session_token()
     bridge = add_dummy_bridge(session_token)
 
-    client.emit(webssh.AGENT_EVENT_ATTACH, {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_MODE_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'approval',
     })
-    client.emit(webssh.AGENT_EVENT_PRIVACY_SET, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
-        'privacy_state': webssh.AGENT_PRIVACY_PRIVATE_INPUT,
+    client.emit(standterm.AGENT_EVENT_PRIVACY_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'privacy_state': standterm.AGENT_PRIVACY_PRIVATE_INPUT,
     })
-    state = last_payload(client, webssh.AGENT_EVENT_STATE)
-    assert state['privacy_state'] == webssh.AGENT_PRIVACY_PRIVATE_INPUT
+    state = last_payload(client, standterm.AGENT_EVENT_STATE)
+    assert state['privacy_state'] == standterm.AGENT_PRIVACY_PRIVATE_INPUT
     assert state['privacy_version'] == 1
 
     client.emit('ssh_input', {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'data': 'secret value\n',
     })
-    metadata = webssh.agent_user_input_metadata_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    metadata = standterm.agent_user_input_metadata_store.get_recent(session_token, standterm.TERMINAL_ID_MAIN)
     assert bridge.writes == ['secret value\n']
-    assert metadata[-1]['privacy_state'] == webssh.AGENT_PRIVACY_PRIVATE_INPUT
+    assert metadata[-1]['privacy_state'] == standterm.AGENT_PRIVACY_PRIVATE_INPUT
     assert metadata[-1]['redacted'] is True
     assert 'escaped_preview' not in metadata[-1]
 
-    context = webssh.build_agent_context(session_token, webssh.TERMINAL_ID_MAIN, current_sid_for_session(session_token))
+    context = standterm.build_agent_context(session_token, standterm.TERMINAL_ID_MAIN, current_sid_for_session(session_token))
     assert context['privacy']['context_allowed'] is False
     assert context['human_input_metadata'] == []
 
-    client.emit(webssh.AGENT_EVENT_PROVIDER_RUN_REQUEST, {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+    client.emit(standterm.AGENT_EVENT_PROVIDER_RUN_REQUEST, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
     })
-    result = last_payload(client, webssh.AGENT_EVENT_ACTION_RESULT)
-    assert result['error_code'] == webssh.AGENT_ERROR_PRIVACY_BLOCKED
+    result = last_payload(client, standterm.AGENT_EVENT_ACTION_RESULT)
+    assert result['error_code'] == standterm.AGENT_ERROR_PRIVACY_BLOCKED
     assert bridge.writes == ['secret value\n']
 
     client.disconnect()
@@ -2918,15 +2877,15 @@ def test_ssh_input_does_not_record_invalid_or_oversized_metadata():
     bridge = add_dummy_bridge(session_token)
 
     client.emit('ssh_input', {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
         'data': 123,
     })
     client.emit('ssh_input', {
-        'terminal_id': webssh.TERMINAL_ID_MAIN,
-        'data': 'x' * (webssh.MAX_SSH_INPUT_BYTES + 1),
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'data': 'x' * (standterm.MAX_SSH_INPUT_BYTES + 1),
     })
 
-    metadata = webssh.agent_user_input_metadata_store.get_recent(session_token, webssh.TERMINAL_ID_MAIN)
+    metadata = standterm.agent_user_input_metadata_store.get_recent(session_token, standterm.TERMINAL_ID_MAIN)
     assert metadata == []
     assert bridge.writes == []
 
@@ -2940,13 +2899,13 @@ def test_viewport_snapshot_is_sid_scoped():
     bridge = add_dummy_bridge(session_token)
     client_b = make_socket_client(flask_client)
 
-    client_a.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client_a.emit('replay_terminal', {'terminal_id': standterm.TERMINAL_ID_MAIN})
     assert bridge.attached_sids
 
-    client_b.emit(webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot())
-    result = last_payload(client_b, webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)
-    assert result['error_code'] == webssh.AGENT_ERROR_NOT_ATTACHED
-    assert webssh.agent_viewport_snapshot_store._entries == {}
+    client_b.emit(standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot())
+    result = last_payload(client_b, standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)
+    assert result['error_code'] == standterm.AGENT_ERROR_NOT_ATTACHED
+    assert standterm.agent_viewport_snapshot_store._entries == {}
 
     client_a.disconnect()
     client_b.disconnect()
@@ -2962,19 +2921,19 @@ def test_viewport_snapshot_accepts_attached_sid():
         'data': 'screen\n',
     })
 
-    client.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit('replay_terminal', {'terminal_id': standterm.TERMINAL_ID_MAIN})
     snapshot = valid_viewport_snapshot(seq=1)
     snapshot['output_seq'] = bridge.output_seq
-    client.emit(webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT, snapshot)
-    result = last_payload(client, webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)
+    client.emit(standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT, snapshot)
+    result = last_payload(client, standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)
     assert result['status'] == 'accepted'
     assert result['snapshot_seq'] == 1
     assert result['line_count'] == 2
     assert result['byte_length'] == len('lineline'.encode('utf-8'))
 
-    stored = webssh.agent_viewport_snapshot_store.get_latest(
+    stored = standterm.agent_viewport_snapshot_store.get_latest(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert stored is not None
@@ -2982,7 +2941,7 @@ def test_viewport_snapshot_accepts_attached_sid():
     assert stored['untrusted'] is True
     assert stored['output_seq'] == 1
 
-    context = webssh.build_agent_context(session_token, webssh.TERMINAL_ID_MAIN, sid)
+    context = standterm.build_agent_context(session_token, standterm.TERMINAL_ID_MAIN, sid)
     assert context['session_id'].startswith('ags_')
     assert context['viewer_id'].startswith('agv_')
     assert context['terminal_mirror']['source'] == 'browser_viewport_snapshot'
@@ -3000,14 +2959,14 @@ def test_viewport_snapshot_rejects_oversized_payload():
     session_token = current_session_token()
     add_dummy_bridge(session_token)
 
-    client.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
+    client.emit('replay_terminal', {'terminal_id': standterm.TERMINAL_ID_MAIN})
     oversized = valid_viewport_snapshot()
-    oversized['lines'][0] = 'x' * (webssh.AGENT_VIEWPORT_SNAPSHOT_MAX_LINE_BYTES + 1)
-    client.emit(webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT, oversized)
+    oversized['lines'][0] = 'x' * (standterm.AGENT_VIEWPORT_SNAPSHOT_MAX_LINE_BYTES + 1)
+    client.emit(standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT, oversized)
 
-    result = last_payload(client, webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)
-    assert result['error_code'] == webssh.AGENT_ERROR_SNAPSHOT_TOO_LARGE
-    assert webssh.agent_viewport_snapshot_store._entries == {}
+    result = last_payload(client, standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)
+    assert result['error_code'] == standterm.AGENT_ERROR_SNAPSHOT_TOO_LARGE
+    assert standterm.agent_viewport_snapshot_store._entries == {}
 
     client.disconnect()
 
@@ -3018,17 +2977,17 @@ def test_viewport_snapshot_stale_sequence_is_rejected():
     add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
 
-    client.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot(seq=2, fill='new'))
-    assert last_payload(client, webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)['status'] == 'accepted'
-    client.emit(webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot(seq=1, fill='old'))
+    client.emit('replay_terminal', {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot(seq=2, fill='new'))
+    assert last_payload(client, standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)['status'] == 'accepted'
+    client.emit(standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot(seq=1, fill='old'))
 
-    result = last_payload(client, webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)
+    result = last_payload(client, standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)
     assert result['status'] == 'stale'
-    assert result['error_code'] == webssh.AGENT_ERROR_SNAPSHOT_STALE
-    stored = webssh.agent_viewport_snapshot_store.get_latest(
+    assert result['error_code'] == standterm.AGENT_ERROR_SNAPSHOT_STALE
+    stored = standterm.agent_viewport_snapshot_store.get_latest(
         session_token,
-        webssh.TERMINAL_ID_MAIN,
+        standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert stored['lines'] == ['new', 'new']
@@ -3042,20 +3001,20 @@ def test_viewport_snapshot_context_clears_on_terminal_close_and_disconnect():
     add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
 
-    client.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot())
-    assert webssh.agent_viewport_snapshot_store.get_latest(session_token, webssh.TERMINAL_ID_MAIN, sid)
+    client.emit('replay_terminal', {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot())
+    assert standterm.agent_viewport_snapshot_store.get_latest(session_token, standterm.TERMINAL_ID_MAIN, sid)
 
-    client.emit('close_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    assert webssh.agent_viewport_snapshot_store.get_latest(session_token, webssh.TERMINAL_ID_MAIN, sid) is None
+    client.emit('close_terminal', {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    assert standterm.agent_viewport_snapshot_store.get_latest(session_token, standterm.TERMINAL_ID_MAIN, sid) is None
 
     add_dummy_bridge(session_token)
-    client.emit('replay_terminal', {'terminal_id': webssh.TERMINAL_ID_MAIN})
-    client.emit(webssh.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot(seq=2))
-    assert webssh.agent_viewport_snapshot_store.get_latest(session_token, webssh.TERMINAL_ID_MAIN, sid)
+    client.emit('replay_terminal', {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot(seq=2))
+    assert standterm.agent_viewport_snapshot_store.get_latest(session_token, standterm.TERMINAL_ID_MAIN, sid)
 
     client.disconnect()
-    assert webssh.agent_viewport_snapshot_store.get_latest(session_token, webssh.TERMINAL_ID_MAIN, sid) is None
+    assert standterm.agent_viewport_snapshot_store.get_latest(session_token, standterm.TERMINAL_ID_MAIN, sid) is None
 
 
 def main():
@@ -3102,7 +3061,6 @@ def main():
         test_terminal_policy_creates_authorized_dir_for_fresh_checkout,
         test_wsl_client_ips_require_explicit_trust_for_local_resources,
         test_settings_capabilities_are_separate_from_local_resource_access,
-        test_legacy_webssh_env_alias_controls_wsl_trust,
         test_readonly_settings_snapshot_socket_event_is_typed,
         test_backend_settings_schema_is_declared_and_typed,
         test_backend_settings_schema_rejects_unsafe_capability_mapping,

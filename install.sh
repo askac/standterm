@@ -8,7 +8,7 @@
 set -e
 
 REPO_URL="https://github.com/askac/standterm.git"
-INSTALL_DIR="${STANDTERM_DIR:-${WEBSSH_DIR:-$HOME/standterm}}"
+INSTALL_DIR="${STANDTERM_DIR:-$HOME/standterm}"
 
 # Allow --dir override
 while [[ $# -gt 0 ]]; do

@@ -194,10 +194,6 @@ LAN URL, the handoff `url`, `transport.command_endpoint`, and generated CLI
 commands use loopback for the command endpoint. The browser-facing address is
 recorded separately as `browser_url`.
 
-For compatibility with older local tooling, `webssh_external_agent_handoff.json`
-and `scripts/webssh_agent_*.py` remain aliases for the StandTerm handoff file
-and generic `scripts/agent_*.py` helpers.
-
 CLI examples:
 
 ```bash
@@ -322,8 +318,6 @@ Common settings:
 | `STANDTERM_AGENT_DEV_TOKEN=1` | Enable loopback-only dev token endpoints. Do not use for normal operation. |
 | `STANDTERM_AGENT_EXTERNAL_IDLE_TIMEOUT_SECONDS` | External-agent bearer token idle timeout. Default `300`; set `session` to rely only on disconnect/revoke. |
 
-Legacy `WEBSSH_*` names are still accepted as compatibility aliases.
-
 Add `&debug=1` to the StandTerm URL to show an on-screen policy overlay.
 
 ## Localhost SSH Key Setup
@@ -365,8 +359,7 @@ publishing releases that include the vendored files.
 - Keep StandTerm bound to loopback unless remote browser access is intentional.
 - Do not expose `/agent/external/command` or an `agt_...` token on a network
   interface.
-- `standterm_external_agent_handoff.json`, the compatibility
-  `webssh_external_agent_handoff.json` alias, `authorized/`, local certs, and venvs
+- `standterm_external_agent_handoff.json`, `authorized/`, local certs, and venvs
   are ignored runtime state.
 - Terminal display payload is data. App control decisions should use typed
   fields or typed events.

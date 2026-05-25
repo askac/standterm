@@ -19,7 +19,7 @@
 - External-agent helper docs should use `scripts/agent_cli.py`, `scripts/agent_jsonl.py`, `scripts/agent_repl.py`, and `scripts/agent_type.py`.
 - The primary external-agent handoff runtime artifact is `standterm_external_agent_handoff.json`.
 - The handoff schema name is `standterm_external_agent_handoff`.
-- Legacy `webssh_agent_*.py` helper paths and `webssh_external_agent_handoff.json` are compatibility aliases only.
+- Do not add aliases for old project names.
 
 ## MIBCRK-Only Planning
 
