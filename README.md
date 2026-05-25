@@ -218,6 +218,7 @@ python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send-wait --text $'pwd\r' --strip-ansi
 python scripts/agent_jsonl.py --handoff standterm_external_agent_handoff.json
 python scripts/agent_repl.py --handoff standterm_external_agent_handoff.json --enter cr
+python scripts/agent_repl.py --handoff standterm_external_agent_handoff.json --type-file body.txt --type-cps 3 --type-wait-quiet-ms 500
 python scripts/agent_type.py --handoff standterm_external_agent_handoff.json --from-file body.txt --cps 3 --newline cr
 ```
 
@@ -261,6 +262,11 @@ timeout.
 `agent_repl.py` also runs a hidden `state` heartbeat by default to keep the
 external-agent token alive during long idle periods. It does not write terminal
 input or terminal output; use `--keepalive-ms` or `--no-keepalive` to tune it.
+For workflows that need one paced paste before interactive follow-up, REPL can
+type `--type-text` or `--type-file` through the same shared pacing helpers and
+then continue the live session. `--type-wait-quiet-ms` asks for a typed quiet
+screen wait after the paced input. Regular keyboard interaction remains raw and
+coalesced; REPL does not pace normal interactive keys.
 
 For repeated machine-driven operations, prefer `agent_jsonl.py`: it
 starts one persistent local process, reads the handoff once, accepts one JSON

@@ -179,6 +179,95 @@ def test_keepalive_worker_stops_on_fatal_error():
     assert stop_event.is_set() is True
 
 
+def make_repl_type_args(**overrides):
+    values = {
+        'url': 'https://127.0.0.1:5010',
+        'terminal': 'term-2',
+        'token': 'agt_secret',
+        'ca_file': '/tmp/ca.crt',
+        'insecure': False,
+        'type_text': 'a\nb',
+        'type_file': None,
+        'type_newline': 'cr',
+        'type_cps': 10.0,
+        'type_delay_ms': 0,
+        'type_jitter_ms': 0,
+        'type_punctuation_pause_ms': 0,
+        'type_newline_pause_ms': 0,
+        'type_think_pause_prob': 0,
+        'type_think_pause_ms_min': 2200,
+        'type_think_pause_ms_max': 3800,
+        'type_cadence_profile': 'generic',
+        'type_max_uniform_seconds': 0,
+        'type_breaker_ms_min': 2200,
+        'type_breaker_ms_max': 3800,
+        'type_dry_run': False,
+        'type_progress': 'none',
+        'type_progress_interval_units': 20,
+        'type_wait_ms': 3000,
+        'type_wait_quiet_ms': None,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def test_repl_startup_type_sends_units_through_shared_pacing():
+    client = FakeClient()
+    stop_event = threading.Event()
+    result = repl.run_startup_type(
+        client,
+        make_repl_type_args(),
+        stop_event,
+    )
+    assert result['status'] == 'completed'
+    assert result['sent_units'] == 3
+    assert client.requests == [
+        ('send', {'data': 'a'}),
+        ('send', {'data': '\r'}),
+        ('send', {'data': 'b'}),
+    ]
+    assert stop_event.is_set() is False
+
+
+def test_repl_startup_type_waits_for_quiet_screen_after_typing():
+    client = FakeClient(responses=[
+        {'status': 'ok'},
+        {'status': 'ok'},
+        {'status': 'ok'},
+        {'status': 'ok', 'screen_wait': {'settled': True}, 'screen': {'lines': []}},
+    ])
+    stop_event = threading.Event()
+    result = repl.run_startup_type(
+        client,
+        make_repl_type_args(type_wait_quiet_ms=500, type_wait_ms=2500),
+        stop_event,
+    )
+    assert result['status'] == 'completed'
+    assert client.requests[-1] == (
+        'screen',
+        {'wait_ms': 2500, 'quiet_ms': 500},
+    )
+    assert stop_event.is_set() is False
+
+
+def test_repl_startup_type_stops_on_fatal_error():
+    client = FakeClient(responses=[
+        {'status': 'failed', 'error_code': 'agent_external_revoked'},
+    ])
+    stop_event = threading.Event()
+    result = repl.run_startup_type(
+        client,
+        make_repl_type_args(type_text='abc'),
+        stop_event,
+    )
+    assert result['status'] == 'failed'
+    assert result['error_code'] == 'agent_external_revoked'
+    assert client.requests == [
+        ('send', {'data': 'a'}),
+    ]
+    assert stop_event.is_set() is True
+
+
 def test_format_token_status_reports_idle_countdown():
     assert repl.format_token_status({
         'external_agent_token': {
@@ -735,6 +824,9 @@ def main():
         test_tail_worker_stops_on_not_attached_error,
         test_keepalive_worker_sends_hidden_state_heartbeat,
         test_keepalive_worker_stops_on_fatal_error,
+        test_repl_startup_type_sends_units_through_shared_pacing,
+        test_repl_startup_type_waits_for_quiet_screen_after_typing,
+        test_repl_startup_type_stops_on_fatal_error,
         test_format_token_status_reports_idle_countdown,
         test_cli_and_repl_apply_handoff_defaults,
         test_cli_plain_send_payload_stays_compatible,

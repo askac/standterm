@@ -107,6 +107,35 @@ def stderr_json(payload):
     sys.stderr.flush()
 
 
+def stderr_compact(message):
+    sys.stderr.write(message + '\n')
+    sys.stderr.flush()
+
+
+def emit_type_progress(args, index, sent_units, sent_bytes, total_units):
+    mode = getattr(args, 'progress_mode', None)
+    if mode is None:
+        mode = 'jsonl' if getattr(args, 'progress', False) else 'none'
+    if mode == 'none':
+        return
+    if mode == 'jsonl':
+        stderr_json({
+            'event': 'typed_unit',
+            'unit_index': index,
+            'sent_units': sent_units,
+            'sent_bytes': sent_bytes,
+            'total_units': total_units,
+        })
+        return
+    if mode == 'compact':
+        interval = max(getattr(args, 'progress_interval_units', 20) or 20, 1)
+        if sent_units == 1 or sent_units == total_units or sent_units % interval == 0:
+            stderr_compact(
+                f"[external-agent] type progress units={sent_units}/{total_units} "
+                f"bytes={sent_bytes}"
+            )
+
+
 def type_units(args, units, post_json, sleep=time.sleep, random_uniform=random.uniform):
     sent_units = 0
     sent_bytes = 0
@@ -133,13 +162,7 @@ def type_units(args, units, post_json, sleep=time.sleep, random_uniform=random.u
             }
         sent_units += 1
         sent_bytes += len(unit.encode('utf-8', errors='ignore'))
-        if getattr(args, 'progress', False):
-            stderr_json({
-                'event': 'typed_unit',
-                'unit_index': index,
-                'sent_units': sent_units,
-                'sent_bytes': sent_bytes,
-            })
+        emit_type_progress(args, index, sent_units, sent_bytes, len(units))
         if index < len(units) - 1:
             delay = delay_for_unit(unit, args, random_uniform=random_uniform)
             delay, secs_since_breaker = guarded_delay(

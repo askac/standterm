@@ -182,6 +182,16 @@ Use the REPL for interactive work:
 <python-from-startup-banner> <standterm-dir>/scripts/agent_repl.py --handoff <standterm-dir>/standterm_external_agent_handoff.json --enter cr
 ```
 
+Use REPL startup paced typing when a workflow needs long text entry followed by
+interactive prompt handling in the same session:
+
+```text
+<python-from-startup-banner> <standterm-dir>/scripts/agent_repl.py --handoff <standterm-dir>/standterm_external_agent_handoff.json --type-file body.txt --type-cps 3 --type-wait-quiet-ms 500
+```
+
+REPL startup typing uses the same shared pacing helpers as `agent_type.py`.
+Normal interactive REPL keystrokes remain raw/coalesced and are not paced.
+
 Use the paced typer for long editor/TUI text entry that should arrive at a
 controlled cadence:
 

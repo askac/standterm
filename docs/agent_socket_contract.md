@@ -187,6 +187,13 @@ Rejected input is not retried automatically, because replaying stale keystrokes
 after the human lease expires can put bytes into the wrong prompt or editor
 state.
 
+For workflows that need one paced text entry before interactive follow-up, the
+REPL can run `--type-text` or `--type-file` after attaching and then continue
+the same live session. It uses the shared `scripts/agent_input.py` pacing
+helpers and supports `--type-wait-quiet-ms` for a typed quiet-screen wait after
+the paced input. Normal interactive REPL keystrokes are still raw/coalesced and
+are not paced.
+
 For paced input into a full-screen editor or TUI, use the dedicated typer helper
 instead of REPL pipe mode:
 

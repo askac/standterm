@@ -11,6 +11,8 @@ import time
 import urllib.error
 import urllib.request
 
+import agent_input as inputlib
+
 try:
     import termios
     import tty
@@ -111,14 +113,42 @@ def parse_args():
     parser.add_argument('--enter', choices=('cr', 'lf', 'crlf'), default='cr', help='Bytes sent when local Enter is pressed')
     parser.add_argument('--backspace', choices=('del', 'bs'), default='del', help='Bytes sent when local Backspace is pressed')
     parser.add_argument('--no-initial-screen', action='store_true', help='Skip initial provisional screen dump')
+    type_group = parser.add_mutually_exclusive_group()
+    type_group.add_argument('--type-text', help='Type this text at a controlled pace after attaching, then continue the REPL')
+    type_group.add_argument('--type-file', help='Type this UTF-8 file at a controlled pace after attaching, then continue the REPL')
+    type_pace_group = parser.add_mutually_exclusive_group()
+    type_pace_group.add_argument('--type-cps', type=float, default=3.0, help='Paced typing characters per second, default: 3')
+    type_pace_group.add_argument('--type-delay-ms', type=float, help='Paced typing delay between characters in milliseconds')
+    parser.add_argument('--type-newline', choices=('cr', 'lf', 'crlf'), default='cr', help='Bytes sent for paced input newlines, default: cr')
+    parser.add_argument('--type-jitter-ms', type=float, default=0, help='Random +/- jitter added to each paced typing delay in milliseconds')
+    parser.add_argument('--type-punctuation-pause-ms', type=float, default=0, help='Extra paced typing delay after punctuation characters')
+    parser.add_argument('--type-newline-pause-ms', type=float, default=0, help='Extra paced typing delay after a newline unit')
+    parser.add_argument('--type-think-pause-prob', type=float, default=0.0, help='Probability [0..1] of inserting a random longer paced typing pause')
+    parser.add_argument('--type-think-pause-ms-min', type=float, default=2200, help='Minimum paced typing think-pause length in ms')
+    parser.add_argument('--type-think-pause-ms-max', type=float, default=3800, help='Maximum paced typing think-pause length in ms')
+    parser.add_argument('--type-cadence-profile', choices=('generic', 'ptt'), default='generic', help='Paced typing cadence profile, default: generic')
+    parser.add_argument('--type-max-uniform-seconds', type=float, default=None, help='Optional paced typing cadence guard; defaults to 30 for ptt and 0 for generic')
+    parser.add_argument('--type-breaker-ms-min', type=float, default=2200, help='Minimum paced typing forced breaker pause length in ms')
+    parser.add_argument('--type-breaker-ms-max', type=float, default=3800, help='Maximum paced typing forced breaker pause length in ms')
+    parser.add_argument('--type-dry-run', action='store_true', help='Print a paced typing summary and exit without sending input')
+    parser.add_argument('--type-progress', choices=('none', 'compact', 'jsonl'), default='compact', help='Paced typing progress format on stderr')
+    parser.add_argument('--type-progress-interval-units', type=int, default=20, help='Compact paced typing progress interval in units')
+    parser.add_argument('--type-wait-ms', type=int, default=3000, help='Wait up to this long after paced typing when --type-wait-quiet-ms is set')
+    parser.add_argument('--type-wait-quiet-ms', type=int, help='After paced typing, wait until terminal output has been quiet this long')
     parser.add_argument('--allow-non-direct', action='store_true', help='Allow running when Agent mode is not direct_active')
     parser.add_argument('--debug', action='store_true', help='Print command acknowledgements to stderr')
     parser.add_argument('--escape', default='ctrl-]', help='Local detach key. Only ctrl-] is supported for now.')
     args = parser.parse_args()
     apply_handoff(args)
+    normalize_type_args(args)
     if not args.url:
         parser.error('--url is required unless --handoff provides url')
     return args
+
+
+def normalize_type_args(args):
+    if args.type_max_uniform_seconds is None:
+        args.type_max_uniform_seconds = 30 if args.type_cadence_profile == 'ptt' else 0
 
 
 def load_handoff(path):
@@ -182,11 +212,18 @@ def print_initial_screen(client):
         return current_output_seq(client)
     screen = result.get('screen')
     if isinstance(screen, dict):
-        lines = screen.get('lines')
-        if isinstance(lines, list) and lines:
-            write_stdout('\n'.join(str(line) for line in lines))
-            write_stdout('\n')
+        print_screen_payload(result)
     return int(result.get('output_seq') or 0)
+
+
+def print_screen_payload(result):
+    screen = result.get('screen') if isinstance(result, dict) else None
+    if not isinstance(screen, dict):
+        return
+    lines = screen.get('lines')
+    if isinstance(lines, list) and lines:
+        write_stdout('\n'.join(str(line) for line in lines))
+        write_stdout('\n')
 
 
 def current_output_seq(client):
@@ -289,6 +326,120 @@ def keepalive_worker(client, stop_event, interval_seconds, debug, wait_func=None
             continue
         if debug:
             stderr_line('[external-agent] keepalive: ' + json.dumps(result, sort_keys=True))
+
+
+class ReplPostJson:
+    def __init__(self, client):
+        self.client = client
+
+    def __call__(self, _base_url, payload, dev_mode=False, ca_file=None, insecure=False):
+        payload = dict(payload)
+        op = payload.pop('op')
+        payload.pop('terminal_id', None)
+        payload.pop('token', None)
+        return self.client.request(op, **payload)
+
+
+def has_startup_type_request(args):
+    return bool(args.type_text is not None or args.type_file)
+
+
+def read_startup_type_text(args):
+    if args.type_text is not None:
+        return args.type_text
+    if args.type_file:
+        try:
+            with open(args.type_file, 'r', encoding='utf-8') as handle:
+                return handle.read()
+        except OSError as exc:
+            raise RuntimeError(f'failed to read type file: {exc}') from exc
+    return ''
+
+
+def build_type_args(args):
+    return argparse.Namespace(
+        url=args.url,
+        terminal=args.terminal,
+        token=args.token,
+        ca_file=args.ca_file,
+        insecure=args.insecure,
+        cps=args.type_cps,
+        delay_ms=args.type_delay_ms,
+        jitter_ms=args.type_jitter_ms,
+        punctuation_pause_ms=args.type_punctuation_pause_ms,
+        newline_pause_ms=args.type_newline_pause_ms,
+        think_pause_prob=args.type_think_pause_prob,
+        think_pause_ms_min=args.type_think_pause_ms_min,
+        think_pause_ms_max=args.type_think_pause_ms_max,
+        max_uniform_seconds=args.type_max_uniform_seconds,
+        breaker_ms_min=args.type_breaker_ms_min,
+        breaker_ms_max=args.type_breaker_ms_max,
+        progress_mode=args.type_progress,
+        progress_interval_units=args.type_progress_interval_units,
+        progress=False,
+    )
+
+
+def run_startup_type(client, args, stop_event):
+    text = read_startup_type_text(args)
+    units = list(inputlib.iter_type_units(text, newline_mode=args.type_newline))
+    summary = inputlib.summarize_units(units)
+    type_args = build_type_args(args)
+    if args.type_dry_run:
+        delays = inputlib.plan_delays(units, type_args)
+        output = {
+            'status': 'dry_run',
+            'cadence_profile': args.type_cadence_profile,
+            'estimated_total_seconds': round(sum(delays), 1),
+            **summary,
+        }
+        if args.type_cadence_profile == 'ptt' or (args.type_max_uniform_seconds or 0) > 0:
+            output.update(inputlib.simulate_ptt_cadence(units, delays))
+        stderr_line('[external-agent] type dry-run: ' + json.dumps(output, ensure_ascii=False, sort_keys=True))
+        stop_event.set()
+        return output
+
+    stderr_line(
+        f"[external-agent] type start units={summary['unit_count']} "
+        f"bytes={summary['byte_count']} cadence={args.type_cadence_profile}"
+    )
+    result = inputlib.type_units(
+        type_args,
+        units,
+        post_json=ReplPostJson(client),
+    )
+    output = {
+        **summary,
+        **result,
+    }
+    status = output.get('status')
+    if status == 'failed':
+        error_code = output.get('error_code') or 'type failed'
+        stderr_line(f"[external-agent] type failed: {error_code}")
+        if error_code in FATAL_AGENT_ERRORS:
+            stop_event.set()
+        return output
+    stderr_line(
+        f"[external-agent] type completed units={output.get('sent_units', 0)} "
+        f"bytes={output.get('sent_bytes', 0)}"
+    )
+    if args.type_wait_quiet_ms is not None:
+        _status, screen = client.request(
+            'screen',
+            wait_ms=args.type_wait_ms,
+            quiet_ms=args.type_wait_quiet_ms,
+        )
+        if screen.get('status') == 'failed':
+            error_code = screen.get('error_code') or 'screen failed'
+            stderr_line(f"[external-agent] type wait-quiet failed: {error_code}")
+            if error_code in FATAL_AGENT_ERRORS:
+                stop_event.set()
+        else:
+            screen_wait = screen.get('screen_wait')
+            if isinstance(screen_wait, dict):
+                stderr_line('[external-agent] type wait-quiet: ' + json.dumps(screen_wait, sort_keys=True))
+            print_screen_payload(screen)
+    return output
 
 
 def handle_send_result(result, stop_event):
@@ -410,6 +561,7 @@ def run_repl(args):
     tail_wait_ms = max(args.tail_wait_ms, 0)
     keepalive_ms = 0 if args.no_keepalive else max(args.keepalive_ms, 0)
     keepalive_seconds = keepalive_ms / 1000.0
+    type_only = has_startup_type_request(args) and args.type_dry_run
 
     tail_thread = threading.Thread(
         target=tail_worker,
@@ -434,6 +586,12 @@ def run_repl(args):
         keepalive_thread.start()
 
     try:
+        if has_startup_type_request(args):
+            run_startup_type(client, args, stop_event)
+        if type_only:
+            return
+        if stop_event.is_set():
+            return
         if sys.stdin.isatty() and termios and tty:
             posix_input_loop(input_queue, stop_event, args.enter, args.backspace, args.escape)
         elif sys.stdin.isatty() and msvcrt:
