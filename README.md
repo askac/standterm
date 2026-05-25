@@ -208,9 +208,12 @@ python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json scre
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json tail --since 0 --limit 50
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json tail --since 0 --wait-ms 25000
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json tail --since 0 --limit 50 --strip-ansi
+python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json wait-output --since 0 --wait-ms 25000
+python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json wait-quiet --wait-ms 3000 --quiet-ms 500
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send --text $'pwd\r'
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send --text 'codex prompt' --submit
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send --key Down --key Enter
+python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json key --key Down --key Enter
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send-wait --text $'pwd\r'
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send-wait --text $'pwd\r' --strip-ansi
 python scripts/agent_jsonl.py --handoff standterm_external_agent_handoff.json
@@ -227,6 +230,10 @@ For full-screen TUIs that treat glued text plus `\r` as paste content,
 `send --text '...' --submit` sends a separate structured Enter keypress after
 the text payload. For navigation-only input, `send --key Enter` remains the
 explicit key path.
+The generic aliases `key`, `wait-output`, and `wait-quiet` map to existing
+`send`, long-poll `tail`, and quiet `screen` payloads. They are naming
+conveniences for terminal automation primitives and do not inspect terminal
+display text as a control signal.
 
 Use `send-wait` or `send --capture` when the `hello` capabilities include
 `send_capture`. It writes only through the normal Agent gate, then returns typed
@@ -240,12 +247,14 @@ remove cursor or highlight cues, so inspect raw `screen`, raw tail/capture, or
 
 Use `agent_type.py` for paced input into full-screen editors or TUIs. It
 sends one text unit per normal `send` request with configurable rate and newline
-translation. StandTerm terminal input is a single shared stream: while a paced
-typer is running, do not send cursor-moving keys from another CLI, REPL, browser,
-or helper. For progress checks, prefer `tail`; `screen` returns the latest
-browser snapshot when available and otherwise falls back to a provisional
-server-side headless terminal grid. Use `render` when xterm/browser visual
-fidelity matters.
+translation. The default cadence profile is generic; use
+`--cadence-profile ptt` only when a target application needs that optional
+whole-second cadence guard. StandTerm terminal input is a single shared stream:
+while a paced typer is running, do not send cursor-moving keys from another CLI,
+REPL, browser, or helper. For progress checks, prefer `tail`; `screen` returns
+the latest browser snapshot when available and otherwise falls back to a
+provisional server-side headless terminal grid. Use `render` when xterm/browser
+visual fidelity matters.
 For animated full-screen TUIs, `screen --wait-ms 3000 --quiet-ms 500` returns
 after the terminal has been quiet for the requested interval or reports a typed
 timeout.

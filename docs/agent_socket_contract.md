@@ -151,6 +151,11 @@ PTY-style interactive programs usually expect carriage return (`\r`) for Enter.
 For navigation-only input, the CLI also accepts repeated named keys such as
 `send --key Down --key Enter`; these are converted client-side into terminal
 control bytes before the same typed `send` command is posted.
+The CLI also exposes generic automation aliases over the same protocol:
+`key --key Down --key Enter` maps to `send --key ...`, `wait-output` maps to
+long-poll `tail`, and `wait-quiet` maps to `screen --wait-ms --quiet-ms`. These
+aliases are client-side conveniences; they do not add text-matching or branch on
+terminal display payloads.
 
 For terminal-like interaction, use the persistent REPL wrapper instead of
 starting one CLI process per line:
@@ -195,12 +200,16 @@ tools/.venv_wsl/bin/python scripts/agent_type.py \
 
 The typer posts one normal `send` operation per text unit and stops on rejected
 input such as paused/privacy-blocked state, revoked tokens, missing terminals,
-or active human-input leases. It does not provide an exclusive multi-character
-write lease. StandTerm terminal input is one shared stream, so another writer can
-move the cursor or change editor state between typed units. While a paced typer
-is running, avoid concurrent cursor-moving input from browser viewers, CLI,
-REPL, JSONL, or other helpers. Use `tail` for progress checks; `screen` remains
-a provisional browser snapshot and `render` requires a live browser viewport.
+or active human-input leases. Its shared pacing helpers live in
+`scripts/agent_input.py`; `agent_type.py` is the CLI wrapper. The default
+cadence profile is generic. Use `--cadence-profile ptt` only when a target
+application needs that optional whole-second cadence guard. The typer does not
+provide an exclusive multi-character write lease. StandTerm terminal input is
+one shared stream, so another writer can move the cursor or change editor state
+between typed units. While a paced typer is running, avoid concurrent
+cursor-moving input from browser viewers, CLI, REPL, JSONL, or other helpers.
+Use `tail` for progress checks; `screen` remains a provisional browser snapshot
+and `render` requires a live browser viewport.
 
 For machine-to-machine repeated commands, use the persistent JSONL wrapper
 instead of the terminal-style REPL. It keeps stdout as JSON only and still

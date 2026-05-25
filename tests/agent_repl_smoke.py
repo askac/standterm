@@ -353,6 +353,47 @@ def test_cli_tail_strip_ansi_payload():
     assert cli.command_payload(args)['wait_ms'] == 2500
 
 
+def test_cli_wait_output_alias_maps_to_tail_payload():
+    args = SimpleNamespace(
+        command='wait-output',
+        terminal='main',
+        token='agt_unit',
+        since=7,
+        limit=12,
+        wait_ms=3000,
+        strip_ansi=True,
+    )
+    assert cli.command_payload(args) == {
+        'op': 'tail',
+        'terminal_id': 'main',
+        'token': 'agt_unit',
+        'since_output_seq': 7,
+        'limit': 12,
+        'wait_ms': 3000,
+        'strip_ansi': True,
+    }
+
+
+def test_cli_wait_quiet_alias_maps_to_screen_payload():
+    args = SimpleNamespace(
+        command='wait-quiet',
+        terminal='main',
+        token='agt_unit',
+        tail_lines=8,
+        region=None,
+        wait_ms=3000,
+        quiet_ms=500,
+    )
+    assert cli.command_payload(args) == {
+        'op': 'screen',
+        'terminal_id': 'main',
+        'token': 'agt_unit',
+        'wait_ms': 3000,
+        'quiet_ms': 500,
+        'tail_lines': 8,
+    }
+
+
 def test_cli_send_wait_payload_requests_capture():
     args = SimpleNamespace(
         command='send-wait',
@@ -438,6 +479,31 @@ def test_cli_send_named_keys_payload_uses_control_sequences():
         'terminal_id': 'main',
         'token': 'agt_unit',
         'data': '\x1b[B\r',
+    }
+
+
+def test_cli_key_alias_maps_to_send_payload():
+    args = SimpleNamespace(
+        command='key',
+        terminal='main',
+        token='agt_unit',
+        key=['Up', 'Enter'],
+        capture=True,
+        wait_ms=1000,
+        settle_ms=100,
+        limit=3,
+        strip_ansi=True,
+    )
+    assert cli.command_payload(args) == {
+        'op': 'send',
+        'terminal_id': 'main',
+        'token': 'agt_unit',
+        'data': '\x1b[A\r',
+        'capture': True,
+        'wait_ms': 1000,
+        'settle_ms': 100,
+        'limit': 3,
+        'strip_ansi': True,
     }
 
 
@@ -550,6 +616,14 @@ def test_type_units_translate_newlines_and_preserve_unicode_characters():
     assert list(typer.iter_type_units('a\n測b', newline_mode='cr')) == ['a', '\r', '測', 'b']
     assert list(typer.iter_type_units('a\nb', newline_mode='lf')) == ['a', '\n', 'b']
     assert list(typer.iter_type_units('a\nb', newline_mode='crlf')) == ['a', '\r\n', 'b']
+
+
+def test_type_helper_defaults_to_generic_cadence_profile():
+    args = typer.parse_args(['--text', 'abc', '--dry-run'])
+    assert args.cadence_profile == 'generic'
+    assert args.max_uniform_seconds == 0
+    ptt_args = typer.parse_args(['--text', 'abc', '--dry-run', '--cadence-profile', 'ptt'])
+    assert ptt_args.max_uniform_seconds == 30
 
 
 def test_type_helper_sends_one_unit_per_plain_send_without_capture():
@@ -668,16 +742,20 @@ def main():
         test_cli_screen_region_payload,
         test_cli_screen_wait_payload,
         test_cli_tail_strip_ansi_payload,
+        test_cli_wait_output_alias_maps_to_tail_payload,
+        test_cli_wait_quiet_alias_maps_to_screen_payload,
         test_cli_send_capture_payload,
         test_cli_send_wait_payload_requests_capture,
         test_cli_send_wait_strip_ansi_payload_requests_plain_capture,
         test_cli_send_submit_after_payload_is_structured,
         test_cli_send_named_keys_payload_uses_control_sequences,
+        test_cli_key_alias_maps_to_send_payload,
         test_cli_render_save_writes_png_and_redacts_base64,
         test_jsonl_client_reuses_defaults_and_preserves_ids,
         test_jsonl_client_reports_invalid_json_as_jsonl_error,
         test_jsonl_client_preserves_backend_failed_result,
         test_type_units_translate_newlines_and_preserve_unicode_characters,
+        test_type_helper_defaults_to_generic_cadence_profile,
         test_type_helper_sends_one_unit_per_plain_send_without_capture,
         test_type_helper_stops_on_failed_send_without_replaying_remaining_units,
     ]

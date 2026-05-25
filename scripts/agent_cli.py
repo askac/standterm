@@ -8,24 +8,7 @@ import sys
 import urllib.error
 import urllib.request
 
-
-KEY_INPUTS = {
-    'Enter': '\r',
-    'Return': '\r',
-    'Tab': '\t',
-    'Escape': '\x1b',
-    'Esc': '\x1b',
-    'Backspace': '\x7f',
-    'Delete': '\x1b[3~',
-    'Up': '\x1b[A',
-    'Down': '\x1b[B',
-    'Right': '\x1b[C',
-    'Left': '\x1b[D',
-    'Home': '\x1b[H',
-    'End': '\x1b[F',
-    'PageUp': '\x1b[5~',
-    'PageDown': '\x1b[6~',
-}
+from agent_input import KEY_INPUTS
 
 
 def parse_args():
@@ -58,6 +41,19 @@ def parse_args():
     tail_parser.add_argument('--wait-ms', type=int, help='Server-side long-poll wait for output')
     tail_parser.add_argument('--strip-ansi', action='store_true', help='Strip ANSI/control sequences from returned terminal data')
 
+    wait_output_parser = subparsers.add_parser('wait-output')
+    wait_output_parser.add_argument('--since', type=int, default=0, help='Only return events after this output_seq')
+    wait_output_parser.add_argument('--limit', type=int, default=50, help='Maximum events to return')
+    wait_output_parser.add_argument('--wait-ms', type=int, required=True, help='Server-side long-poll wait for output')
+    wait_output_parser.add_argument('--strip-ansi', action='store_true', help='Strip ANSI/control sequences from returned terminal data')
+
+    wait_quiet_parser = subparsers.add_parser('wait-quiet')
+    wait_quiet_group = wait_quiet_parser.add_mutually_exclusive_group()
+    wait_quiet_group.add_argument('--tail-lines', type=int, help='Only return the last N viewport lines')
+    wait_quiet_group.add_argument('--region', help='Only return zero-based line range TOP:BOTTOM, with BOTTOM exclusive')
+    wait_quiet_parser.add_argument('--wait-ms', type=int, required=True, help='Wait up to this long for a quiet screen')
+    wait_quiet_parser.add_argument('--quiet-ms', type=int, required=True, help='Required terminal quiet time before returning screen')
+
     send_parser = subparsers.add_parser('send')
     input_group = send_parser.add_mutually_exclusive_group(required=True)
     input_group.add_argument('--text', help='Text to send')
@@ -80,6 +76,14 @@ def parse_args():
     send_wait_parser.add_argument('--settle-ms', type=int, help='Output idle time before capture returns')
     send_wait_parser.add_argument('--limit', type=int, help='Maximum captured tail events to return')
     send_wait_parser.add_argument('--strip-ansi', action='store_true', help='Strip ANSI/control sequences from captured terminal data')
+
+    key_parser = subparsers.add_parser('key')
+    key_parser.add_argument('--key', action='append', required=True, choices=sorted(KEY_INPUTS), help='Named key to send; repeat for multiple keys')
+    key_parser.add_argument('--capture', action='store_true', help='Wait for terminal output after sending')
+    key_parser.add_argument('--wait-ms', type=int, help='Maximum capture wait time')
+    key_parser.add_argument('--settle-ms', type=int, help='Output idle time before capture returns')
+    key_parser.add_argument('--limit', type=int, help='Maximum captured tail events to return')
+    key_parser.add_argument('--strip-ansi', action='store_true', help='Strip ANSI/control sequences from captured terminal data')
 
     subparsers.add_parser('revoke')
     args = parser.parse_args()
@@ -120,20 +124,26 @@ def apply_handoff(args):
 
 
 def command_payload(args):
+    command = args.command
+    op = {
+        'key': 'send',
+        'wait-output': 'tail',
+        'wait-quiet': 'screen',
+    }.get(command, command)
     payload = {
-        'op': args.command,
+        'op': op,
         'terminal_id': args.terminal,
     }
     if args.token:
         payload['token'] = args.token
-    if args.command == 'tail':
+    if command in {'tail', 'wait-output'}:
         payload['since_output_seq'] = args.since
         payload['limit'] = args.limit
         if getattr(args, 'wait_ms', None) is not None:
             payload['wait_ms'] = args.wait_ms
         if getattr(args, 'strip_ansi', False):
             payload['strip_ansi'] = True
-    elif args.command == 'screen':
+    elif command in {'screen', 'wait-quiet'}:
         if getattr(args, 'wait_ms', None) is not None:
             payload['wait_ms'] = args.wait_ms
         if getattr(args, 'quiet_ms', None) is not None:
@@ -148,12 +158,12 @@ def command_payload(args):
                     'bottom': int(bottom_text),
                 }
             except ValueError as exc:
-                raise SystemExit('screen --region must use TOP:BOTTOM') from exc
-    elif args.command == 'render':
+                raise SystemExit(f'{command} --region must use TOP:BOTTOM') from exc
+    elif command == 'render':
         payload['wait_ms'] = args.wait_ms
-    elif args.command in {'send', 'send-wait'}:
+    elif command in {'send', 'send-wait', 'key'}:
         payload['data'] = send_data(args)
-        if args.command == 'send-wait':
+        if command == 'send-wait':
             payload['capture'] = True
         elif getattr(args, 'capture', False):
             payload['capture'] = True
