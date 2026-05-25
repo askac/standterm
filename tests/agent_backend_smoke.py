@@ -594,6 +594,9 @@ def test_external_agent_can_attach_and_read_authorized_screen():
     assert attach['status'] == 'ok'
     assert attach['external_agent_id'] == record['external_agent_id']
     assert attach['mode'] == standterm.AGENT_MODE_OBSERVE
+    assert attach['terminal_session']['output_seq'] == 1
+    assert attach['terminal_session']['last_output_at'] is not None
+    assert attach['terminal_session']['terminal_quiet_ms'] >= 0
 
     screen = standterm.process_external_agent_command({
         'op': 'screen',
@@ -1179,6 +1182,39 @@ def test_external_agent_direct_send_uses_agent_gate():
     client.disconnect()
 
 
+def test_external_agent_submit_after_writes_discrete_enter():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'mode': 'direct',
+    })
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
+        session_token,
+        standterm.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert error_code is None
+
+    result = standterm.process_external_agent_command({
+        'op': 'send',
+        'token': token,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'data': 'codex prompt',
+        'submit_after': True,
+    })
+    assert result['status'] == standterm.AGENT_STATUS_COMPLETED
+    assert result['submit_after'] is True
+    assert result['bytes_written'] == len('codex prompt\r')
+    assert bridge.writes == ['codex prompt', '\r']
+
+    client.disconnect()
+
+
 def test_external_agent_direct_send_capture_returns_tail_after_write():
     client = make_client()
     session_token = current_session_token()
@@ -1715,7 +1751,7 @@ def test_external_agent_token_revoke_and_terminal_close_invalidate_access():
         'token': token,
         'terminal_id': standterm.TERMINAL_ID_MAIN,
     })
-    assert result['error_code'] == standterm.AGENT_ERROR_EXTERNAL_AGENT_UNAUTHORIZED
+    assert result['error_code'] == standterm.AGENT_ERROR_EXTERNAL_AGENT_DISCONNECTED
 
     client.disconnect()
 
@@ -1808,6 +1844,7 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             assert token_payload['protocol_version'] == standterm.EXTERNAL_AGENT_PROTOCOL_VERSION
             assert 'render' in token_payload['capabilities']
             assert 'send_capture' in token_payload['capabilities']
+            assert 'submit_after' in token_payload['capabilities']
             assert 'strip_ansi' in token_payload['capabilities']
             assert token_payload['transport']['type'] == 'loopback_http_json'
             assert token_payload['transport']['loopback_only'] is True
@@ -1825,6 +1862,7 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             }
             assert token_payload['operations']['tail']['wait_ms'] == standterm.AGENT_EXTERNAL_TAIL_MAX_WAIT_MS
             assert token_payload['operations']['tail_plain']['strip_ansi'] is True
+            assert token_payload['operations']['send_submit']['submit_after'] is True
             assert token_payload['operations']['send_wait']['op'] == 'send-wait'
             assert token_payload['operations']['send_wait_plain']['strip_ansi'] is True
             assert token_payload['expires_at'] > standterm.time.time()
@@ -1840,7 +1878,11 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             assert token_payload['cli_commands']['render'].endswith('render')
             assert token_payload['cli_commands']['screen_tail'].endswith("screen --tail-lines 12")
             assert token_payload['cli_commands']['screen_region'].endswith("screen --region 0:12")
+            assert token_payload['cli_commands']['tail_wait'].endswith(
+                f"tail --wait-ms {standterm.AGENT_EXTERNAL_TAIL_MAX_WAIT_MS}"
+            )
             assert token_payload['cli_commands']['tail_plain'].endswith('tail --strip-ansi')
+            assert token_payload['cli_commands']['send_submit'].endswith("send --text 'codex prompt' --submit")
             assert token_payload['cli_commands']['send_wait_plain_pwd'].endswith("send-wait --text 'pwd\n' --strip-ansi")
             assert 'scripts/agent_repl.py' in token_payload['cli_commands']['repl']
             assert 'scripts/agent_jsonl.py' in token_payload['cli_commands']['jsonl']
@@ -2771,6 +2813,8 @@ def test_terminal_bridge_tracks_shared_session_metadata():
     assert metadata['cols'] == 132
     assert metadata['rows'] == 43
     assert metadata['output_seq'] == 2
+    assert metadata['last_output_at'] is not None
+    assert metadata['terminal_quiet_ms'] >= 0
 
 
 def test_ssh_input_records_agent_metadata_after_validation():
@@ -3042,6 +3086,7 @@ def main():
         test_external_agent_observe_cannot_send,
         test_external_agent_approval_send_waits_for_human_approval,
         test_external_agent_direct_send_uses_agent_gate,
+        test_external_agent_submit_after_writes_discrete_enter,
         test_external_agent_direct_send_capture_returns_tail_after_write,
         test_external_agent_send_wait_strip_ansi_formats_capture_only_when_requested,
         test_external_agent_send_wait_times_out_without_output,

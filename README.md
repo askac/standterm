@@ -203,8 +203,10 @@ python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json rend
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json screen --tail-lines 12
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json screen --region 0:12
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json tail --since 0 --limit 50
+python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json tail --since 0 --wait-ms 25000
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json tail --since 0 --limit 50 --strip-ansi
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send --text $'pwd\r'
+python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send --text 'codex prompt' --submit
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send --key Down --key Enter
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send-wait --text $'pwd\r'
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send-wait --text $'pwd\r' --strip-ansi
@@ -218,6 +220,10 @@ escapes. In bash, use `$'...'` to send a real carriage return, as shown above.
 On Windows shells, prefer `--stdin` or `agent_jsonl.py` for portable line
 breaks. JSONL `data` fields are JSON-decoded, so `\r` and `\n` become real
 control bytes before sending.
+For full-screen TUIs that treat glued text plus `\r` as paste content,
+`send --text '...' --submit` sends a separate structured Enter keypress after
+the text payload. For navigation-only input, `send --key Enter` remains the
+explicit key path.
 
 Use `send-wait` or `send --capture` when the `hello` capabilities include
 `send_capture`. It writes only through the normal Agent gate, then returns typed

@@ -255,6 +255,8 @@ AGENT_ERROR_PROVIDER_INVALID_PROPOSAL = 'agent_provider_invalid_proposal'
 AGENT_ERROR_EXTERNAL_AGENT_UNAUTHORIZED = 'agent_external_unauthorized'
 AGENT_ERROR_EXTERNAL_AGENT_EXPIRED = 'agent_external_expired'
 AGENT_ERROR_EXTERNAL_AGENT_REVOKED = 'agent_external_revoked'
+AGENT_ERROR_EXTERNAL_AGENT_DISCONNECTED = 'agent_external_disconnected'
+AGENT_ERROR_EXTERNAL_AGENT_ORIGIN_BLOCKED = 'agent_external_origin_blocked'
 AGENT_ERROR_EXTERNAL_AGENT_DISABLED = 'agent_external_disabled'
 AGENT_ERROR_HUMAN_INPUT_ACTIVE = 'agent_human_input_active'
 AGENT_REASON_DETACHED = 'agent_detached'
@@ -337,7 +339,7 @@ AGENT_AUDIT_DIRECT_WRITE = 'direct_write'
 AGENT_AUDIT_TERMINAL_CLEANUP = 'terminal_cleanup'
 AGENT_AUDIT_ERROR = 'error'
 EXTERNAL_AGENT_PROTOCOL_VERSION = 1
-EXTERNAL_AGENT_CAPABILITIES = ['state', 'screen', 'render', 'tail', 'send', 'send_capture', 'strip_ansi', 'revoke']
+EXTERNAL_AGENT_CAPABILITIES = ['state', 'screen', 'render', 'tail', 'send', 'send_capture', 'submit_after', 'strip_ansi', 'revoke']
 AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_WAIT_MS = 3000
 AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_SETTLE_MS = 150
 AGENT_EXTERNAL_SEND_CAPTURE_MAX_SETTLE_MS = 5000
@@ -2403,6 +2405,8 @@ class ExternalAgentAttachStore:
         record = self._tokens.get(token_hash)
         if not record:
             return None, AGENT_ERROR_EXTERNAL_AGENT_UNAUTHORIZED
+        if record.get('invalidated'):
+            return None, record.get('error_code') or AGENT_ERROR_EXTERNAL_AGENT_DISCONNECTED
         if record.get('revoked'):
             return None, AGENT_ERROR_EXTERNAL_AGENT_REVOKED
         expires_at = record.get('expires_at')
@@ -2445,7 +2449,9 @@ class ExternalAgentAttachStore:
             if record.get('session_token') == session_token \
                     and (terminal_id is None or record.get('terminal_id') == terminal_id) \
                     and (sid is None or record.get('sid') == sid):
-                self._tokens.pop(token_hash, None)
+                record['invalidated'] = True
+                record['error_code'] = AGENT_ERROR_EXTERNAL_AGENT_DISCONNECTED
+                record['invalidated_at'] = time.time()
 
     def clear(self):
         self._tokens.clear()
@@ -2899,9 +2905,21 @@ def validate_external_agent_command_token(command, require_terminal=True):
             return record, state, terminal_id, error_code
     return record, state, terminal_id, None
 
+def build_external_agent_terminal_session_payload(record):
+    bridge = get_bridge(record.get('session_token'), record.get('terminal_id')) if isinstance(record, dict) else None
+    if not bridge:
+        return None
+    session = dict(bridge.session_metadata())
+    session.pop('session_token', None)
+    session['session_id'] = get_agent_session_id(record.get('session_token'))
+    return session
+
 def build_external_agent_state_payload(record, state):
     payload = state.public_state()
     payload['external_agent_id'] = record.get('external_agent_id')
+    terminal_session = build_external_agent_terminal_session_payload(record)
+    if terminal_session:
+        payload['terminal_session'] = terminal_session
     payload['status'] = 'ok'
     return payload
 
@@ -2992,6 +3010,10 @@ def parse_external_agent_send_capture_settle_ms(value):
 
 def external_agent_flag_enabled(value):
     return value is True or value == 1
+
+def should_external_agent_submit_after(command):
+    return external_agent_flag_enabled(command.get('submit_after')) \
+        or external_agent_flag_enabled(command.get('submit'))
 
 def should_external_agent_capture_send(command):
     return external_agent_flag_enabled(command.get('capture'))
@@ -3137,14 +3159,17 @@ def build_external_agent_viewport_render_payload(record, state, terminal_id, bri
         return None, error_code, request_payload, wait_ms
     return result, None, request_payload, wait_ms
 
-def external_agent_build_terminal_input_action(state, data):
-    return {
+def external_agent_build_terminal_input_action(state, data, submit_after=False):
+    action = {
         'action_type': AGENT_ACTION_TERMINAL_INPUT,
         'terminal_id': state.terminal_id,
         'data': data,
         'provider_name': 'external_agent',
         'provider_version': '1',
     }
+    if submit_after:
+        action['submit_after'] = True
+    return action
 
 def escape_agent_preview(value):
     return value.encode('unicode_escape', errors='backslashreplace').decode('ascii')
@@ -3169,7 +3194,9 @@ def build_agent_action(state, proposal, requires_approval):
     action_data = proposal.get('data')
     if not isinstance(action_data, str):
         return None, AGENT_ERROR_ACTION_INVALID_DATA
-    if len(action_data.encode('utf-8', errors='ignore')) > AGENT_MAX_INPUT_BYTES:
+    submit_after = proposal.get('submit_after') is True
+    extra_submit_bytes = 1 if submit_after else 0
+    if len(action_data.encode('utf-8', errors='ignore')) + extra_submit_bytes > AGENT_MAX_INPUT_BYTES:
         return None, AGENT_ERROR_ACTION_TOO_LARGE
     action_id = secrets.token_urlsafe(12)
     proposal_id = 'agp_' + secrets.token_urlsafe(12)
@@ -3196,6 +3223,8 @@ def build_agent_action(state, proposal, requires_approval):
         'privacy_version': state.privacy_version,
         'run_id': run_id,
     }
+    if submit_after:
+        action['submit_after'] = True
     if provider_name:
         action['provider_name'] = provider_name
     if provider_version:
@@ -3236,6 +3265,7 @@ def public_agent_action(action):
         'line_count': action.get('line_count'),
         'contains_control_chars': action.get('contains_control_chars'),
         'ends_with_newline': action.get('ends_with_newline'),
+        'submit_after': action.get('submit_after') is True,
         'escaped_preview': action.get('escaped_preview'),
     }
 
@@ -3427,10 +3457,16 @@ def write_agent_terminal_input(session_token, terminal_id, sid, action_id, contr
             if not isinstance(data, str):
                 return False, {'error_code': AGENT_ERROR_ACTION_INVALID_DATA, 'bytes_written': bytes_written}
             chunks = list(iter_text_chunks(data, AGENT_INPUT_CHUNK_BYTES))
+            submit_after = action.get('submit_after') is True
             if not chunks:
-                action['status'] = AGENT_STATUS_COMPLETED
-                record_agent_audit(state, action, AGENT_STATUS_COMPLETED)
-                return True, {'bytes_written': 0}
+                if submit_after:
+                    chunks = ['\r']
+                else:
+                    action['status'] = AGENT_STATUS_COMPLETED
+                    record_agent_audit(state, action, AGENT_STATUS_COMPLETED)
+                    return True, {'bytes_written': 0}
+            elif submit_after:
+                chunks.append('\r')
             break
 
     for chunk in chunks:
@@ -3986,6 +4022,13 @@ def build_external_agent_cli_commands(base_url, token, terminal_id):
         ),
         'render': build_external_agent_cli_command(base_url, token, terminal_id, op='render'),
         'tail': build_external_agent_cli_command(base_url, token, terminal_id, op='tail'),
+        'tail_wait': build_external_agent_cli_command(
+            base_url,
+            token,
+            terminal_id,
+            op='tail',
+            extra_args=['--wait-ms', str(AGENT_EXTERNAL_TAIL_MAX_WAIT_MS)],
+        ),
         'tail_plain': build_external_agent_cli_command(
             base_url,
             token,
@@ -3994,6 +4037,14 @@ def build_external_agent_cli_commands(base_url, token, terminal_id):
             extra_args=['--strip-ansi'],
         ),
         'send_pwd': build_external_agent_cli_command(base_url, token, terminal_id, op='send', text='pwd\n'),
+        'send_submit': build_external_agent_cli_command(
+            base_url,
+            token,
+            terminal_id,
+            op='send',
+            text='codex prompt',
+            extra_args=['--submit'],
+        ),
         'send_wait_pwd': build_external_agent_cli_command(base_url, token, terminal_id, op='send-wait', text='pwd\n'),
         'send_wait_plain_pwd': build_external_agent_cli_command(
             base_url,
@@ -4045,6 +4096,7 @@ def build_external_agent_discovery_payload(base_url, token, terminal_id):
                 'strip_ansi': True,
             },
             'send': {'op': 'send', 'data': 'pwd\n'},
+            'send_submit': {'op': 'send', 'data': 'codex prompt', 'submit_after': True},
             'send_capture': {
                 'op': 'send',
                 'data': 'pwd\n',
@@ -4255,7 +4307,7 @@ def external_agent_dev_command():
 @app.route('/agent/external/command', methods=['POST'])
 def external_agent_command():
     if not is_loopback_client_request():
-        return external_agent_json_response(external_agent_error(AGENT_ERROR_EXTERNAL_AGENT_UNAUTHORIZED), 403)
+        return external_agent_json_response(external_agent_error(AGENT_ERROR_EXTERNAL_AGENT_ORIGIN_BLOCKED), 403)
     data = request.get_json(silent=True)
     payload = process_external_agent_command(data)
     status_code = 200 if payload.get('status') != AGENT_STATUS_FAILED else 400
@@ -5222,13 +5274,15 @@ def process_external_agent_command(command):
         )
         if error_code:
             return external_agent_error(error_code, terminal_id=terminal_id)
+        state_payload = build_external_agent_state_payload(record, state)
+        state_payload.pop('status', None)
         return {
             'status': 'ok',
             'version': EXTERNAL_AGENT_PROTOCOL_VERSION,
             'external_agent_id': record.get('external_agent_id'),
             'terminal_id': record.get('terminal_id'),
             'capabilities': list(EXTERNAL_AGENT_CAPABILITIES),
-            'state': state.public_state(),
+            'state': state_payload,
         }
 
     if op == 'attach':
@@ -5394,7 +5448,11 @@ def process_external_agent_command(command):
                     return external_agent_error(AGENT_ERROR_HUMAN_INPUT_ACTIVE, terminal_id=terminal_id)
                 if state.mode not in {AGENT_MODE_APPROVAL_PENDING, AGENT_MODE_DIRECT_ACTIVE}:
                     return external_agent_error(AGENT_ERROR_MODE_NOT_WRITABLE, terminal_id=terminal_id)
-                proposal = external_agent_build_terminal_input_action(state, data)
+                proposal = external_agent_build_terminal_input_action(
+                    state,
+                    data,
+                    submit_after=should_external_agent_submit_after(command),
+                )
                 requires_approval = state.mode != AGENT_MODE_DIRECT_ACTIVE
                 action, error_code = build_agent_action(state, proposal, requires_approval)
                 if error_code:

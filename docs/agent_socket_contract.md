@@ -244,7 +244,8 @@ Discover protocol/capabilities:
 
 `hello` returns `version`, `external_agent_id`, `terminal_id`, current public
 Agent state, and a typed `capabilities` array such as `state`, `screen`,
-`render`, `tail`, `send`, `send_capture`, `strip_ansi`, and `revoke`.
+`render`, `tail`, `send`, `send_capture`, `submit_after`, `strip_ansi`, and
+`revoke`.
 
 Attach:
 
@@ -265,6 +266,11 @@ Read state:
   "terminal_id": "main"
 }
 ```
+
+`state`, `attach`, and the nested `hello.state` include a `terminal_session`
+object when the terminal bridge is still present. It includes the current
+`output_seq`, `last_output_at`, and `terminal_quiet_ms` so CLI clients can
+distinguish an idle terminal from a slow task without scraping display text.
 
 Read screen:
 
@@ -437,6 +443,20 @@ Propose terminal input:
 emits `agent_action_request` to the authorizing human browser. `send` in
 `direct_active` mode still writes only through `AgentInputGate`. `send` in
 `observe`, `disabled`, paused, or privacy-blocked states returns a typed error.
+For full-screen TUIs that treat glued text plus `\r` as paste content, callers
+may send text with `"submit_after": true`; the backend then writes the text and
+a separate carriage return keypress as one structured action:
+
+```json
+{
+  "op": "send",
+  "token": "agt_...",
+  "terminal_id": "main",
+  "data": "codex prompt",
+  "submit_after": true
+}
+```
+
 Clients may request an atomic send-and-observe operation by adding
 `"capture": true` to `send`, or by using `op: "send-wait"` / the `send-wait`
 CLI alias. The first supported capture mode is tail-based and uses the
@@ -867,6 +887,8 @@ explicit `error_code`.
 - `agent_external_unauthorized`
 - `agent_external_expired`
 - `agent_external_revoked`
+- `agent_external_disconnected`
+- `agent_external_origin_blocked`
 - `agent_external_disabled`
 - `agent_human_input_active`
 

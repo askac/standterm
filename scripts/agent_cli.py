@@ -53,6 +53,7 @@ def parse_args():
     tail_parser = subparsers.add_parser('tail')
     tail_parser.add_argument('--since', type=int, default=0, help='Only return events after this output_seq')
     tail_parser.add_argument('--limit', type=int, default=50, help='Maximum events to return')
+    tail_parser.add_argument('--wait-ms', type=int, help='Server-side long-poll wait for output')
     tail_parser.add_argument('--strip-ansi', action='store_true', help='Strip ANSI/control sequences from returned terminal data')
 
     send_parser = subparsers.add_parser('send')
@@ -61,6 +62,7 @@ def parse_args():
     input_group.add_argument('--stdin', action='store_true', help='Read text from stdin')
     input_group.add_argument('--key', action='append', choices=sorted(KEY_INPUTS), help='Named key to send; repeat for multiple keys')
     send_parser.add_argument('--capture', action='store_true', help='Wait for terminal output after sending')
+    send_parser.add_argument('--submit', action='store_true', help='Send a discrete Enter keypress after the text/stdin payload')
     send_parser.add_argument('--wait-ms', type=int, help='Maximum capture wait time')
     send_parser.add_argument('--settle-ms', type=int, help='Output idle time before capture returns')
     send_parser.add_argument('--limit', type=int, help='Maximum captured tail events to return')
@@ -71,6 +73,7 @@ def parse_args():
     send_wait_group.add_argument('--text', help='Text to send')
     send_wait_group.add_argument('--stdin', action='store_true', help='Read text from stdin')
     send_wait_group.add_argument('--key', action='append', choices=sorted(KEY_INPUTS), help='Named key to send; repeat for multiple keys')
+    send_wait_parser.add_argument('--submit', action='store_true', help='Send a discrete Enter keypress after the text/stdin payload')
     send_wait_parser.add_argument('--wait-ms', type=int, help='Maximum capture wait time')
     send_wait_parser.add_argument('--settle-ms', type=int, help='Output idle time before capture returns')
     send_wait_parser.add_argument('--limit', type=int, help='Maximum captured tail events to return')
@@ -124,6 +127,8 @@ def command_payload(args):
     if args.command == 'tail':
         payload['since_output_seq'] = args.since
         payload['limit'] = args.limit
+        if getattr(args, 'wait_ms', None) is not None:
+            payload['wait_ms'] = args.wait_ms
         if getattr(args, 'strip_ansi', False):
             payload['strip_ansi'] = True
     elif args.command == 'screen':
@@ -146,6 +151,10 @@ def command_payload(args):
             payload['capture'] = True
         elif getattr(args, 'capture', False):
             payload['capture'] = True
+        if getattr(args, 'submit', False):
+            if getattr(args, 'key', None):
+                raise SystemExit('--submit can only be used with --text or --stdin')
+            payload['submit_after'] = True
         if getattr(args, 'wait_ms', None) is not None:
             payload['wait_ms'] = args.wait_ms
         if getattr(args, 'settle_ms', None) is not None:

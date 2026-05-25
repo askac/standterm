@@ -144,6 +144,7 @@ class TerminalBridge:
         self.cols = 80
         self.rows = 24
         self.output_seq = 0
+        self.last_output_at = None
         self.replay_buffer = deque()
         self.replay_buffer_bytes = 0
         self.input_lock = threading.RLock()
@@ -161,7 +162,11 @@ class TerminalBridge:
             rows,
         )
 
-    def session_metadata(self):
+    def session_metadata(self, now=None):
+        now = time.time() if now is None else now
+        terminal_quiet_ms = None
+        if self.last_output_at is not None:
+            terminal_quiet_ms = max(0, int((now - self.last_output_at) * 1000))
         return {
             'session_token': self.owner_session,
             'terminal_id': self.terminal_id,
@@ -171,6 +176,8 @@ class TerminalBridge:
             'cols': self.cols,
             'rows': self.rows,
             'output_seq': self.output_seq,
+            'last_output_at': self.last_output_at,
+            'terminal_quiet_ms': terminal_quiet_ms,
         }
 
     def update_terminal_size(self, cols, rows):
@@ -193,6 +200,7 @@ class TerminalBridge:
         if payload.get('message_type') == 'terminal':
             with self.output_condition:
                 self.output_seq += 1
+                self.last_output_at = time.time()
                 payload.setdefault('output_seq', self.output_seq)
                 self._remember_terminal_payload(payload)
                 self.runtime.append_transcript(

@@ -33,6 +33,8 @@ FATAL_AGENT_ERRORS = {
     'agent_external_unauthorized',
     'agent_external_expired',
     'agent_external_revoked',
+    'agent_external_disconnected',
+    'agent_external_origin_blocked',
     'agent_external_disabled',
     'terminal_not_found',
 }

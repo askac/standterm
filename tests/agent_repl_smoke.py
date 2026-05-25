@@ -254,6 +254,7 @@ def test_cli_tail_strip_ansi_payload():
         token='agt_unit',
         since=0,
         limit=50,
+        wait_ms=None,
         strip_ansi=True,
     )
     assert cli.command_payload(args) == {
@@ -264,6 +265,9 @@ def test_cli_tail_strip_ansi_payload():
         'limit': 50,
         'strip_ansi': True,
     }
+
+    args.wait_ms = 2500
+    assert cli.command_payload(args)['wait_ms'] == 2500
 
 
 def test_cli_send_wait_payload_requests_capture():
@@ -276,6 +280,7 @@ def test_cli_send_wait_payload_requests_capture():
         wait_ms=None,
         settle_ms=None,
         limit=None,
+        submit=False,
     )
     assert cli.command_payload(args) == {
         'op': 'send-wait',
@@ -296,6 +301,7 @@ def test_cli_send_wait_strip_ansi_payload_requests_plain_capture():
         wait_ms=None,
         settle_ms=None,
         limit=None,
+        submit=False,
         strip_ansi=True,
     )
     assert cli.command_payload(args) == {
@@ -305,6 +311,28 @@ def test_cli_send_wait_strip_ansi_payload_requests_plain_capture():
         'data': 'pwd\n',
         'capture': True,
         'strip_ansi': True,
+    }
+
+def test_cli_send_submit_after_payload_is_structured():
+    args = SimpleNamespace(
+        command='send',
+        terminal='main',
+        token='agt_unit',
+        text='codex prompt',
+        stdin=False,
+        key=None,
+        capture=False,
+        submit=True,
+        wait_ms=None,
+        settle_ms=None,
+        limit=None,
+    )
+    assert cli.command_payload(args) == {
+        'op': 'send',
+        'terminal_id': 'main',
+        'token': 'agt_unit',
+        'data': 'codex prompt',
+        'submit_after': True,
     }
 
 
@@ -317,6 +345,7 @@ def test_cli_send_named_keys_payload_uses_control_sequences():
         stdin=False,
         key=['Down', 'Enter'],
         capture=False,
+        submit=False,
         wait_ms=None,
         settle_ms=None,
         limit=None,
@@ -555,6 +584,7 @@ def main():
         test_cli_send_capture_payload,
         test_cli_send_wait_payload_requests_capture,
         test_cli_send_wait_strip_ansi_payload_requests_plain_capture,
+        test_cli_send_submit_after_payload_is_structured,
         test_cli_send_named_keys_payload_uses_control_sequences,
         test_cli_render_save_writes_png_and_redacts_base64,
         test_jsonl_client_reuses_defaults_and_preserves_ids,
