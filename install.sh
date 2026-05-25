@@ -1,14 +1,14 @@
 #!/bin/bash
-# WebSSH One-liner Installer
+# StandTerm One-liner Installer
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/askac/webssh/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/askac/standterm/main/install.sh | bash
 #   or:
-#   curl -fsSL https://raw.githubusercontent.com/askac/webssh/main/install.sh | bash -s -- --dir ~/webssh
+#   curl -fsSL https://raw.githubusercontent.com/askac/standterm/main/install.sh | bash -s -- --dir ~/standterm
 
 set -e
 
-REPO_URL="https://github.com/askac/webssh.git"
-INSTALL_DIR="${WEBSSH_DIR:-$HOME/webssh}"
+REPO_URL="https://github.com/askac/standterm.git"
+INSTALL_DIR="${STANDTERM_DIR:-${WEBSSH_DIR:-$HOME/standterm}}"
 
 # Allow --dir override
 while [[ $# -gt 0 ]]; do
@@ -19,7 +19,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 echo "========================================"
-echo "   WebSSH Installer"
+echo "   StandTerm Installer"
 echo "========================================"
 
 # Check dependencies
@@ -47,6 +47,6 @@ else
     git clone "$REPO_URL" "$INSTALL_DIR"
 fi
 
-echo "[+] Done. Launching WebSSH..."
+echo "[+] Done. Launching StandTerm..."
 echo ""
 exec bash "$INSTALL_DIR/run.sh"

@@ -67,11 +67,11 @@ parser that consumes the same terminal output stream.
 
 The External Agent Mirror is the local CLI boundary for tools such as Codex CLI
 or Claude Code. The current testable transport is a loopback-only HTTP command
-bridge plus `scripts/webssh_agent_cli.py`. OS transports such as Unix domain
+bridge plus `scripts/agent_cli.py`. OS transports such as Unix domain
 sockets or Windows named pipes can be layered on top of the same command
 boundary later.
 
-The human WebSSH viewer remains the controller:
+The human StandTerm viewer remains the controller:
 
 - the external agent cannot create terminal connections;
 - the external agent cannot read SSH passwords, Flask access tokens, browser
@@ -93,50 +93,55 @@ sufficient for attach authorization. Tokens use a sliding idle timeout, scoped
 to the terminal and authorizing browser binding, and are invalidated by terminal
 close, viewer detach/disconnect, session expiry, explicit revoke, or binding
 changes. The default idle timeout is five minutes and can be changed with
-`WEBSSH_AGENT_EXTERNAL_IDLE_TIMEOUT_SECONDS`.
+`STANDTERM_AGENT_EXTERNAL_IDLE_TIMEOUT_SECONDS`.
+Legacy `WEBSSH_*` environment variable names are still accepted as compatibility
+aliases.
 
 The browser mints tokens through `POST /agent/external/token` using the current
-authenticated WebSSH session cookie and public Agent state fields for the active
+authenticated StandTerm session cookie and public Agent state fields for the active
 terminal. External clients submit commands through `POST /agent/external/command`,
 which is accepted only from loopback clients and still requires the `agt_...`
 token. When a token is minted, the server also writes the latest local handoff
-JSON to `webssh_external_agent_handoff.json` in the WebSSH launch directory.
-This ignored local file is only a convenience for CLI agents on the WebSSH host;
+JSON to `standterm_external_agent_handoff.json` in the StandTerm launch directory.
+This ignored local file is only a convenience for CLI agents on the StandTerm host;
 it does not bypass the short-lived token, loopback-only command endpoint, or
 Agent panel mode gates. It is also the machine-readable discovery document for
-non-WebSSH agents. It includes `handoff_schema`, `schema_version`,
-`protocol_version`, `transport`, `capabilities`, operation templates, and
-ready-to-run CLI commands.
+non-StandTerm agents. It includes `handoff_schema:
+"standterm_external_agent_handoff"`, `schema_version`, `protocol_version`,
+`transport`, `capabilities`, operation templates, and ready-to-run CLI commands.
+The legacy `webssh_external_agent_handoff.json` file and
+`scripts/webssh_agent_*.py` helpers are compatibility aliases for older local
+tooling.
 Because `/agent/external/command` only accepts loopback clients, the handoff
 `url`, `transport.command_endpoint`, and generated CLI commands use a loopback
-host even when the browser-facing WebSSH URL is a WSL or LAN address. The
+host even when the browser-facing StandTerm URL is a WSL or LAN address. The
 browser-facing address is retained as `browser_url`.
 Agents should call `hello` first when possible and branch only on the typed
 `capabilities` field, not on displayed terminal text.
-See `docs/examples/webssh-external-agent-skill/SKILL.md` and the adjacent
+See `docs/examples/standterm-external-agent-skill/SKILL.md` and the adjacent
 `skill_prompt.txt` for a local skill example that wraps this workflow for CLI
 agents.
 
 The command endpoint is loopback-only. If an external agent runs on another
 machine, route it through an SSH tunnel or equivalent loopback tunnel to the
-WebSSH host; do not expose the command endpoint or bearer token directly on a
+StandTerm host; do not expose the command endpoint or bearer token directly on a
 network interface.
 
 The CLI wrapper is intentionally small and speaks this JSON command contract.
-It can read the generated handoff file directly. When WebSSH serves HTTPS with
+It can read the generated handoff file directly. When StandTerm serves HTTPS with
 its generated local development certificate, the handoff includes the local CA
 path and the wrapper uses it for TLS verification.
 
 ```bash
-tools/.venv_wsl/bin/python scripts/webssh_agent_cli.py \
-  --handoff webssh_external_agent_handoff.json \
+tools/.venv_wsl/bin/python scripts/agent_cli.py \
+  --handoff standterm_external_agent_handoff.json \
   hello
 ```
 
 Or receive the connection fields explicitly:
 
 ```bash
-tools/.venv_wsl/bin/python scripts/webssh_agent_cli.py \
+tools/.venv_wsl/bin/python scripts/agent_cli.py \
   --url http://127.0.0.1:5010 \
   --token agt_... \
   --terminal main \
@@ -156,8 +161,8 @@ For terminal-like interaction, use the persistent REPL wrapper instead of
 starting one CLI process per line:
 
 ```bash
-tools/.venv_wsl/bin/python scripts/webssh_agent_repl.py \
-  --handoff webssh_external_agent_handoff.json \
+tools/.venv_wsl/bin/python scripts/agent_repl.py \
+  --handoff standterm_external_agent_handoff.json \
   --enter cr
 ```
 
@@ -166,7 +171,7 @@ calling `send`, and renders remote output from long-poll `tail` using
 `output_seq` as its cursor. `screen` is only a provisional initial
 viewport/debug source; it is not the authoritative terminal stream. The local
 detach key is `Ctrl-]`. In dev
-servers started with `WEBSSH_AGENT_DEV_TOKEN=1`, the REPL may omit `--token` and
+servers started with `STANDTERM_AGENT_DEV_TOKEN=1`, the REPL may omit `--token` and
 use the loopback-only dev command endpoint. `--enter cr` is the default because
 PTY-style interactive programs generally expect carriage return for Enter; use
 `--enter lf` for line-oriented shell pipe behavior and `--enter crlf` only for
@@ -182,8 +187,8 @@ For paced input into a full-screen editor or TUI, use the dedicated typer helper
 instead of REPL pipe mode:
 
 ```bash
-tools/.venv_wsl/bin/python scripts/webssh_agent_type.py \
-  --handoff webssh_external_agent_handoff.json \
+tools/.venv_wsl/bin/python scripts/agent_type.py \
+  --handoff standterm_external_agent_handoff.json \
   --from-file body.txt \
   --cps 3 \
   --newline cr
@@ -192,7 +197,7 @@ tools/.venv_wsl/bin/python scripts/webssh_agent_type.py \
 The typer posts one normal `send` operation per text unit and stops on rejected
 input such as paused/privacy-blocked state, revoked tokens, missing terminals,
 or active human-input leases. It does not provide an exclusive multi-character
-write lease. WebSSH terminal input is one shared stream, so another writer can
+write lease. StandTerm terminal input is one shared stream, so another writer can
 move the cursor or change editor state between typed units. While a paced typer
 is running, avoid concurrent cursor-moving input from browser viewers, CLI,
 REPL, JSONL, or other helpers. Use `tail` for progress checks; `screen` remains
@@ -203,8 +208,8 @@ instead of the terminal-style REPL. It keeps stdout as JSON only and still
 forwards each command to the same loopback HTTP command endpoint:
 
 ```bash
-tools/.venv_wsl/bin/python scripts/webssh_agent_jsonl.py \
-  --handoff webssh_external_agent_handoff.json
+tools/.venv_wsl/bin/python scripts/agent_jsonl.py \
+  --handoff standterm_external_agent_handoff.json
 ```
 
 Each stdin line is a JSON command object. The wrapper fills in the default
@@ -278,7 +283,7 @@ Read screen:
 
 `screen` returns the latest browser mirror viewport snapshot. This snapshot is
 marked `provisional: true`: it is useful display data for observation, but it is
-not an authoritative backend terminal parser and must not be used as a WebSSH
+not an authoritative backend terminal parser and must not be used as a StandTerm
 control signal. To reduce repeated full viewport payloads, clients may request
 a slice of the latest snapshot:
 
@@ -324,8 +329,8 @@ Read rendered xterm viewport:
 The CLI wrapper can save the returned PNG directly:
 
 ```bash
-tools/.venv_wsl/bin/python scripts/webssh_agent_cli.py \
-  --handoff webssh_external_agent_handoff.json \
+tools/.venv_wsl/bin/python scripts/agent_cli.py \
+  --handoff standterm_external_agent_handoff.json \
   render --save viewport.png
 ```
 
@@ -384,7 +389,7 @@ Tail terminal display events:
 Add `"strip_ansi": true` only when the caller wants a plain display-data view
 of terminal events. Raw terminal bytes remain the default. Plain output has
 ANSI/control sequences removed and `\r` normalized to `\n`; it is still display
-data and must not be used as a WebSSH control signal.
+data and must not be used as a StandTerm control signal.
 
 Tail returns a structured cursor and retention contract:
 
@@ -488,7 +493,7 @@ If no terminal output arrives before `wait_ms`, the send may still be
 `capture.timed_out: true`. In approval mode, capture is not executed because no
 bytes have been written yet; the response remains `pending_approval` and
 includes `capture.status: "skipped"` with reason `pending_approval`. Captured
-tail events are display data only and must not be parsed as WebSSH control
+tail events are display data only and must not be parsed as StandTerm control
 state. `strip_ansi` affects only the captured `events[*].data` formatting and
 adds `capture.strip_ansi: true` plus `capture.data_format: "plain"`; raw capture
 events remain the default. Capture returns terminal output after
@@ -623,8 +628,8 @@ minimized human input metadata.
 
 The default provider is `mock`, which emits a fixed `terminal_input` proposal
 for local contract testing. A second `static_env` adapter is available only when
-explicitly selected with `WEBSSH_AGENT_PROVIDER=static_env` and
-`WEBSSH_AGENT_STATIC_INPUT`; it is intended for adapter wiring tests, not as an
+explicitly selected with `STANDTERM_AGENT_PROVIDER=static_env` and
+`STANDTERM_AGENT_STATIC_INPUT`; it is intended for adapter wiring tests, not as an
 LLM integration.
 
 In `approval_pending` mode, the resulting action is emitted as

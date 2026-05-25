@@ -1,11 +1,11 @@
-# WebSSH
+# StandTerm
 
-WebSSH is a local-first browser terminal for SSH, host-local shells, UART
+StandTerm is a local-first browser terminal for SSH, host-local shells, UART
 sessions, and controlled external-agent access. It is designed for WSL2, native
 Windows, macOS, and Linux, with browser-based terminal tabs that stay attached
-to the WebSSH server process across page reloads.
+to the StandTerm server process across page reloads.
 
-![WebSSH Demo](webssh_demo.gif)
+![StandTerm Demo](standterm_demo.gif)
 
 ## What It Does
 
@@ -23,7 +23,7 @@ to the WebSSH server process across page reloads.
   typed JSON commands, browser viewport render requests, tail polling, and a
   short-lived bearer-token handoff file.
 
-WebSSH is not a hosted remote access service. Treat it as a local operator tool:
+StandTerm is not a hosted remote access service. Treat it as a local operator tool:
 bind to loopback unless you understand the Local Shell, UART, HTTPS, browser
 authorization, and bearer-token implications.
 
@@ -53,33 +53,33 @@ The launchers create and maintain their own repo-local virtual environments.
 Install and run on macOS, Linux, or WSL:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/askac/webssh/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/askac/standterm/main/install.sh | bash
 ```
 
 Install into a specific directory:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/askac/webssh/main/install.sh | bash -s -- --dir ~/webssh
+curl -fsSL https://raw.githubusercontent.com/askac/standterm/main/install.sh | bash -s -- --dir ~/standterm
 ```
 
 Manual setup:
 
 ```bash
-git clone https://github.com/askac/webssh.git
-cd webssh
+git clone https://github.com/askac/standterm.git
+cd standterm
 ./run.sh
 ```
 
 Native Windows:
 
 ```bat
-git clone https://github.com/askac/webssh.git
-cd webssh
+git clone https://github.com/askac/standterm.git
+cd standterm
 run.bat
 ```
 
 Open the Access URL printed by the launcher. It includes a one-process access
-token in `?token=...`; after the browser creates a session cookie, WebSSH
+token in `?token=...`; after the browser creates a session cookie, StandTerm
 redirects to `/`.
 
 Use `./run.sh --force` or `run.bat --force` to rebuild dependency checks after
@@ -87,10 +87,10 @@ pulling large changes.
 
 ## Terminal Backends
 
-WebSSH has three terminal backends:
+StandTerm has three terminal backends:
 
 - `ssh`: Connect to any reachable SSH server.
-- `local_shell`: Start a shell on the WebSSH host when the browser is local or
+- `local_shell`: Start a shell on the StandTerm host when the browser is local or
   explicitly authorized. On WSL, the UI lets you choose `bash`, `cmd.exe`, or
   `powershell.exe`; `bash` is the default.
 - `uart`: Open a serial port such as `COM3`, `/dev/ttyUSB0`, `/dev/ttyACM0`, or
@@ -114,22 +114,22 @@ Useful launcher flags:
 
 ## Browser Authorization And HTTPS
 
-When WebSSH listens on a non-loopback address, HTTPS is enabled by default so
+When StandTerm listens on a non-loopback address, HTTPS is enabled by default so
 modern browsers can use WebCrypto for browser authorization. Local Shell and
 UART only bypass browser authorization for true loopback clients by default.
 WSL host/NAT client IPs must authorize the browser unless you explicitly trust
-that WSL network with `WEBSSH_TRUST_WSL_CLIENT_IPS=1`.
+that WSL network with `STANDTERM_TRUST_WSL_CLIENT_IPS=1`.
 
-On WSL, the Authorizer panel provides a WebSSH CA download link and pairing
-steps. Import `webssh-local-ca.crt` into Windows Trusted Root Certification
+On WSL, the Authorizer panel provides a StandTerm CA download link and pairing
+steps. Import `standterm-local-ca.crt` into Windows Trusted Root Certification
 Authorities to trust the generated WSL IP certificate.
 
 To authorize a browser from the WSL IP URL:
 
 1. Open the HTTPS Access URL printed by `run.sh`.
-2. If the page is not trusted, download the WebSSH CA from the Authorizer panel
+2. If the page is not trusted, download the StandTerm CA from the Authorizer panel
    and import it into Windows Trusted Root Certification Authorities.
-3. Click `Authorize` to download `webssh-authorize_*.json`.
+3. Click `Authorize` to download `standterm-authorize_*.json`.
 4. Move that file into the repo-local `authorized/` directory.
 5. Click `Check`.
 
@@ -141,7 +141,7 @@ printed by `run.sh` in each browser, including `?token=...`. Copying the
 post-redirect `/` URL from one browser to another does not carry access.
 
 Certificate private keys are stored outside Windows-mounted repo paths by
-default when needed so `chmod 600` works. Set `WEBSSH_CERTS_DIR` to override the
+default when needed so `chmod 600` works. Set `STANDTERM_CERTS_DIR` to override the
 certificate directory.
 
 ## UART Notes
@@ -151,7 +151,7 @@ Native Windows, macOS, and Linux use pyserial discovery. WSL lists Windows
 Python helper venv.
 
 UART access follows the same local-client/browser-authorization gate as Local
-Shell unless `WEBSSH_ALLOW_REMOTE_UART=1` is set.
+Shell unless `STANDTERM_ALLOW_REMOTE_UART=1` is set.
 
 ## Agent And External Agent Mirror
 
@@ -167,24 +167,24 @@ own proposals, or bypass Agent mode and privacy gates.
 
 Typical local flow:
 
-1. Launch WebSSH and open the browser.
+1. Launch StandTerm and open the browser.
 2. Connect a terminal.
 3. Open the Agent panel for that terminal.
 4. Mint an external-agent token from the browser Agent UI.
 5. Use the startup banner's `External Agent CLI hello` or `render` command.
 
-Token minting writes an ignored local handoff file in the WebSSH launch
+Token minting writes an ignored local handoff file in the StandTerm launch
 directory:
 
 ```text
-webssh_external_agent_handoff.json
+standterm_external_agent_handoff.json
 ```
 
 This file contains a bearer token with a sliding idle timeout. By default, each
 valid external-agent command extends access for another five idle minutes; the
 token is still invalidated by terminal close, browser Agent detach/disconnect,
 server restart, or explicit revoke. Do not commit it, paste it into logs, or
-expose it outside the WebSSH host.
+expose it outside the StandTerm host.
 
 The handoff file is a convenience for the latest minted token. For
 multi-terminal checks, pass explicit `--url`, `--token`, and `--terminal` values
@@ -194,28 +194,32 @@ LAN URL, the handoff `url`, `transport.command_endpoint`, and generated CLI
 commands use loopback for the command endpoint. The browser-facing address is
 recorded separately as `browser_url`.
 
+For compatibility with older local tooling, `webssh_external_agent_handoff.json`
+and `scripts/webssh_agent_*.py` remain aliases for the StandTerm handoff file
+and generic `scripts/agent_*.py` helpers.
+
 CLI examples:
 
 ```bash
-python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json hello
-python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json render
-python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json render --save viewport.png
-python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json screen --tail-lines 12
-python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json screen --region 0:12
-python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json tail --since 0 --limit 50
-python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json tail --since 0 --limit 50 --strip-ansi
-python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json send --text $'pwd\r'
-python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json send --key Down --key Enter
-python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json send-wait --text $'pwd\r'
-python scripts/webssh_agent_cli.py --handoff webssh_external_agent_handoff.json send-wait --text $'pwd\r' --strip-ansi
-python scripts/webssh_agent_jsonl.py --handoff webssh_external_agent_handoff.json
-python scripts/webssh_agent_repl.py --handoff webssh_external_agent_handoff.json --enter cr
-python scripts/webssh_agent_type.py --handoff webssh_external_agent_handoff.json --from-file body.txt --cps 3 --newline cr
+python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json hello
+python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json render
+python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json render --save viewport.png
+python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json screen --tail-lines 12
+python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json screen --region 0:12
+python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json tail --since 0 --limit 50
+python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json tail --since 0 --limit 50 --strip-ansi
+python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send --text $'pwd\r'
+python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send --key Down --key Enter
+python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send-wait --text $'pwd\r'
+python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send-wait --text $'pwd\r' --strip-ansi
+python scripts/agent_jsonl.py --handoff standterm_external_agent_handoff.json
+python scripts/agent_repl.py --handoff standterm_external_agent_handoff.json --enter cr
+python scripts/agent_type.py --handoff standterm_external_agent_handoff.json --from-file body.txt --cps 3 --newline cr
 ```
 
 CLI `--text` is sent verbatim; normal quoted strings do not decode backslash
 escapes. In bash, use `$'...'` to send a real carriage return, as shown above.
-On Windows shells, prefer `--stdin` or `webssh_agent_jsonl.py` for portable line
+On Windows shells, prefer `--stdin` or `agent_jsonl.py` for portable line
 breaks. JSONL `data` fields are JSON-decoded, so `\r` and `\n` become real
 control bytes before sending.
 
@@ -229,21 +233,21 @@ signal. For full-screen TUIs, stripped output can make redraws readable but may
 remove cursor or highlight cues, so inspect raw `screen`, raw tail/capture, or
 `render` when selection position matters.
 
-Use `webssh_agent_type.py` for paced input into full-screen editors or TUIs. It
+Use `agent_type.py` for paced input into full-screen editors or TUIs. It
 sends one text unit per normal `send` request with configurable rate and newline
-translation. WebSSH terminal input is a single shared stream: while a paced
+translation. StandTerm terminal input is a single shared stream: while a paced
 typer is running, do not send cursor-moving keys from another CLI, REPL, browser,
 or helper. For progress checks, prefer `tail`; `screen` is a provisional browser
 snapshot and `render` depends on an active browser viewport.
 
-For repeated machine-driven operations, prefer `webssh_agent_jsonl.py`: it
+For repeated machine-driven operations, prefer `agent_jsonl.py`: it
 starts one persistent local process, reads the handoff once, accepts one JSON
 command per stdin line, and writes one JSON response per stdout line while still
 using the same loopback HTTP command endpoint.
 
-Prefer the exact absolute commands printed by the WebSSH startup banner. They
+Prefer the exact absolute commands printed by the StandTerm startup banner. They
 use the active runtime Python, platform-appropriate quoting, and the generated
-local CA path when WebSSH is serving HTTPS with its local development
+local CA path when StandTerm is serving HTTPS with its local development
 certificate.
 
 Full protocol details are in `docs/agent_socket_contract.md`.
@@ -257,35 +261,34 @@ session. The first version records typed metadata only, such as event kind,
 terminal id, byte counts, line counts, privacy state, and whether control
 characters were present. It does not record raw terminal input previews.
 
-Observation JSONL logs are runtime artifacts and are ignored by git. WebSSH
-writes them only when `WEBSSH_OPERATOR_OBSERVATION_DIR` is set, or when running
-from the MIBCRK mirror path where they default to `operator_observations/`.
+Observation JSONL logs are runtime artifacts and are ignored by git. StandTerm
+writes them only when `STANDTERM_OPERATOR_OBSERVATION_DIR` is set.
 
 ## Local Agent Skill Example
 
-The repo includes a local skill example for agents that should operate WebSSH
+The repo includes a local skill example for agents that should operate StandTerm
 through the external-agent handoff:
 
 ```text
-docs/examples/webssh-external-agent-skill/SKILL.md
-docs/examples/webssh-external-agent-skill/skill_prompt.txt
-docs/examples/webssh-external-agent-skill/boot_prompt.txt
+docs/examples/standterm-external-agent-skill/SKILL.md
+docs/examples/standterm-external-agent-skill/skill_prompt.txt
+docs/examples/standterm-external-agent-skill/boot_prompt.txt
 ```
 
 Use `skill_prompt.txt` when asking an agent to install or create the local
 skill. The intended prompt shape is:
 
 ```text
-請閱讀 docs/examples/webssh-external-agent-skill/SKILL.md，增加 webssh-external-agent local skill。
+請閱讀 docs/examples/standterm-external-agent-skill/SKILL.md，增加 standterm-external-agent local skill。
 ```
 
 Use `boot_prompt.txt` when the skill already exists and an agent should start
-assisting the current WebSSH terminal session through the external-agent
+assisting the current StandTerm terminal session through the external-agent
 handoff.
 
 The skill tells an agent to:
 
-- inspect `webssh_external_agent_handoff.json` as a secret-bearing discovery
+- inspect `standterm_external_agent_handoff.json` as a secret-bearing discovery
   file, not as text to paste into chat;
 - run `hello` first;
 - branch only on typed JSON fields such as `status`, `capabilities`,
@@ -305,21 +308,23 @@ Common settings:
 
 | Setting | Purpose |
 | --- | --- |
-| `WEBSSH_HOST` | Default bind host when `--host` is not passed. |
-| `WEBSSH_PORT` | Default port, usually `5000`. |
-| `WEBSSH_HTTPS=1` | Force HTTPS. |
-| `WEBSSH_DISABLE_AUTO_HTTPS=1` | Disable automatic HTTPS for non-loopback binds. |
-| `WEBSSH_CERTS_DIR` | Override local certificate storage. |
-| `WEBSSH_ALLOW_REMOTE_LOCAL_SHELL=1` | Acknowledge Local Shell while listening on a non-loopback address. |
-| `WEBSSH_ALLOW_REMOTE_UART=1` | Acknowledge UART while listening on a non-loopback address. |
-| `WEBSSH_TRUST_WSL_CLIENT_IPS=1` | Treat WSL host/NAT client IPs as local for Local Shell and UART. Use only on a trusted private WSL network. |
-| `WEBSSH_DEBUG_POLICY=1` | Print server-side policy decisions. |
-| `WEBSSH_AGENT_PROVIDER=static_env` | Use the static test Agent provider. |
-| `WEBSSH_AGENT_STATIC_INPUT` | Input text for the static test Agent provider. |
-| `WEBSSH_AGENT_DEV_TOKEN=1` | Enable loopback-only dev token endpoints. Do not use for normal operation. |
-| `WEBSSH_AGENT_EXTERNAL_IDLE_TIMEOUT_SECONDS` | External-agent bearer token idle timeout. Default `300`; set `session` to rely only on disconnect/revoke. |
+| `STANDTERM_HOST` | Default bind host when `--host` is not passed. |
+| `STANDTERM_PORT` | Default port, usually `5000`. |
+| `STANDTERM_HTTPS=1` | Force HTTPS. |
+| `STANDTERM_DISABLE_AUTO_HTTPS=1` | Disable automatic HTTPS for non-loopback binds. |
+| `STANDTERM_CERTS_DIR` | Override local certificate storage. |
+| `STANDTERM_ALLOW_REMOTE_LOCAL_SHELL=1` | Acknowledge Local Shell while listening on a non-loopback address. |
+| `STANDTERM_ALLOW_REMOTE_UART=1` | Acknowledge UART while listening on a non-loopback address. |
+| `STANDTERM_TRUST_WSL_CLIENT_IPS=1` | Treat WSL host/NAT client IPs as local for Local Shell and UART. Use only on a trusted private WSL network. |
+| `STANDTERM_DEBUG_POLICY=1` | Print server-side policy decisions. |
+| `STANDTERM_AGENT_PROVIDER=static_env` | Use the static test Agent provider. |
+| `STANDTERM_AGENT_STATIC_INPUT` | Input text for the static test Agent provider. |
+| `STANDTERM_AGENT_DEV_TOKEN=1` | Enable loopback-only dev token endpoints. Do not use for normal operation. |
+| `STANDTERM_AGENT_EXTERNAL_IDLE_TIMEOUT_SECONDS` | External-agent bearer token idle timeout. Default `300`; set `session` to rely only on disconnect/revoke. |
 
-Add `&debug=1` to the WebSSH URL to show an on-screen policy overlay.
+Legacy `WEBSSH_*` names are still accepted as compatibility aliases.
+
+Add `&debug=1` to the StandTerm URL to show an on-screen policy overlay.
 
 ## Localhost SSH Key Setup
 
@@ -334,12 +339,12 @@ chmod 600 ~/.ssh/authorized_keys
 ssh 127.0.0.1
 ```
 
-WebSSH uses your local private key for localhost targets. The server side must
+StandTerm uses your local private key for localhost targets. The server side must
 have the matching public key in `~/.ssh/authorized_keys`.
 
 ## Vendored Browser Assets
 
-WebSSH vendors xterm.js runtime files under `static/` so the terminal works
+StandTerm vendors xterm.js runtime files under `static/` so the terminal works
 without a CDN:
 
 - `@xterm/xterm` 6.0.0: `static/js/xterm.js`, `static/css/xterm.css`
@@ -357,10 +362,11 @@ publishing releases that include the vendored files.
 
 ## Security Notes
 
-- Keep WebSSH bound to loopback unless remote browser access is intentional.
+- Keep StandTerm bound to loopback unless remote browser access is intentional.
 - Do not expose `/agent/external/command` or an `agt_...` token on a network
   interface.
-- `webssh_external_agent_handoff.json`, `authorized/`, local certs, and venvs
+- `standterm_external_agent_handoff.json`, the compatibility
+  `webssh_external_agent_handoff.json` alias, `authorized/`, local certs, and venvs
   are ignored runtime state.
 - Terminal display payload is data. App control decisions should use typed
   fields or typed events.

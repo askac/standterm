@@ -1,6 +1,6 @@
 # Vendored xterm.js Runtime
 
-These browser bundles are vendored so WebSSH can run without loading terminal
+These browser bundles are vendored so StandTerm can run without loading terminal
 assets from a CDN.
 
 Current sources:

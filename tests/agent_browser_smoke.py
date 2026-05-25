@@ -63,11 +63,11 @@ def start_server():
     port = find_free_port()
     env = os.environ.copy()
     env.update({
-        'WEBSSH_HOST': '127.0.0.1',
-        'WEBSSH_PORT': str(port),
-        'WEBSSH_DISABLE_AUTO_HTTPS': '1',
-        'WEBSSH_ASYNC_MODE': 'threading',
-        'WEBSSH_OPERATOR_OBSERVATION_DIR': tempfile.mkdtemp(prefix='webssh-observation-smoke-'),
+        'STANDTERM_HOST': '127.0.0.1',
+        'STANDTERM_PORT': str(port),
+        'STANDTERM_DISABLE_AUTO_HTTPS': '1',
+        'STANDTERM_ASYNC_MODE': 'threading',
+        'STANDTERM_OPERATOR_OBSERVATION_DIR': tempfile.mkdtemp(prefix='standterm-observation-smoke-'),
     })
     proc = subprocess.Popen(
         [str(PYTHON), 'app.py', '--force-connection', 'local-shell'],
@@ -95,7 +95,7 @@ def start_server():
     deadline = time.time() + 20
     while time.time() < deadline:
         if proc.poll() is not None:
-            raise RuntimeError('WebSSH server exited early:\n' + '\n'.join(lines[-40:]))
+            raise RuntimeError('StandTerm server exited early:\n' + '\n'.join(lines[-40:]))
         try:
             line = output_queue.get(timeout=0.1)
         except queue.Empty:
@@ -106,7 +106,7 @@ def start_server():
             break
     if not access_url:
         stop_server(proc)
-        raise RuntimeError('Timed out waiting for WebSSH access URL:\n' + '\n'.join(lines[-40:]))
+        raise RuntimeError('Timed out waiting for StandTerm access URL:\n' + '\n'.join(lines[-40:]))
 
     deadline = time.time() + 10
     last_error = None
@@ -120,7 +120,7 @@ def start_server():
             time.sleep(0.1)
 
     stop_server(proc)
-    raise RuntimeError(f'Timed out waiting for WebSSH HTTP readiness: {last_error}')
+    raise RuntimeError(f'Timed out waiting for StandTerm HTTP readiness: {last_error}')
 
 
 def stop_server(proc):

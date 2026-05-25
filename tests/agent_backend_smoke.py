@@ -1789,8 +1789,8 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
     state = last_payload(client, webssh.AGENT_EVENT_STATE)
 
     original_handoff_path = webssh.EXTERNAL_AGENT_HANDOFF_PATH
-    with tempfile.TemporaryDirectory(prefix='webssh-agent-smoke-') as handoff_dir:
-        webssh.EXTERNAL_AGENT_HANDOFF_PATH = Path(handoff_dir) / 'webssh_external_agent_handoff.json'
+    with tempfile.TemporaryDirectory(prefix='standterm-agent-smoke-') as handoff_dir:
+        webssh.EXTERNAL_AGENT_HANDOFF_PATH = Path(handoff_dir) / 'standterm_external_agent_handoff.json'
         try:
             response = flask_client.post('/agent/external/token', json={
                 'terminal_id': webssh.TERMINAL_ID_MAIN,
@@ -1803,7 +1803,7 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             token_payload = response.get_json()
             assert token_payload['status'] == 'ok'
             assert token_payload['token'].startswith('agt_')
-            assert token_payload['handoff_schema'] == 'webssh_external_agent_handoff'
+            assert token_payload['handoff_schema'] == 'standterm_external_agent_handoff'
             assert token_payload['schema_version'] == 1
             assert token_payload['protocol_version'] == webssh.EXTERNAL_AGENT_PROTOCOL_VERSION
             assert 'render' in token_payload['capabilities']
@@ -1834,6 +1834,7 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             )
             assert token_payload['security']['remote_use_requires_loopback_tunnel'] is True
             assert token_payload['cli_command'].endswith("send --text 'pwd\n'")
+            assert 'scripts/agent_cli.py' in token_payload['cli_command']
             assert f"--url {token_payload['url']}" in token_payload['cli_command']
             assert token_payload['cli_commands']['hello'].endswith('hello')
             assert token_payload['cli_commands']['render'].endswith('render')
@@ -1841,8 +1842,8 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             assert token_payload['cli_commands']['screen_region'].endswith("screen --region 0:12")
             assert token_payload['cli_commands']['tail_plain'].endswith('tail --strip-ansi')
             assert token_payload['cli_commands']['send_wait_plain_pwd'].endswith("send-wait --text 'pwd\n' --strip-ansi")
-            assert 'scripts/webssh_agent_repl.py' in token_payload['cli_commands']['repl']
-            assert 'scripts/webssh_agent_jsonl.py' in token_payload['cli_commands']['jsonl']
+            assert 'scripts/agent_repl.py' in token_payload['cli_commands']['repl']
+            assert 'scripts/agent_jsonl.py' in token_payload['cli_commands']['jsonl']
             handoff = Path(token_payload['handoff_path'])
             assert handoff == webssh.EXTERNAL_AGENT_HANDOFF_PATH
             assert handoff.parent == Path(handoff_dir)
@@ -1854,6 +1855,18 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             assert handoff_payload['cli_command'] == token_payload['cli_command']
             assert handoff_payload['capabilities'] == token_payload['capabilities']
             assert handoff_payload['cli_commands']['render'] == token_payload['cli_commands']['render']
+            legacy_handoff = Path(token_payload['legacy_handoff_path'])
+            assert legacy_handoff == webssh.get_legacy_external_agent_handoff_path()
+            assert legacy_handoff.parent == Path(handoff_dir)
+            assert legacy_handoff.is_file()
+            legacy_payload = webssh.json.loads(legacy_handoff.read_text(encoding='utf-8'))
+            assert legacy_payload['handoff_schema'] == 'webssh_external_agent_handoff'
+            assert legacy_payload['canonical_handoff_schema'] == 'standterm_external_agent_handoff'
+            assert legacy_payload['canonical_handoff_path'] == str(handoff)
+            assert legacy_payload['legacy_alias'] is True
+            assert 'scripts/webssh_agent_cli.py' in legacy_payload['cli_command']
+            assert 'scripts/webssh_agent_repl.py' in legacy_payload['cli_commands']['repl']
+            assert 'scripts/webssh_agent_jsonl.py' in legacy_payload['cli_commands']['jsonl']
         finally:
             webssh.EXTERNAL_AGENT_HANDOFF_PATH = original_handoff_path
 
@@ -1908,7 +1921,7 @@ def test_external_agent_startup_lines_point_to_launch_handoff():
         '"C:\\Program Files\\Python\\python.exe"'
     )
     assert str(webssh.EXTERNAL_AGENT_HANDOFF_PATH) in joined
-    assert str(webssh.APP_DIR / 'scripts' / 'webssh_agent_cli.py') in joined
+    assert str(webssh.APP_DIR / 'scripts' / 'agent_cli.py') in joined
     assert webssh.sys.executable in joined
     assert '--handoff' in hello_line
     assert f'--url http://127.0.0.1:{webssh.DEFAULT_PORT}' in hello_line
@@ -2007,11 +2020,13 @@ def test_wsl_client_ips_require_explicit_trust_for_local_resources():
     original_is_wsl = webssh.is_wsl
     original_get_wsl_host_addresses = webssh.get_wsl_host_addresses
     original_get_wsl_ip = webssh.get_wsl_ip
-    original_env = webssh.os.environ.get('WEBSSH_TRUST_WSL_CLIENT_IPS')
+    original_standterm_env = webssh.os.environ.get('STANDTERM_TRUST_WSL_CLIENT_IPS')
+    original_webssh_env = webssh.os.environ.get('WEBSSH_TRUST_WSL_CLIENT_IPS')
     try:
         webssh.is_wsl = lambda: True
         webssh.get_wsl_host_addresses = lambda: {webssh.ipaddress.ip_address('172.20.0.1')}
         webssh.get_wsl_ip = lambda: '172.20.5.10'
+        webssh.os.environ.pop('STANDTERM_TRUST_WSL_CLIENT_IPS', None)
         webssh.os.environ.pop('WEBSSH_TRUST_WSL_CLIENT_IPS', None)
 
         assert webssh.is_local_client_ip('127.0.0.1') is True
@@ -2022,28 +2037,34 @@ def test_wsl_client_ips_require_explicit_trust_for_local_resources():
         assert webssh.is_local_shell_allowed_for_client('172.20.0.1', browser_authorized=True) is True
         assert webssh.is_uart_allowed_for_client('172.20.0.1', browser_authorized=True) is True
 
-        webssh.os.environ['WEBSSH_TRUST_WSL_CLIENT_IPS'] = '1'
+        webssh.os.environ['STANDTERM_TRUST_WSL_CLIENT_IPS'] = '1'
         assert webssh.is_local_client_ip('172.20.0.1') is True
         assert webssh.is_local_client_ip('172.20.5.20') is True
     finally:
         webssh.is_wsl = original_is_wsl
         webssh.get_wsl_host_addresses = original_get_wsl_host_addresses
         webssh.get_wsl_ip = original_get_wsl_ip
-        if original_env is None:
+        if original_standterm_env is None:
+            webssh.os.environ.pop('STANDTERM_TRUST_WSL_CLIENT_IPS', None)
+        else:
+            webssh.os.environ['STANDTERM_TRUST_WSL_CLIENT_IPS'] = original_standterm_env
+        if original_webssh_env is None:
             webssh.os.environ.pop('WEBSSH_TRUST_WSL_CLIENT_IPS', None)
         else:
-            webssh.os.environ['WEBSSH_TRUST_WSL_CLIENT_IPS'] = original_env
+            webssh.os.environ['WEBSSH_TRUST_WSL_CLIENT_IPS'] = original_webssh_env
 
 
 def test_settings_capabilities_are_separate_from_local_resource_access():
     original_is_wsl = webssh.is_wsl
     original_get_wsl_host_addresses = webssh.get_wsl_host_addresses
     original_get_wsl_ip = webssh.get_wsl_ip
-    original_env = webssh.os.environ.get('WEBSSH_TRUST_WSL_CLIENT_IPS')
+    original_standterm_env = webssh.os.environ.get('STANDTERM_TRUST_WSL_CLIENT_IPS')
+    original_webssh_env = webssh.os.environ.get('WEBSSH_TRUST_WSL_CLIENT_IPS')
     try:
         webssh.is_wsl = lambda: True
         webssh.get_wsl_host_addresses = lambda: {webssh.ipaddress.ip_address('172.20.0.1')}
         webssh.get_wsl_ip = lambda: '172.20.5.10'
+        webssh.os.environ.pop('STANDTERM_TRUST_WSL_CLIENT_IPS', None)
         webssh.os.environ.pop('WEBSSH_TRUST_WSL_CLIENT_IPS', None)
 
         assert webssh.is_settings_view_allowed_for_client('172.20.0.1', browser_authorized=False) is False
@@ -2055,10 +2076,32 @@ def test_settings_capabilities_are_separate_from_local_resource_access():
         webssh.is_wsl = original_is_wsl
         webssh.get_wsl_host_addresses = original_get_wsl_host_addresses
         webssh.get_wsl_ip = original_get_wsl_ip
-        if original_env is None:
+        if original_standterm_env is None:
+            webssh.os.environ.pop('STANDTERM_TRUST_WSL_CLIENT_IPS', None)
+        else:
+            webssh.os.environ['STANDTERM_TRUST_WSL_CLIENT_IPS'] = original_standterm_env
+        if original_webssh_env is None:
             webssh.os.environ.pop('WEBSSH_TRUST_WSL_CLIENT_IPS', None)
         else:
-            webssh.os.environ['WEBSSH_TRUST_WSL_CLIENT_IPS'] = original_env
+            webssh.os.environ['WEBSSH_TRUST_WSL_CLIENT_IPS'] = original_webssh_env
+
+
+def test_legacy_webssh_env_alias_controls_wsl_trust():
+    original_standterm_env = webssh.os.environ.get('STANDTERM_TRUST_WSL_CLIENT_IPS')
+    original_webssh_env = webssh.os.environ.get('WEBSSH_TRUST_WSL_CLIENT_IPS')
+    try:
+        webssh.os.environ.pop('STANDTERM_TRUST_WSL_CLIENT_IPS', None)
+        webssh.os.environ['WEBSSH_TRUST_WSL_CLIENT_IPS'] = '1'
+        assert webssh.is_wsl_client_ip_trust_enabled() is True
+    finally:
+        if original_standterm_env is None:
+            webssh.os.environ.pop('STANDTERM_TRUST_WSL_CLIENT_IPS', None)
+        else:
+            webssh.os.environ['STANDTERM_TRUST_WSL_CLIENT_IPS'] = original_standterm_env
+        if original_webssh_env is None:
+            webssh.os.environ.pop('WEBSSH_TRUST_WSL_CLIENT_IPS', None)
+        else:
+            webssh.os.environ['WEBSSH_TRUST_WSL_CLIENT_IPS'] = original_webssh_env
 
 
 def test_readonly_settings_snapshot_socket_event_is_typed():
@@ -3059,6 +3102,7 @@ def main():
         test_terminal_policy_creates_authorized_dir_for_fresh_checkout,
         test_wsl_client_ips_require_explicit_trust_for_local_resources,
         test_settings_capabilities_are_separate_from_local_resource_access,
+        test_legacy_webssh_env_alias_controls_wsl_trust,
         test_readonly_settings_snapshot_socket_event_is_typed,
         test_backend_settings_schema_is_declared_and_typed,
         test_backend_settings_schema_rejects_unsafe_capability_mapping,

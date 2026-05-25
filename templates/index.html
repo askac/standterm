@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>WebSSH</title>
+    <title>StandTerm</title>
     <!-- Local Fallback Assets -->
     <link rel="stylesheet" href="/static/css/xterm.css" />
     <style>
@@ -363,7 +363,7 @@
     <div id="loader-screen">
         <div class="spinner"></div>
         <div class="progress-container"><div id="progress-bar"></div></div>
-        <div id="loader-text" style="margin-bottom: 5px;">Initializing WebSSH...</div>
+        <div id="loader-text" style="margin-bottom: 5px;">Initializing StandTerm...</div>
         <div id="loader-timer">0.0s</div>
     </div>
 
@@ -1794,15 +1794,15 @@
             function renderBrowserAuthDetails() {
                 browserAuthDetails.replaceChildren();
                 if (terminalPolicy.https_enabled) {
-                    appendBrowserAuthDetail('Use the HTTPS Access URL when opening WebSSH through the WSL IP.');
+                    appendBrowserAuthDetail('Use the HTTPS Access URL when opening StandTerm through the WSL IP.');
                 } else {
-                    appendBrowserAuthDetail('Use a secure browser context. For WSL IP access, restart WebSSH with HTTPS enabled.');
+                    appendBrowserAuthDetail('Use a secure browser context. For WSL IP access, restart StandTerm with HTTPS enabled.');
                 }
                 if (terminalPolicy.ca_download_url) {
-                    appendBrowserAuthDetail('If the browser does not trust this page yet, download the local CA certificate:', 'Download WebSSH CA', terminalPolicy.ca_download_url);
-                    appendBrowserAuthDetail('Import webssh-local-ca.crt into Windows Trusted Root Certification Authorities, then reload the HTTPS URL.');
+                    appendBrowserAuthDetail('If the browser does not trust this page yet, download the local CA certificate:', 'Download StandTerm CA', terminalPolicy.ca_download_url);
+                    appendBrowserAuthDetail('Import standterm-local-ca.crt into Windows Trusted Root Certification Authorities, then reload the HTTPS URL.');
                 }
-                appendBrowserAuthDetail('Click Authorize to download webssh-authorize_*.json.');
+                appendBrowserAuthDetail('Click Authorize to download standterm-authorize_*.json.');
                 if (terminalPolicy.authorized_dir_ready === false) {
                     appendBrowserAuthDetail('The server could not create the authorization directory. Check server filesystem permissions before clicking Authorize.');
                 }
@@ -1849,7 +1849,7 @@
                     localShellAllowed: !!nextLocalShellOption.allowed
                 });
                 if (window.console && console.debug) {
-                    console.debug('[webssh policy]', {
+                    console.debug('[standterm policy]', {
                         defaultConnectionType,
                         nextConnection,
                         localShellAllowed: !!nextLocalShellOption.allowed,
@@ -1957,7 +1957,7 @@
                 if (browserPairingResponseTimer) clearTimeout(browserPairingResponseTimer);
                 browserPairingResponseTimer = setTimeout(() => {
                     setBrowserAuthBusy(false);
-                    updateBrowserAuthUi('No authorization response from server. Restart WebSSH, refresh this page, then try Authorize again.');
+                    updateBrowserAuthUi('No authorization response from server. Restart StandTerm, refresh this page, then try Authorize again.');
                 }, 5000);
             }
 
@@ -2650,7 +2650,7 @@
                         agentExternalCommand.value = `error: ${result.error_code || response.status}`;
                         return;
                     }
-                    const cli = result.cli_command || `tools/.venv_wsl/bin/python scripts/webssh_agent_cli.py --url ${shellQuote(result.url)} --token ${shellQuote(result.token)} --terminal ${shellQuote(result.terminal_id)} send --text ${shellQuote('pwd\n')}`;
+                    const cli = result.cli_command || `tools/.venv_wsl/bin/python scripts/agent_cli.py --url ${shellQuote(result.url)} --token ${shellQuote(result.token)} --terminal ${shellQuote(result.terminal_id)} send --text ${shellQuote('pwd\n')}`;
                     agentExternalCommand.value = cli;
                     if (result.handoff_path) {
                         agentExternalCommand.value += `\n# local handoff: ${result.handoff_path}`;

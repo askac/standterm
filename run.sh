@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# WebSSH Startup Script for macOS / Linux / WSL
+# StandTerm Startup Script for macOS / Linux / WSL
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_FILE="$PROJECT_DIR/app.py"
@@ -48,7 +48,7 @@ INSTALLED_FLAG="$VENV_DIR/.installed"
 WIN_UART_VENV_DIR="$PROJECT_DIR/tools/.venv_win"
 
 echo "========================================"
-echo "   WebSSH Automated Starter ($PLATFORM_NAME)"
+echo "   StandTerm Automated Starter ($PLATFORM_NAME)"
 echo "========================================"
 
 # Check for force flag
@@ -143,7 +143,7 @@ fi
 if [[ "$PLATFORM_NAME" == "WSL" ]]; then
     echo "[*] WSL note: the browser will auto-open the WSL IP Access URL."
     echo "[*] WSL note: non-loopback access uses HTTPS by default."
-    echo "[*] WSL note: WSL IP clients need browser authorization for Local Shell/UART unless WEBSSH_TRUST_WSL_CLIENT_IPS=1."
+    echo "[*] WSL note: WSL IP clients need browser authorization for Local Shell/UART unless STANDTERM_TRUST_WSL_CLIENT_IPS=1."
     echo "[*] WSL note: if browser authorization needs certificate trust, use the Authorizer details in the page."
 fi
 
@@ -166,7 +166,7 @@ open_browser() {
     esac
 }
 
-echo "[*] Starting WebSSH server..."
+echo "[*] Starting StandTerm server..."
 echo "[*] Loading Python modules; first startup from /mnt/* may take a few seconds..."
 # Run python with unbuffered output so we can detect the access URL line and open
 # the browser once on the first launch.

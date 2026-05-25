@@ -1,33 +1,37 @@
 ---
-name: webssh-external-agent
-description: Use when controlling a local WebSSH terminal through the external-agent handoff JSON and CLI wrappers, including hello, render, tail, send, and REPL workflows.
+name: standterm-external-agent
+description: Use when controlling a local StandTerm terminal through the external-agent handoff JSON and CLI wrappers, including hello, render, tail, send, and REPL workflows.
 ---
 
-# WebSSH External Agent
+# StandTerm External Agent
 
-Use this skill only from the WebSSH launch directory after the browser Agent
+Use this skill only from the StandTerm launch directory after the browser Agent
 panel is attached and an external token has been minted.
 
 ## Minimum Usage From A User Prompt
 
-If the user only provides this skill prompt and asks you to operate WebSSH:
+If the user only provides this skill prompt and asks you to operate StandTerm:
 
-1. Use the WebSSH startup banner as the source of truth for the active Python,
-   `scripts/webssh_agent_cli.py`, `scripts/webssh_agent_jsonl.py`,
-   `scripts/webssh_agent_repl.py`, `scripts/webssh_agent_type.py`, and
-   `webssh_external_agent_handoff.json` absolute paths. Do not guess the port,
+1. Use the StandTerm startup banner as the source of truth for the active Python,
+   `scripts/agent_cli.py`, `scripts/agent_jsonl.py`,
+   `scripts/agent_repl.py`, `scripts/agent_type.py`, and
+   `standterm_external_agent_handoff.json` absolute paths. Do not guess the port,
    URL, token, or working directory.
-2. If the banner is not available, derive paths from the WebSSH launch
+2. If the banner is not available, derive paths from the StandTerm launch
    directory, then run `hello` before doing anything else.
 3. Do not run backend smoke tests to create a handoff. Smoke tests may mint
-   test-only tokens that are not recognized by the live WebSSH server.
+   test-only tokens that are not recognized by the live StandTerm server.
 4. For HTTPS, prefer `--handoff`; it can carry the local CA path. If the
    startup banner includes `--ca-file`, preserve it exactly.
 5. Never print the bearer token or full handoff JSON.
 
+Older StandTerm builds may print `webssh_external_agent_handoff.json` and
+`scripts/webssh_agent_*.py` paths. Treat those only as compatibility aliases for
+`standterm_external_agent_handoff.json` and `scripts/agent_*.py`.
+
 ## Workflow
 
-1. Inspect `webssh_external_agent_handoff.json` only as a local secret-bearing
+1. Inspect `standterm_external_agent_handoff.json` only as a local secret-bearing
    discovery file. Do not commit it, paste the token, or print the full file.
 2. Call `hello` first and branch on typed JSON fields such as `status`,
    `capabilities`, `terminal_id`, and `error_code`.
@@ -53,75 +57,75 @@ If the user only provides this skill prompt and asks you to operate WebSSH:
    retry also fails.
 8. Do not guess a different port. Replacing a browser-facing host with
    loopback on the same port is allowed when `loopback_only` is true; otherwise
-   if the handoff does not match the observed running WebSSH server, mint a
+   if the handoff does not match the observed running StandTerm server, mint a
    fresh token.
 
 ## Commands
 
-Prefer the single-line absolute command printed by the WebSSH startup banner.
+Prefer the single-line absolute command printed by the StandTerm startup banner.
 The examples below use placeholders; keep them as one line on Windows shells.
 
 Run a capability check:
 
 ```text
-<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json hello
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json hello
 ```
 
 Request a browser-rendered terminal PNG:
 
 ```text
-<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json render
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json render
 ```
 
 Save a browser-rendered terminal PNG without printing base64 to stdout:
 
 ```text
-<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json render --save viewport.png
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json render --save viewport.png
 ```
 
 Read terminal output events:
 
 ```text
-<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json tail --since 0 --limit 50
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json tail --since 0 --limit 50
 ```
 
 Use stripped plain display data only when raw ANSI redraws are too noisy:
 
 ```text
-<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json tail --since 0 --limit 50 --strip-ansi
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json tail --since 0 --limit 50 --strip-ansi
 ```
 
 Read a smaller provisional viewport slice when full `screen` would be too
 large:
 
 ```text
-<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json screen --tail-lines 12
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json screen --tail-lines 12
 ```
 
 ```text
-<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json screen --region 0:12
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json screen --region 0:12
 ```
 
 Send input only when Agent mode allows it:
 
 ```bash
-<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json send --text $'pwd\r'
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json send --text $'pwd\r'
 ```
 
 Send named navigation keys:
 
 ```text
-<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json send --key Down --key Enter
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json send --key Down --key Enter
 ```
 
 Prefer atomic send-and-observe when the server advertises `send_capture`:
 
 ```bash
-<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json send-wait --text $'pwd\r'
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json send-wait --text $'pwd\r'
 ```
 
 ```bash
-<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_cli.py --handoff <webssh-dir>/webssh_external_agent_handoff.json send-wait --text $'pwd\r' --strip-ansi
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json send-wait --text $'pwd\r' --strip-ansi
 ```
 
 `send-wait` and `send --capture` return normal send metadata plus a typed
@@ -143,7 +147,7 @@ For repeated machine-driven operations, prefer the persistent JSONL client over
 starting one CLI process per command:
 
 ```text
-<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_jsonl.py --handoff <webssh-dir>/webssh_external_agent_handoff.json
+<python-from-startup-banner> <standterm-dir>/scripts/agent_jsonl.py --handoff <standterm-dir>/standterm_external_agent_handoff.json
 ```
 
 Send one JSON command per stdin line and read one JSON response per stdout line:
@@ -161,18 +165,18 @@ bytes before sending; this is intentionally different from raw CLI `--text`.
 Use the REPL for interactive work:
 
 ```text
-<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_repl.py --handoff <webssh-dir>/webssh_external_agent_handoff.json --enter cr
+<python-from-startup-banner> <standterm-dir>/scripts/agent_repl.py --handoff <standterm-dir>/standterm_external_agent_handoff.json --enter cr
 ```
 
 Use the paced typer for long editor/TUI text entry that should arrive at a
 controlled cadence:
 
 ```text
-<python-from-startup-banner> <webssh-dir>/scripts/webssh_agent_type.py --handoff <webssh-dir>/webssh_external_agent_handoff.json --from-file body.txt --cps 3 --newline cr
+<python-from-startup-banner> <standterm-dir>/scripts/agent_type.py --handoff <standterm-dir>/standterm_external_agent_handoff.json --from-file body.txt --cps 3 --newline cr
 ```
 
 The typer sends one normal `send` operation per text unit and stops on rejected
-input. It does not hold an exclusive multi-character write lease. WebSSH
+input. It does not hold an exclusive multi-character write lease. StandTerm
 terminal input is one shared stream, so do not send cursor-moving keys from
 another CLI, REPL, JSONL client, browser viewer, or helper while paced typing is
 active. For progress checks, prefer `tail` or another non-mutating observation;

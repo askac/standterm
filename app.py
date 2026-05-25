@@ -40,7 +40,23 @@ paramiko = None
 serial_module = None
 serial_list_ports_module = None
 
-ASYNC_MODE = os.getenv('WEBSSH_ASYNC_MODE', '').strip().lower()
+APP_NAME = 'StandTerm'
+ENV_PREFIX = 'STANDTERM'
+LEGACY_ENV_PREFIX = 'WEBSSH'
+
+def get_prefixed_env(name, default=''):
+    value = os.getenv(f'{ENV_PREFIX}_{name}')
+    if value is not None:
+        return value
+    return os.getenv(f'{LEGACY_ENV_PREFIX}_{name}', default)
+
+def is_prefixed_env_enabled(name):
+    return get_prefixed_env(name).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+def get_prefixed_env_name(name):
+    return f'{ENV_PREFIX}_{name}'
+
+ASYNC_MODE = get_prefixed_env('ASYNC_MODE').strip().lower()
 if not ASYNC_MODE:
     ASYNC_MODE = 'threading'
 
@@ -64,12 +80,13 @@ socketio = SocketIO(app, async_mode=ASYNC_MODE, logger=False, engineio_logger=Fa
 SSH_HOST = '127.0.0.1'
 SSH_PORT = 22
 SSH_USER = os.getenv('USER', 'aska')
-DEFAULT_BIND_HOST = os.getenv('WEBSSH_HOST', '').strip()
-DEFAULT_PORT = int(os.getenv('WEBSSH_PORT', '5000'))
-AGENT_EXTERNAL_DEV_TOKEN_ENABLED = os.getenv('WEBSSH_AGENT_DEV_TOKEN', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+DEFAULT_BIND_HOST = get_prefixed_env('HOST').strip()
+DEFAULT_PORT = int(get_prefixed_env('PORT', '5000'))
+AGENT_EXTERNAL_DEV_TOKEN_ENABLED = is_prefixed_env_enabled('AGENT_DEV_TOKEN')
 
 def parse_optional_seconds_env(name, default=None):
-    raw_value = os.getenv(name, '').strip().lower()
+    raw_value = get_prefixed_env(name).strip().lower()
+    env_name = get_prefixed_env_name(name)
     if not raw_value:
         return default
     if raw_value in {'0', 'none', 'session', 'disconnect', 'off'}:
@@ -77,10 +94,10 @@ def parse_optional_seconds_env(name, default=None):
     try:
         seconds = int(raw_value)
     except ValueError:
-        print(f"[!] Ignoring invalid {name}={raw_value!r}; expected seconds or 'session'.", file=sys.stderr)
+        print(f"[!] Ignoring invalid {env_name}={raw_value!r}; expected seconds or 'session'.", file=sys.stderr)
         return default
     if seconds < 0:
-        print(f"[!] Ignoring invalid {name}={raw_value!r}; expected a non-negative value.", file=sys.stderr)
+        print(f"[!] Ignoring invalid {env_name}={raw_value!r}; expected a non-negative value.", file=sys.stderr)
         return default
     return seconds
 
@@ -292,7 +309,7 @@ AGENT_VIEWPORT_RENDER_MAX_WAIT_MS = 10000
 AGENT_VIEWPORT_RENDER_MAX_IMAGE_BYTES = 1024 * 1024
 AGENT_VIEWPORT_RENDER_MAX_PIXELS = 4096 * 4096
 AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS = parse_optional_seconds_env(
-    'WEBSSH_AGENT_EXTERNAL_IDLE_TIMEOUT_SECONDS',
+    'AGENT_EXTERNAL_IDLE_TIMEOUT_SECONDS',
     default=5 * 60,
 )
 AGENT_EXTERNAL_TAIL_MAX_EVENTS = 200
@@ -373,7 +390,7 @@ def connection_type_cli_value(value):
     return normalized
 
 def parse_cli_args(argv):
-    parser = argparse.ArgumentParser(description='WebSSH server')
+    parser = argparse.ArgumentParser(description=f'{APP_NAME} server')
     parser.add_argument(
         '--default-connection',
         type=connection_type_cli_value,
@@ -403,7 +420,7 @@ def parse_cli_args(argv):
     parser.add_argument(
         '--https',
         action='store_true',
-        help='Serve WebSSH over HTTPS using a local generated certificate.',
+        help=f'Serve {APP_NAME} over HTTPS using a local generated certificate.',
     )
     parser.add_argument(
         '--certfile',
@@ -420,13 +437,14 @@ def parse_cli_args(argv):
 CLI_ARGS = parse_cli_args(sys.argv[1:])
 DEFAULT_CONNECTION_TYPE = CLI_ARGS.default_connection
 FORCE_CONNECTION_TYPE = CLI_ARGS.force_connection
-DEBUG_INPUT = CLI_ARGS.debug_input or os.getenv('WEBSSH_DEBUG_INPUT') == '1'
-DEBUG_POLICY = os.getenv('WEBSSH_DEBUG_POLICY') == '1'
-HTTPS_REQUESTED = CLI_ARGS.https or os.getenv('WEBSSH_HTTPS') == '1' or bool(CLI_ARGS.certfile or CLI_ARGS.keyfile)
+DEBUG_INPUT = CLI_ARGS.debug_input or get_prefixed_env('DEBUG_INPUT') == '1'
+DEBUG_POLICY = get_prefixed_env('DEBUG_POLICY') == '1'
+HTTPS_REQUESTED = CLI_ARGS.https or get_prefixed_env('HTTPS') == '1' or bool(CLI_ARGS.certfile or CLI_ARGS.keyfile)
 HTTPS_ENABLED = HTTPS_REQUESTED
-HTTPS_AUTO_DISABLED = os.getenv('WEBSSH_DISABLE_AUTO_HTTPS') == '1'
+HTTPS_AUTO_DISABLED = get_prefixed_env('DISABLE_AUTO_HTTPS') == '1'
 APP_DIR = Path(__file__).resolve().parent
-EXTERNAL_AGENT_HANDOFF_PATH = APP_DIR / 'webssh_external_agent_handoff.json'
+EXTERNAL_AGENT_HANDOFF_PATH = APP_DIR / 'standterm_external_agent_handoff.json'
+LEGACY_EXTERNAL_AGENT_HANDOFF_NAME = 'webssh_external_agent_handoff.json'
 AUTHORIZED_DIR = APP_DIR / 'authorized'
 AUTHORIZED_BROWSERS_PATH = AUTHORIZED_DIR / 'browsers.json'
 
@@ -439,12 +457,9 @@ def ensure_authorized_dir():
         return False
 
 def resolve_operator_observation_dir():
-    configured = os.getenv('WEBSSH_OPERATOR_OBSERVATION_DIR', '').strip()
+    configured = get_prefixed_env('OPERATOR_OBSERVATION_DIR').strip()
     if configured:
         return Path(configured).expanduser()
-    normalized = str(APP_DIR).replace('\\', '/')
-    if normalized.endswith('/MIBCRK/Tools/webssh'):
-        return APP_DIR / 'operator_observations'
     return None
 
 OPERATOR_OBSERVATION_DIR = resolve_operator_observation_dir()
@@ -461,19 +476,19 @@ def is_wsl_runtime_hint():
         return False
 
 def get_default_certs_dir():
-    configured_dir = os.getenv('WEBSSH_CERTS_DIR', '').strip()
+    configured_dir = get_prefixed_env('CERTS_DIR').strip()
     if configured_dir:
         return Path(configured_dir).expanduser()
     if is_wsl_runtime_hint() and str(APP_DIR).startswith('/mnt/'):
         app_hash = hashlib.sha256(str(APP_DIR).encode('utf-8')).hexdigest()[:12]
-        return Path.home() / '.webssh' / 'certs' / app_hash
+        return Path.home() / '.standterm' / 'certs' / app_hash
     return APP_DIR / 'certs'
 
 CERTS_DIR = get_default_certs_dir()
-LOCAL_CA_CERT_PATH = CERTS_DIR / 'webssh-local-ca.crt'
-LOCAL_CA_KEY_PATH = CERTS_DIR / 'webssh-local-ca.key'
-LOCAL_SERVER_CERT_PATH = CERTS_DIR / 'webssh-server.crt'
-LOCAL_SERVER_KEY_PATH = CERTS_DIR / 'webssh-server.key'
+LOCAL_CA_CERT_PATH = CERTS_DIR / 'standterm-local-ca.crt'
+LOCAL_CA_KEY_PATH = CERTS_DIR / 'standterm-local-ca.key'
+LOCAL_SERVER_CERT_PATH = CERTS_DIR / 'standterm-server.crt'
+LOCAL_SERVER_KEY_PATH = CERTS_DIR / 'standterm-server.key'
 BROWSER_PAIRING_SECRET = secrets.token_bytes(32)
 serial_port_cache = {
     'expires_at': 0,
@@ -1137,7 +1152,7 @@ def ensure_local_https_certificates(bind_host, access_host):
     else:
         ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         ca_name = x509.Name([
-            x509.NameAttribute(NameOID.COMMON_NAME, 'WebSSH Local Development CA'),
+            x509.NameAttribute(NameOID.COMMON_NAME, f'{APP_NAME} Local Development CA'),
         ])
         ca_cert = (
             x509.CertificateBuilder()
@@ -1184,7 +1199,7 @@ def ensure_local_https_certificates(bind_host, access_host):
     san_entries = [x509.DNSName(name) for name in sorted(dns_names)]
     san_entries.extend(x509.IPAddress(ipaddress.ip_address(address)) for address in sorted(ip_addresses))
     subject = x509.Name([
-        x509.NameAttribute(NameOID.COMMON_NAME, 'WebSSH Local Server'),
+        x509.NameAttribute(NameOID.COMMON_NAME, f'{APP_NAME} Local Server'),
     ])
     server_cert = (
         x509.CertificateBuilder()
@@ -1462,7 +1477,9 @@ def validate_pairing_file(data, browser_id, public_key_b64):
 def accept_browser_pairing_file(browser_id, public_key_b64):
     if not AUTHORIZED_DIR.is_dir():
         return False
-    for pairing_path in sorted(AUTHORIZED_DIR.glob('webssh-authorize_*.json')):
+    pairing_paths = sorted(AUTHORIZED_DIR.glob('standterm-authorize_*.json'))
+    pairing_paths.extend(sorted(AUTHORIZED_DIR.glob('webssh-authorize_*.json')))
+    for pairing_path in pairing_paths:
         try:
             data = json.loads(pairing_path.read_text(encoding='utf-8'))
         except (OSError, json.JSONDecodeError):
@@ -2581,13 +2598,16 @@ class UnavailableAgentProvider(AgentProvider):
         raise AgentProviderError(AGENT_ERROR_PROVIDER_UNAVAILABLE, self.reason)
 
 def build_agent_provider_from_env():
-    provider_name = os.getenv('WEBSSH_AGENT_PROVIDER', 'mock').strip().lower() or 'mock'
+    provider_name = get_prefixed_env('AGENT_PROVIDER', 'mock').strip().lower() or 'mock'
     if provider_name == 'mock':
         return MockAgentProvider()
     if provider_name == 'static_env':
-        terminal_input = os.getenv('WEBSSH_AGENT_STATIC_INPUT')
+        terminal_input = get_prefixed_env('AGENT_STATIC_INPUT')
         if not isinstance(terminal_input, str) or terminal_input == '':
-            return UnavailableAgentProvider(provider_name, 'WEBSSH_AGENT_STATIC_INPUT is required')
+            return UnavailableAgentProvider(
+                provider_name,
+                f'{get_prefixed_env_name("AGENT_STATIC_INPUT")} is required',
+            )
         return StaticEnvAgentProvider(terminal_input)
     return UnavailableAgentProvider(provider_name, 'Unknown Agent provider')
 
@@ -3531,17 +3551,17 @@ def build_access_required_response():
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>WebSSH Access Required</title>
+  <title>StandTerm Access Required</title>
   <style>
     body { font-family: system-ui, sans-serif; margin: 3rem; line-height: 1.5; color: #1f2937; }
     code { background: #f3f4f6; padding: 0.1rem 0.3rem; border-radius: 4px; }
   </style>
 </head>
 <body>
-  <h1>WebSSH access required</h1>
+  <h1>StandTerm access required</h1>
   <p>Open the full Access URL printed by the launcher, including <code>?token=...</code>.</p>
   <p>If you copied the URL from another browser after it loaded, copy the launcher URL again instead.</p>
-  <p>For Windows browsers connecting to a WSL IP over HTTPS, the browser may also require trusting the WebSSH local CA.</p>
+  <p>For Windows browsers connecting to a WSL IP over HTTPS, the browser may also require trusting the StandTerm local CA.</p>
 </body>
 </html>
 ''', 403)
@@ -3900,11 +3920,15 @@ def get_external_agent_local_base_url():
     scheme = 'https' if HTTPS_ENABLED else 'http'
     return f'{scheme}://127.0.0.1:{DEFAULT_PORT}'
 
+def get_legacy_external_agent_handoff_path(handoff_path=None):
+    path = handoff_path or EXTERNAL_AGENT_HANDOFF_PATH
+    return path.with_name(LEGACY_EXTERNAL_AGENT_HANDOFF_NAME)
+
 def build_external_agent_cli_command(base_url, token, terminal_id, op='send', text='pwd\n',
                                      extra_args=None):
     args = [
         'tools/.venv_wsl/bin/python',
-        'scripts/webssh_agent_cli.py',
+        'scripts/agent_cli.py',
         '--url',
         base_url,
         '--token',
@@ -3926,7 +3950,7 @@ def build_external_agent_cli_command(base_url, token, terminal_id, op='send', te
 def build_external_agent_repl_command(base_url, token, terminal_id):
     args = [
         'tools/.venv_wsl/bin/python',
-        'scripts/webssh_agent_repl.py',
+        'scripts/agent_repl.py',
         '--url',
         base_url,
         '--token',
@@ -3940,7 +3964,7 @@ def build_external_agent_repl_command(base_url, token, terminal_id):
 def build_external_agent_jsonl_command(base_url, token, terminal_id):
     args = [
         'tools/.venv_wsl/bin/python',
-        'scripts/webssh_agent_jsonl.py',
+        'scripts/agent_jsonl.py',
         '--url',
         base_url,
         '--token',
@@ -4005,7 +4029,7 @@ def build_external_agent_discovery_payload(base_url, token, terminal_id):
     if ca_cert_path:
         transport['tls_ca_cert_path'] = ca_cert_path
     return {
-        'handoff_schema': 'webssh_external_agent_handoff',
+        'handoff_schema': 'standterm_external_agent_handoff',
         'schema_version': 1,
         'protocol_version': EXTERNAL_AGENT_PROTOCOL_VERSION,
         'transport': transport,
@@ -4071,14 +4095,38 @@ def build_external_agent_discovery_payload(base_url, token, terminal_id):
 
 def write_external_agent_handoff(payload):
     handoff_path = EXTERNAL_AGENT_HANDOFF_PATH
-    tmp_path = handoff_path.with_suffix('.json.tmp')
+    write_external_agent_handoff_file(handoff_path, payload)
+    legacy_payload = build_legacy_external_agent_handoff_payload(payload, handoff_path)
+    write_external_agent_handoff_file(get_legacy_external_agent_handoff_path(handoff_path), legacy_payload)
+    return str(handoff_path)
+
+def build_legacy_external_agent_handoff_payload(payload, canonical_handoff_path):
+    legacy_payload = dict(payload)
+    legacy_payload['handoff_schema'] = 'webssh_external_agent_handoff'
+    legacy_payload['legacy_alias'] = True
+    legacy_payload['canonical_handoff_schema'] = 'standterm_external_agent_handoff'
+    legacy_payload['canonical_handoff_path'] = str(canonical_handoff_path)
+    if isinstance(legacy_payload.get('cli_command'), str):
+        legacy_payload['cli_command'] = legacy_payload['cli_command'].replace(
+            'scripts/agent_cli.py',
+            'scripts/webssh_agent_cli.py',
+        )
+    cli_commands = legacy_payload.get('cli_commands')
+    if isinstance(cli_commands, dict):
+        legacy_payload['cli_commands'] = {
+            key: value.replace('scripts/agent_', 'scripts/webssh_agent_') if isinstance(value, str) else value
+            for key, value in cli_commands.items()
+        }
+    return legacy_payload
+
+def write_external_agent_handoff_file(handoff_path, payload):
+    tmp_path = handoff_path.with_suffix(handoff_path.suffix + '.tmp')
     tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
     try:
         os.chmod(tmp_path, 0o600)
     except OSError:
         pass
     tmp_path.replace(handoff_path)
-    return str(handoff_path)
 
 def build_external_agent_token_payload(token, record, terminal_id, base_url):
     command_base_url = build_external_agent_loopback_base_url(base_url)
@@ -4096,6 +4144,7 @@ def build_external_agent_token_payload(token, record, terminal_id, base_url):
     }
     payload.update(discovery)
     payload['handoff_path'] = write_external_agent_handoff(payload)
+    payload['legacy_handoff_path'] = str(get_legacy_external_agent_handoff_path())
     return payload
 
 def quote_local_command(args, platform_name=None):
@@ -4106,7 +4155,7 @@ def quote_local_command(args, platform_name=None):
 
 def build_external_agent_startup_lines():
     python_arg = sys.executable
-    cli_arg = str(APP_DIR / 'scripts' / 'webssh_agent_cli.py')
+    cli_arg = str(APP_DIR / 'scripts' / 'agent_cli.py')
     handoff_arg = str(EXTERNAL_AGENT_HANDOFF_PATH)
     loopback_url = build_external_agent_loopback_base_url(get_external_agent_local_base_url())
     hello_command = quote_local_command([
@@ -4254,7 +4303,7 @@ def download_ca():
         LOCAL_CA_CERT_PATH,
         mimetype='application/x-x509-ca-cert',
         as_attachment=True,
-        download_name='webssh-local-ca.crt',
+        download_name='standterm-local-ca.crt',
     )
     return add_common_headers(response)
 
@@ -4378,7 +4427,7 @@ def on_request_browser_pairing():
         )
         return
     pairing = build_pairing_file(identity['browser_id'], identity['public_key'])
-    filename = f"webssh-authorize_{pairing['pairing_id']}.json"
+    filename = f"standterm-authorize_{pairing['pairing_id']}.json"
     socketio.emit(
         'browser_pairing_file',
         {
@@ -6172,7 +6221,7 @@ def is_local_client_ip(client_ip):
     return False
 
 def is_wsl_client_ip_trust_enabled():
-    return os.getenv('WEBSSH_TRUST_WSL_CLIENT_IPS', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+    return is_prefixed_env_enabled('TRUST_WSL_CLIENT_IPS')
 
 def is_wsl_nat_client_ip(address):
     if not getattr(address, 'version', None) == 4 or not address.is_private:
@@ -6188,14 +6237,14 @@ def is_wsl_nat_client_ip(address):
         return False
 
 def is_local_shell_allowed_for_client(client_ip, browser_authorized=False):
-    if os.getenv('WEBSSH_ALLOW_REMOTE_LOCAL_SHELL') == '1':
+    if get_prefixed_env('ALLOW_REMOTE_LOCAL_SHELL') == '1':
         return True
     if browser_authorized:
         return True
     return is_local_client_ip(client_ip)
 
 def is_uart_allowed_for_client(client_ip, browser_authorized=False):
-    if os.getenv('WEBSSH_ALLOW_REMOTE_UART') == '1':
+    if get_prefixed_env('ALLOW_REMOTE_UART') == '1':
         return True
     if browser_authorized:
         return True
@@ -6243,7 +6292,7 @@ if __name__ == '__main__':
     ssl_context = get_ssl_context(bind_host, access_host)
     scheme = get_url_scheme()
     print("\n" + "="*60)
-    print(f"WebSSH Server Starting...")
+    print(f"{APP_NAME} Server Starting...")
     print(f"Runtime: {get_runtime_name()}")
     print(f"Async Mode: {ASYNC_MODE}")
     print(f"Debug Input: {'on' if DEBUG_INPUT else 'off'}")
@@ -6264,16 +6313,16 @@ if __name__ == '__main__':
     if HTTPS_ENABLED and not (CLI_ARGS.certfile and CLI_ARGS.keyfile):
         print(f"HTTPS Local CA: {LOCAL_CA_CERT_PATH}")
         print("Import the HTTPS Local CA into Windows Trusted Root Certification Authorities to trust the WSL IP URL.")
-    if is_local_shell_enabled() and not is_loopback_bind(bind_host) and os.getenv('WEBSSH_ALLOW_REMOTE_LOCAL_SHELL') != '1':
+    if is_local_shell_enabled() and not is_loopback_bind(bind_host) and get_prefixed_env('ALLOW_REMOTE_LOCAL_SHELL') != '1':
         print("[!] WARNING: Local Shell is enabled while listening on a non-loopback address.")
         print("[!] Non-loopback clients must use browser authorization unless explicitly trusted.")
-        print("[!] Set WEBSSH_TRUST_WSL_CLIENT_IPS=1 only if the WSL host/NAT network is private and trusted.")
-        print("[!] Set WEBSSH_ALLOW_REMOTE_LOCAL_SHELL=1 only if remote clients should bypass browser authorization.")
-    if is_uart_enabled() and not is_loopback_bind(bind_host) and os.getenv('WEBSSH_ALLOW_REMOTE_UART') != '1':
+        print(f"[!] Set {get_prefixed_env_name('TRUST_WSL_CLIENT_IPS')}=1 only if the WSL host/NAT network is private and trusted.")
+        print(f"[!] Set {get_prefixed_env_name('ALLOW_REMOTE_LOCAL_SHELL')}=1 only if remote clients should bypass browser authorization.")
+    if is_uart_enabled() and not is_loopback_bind(bind_host) and get_prefixed_env('ALLOW_REMOTE_UART') != '1':
         print("[!] WARNING: UART is enabled while listening on a non-loopback address.")
         print("[!] Non-loopback clients must use browser authorization unless explicitly trusted.")
-        print("[!] Set WEBSSH_TRUST_WSL_CLIENT_IPS=1 only if the WSL host/NAT network is private and trusted.")
-        print("[!] Set WEBSSH_ALLOW_REMOTE_UART=1 only if remote clients should bypass browser authorization.")
+        print(f"[!] Set {get_prefixed_env_name('TRUST_WSL_CLIENT_IPS')}=1 only if the WSL host/NAT network is private and trusted.")
+        print(f"[!] Set {get_prefixed_env_name('ALLOW_REMOTE_UART')}=1 only if remote clients should bypass browser authorization.")
     if sys.platform == 'darwin':
         print("Tip: Enable Remote Login in macOS if you want localhost SSH access.")
     print("="*60 + "\n")

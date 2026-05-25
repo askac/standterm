@@ -28,6 +28,7 @@ Thumbs.db
 authorized/
 
 # Local external-agent bearer-token handoff
+standterm_external_agent_handoff.json
 webssh_external_agent_handoff.json
 
 # Local operator observation JSONL logs
