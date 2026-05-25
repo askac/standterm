@@ -339,7 +339,7 @@ AGENT_AUDIT_DIRECT_WRITE = 'direct_write'
 AGENT_AUDIT_TERMINAL_CLEANUP = 'terminal_cleanup'
 AGENT_AUDIT_ERROR = 'error'
 EXTERNAL_AGENT_PROTOCOL_VERSION = 1
-EXTERNAL_AGENT_CAPABILITIES = ['state', 'screen', 'render', 'tail', 'send', 'send_capture', 'submit_after', 'strip_ansi', 'revoke']
+EXTERNAL_AGENT_CAPABILITIES = ['state', 'screen', 'headless_screen', 'render', 'tail', 'send', 'send_capture', 'submit_after', 'strip_ansi', 'revoke']
 AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_WAIT_MS = 3000
 AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_SETTLE_MS = 150
 AGENT_EXTERNAL_SEND_CAPTURE_MAX_SETTLE_MS = 5000
@@ -347,6 +347,7 @@ ANSI_OSC_PATTERN = re.compile(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)')
 ANSI_CSI_PATTERN = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
 ANSI_ESCAPE_PATTERN = re.compile(r'\x1b[@-Z\\-_]')
 AGENT_TRANSCRIPT_CONTROL_PATTERN = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
+AGENT_HEADLESS_SCREEN_SOURCE = 'server_headless_terminal_grid'
 MAX_UART_PORT_LENGTH = 128
 DEFAULT_UART_BAUD_RATE = 115200
 MIN_UART_BAUD_RATE = 300
@@ -1626,6 +1627,15 @@ def get_local_shell_config(shell_kind=None):
 def append_terminal_transcript(session_token, terminal_id, data):
     agent_transcript_store.append_terminal_output(session_token, terminal_id, data)
 
+def update_headless_terminal_mirror(session_token, terminal_id, payload, cols, rows):
+    agent_headless_terminal_mirror_store.update_output(
+        session_token,
+        terminal_id,
+        payload,
+        cols,
+        rows,
+    )
+
 TERMINAL_BRIDGE_RUNTIME = TerminalBridgeRuntime(
     emit_socket=socketio.emit,
     build_metadata=build_terminal_metadata,
@@ -1639,6 +1649,7 @@ TERMINAL_BRIDGE_RUNTIME = TerminalBridgeRuntime(
     close_process=close_process,
     max_replay_events=MAX_TERMINAL_REPLAY_EVENTS,
     max_replay_bytes=MAX_TERMINAL_REPLAY_BYTES,
+    update_headless_mirror=update_headless_terminal_mirror,
 )
 TerminalBridge.set_default_runtime(TERMINAL_BRIDGE_RUNTIME)
 
@@ -2161,6 +2172,308 @@ def validate_agent_viewport_snapshot_payload(data):
 
 agent_viewport_snapshot_store = AgentViewportSnapshotStore()
 
+class HeadlessTerminalGrid:
+    def __init__(self, cols, rows):
+        self.cols = self._clamp_cols(cols)
+        self.rows = self._clamp_rows(rows)
+        self.lines = [self._blank_line() for _ in range(self.rows)]
+        self.cursor_x = 0
+        self.cursor_y = 0
+        self.saved_cursor = (0, 0)
+        self.output_seq = 0
+        self.updated_at = None
+
+    def resize(self, cols, rows):
+        cols = self._clamp_cols(cols)
+        rows = self._clamp_rows(rows)
+        if cols == self.cols and rows == self.rows:
+            return
+        resized = []
+        for line in self.lines[:rows]:
+            resized.append((line + [' '] * cols)[:cols])
+        while len(resized) < rows:
+            resized.append([' '] * cols)
+        self.cols = cols
+        self.rows = rows
+        self.lines = resized
+        self.cursor_x = min(self.cursor_x, self.cols - 1)
+        self.cursor_y = min(self.cursor_y, self.rows - 1)
+
+    def feed(self, data, output_seq=None):
+        if not isinstance(data, str):
+            return
+        if isinstance(output_seq, int) and output_seq > self.output_seq:
+            self.output_seq = output_seq
+        self.updated_at = time.time()
+        index = 0
+        while index < len(data):
+            char = data[index]
+            if char == '\x1b':
+                index = self._consume_escape(data, index)
+                continue
+            if char == '\r':
+                self.cursor_x = 0
+            elif char == '\n':
+                self._linefeed()
+            elif char == '\b':
+                self.cursor_x = max(0, self.cursor_x - 1)
+            elif char == '\t':
+                spaces = 8 - (self.cursor_x % 8)
+                for _space in range(spaces):
+                    self._put_char(' ')
+            elif ord(char) >= 32:
+                self._put_char(char)
+            index += 1
+
+    def snapshot(self, terminal_id, bridge_output_seq=None):
+        output_seq = bridge_output_seq if isinstance(bridge_output_seq, int) else self.output_seq
+        lines = [''.join(line).rstrip(' ') for line in self.lines]
+        byte_length = sum(len(line.encode('utf-8', errors='ignore')) for line in lines)
+        return {
+            'source': AGENT_HEADLESS_SCREEN_SOURCE,
+            'provisional': True,
+            'terminal_id': terminal_id,
+            'cols': self.cols,
+            'rows': self.rows,
+            'viewport_y': 0,
+            'base_y': 0,
+            'output_seq': output_seq,
+            'updated_at': self.updated_at,
+            'line_count': len(lines),
+            'byte_length': byte_length,
+            'cursor_x': self.cursor_x,
+            'cursor_y': self.cursor_y,
+            'lines': lines,
+        }
+
+    def _blank_line(self):
+        return [' '] * self.cols
+
+    def _put_char(self, char):
+        if self.cursor_x >= self.cols:
+            self.cursor_x = 0
+            self._linefeed()
+        self.lines[self.cursor_y][self.cursor_x] = char
+        self.cursor_x += 1
+
+    def _linefeed(self):
+        self.cursor_y += 1
+        if self.cursor_y < self.rows:
+            return
+        self.lines.pop(0)
+        self.lines.append(self._blank_line())
+        self.cursor_y = self.rows - 1
+
+    def _consume_escape(self, data, index):
+        if index + 1 >= len(data):
+            return len(data)
+        prefix = data[index + 1]
+        if prefix == ']':
+            return self._consume_osc(data, index + 2)
+        if prefix == '[':
+            return self._consume_csi(data, index + 2)
+        if prefix == '7':
+            self.saved_cursor = (self.cursor_x, self.cursor_y)
+        elif prefix == '8':
+            self.cursor_x, self.cursor_y = self.saved_cursor
+        elif prefix in {'D', 'E'}:
+            self._linefeed()
+            if prefix == 'E':
+                self.cursor_x = 0
+        elif prefix == 'M':
+            self._reverse_index()
+        elif prefix == 'c':
+            self._clear_screen()
+            self.cursor_x = 0
+            self.cursor_y = 0
+        return index + 2
+
+    def _consume_osc(self, data, index):
+        while index < len(data):
+            if data[index] == '\x07':
+                return index + 1
+            if data[index] == '\x1b' and index + 1 < len(data) and data[index + 1] == '\\':
+                return index + 2
+            index += 1
+        return len(data)
+
+    def _consume_csi(self, data, index):
+        start = index
+        while index < len(data):
+            char = data[index]
+            if '@' <= char <= '~':
+                self._handle_csi(data[start:index], char)
+                return index + 1
+            index += 1
+        return len(data)
+
+    def _handle_csi(self, params, final):
+        numbers = self._csi_numbers(params)
+        count = numbers[0] if numbers else 1
+        if final in {'A', 'B', 'C', 'D'}:
+            count = max(1, count)
+            if final == 'A':
+                self.cursor_y = max(0, self.cursor_y - count)
+            elif final == 'B':
+                self.cursor_y = min(self.rows - 1, self.cursor_y + count)
+            elif final == 'C':
+                self.cursor_x = min(self.cols - 1, self.cursor_x + count)
+            else:
+                self.cursor_x = max(0, self.cursor_x - count)
+        elif final in {'H', 'f'}:
+            row = numbers[0] if len(numbers) >= 1 else 1
+            col = numbers[1] if len(numbers) >= 2 else 1
+            self.cursor_y = min(self.rows - 1, max(0, row - 1))
+            self.cursor_x = min(self.cols - 1, max(0, col - 1))
+        elif final == 'G':
+            self.cursor_x = min(self.cols - 1, max(0, count - 1))
+        elif final == 'd':
+            self.cursor_y = min(self.rows - 1, max(0, count - 1))
+        elif final == 'J':
+            self._clear_display(count if numbers else 0)
+        elif final == 'K':
+            self._clear_line(count if numbers else 0)
+        elif final == 'S':
+            self._scroll_up(max(1, count))
+        elif final == 'T':
+            self._scroll_down(max(1, count))
+        elif final in {'h', 'l'}:
+            self._handle_mode_set_reset(final, numbers)
+        elif final == 's':
+            self.saved_cursor = (self.cursor_x, self.cursor_y)
+        elif final == 'u':
+            self.cursor_x, self.cursor_y = self.saved_cursor
+
+    def _csi_numbers(self, params):
+        params = params.strip()
+        while params and params[0] in '?>!':
+            params = params[1:]
+        if not params:
+            return []
+        values = []
+        for part in params.split(';'):
+            if part == '':
+                values.append(1)
+                continue
+            match = re.match(r'^\d+', part)
+            values.append(int(match.group(0)) if match else 1)
+        return values
+
+    def _clear_display(self, mode):
+        if mode in {2, 3}:
+            self._clear_screen()
+        elif mode == 1:
+            for row in range(0, self.cursor_y):
+                self.lines[row] = self._blank_line()
+            self.lines[self.cursor_y][:self.cursor_x + 1] = [' '] * (self.cursor_x + 1)
+        else:
+            self.lines[self.cursor_y][self.cursor_x:] = [' '] * (self.cols - self.cursor_x)
+            for row in range(self.cursor_y + 1, self.rows):
+                self.lines[row] = self._blank_line()
+
+    def _clear_line(self, mode):
+        if mode == 2:
+            self.lines[self.cursor_y] = self._blank_line()
+        elif mode == 1:
+            self.lines[self.cursor_y][:self.cursor_x + 1] = [' '] * (self.cursor_x + 1)
+        else:
+            self.lines[self.cursor_y][self.cursor_x:] = [' '] * (self.cols - self.cursor_x)
+
+    def _clear_screen(self):
+        self.lines = [self._blank_line() for _ in range(self.rows)]
+
+    def _handle_mode_set_reset(self, final, numbers):
+        if not any(number in {1047, 1049} for number in numbers):
+            return
+        if final == 'h':
+            self.saved_cursor = (self.cursor_x, self.cursor_y)
+        self._clear_screen()
+        self.cursor_x = 0
+        self.cursor_y = 0
+
+    def _scroll_up(self, count):
+        for _index in range(min(count, self.rows)):
+            self.lines.pop(0)
+            self.lines.append(self._blank_line())
+
+    def _scroll_down(self, count):
+        for _index in range(min(count, self.rows)):
+            self.lines.pop()
+            self.lines.insert(0, self._blank_line())
+
+    def _reverse_index(self):
+        if self.cursor_y > 0:
+            self.cursor_y -= 1
+            return
+        self.lines.pop()
+        self.lines.insert(0, self._blank_line())
+
+    @staticmethod
+    def _clamp_cols(cols):
+        try:
+            cols = int(cols)
+        except (TypeError, ValueError):
+            cols = 80
+        return max(MIN_TERMINAL_COLS, min(MAX_TERMINAL_COLS, cols))
+
+    @staticmethod
+    def _clamp_rows(rows):
+        try:
+            rows = int(rows)
+        except (TypeError, ValueError):
+            rows = 24
+        return max(MIN_TERMINAL_ROWS, min(MAX_TERMINAL_ROWS, rows))
+
+class AgentHeadlessTerminalMirrorStore:
+    def __init__(self):
+        self._entries = {}
+        self._lock = threading.RLock()
+
+    def update_output(self, session_token, terminal_id, payload, cols, rows):
+        if not session_token or not terminal_id or not isinstance(payload, dict):
+            return
+        if payload.get('message_type') != 'terminal':
+            return
+        data = payload.get('data')
+        if not isinstance(data, str) or data == '':
+            return
+        key = (session_token, terminal_id)
+        with self._lock:
+            grid = self._entries.get(key)
+            if not grid:
+                grid = HeadlessTerminalGrid(cols, rows)
+                self._entries[key] = grid
+            else:
+                grid.resize(cols, rows)
+            grid.feed(data, output_seq=payload.get('output_seq'))
+
+    def get_screen(self, session_token, terminal_id, cols, rows, output_seq=None):
+        if not session_token or not terminal_id:
+            return None
+        key = (session_token, terminal_id)
+        with self._lock:
+            grid = self._entries.get(key)
+            if not grid:
+                grid = HeadlessTerminalGrid(cols, rows)
+                return grid.snapshot(terminal_id, bridge_output_seq=output_seq)
+            grid.resize(cols, rows)
+            return grid.snapshot(terminal_id, bridge_output_seq=output_seq)
+
+    def discard(self, session_token, terminal_id=None):
+        with self._lock:
+            for key in [
+                key for key in self._entries
+                if key[0] == session_token
+                and (terminal_id is None or key[1] == terminal_id)
+            ]:
+                self._entries.pop(key, None)
+
+    def clear(self):
+        with self._lock:
+            self._entries.clear()
+
+agent_headless_terminal_mirror_store = AgentHeadlessTerminalMirrorStore()
+
 def parse_agent_viewport_render_wait_ms(value):
     try:
         wait_ms = int(value if value is not None else AGENT_VIEWPORT_RENDER_WAIT_MS)
@@ -2660,7 +2973,37 @@ class BrowserViewportMirrorAdapter(AgentTerminalMirror):
             'lines': list(snapshot.get('lines') or []),
         }
 
-AGENT_TERMINAL_MIRROR = BrowserViewportMirrorAdapter()
+class CompositeTerminalMirrorAdapter(AgentTerminalMirror):
+    source = 'browser_viewport_snapshot_with_headless_fallback'
+    provisional = True
+
+    def __init__(self):
+        self.browser_mirror = BrowserViewportMirrorAdapter()
+
+    def metadata(self):
+        payload = super().metadata()
+        payload['sources'] = [
+            self.browser_mirror.source,
+            AGENT_HEADLESS_SCREEN_SOURCE,
+        ]
+        return payload
+
+    def get_active_screen(self, session_token, terminal_id, sid):
+        browser_screen = self.browser_mirror.get_active_screen(session_token, terminal_id, sid)
+        if browser_screen:
+            return browser_screen
+        bridge = get_bridge(session_token, terminal_id)
+        if not bridge:
+            return None
+        return agent_headless_terminal_mirror_store.get_screen(
+            session_token,
+            terminal_id,
+            bridge.cols,
+            bridge.rows,
+            output_seq=bridge.output_seq,
+        )
+
+AGENT_TERMINAL_MIRROR = CompositeTerminalMirrorAdapter()
 
 def parse_external_agent_screen_options(command):
     has_tail_lines = command.get('tail_lines') is not None
@@ -3645,6 +3988,7 @@ def unregister_terminal_bridge(session_token, terminal_id, bridge):
     invalidate_agent_states(session_token, terminal_id=terminal_id, reason=AGENT_REASON_TERMINAL_CLOSED)
     agent_transcript_store.discard(session_token, terminal_id)
     agent_user_input_metadata_store.discard(session_token, terminal_id)
+    agent_headless_terminal_mirror_store.discard(session_token, terminal_id)
     agent_viewport_snapshot_store.discard(session_token, terminal_id=terminal_id)
     agent_viewport_render_request_store.discard(session_token, terminal_id=terminal_id)
     close_bridge(bridge)
@@ -3655,6 +3999,7 @@ def close_terminal_bridge(session_token, terminal_id):
     invalidate_agent_states(session_token, terminal_id=terminal_id, reason=AGENT_REASON_TERMINAL_CLOSED)
     agent_transcript_store.discard(session_token, terminal_id)
     agent_user_input_metadata_store.discard(session_token, terminal_id)
+    agent_headless_terminal_mirror_store.discard(session_token, terminal_id)
     agent_viewport_snapshot_store.discard(session_token, terminal_id=terminal_id)
     agent_viewport_render_request_store.discard(session_token, terminal_id=terminal_id)
     close_bridge(pop_bridge(session_token, terminal_id))
@@ -3666,6 +4011,7 @@ def close_all_terminal_bridges(session_token):
     invalidate_agent_states(session_token, reason=AGENT_REASON_TERMINAL_CLOSED)
     agent_transcript_store.discard(session_token)
     agent_user_input_metadata_store.discard(session_token)
+    agent_headless_terminal_mirror_store.discard(session_token)
     agent_viewport_snapshot_store.discard(session_token)
     agent_viewport_render_request_store.discard(session_token)
     terminals = bridges.pop(session_token, {})

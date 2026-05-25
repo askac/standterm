@@ -84,6 +84,7 @@ def reset_state():
     standterm.agent_audit_store.clear()
     standterm.agent_transcript_store.clear()
     standterm.agent_user_input_metadata_store.clear()
+    standterm.agent_headless_terminal_mirror_store.clear()
     standterm.agent_viewport_snapshot_store.clear()
     standterm.agent_viewport_render_request_store.clear()
     standterm.external_agent_attach_store.clear()
@@ -629,6 +630,66 @@ def test_external_agent_can_attach_and_read_authorized_screen():
     for event in audit_events:
         assert 'token' not in event
         assert 'token_hash' not in event
+
+    client.disconnect()
+
+
+def test_external_agent_screen_falls_back_to_headless_grid_without_browser_snapshot():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+    bridge.update_terminal_size(12, 4)
+
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    bridge.emit_output({
+        'message_type': 'terminal',
+        'data': 'old prompt\r\n',
+    })
+    bridge.emit_output({
+        'message_type': 'terminal',
+        'data': '\x1b[?1049hfirst\r\nsecond',
+    })
+    bridge.emit_output({
+        'message_type': 'terminal',
+        'data': '\r\x1b[2Kdone',
+    })
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
+        session_token,
+        standterm.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert error_code is None
+
+    screen = standterm.process_external_agent_command({
+        'op': 'screen',
+        'token': token,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+    })
+    assert screen['status'] == 'ok'
+    assert screen['screen']['source'] == standterm.AGENT_HEADLESS_SCREEN_SOURCE
+    assert screen['screen']['provisional'] is True
+    assert screen['screen']['cols'] == 12
+    assert screen['screen']['rows'] == 4
+    assert screen['screen']['output_seq'] == 3
+    assert screen['screen']['lines'] == ['first', 'done', '', '']
+    assert screen['screen']['cursor_x'] == len('done')
+    assert screen['screen']['cursor_y'] == 1
+
+    tail_screen = standterm.process_external_agent_command({
+        'op': 'screen',
+        'token': token,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'tail_lines': 2,
+    })
+    assert tail_screen['status'] == 'ok'
+    assert tail_screen['screen']['lines'] == ['', '']
+    assert tail_screen['screen']['original_line_count'] == 4
+    assert tail_screen['screen']['region'] == {
+        'top': 2,
+        'bottom': 4,
+        'tail_lines': 2,
+    }
 
     client.disconnect()
 
@@ -1842,6 +1903,7 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             assert token_payload['handoff_schema'] == 'standterm_external_agent_handoff'
             assert token_payload['schema_version'] == 1
             assert token_payload['protocol_version'] == standterm.EXTERNAL_AGENT_PROTOCOL_VERSION
+            assert 'headless_screen' in token_payload['capabilities']
             assert 'render' in token_payload['capabilities']
             assert 'send_capture' in token_payload['capabilities']
             assert 'submit_after' in token_payload['capabilities']
@@ -2988,7 +3050,11 @@ def test_viewport_snapshot_accepts_attached_sid():
     context = standterm.build_agent_context(session_token, standterm.TERMINAL_ID_MAIN, sid)
     assert context['session_id'].startswith('ags_')
     assert context['viewer_id'].startswith('agv_')
-    assert context['terminal_mirror']['source'] == 'browser_viewport_snapshot'
+    assert context['terminal_mirror']['source'] == 'browser_viewport_snapshot_with_headless_fallback'
+    assert context['terminal_mirror']['sources'] == [
+        'browser_viewport_snapshot',
+        standterm.AGENT_HEADLESS_SCREEN_SOURCE,
+    ]
     assert 'session_token' not in context['terminal_session']
     assert context['terminal_session']['output_seq'] == 1
     assert context['active_screen']['source'] == 'browser_viewport_snapshot'
@@ -3074,6 +3140,7 @@ def main():
         test_invalid_provider_proposal_is_rejected_before_action_creation,
         test_external_agent_token_requires_enabled_agent_panel,
         test_external_agent_can_attach_and_read_authorized_screen,
+        test_external_agent_screen_falls_back_to_headless_grid_without_browser_snapshot,
         test_external_agent_screen_tail_lines_and_region_reduce_viewport_payload,
         test_external_agent_render_requests_browser_viewport_png,
         test_external_agent_render_timeout_is_typed,

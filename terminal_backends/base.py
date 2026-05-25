@@ -120,6 +120,7 @@ class TerminalBridgeRuntime:
     max_replay_events: int
     max_replay_bytes: int
     close_process: Optional[Any] = None
+    update_headless_mirror: Optional[Any] = None
 
 
 class TerminalBridge:
@@ -208,6 +209,14 @@ class TerminalBridge:
                     self.terminal_id,
                     payload.get('data'),
                 )
+                if self.runtime.update_headless_mirror:
+                    self.runtime.update_headless_mirror(
+                        self.owner_session,
+                        self.terminal_id,
+                        payload,
+                        self.cols,
+                        self.rows,
+                    )
                 self.output_condition.notify_all()
         for sid in list(self.attached_sids):
             self.runtime.emit_socket('ssh_output', payload, room=sid)

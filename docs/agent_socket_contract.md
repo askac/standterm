@@ -57,11 +57,11 @@ the panel when Agent state is not attached.
 The frontend may send xterm screen snapshots as typed Agent context. The
 frontend now builds these snapshots from a dedicated hidden xterm mirror that
 consumes the same terminal output stream as human viewers, rather than from the
-human viewer scroll position. The backend event path is still the provisional
-snapshot adapter, not the final source of truth. Snapshot text is untrusted
-display data and must not be used as a control signal. Future implementations
-should replace or supplement this adapter with a backend headless terminal
-parser that consumes the same terminal output stream.
+human viewer scroll position. The backend also keeps a provisional headless
+terminal grid from the same terminal output stream, so `screen` can return a
+server-side display view when no browser snapshot is available. Snapshot and
+headless-grid text are untrusted display data and must not be used as a control
+signal.
 
 ## External Agent Mirror Boundary
 
@@ -244,8 +244,8 @@ Discover protocol/capabilities:
 
 `hello` returns `version`, `external_agent_id`, `terminal_id`, current public
 Agent state, and a typed `capabilities` array such as `state`, `screen`,
-`render`, `tail`, `send`, `send_capture`, `submit_after`, `strip_ansi`, and
-`revoke`.
+`headless_screen`, `render`, `tail`, `send`, `send_capture`, `submit_after`,
+`strip_ansi`, and `revoke`.
 
 Attach:
 
@@ -271,6 +271,9 @@ Read state:
 object when the terminal bridge is still present. It includes the current
 `output_seq`, `last_output_at`, and `terminal_quiet_ms` so CLI clients can
 distinguish an idle terminal from a slow task without scraping display text.
+Because every valid command renews the token idle timeout, `state` is the
+lightweight typed heartbeat for long local reasoning gaps. Use `tail` with
+`wait_ms` instead when the caller also wants to wait for terminal output.
 
 Read screen:
 
@@ -282,11 +285,15 @@ Read screen:
 }
 ```
 
-`screen` returns the latest browser mirror viewport snapshot. This snapshot is
-marked `provisional: true`: it is useful display data for observation, but it is
-not an authoritative backend terminal parser and must not be used as a StandTerm
-control signal. To reduce repeated full viewport payloads, clients may request
-a slice of the latest snapshot:
+`screen` returns the latest browser mirror viewport snapshot when available, or
+a server-side headless terminal grid (`source: "server_headless_terminal_grid"`)
+when no browser snapshot exists. Both sources are marked `provisional: true`:
+they are useful display data for observation, but are not authoritative control
+signals. The headless grid implements a small
+VT/ANSI display subset for printable text, cursor movement, line clears, screen
+clears, and scrolling; `render` remains the xterm/browser path when pixel-level
+fidelity matters. To reduce repeated full viewport payloads, clients may
+request a slice of the latest screen:
 
 ```json
 {
@@ -310,11 +317,11 @@ a slice of the latest snapshot:
 ```
 
 `region.top` is inclusive and `region.bottom` is exclusive. Sliced responses
-preserve snapshot metadata such as `source`, `provisional`, `snapshot_seq`,
-`output_seq`, `captured_at`, `rows`, and `cols`, and add `region`,
+preserve screen metadata such as `source`, `provisional`, `snapshot_seq` when
+present, `output_seq`, `rows`, and `cols`, and add `region`,
 `original_line_count`, and `truncated` fields. `tail_lines` and `region` are
-mutually exclusive. Diff reads are intentionally not defined yet because the
-current backend only retains the latest viewport snapshot for each browser sid.
+mutually exclusive. Diff reads are intentionally not defined yet; use `tail`
+with `output_seq` for event-cursor reads.
 
 Read rendered xterm viewport:
 
@@ -953,16 +960,17 @@ payload and remain data only.
 
 ## Agent Terminal Mirror Direction
 
-The frontend dedicated xterm mirror currently feeds the backend's provisional
-snapshot adapter. The backend mirror boundary is:
+The frontend dedicated xterm mirror feeds the backend's provisional snapshot
+adapter, and the server-side headless grid provides a fallback when no browser
+snapshot is active. The backend mirror boundary is:
 
 ```text
 AgentTerminalMirror.get_active_screen(session_token, terminal_id, viewer_sid)
 ```
 
-The adapter returns the latest same-browser-sid snapshot plus metadata such as
-`cols`, `rows`, `snapshot_seq`, and `output_seq`. It is intentionally marked
-provisional because it depends on a browser tab. The planned replacement is a
-dedicated mirror that consumes the same terminal output stream as human viewers,
-uses the authoritative PTY size, and is not affected by human scroll position or
-DOM selection.
+The adapter returns the latest same-browser-sid snapshot when present; otherwise
+it returns the headless grid plus metadata such as `cols`, `rows`, `output_seq`,
+and cursor position. It is intentionally marked provisional because the headless
+grid is a smaller display parser than xterm.js. It consumes the same terminal
+output stream as human viewers, uses the authoritative PTY size, and is not
+affected by human scroll position or DOM selection.

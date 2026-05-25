@@ -185,6 +185,8 @@ valid external-agent command extends access for another five idle minutes; the
 token is still invalidated by terminal close, browser Agent detach/disconnect,
 server restart, or explicit revoke. Do not commit it, paste it into logs, or
 expose it outside the StandTerm host.
+For long local reasoning gaps, use `state` as a lightweight typed heartbeat or
+`tail --wait-ms` as an output-aware heartbeat; both renew the same idle timeout.
 
 The handoff file is a convenience for the latest minted token. For
 multi-terminal checks, pass explicit `--url`, `--token`, and `--terminal` values
@@ -239,8 +241,10 @@ Use `agent_type.py` for paced input into full-screen editors or TUIs. It
 sends one text unit per normal `send` request with configurable rate and newline
 translation. StandTerm terminal input is a single shared stream: while a paced
 typer is running, do not send cursor-moving keys from another CLI, REPL, browser,
-or helper. For progress checks, prefer `tail`; `screen` is a provisional browser
-snapshot and `render` depends on an active browser viewport.
+or helper. For progress checks, prefer `tail`; `screen` returns the latest
+browser snapshot when available and otherwise falls back to a provisional
+server-side headless terminal grid. Use `render` when xterm/browser visual
+fidelity matters.
 
 For repeated machine-driven operations, prefer `agent_jsonl.py`: it
 starts one persistent local process, reads the handoff once, accepts one JSON
