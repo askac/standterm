@@ -331,6 +331,7 @@ AGENT_AUDIT_EXTERNAL_AGENT_SCREEN = 'external_agent_screen'
 AGENT_AUDIT_EXTERNAL_AGENT_RENDER = 'external_agent_render'
 AGENT_AUDIT_EXTERNAL_AGENT_TAIL = 'external_agent_tail'
 AGENT_AUDIT_EXTERNAL_AGENT_WAIT = 'external_agent_wait'
+AGENT_AUDIT_EXTERNAL_AGENT_SEQUENCE = 'external_agent_sequence'
 AGENT_AUDIT_EXTERNAL_AGENT_SEND = 'external_agent_send'
 AGENT_AUDIT_CONTEXT_BUILT = 'context_built'
 AGENT_AUDIT_PROPOSAL_CREATED = 'proposal_created'
@@ -341,10 +342,12 @@ AGENT_AUDIT_DIRECT_WRITE = 'direct_write'
 AGENT_AUDIT_TERMINAL_CLEANUP = 'terminal_cleanup'
 AGENT_AUDIT_ERROR = 'error'
 EXTERNAL_AGENT_PROTOCOL_VERSION = 1
-EXTERNAL_AGENT_CAPABILITIES = ['state', 'screen', 'headless_screen', 'screen_wait', 'wait', 'render', 'tail', 'send', 'typed_send', 'send_capture', 'submit_after', 'strip_ansi', 'revoke']
+EXTERNAL_AGENT_CAPABILITIES = ['state', 'screen', 'headless_screen', 'screen_wait', 'wait', 'sequence', 'render', 'tail', 'send', 'typed_send', 'send_capture', 'submit_after', 'strip_ansi', 'revoke']
 AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_WAIT_MS = 3000
 AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_SETTLE_MS = 150
 AGENT_EXTERNAL_SEND_CAPTURE_MAX_SETTLE_MS = 5000
+AGENT_EXTERNAL_SEQUENCE_MAX_STEPS = 16
+EXTERNAL_AGENT_SEQUENCE_OPS = {'state', 'screen', 'render', 'tail', 'wait', 'send', 'send-wait'}
 EXTERNAL_AGENT_KEY_INPUTS = {
     'Enter': '\r',
     'Return': '\r',
@@ -3696,6 +3699,128 @@ def build_external_agent_wait_payload(bridge, state, command):
         return build_external_agent_wait_quiet_payload(bridge, state, command)
     return None, AGENT_ERROR_ACTION_INVALID_DATA
 
+def parse_external_agent_sequence_steps(command):
+    steps = command.get('steps')
+    if not isinstance(steps, list) or not steps or len(steps) > AGENT_EXTERNAL_SEQUENCE_MAX_STEPS:
+        return None, AGENT_ERROR_ACTION_INVALID_DATA
+    parsed_steps = []
+    for step in steps:
+        if not isinstance(step, dict):
+            return None, AGENT_ERROR_ACTION_INVALID_DATA
+        step_op = step.get('op')
+        if not isinstance(step_op, str):
+            return None, AGENT_ERROR_ACTION_INVALID_DATA
+        step_op = step_op.strip().lower()
+        if step_op not in EXTERNAL_AGENT_SEQUENCE_OPS:
+            return None, AGENT_ERROR_ACTION_INVALID_DATA
+        if 'token' in step or 'terminal_id' in step:
+            return None, AGENT_ERROR_ACTION_INVALID_DATA
+        parsed_step = dict(step)
+        parsed_step['op'] = step_op
+        parsed_steps.append(parsed_step)
+    return parsed_steps, None
+
+def classify_external_agent_sequence_stop(result):
+    if not isinstance(result, dict):
+        return 'failed'
+    status = result.get('status')
+    if status == AGENT_STATUS_FAILED:
+        return 'failed'
+    if status == AGENT_STATUS_PENDING_APPROVAL:
+        return AGENT_STATUS_PENDING_APPROVAL
+    wait = result.get('wait')
+    if isinstance(wait, dict) and wait.get('timed_out') is True:
+        return 'timeout'
+    screen_wait = result.get('screen_wait')
+    if isinstance(screen_wait, dict) and screen_wait.get('timed_out') is True:
+        return 'timeout'
+    capture = result.get('capture')
+    if isinstance(capture, dict) and (
+        capture.get('status') == AGENT_STATUS_FAILED or capture.get('error_code')
+    ):
+        return 'failed'
+    if isinstance(capture, dict) and (
+        capture.get('timed_out') is True or capture.get('status') == 'timeout'
+    ):
+        return 'timeout'
+    return None
+
+def extract_external_agent_sequence_error_code(result):
+    if not isinstance(result, dict):
+        return None
+    if result.get('error_code'):
+        return result.get('error_code')
+    capture = result.get('capture')
+    if isinstance(capture, dict):
+        return capture.get('error_code')
+    return None
+
+def build_external_agent_sequence_payload(record, state, terminal_id, command):
+    steps, error_code = parse_external_agent_sequence_steps(command)
+    if error_code:
+        return None, error_code
+    results = []
+    stop_reason = None
+    stopped_step_index = None
+    final_error_code = None
+    for index, step in enumerate(steps):
+        step_command = dict(step)
+        step_command['token'] = command.get('token')
+        step_command['terminal_id'] = terminal_id
+        result = process_external_agent_command(step_command)
+        step_stop_reason = classify_external_agent_sequence_stop(result)
+        if step_stop_reason:
+            stop_reason = step_stop_reason
+            stopped_step_index = index
+            final_error_code = extract_external_agent_sequence_error_code(result)
+        results.append({
+            'index': index,
+            'op': step['op'],
+            'status': result.get('status') if isinstance(result, dict) else AGENT_STATUS_FAILED,
+            'stop_reason': step_stop_reason,
+            'result': result,
+        })
+        if step_stop_reason:
+            break
+    completed = stop_reason is None and len(results) == len(steps)
+    sequence = {
+        'status': AGENT_STATUS_COMPLETED if completed else 'stopped',
+        'completed': completed,
+        'stop_reason': stop_reason,
+        'stopped_step_index': stopped_step_index,
+        'step_count': len(steps),
+        'executed_count': len(results),
+        'max_steps': AGENT_EXTERNAL_SEQUENCE_MAX_STEPS,
+        'results': results,
+    }
+    record_agent_audit_event(
+        state,
+        AGENT_AUDIT_EXTERNAL_AGENT_SEQUENCE,
+        external_agent_id=record.get('external_agent_id'),
+        step_count=sequence['step_count'],
+        executed_count=sequence['executed_count'],
+        completed=sequence['completed'],
+        stop_reason=sequence['stop_reason'],
+        stopped_step_index=sequence['stopped_step_index'],
+        final_status=sequence['status'],
+    )
+    with agent_lock:
+        current_state = get_agent_state(record.get('session_token'), terminal_id, state.sid)
+    payload = {
+        'status': AGENT_STATUS_FAILED if stop_reason == 'failed' else 'ok',
+        'terminal_id': terminal_id,
+        'external_agent_id': record.get('external_agent_id'),
+        'output_seq': (
+            results[-1]['result'].get('output_seq')
+            if results and isinstance(results[-1].get('result'), dict) else None
+        ),
+        'state': current_state.public_state() if current_state else state.public_state(),
+        'sequence': sequence,
+    }
+    if payload['status'] == AGENT_STATUS_FAILED:
+        payload['error_code'] = final_error_code or AGENT_ERROR_ACTION_NOT_ALLOWED
+    return payload, None
+
 def build_external_agent_tail_payload_waiting(bridge, state, since_output_seq=None,
                                               limit=AGENT_EXTERNAL_TAIL_MAX_EVENTS,
                                               wait_ms=0):
@@ -4749,6 +4874,18 @@ def build_external_agent_discovery_payload(base_url, token, terminal_id):
                 'wait_ms': AGENT_EXTERNAL_TAIL_MAX_WAIT_MS,
             },
             'wait_quiet': {'op': 'wait', 'condition': 'quiet', 'wait_ms': 3000, 'quiet_ms': 500},
+            'sequence': {
+                'op': 'sequence',
+                'steps': [
+                    {'op': 'send', 'kind': 'text', 'text': 'pwd\n'},
+                    {
+                        'op': 'wait',
+                        'condition': 'output',
+                        'since_output_seq': 0,
+                        'wait_ms': AGENT_EXTERNAL_TAIL_MAX_WAIT_MS,
+                    },
+                ],
+            },
             'render': {'op': 'render', 'wait_ms': AGENT_VIEWPORT_RENDER_WAIT_MS},
             'tail': {
                 'op': 'tail',
@@ -6140,6 +6277,12 @@ def process_external_agent_command(command):
 
     if op == 'state':
         return build_external_agent_state_payload(record, state)
+
+    if op == 'sequence':
+        payload, error_code = build_external_agent_sequence_payload(record, state, terminal_id, command)
+        if error_code:
+            return external_agent_error(error_code, terminal_id=terminal_id)
+        return payload
 
     if op in {'screen', 'render', 'tail', 'wait'}:
         if not is_agent_context_allowed(state):

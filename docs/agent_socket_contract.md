@@ -160,6 +160,13 @@ For backend-level synchronization without returning display payloads by
 default, clients can call `op: "wait"` with `condition: "output"` or
 `condition: "quiet"`. The response contains a typed `wait` object with status,
 timeout, and sequence metadata.
+For bounded multi-step automation, clients can call `op: "sequence"` with a
+fixed `steps` array. Sequence steps inherit the outer token and terminal and may
+use `state`, `screen`, `render`, `tail`, `wait`, `send`, or `send-wait`. The
+response includes one typed result per executed step. Execution stops
+deterministically on a failed step, pending human approval, a typed wait
+timeout, a quiet-screen timeout, or a timed-out send capture. It does not branch
+on terminal display text.
 
 For terminal-like interaction, use the persistent REPL wrapper instead of
 starting one CLI process per line:
@@ -268,8 +275,8 @@ Discover protocol/capabilities:
 
 `hello` returns `version`, `external_agent_id`, `terminal_id`, current public
 Agent state, and a typed `capabilities` array such as `state`, `screen`,
-`headless_screen`, `screen_wait`, `render`, `tail`, `send`, `send_capture`,
-`submit_after`, `strip_ansi`, and `revoke`.
+`headless_screen`, `screen_wait`, `wait`, `sequence`, `render`, `tail`, `send`,
+`send_capture`, `submit_after`, `strip_ansi`, and `revoke`.
 
 Attach:
 

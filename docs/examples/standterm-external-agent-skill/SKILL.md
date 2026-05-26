@@ -146,6 +146,12 @@ data:
 <python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json wait-quiet --wait-ms 3000 --quiet-ms 500
 ```
 
+When the server advertises `sequence`, JSONL callers may post a bounded
+`op: "sequence"` with fixed steps. Steps inherit the outer token/terminal and
+stop on failed status, pending human approval, typed wait timeout, quiet-screen
+timeout, or send-capture timeout. Do not use terminal display text to branch
+within a sequence.
+
 Prefer atomic send-and-observe when the server advertises `send_capture`:
 
 ```bash

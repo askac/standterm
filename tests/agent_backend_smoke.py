@@ -1283,6 +1283,105 @@ def test_external_agent_wait_output_timeout_and_wait_quiet_are_typed():
 
     client.disconnect()
 
+def test_external_agent_sequence_runs_steps_and_stops_on_timeout():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'mode': 'direct',
+    })
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
+        session_token,
+        standterm.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert error_code is None
+
+    result_box = {}
+
+    def request_sequence():
+        result_box['sequence'] = standterm.process_external_agent_command({
+            'op': 'sequence',
+            'token': token,
+            'terminal_id': standterm.TERMINAL_ID_MAIN,
+            'steps': [
+                {'op': 'send', 'kind': 'text', 'text': 'seq-input\n'},
+                {
+                    'op': 'wait',
+                    'condition': 'output',
+                    'since_output_seq': 0,
+                    'wait_ms': 1000,
+                },
+            ],
+        })
+
+    thread = threading.Thread(target=request_sequence)
+    thread.start()
+    wait_until(lambda: ''.join(bridge.writes) == 'seq-input\n', 'sequence did not write input')
+    bridge.emit_output({
+        'message_type': 'terminal',
+        'data': 'seq-output\n',
+    })
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+
+    result = result_box['sequence']
+    assert result['status'] == 'ok'
+    assert result['sequence']['status'] == standterm.AGENT_STATUS_COMPLETED
+    assert result['sequence']['completed'] is True
+    assert result['sequence']['stop_reason'] is None
+    assert result['sequence']['executed_count'] == 2
+    assert result['sequence']['results'][0]['op'] == 'send'
+    assert result['sequence']['results'][0]['status'] == standterm.AGENT_STATUS_COMPLETED
+    assert result['sequence']['results'][1]['op'] == 'wait'
+    assert result['sequence']['results'][1]['result']['wait']['status'] == 'changed'
+    assert 'events' not in result['sequence']['results'][1]['result']['wait']
+
+    timeout_result = standterm.process_external_agent_command({
+        'op': 'sequence',
+        'token': token,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'steps': [
+            {
+                'op': 'wait',
+                'condition': 'output',
+                'since_output_seq': bridge.output_seq,
+                'wait_ms': 10,
+            },
+            {'op': 'send', 'kind': 'text', 'text': 'should-not-run\n'},
+        ],
+    })
+    assert timeout_result['status'] == 'ok'
+    assert timeout_result['sequence']['status'] == 'stopped'
+    assert timeout_result['sequence']['completed'] is False
+    assert timeout_result['sequence']['stop_reason'] == 'timeout'
+    assert timeout_result['sequence']['stopped_step_index'] == 0
+    assert timeout_result['sequence']['executed_count'] == 1
+    assert ''.join(bridge.writes) == 'seq-input\n'
+
+    invalid = standterm.process_external_agent_command({
+        'op': 'sequence',
+        'token': token,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'steps': [{'op': 'wait', 'terminal_id': standterm.TERMINAL_ID_MAIN}],
+    })
+    assert invalid['status'] == standterm.AGENT_STATUS_FAILED
+    assert invalid['error_code'] == standterm.AGENT_ERROR_ACTION_INVALID_DATA
+
+    audit_events = standterm.agent_audit_store.get_recent(session_token, standterm.TERMINAL_ID_MAIN)
+    sequence_audit = [
+        event for event in audit_events
+        if event['event_type'] == standterm.AGENT_AUDIT_EXTERNAL_AGENT_SEQUENCE
+    ][-1]
+    assert sequence_audit['stop_reason'] == 'timeout'
+    assert sequence_audit['executed_count'] == 1
+
+    client.disconnect()
+
 
 def test_external_agent_observe_cannot_send():
     client = make_client()
@@ -2124,6 +2223,7 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             assert 'headless_screen' in token_payload['capabilities']
             assert 'screen_wait' in token_payload['capabilities']
             assert 'wait' in token_payload['capabilities']
+            assert 'sequence' in token_payload['capabilities']
             assert 'render' in token_payload['capabilities']
             assert 'typed_send' in token_payload['capabilities']
             assert 'send_capture' in token_payload['capabilities']
@@ -2160,6 +2260,13 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
                 'wait_ms': 3000,
                 'quiet_ms': 500,
             }
+            assert token_payload['operations']['sequence']['op'] == 'sequence'
+            assert token_payload['operations']['sequence']['steps'][0] == {
+                'op': 'send',
+                'kind': 'text',
+                'text': 'pwd\n',
+            }
+            assert token_payload['operations']['sequence']['steps'][1]['op'] == 'wait'
             assert token_payload['operations']['tail']['wait_ms'] == standterm.AGENT_EXTERNAL_TAIL_MAX_WAIT_MS
             assert token_payload['operations']['tail_plain']['strip_ansi'] is True
             assert token_payload['operations']['send'] == {'op': 'send', 'kind': 'text', 'text': 'pwd\n'}
@@ -3533,6 +3640,7 @@ def main():
         test_external_agent_tail_wait_stops_on_pause,
         test_external_agent_wait_output_returns_structured_result_without_display_by_default,
         test_external_agent_wait_output_timeout_and_wait_quiet_are_typed,
+        test_external_agent_sequence_runs_steps_and_stops_on_timeout,
         test_external_agent_observe_cannot_send,
         test_external_agent_approval_send_waits_for_human_approval,
         test_external_agent_direct_send_uses_agent_gate,

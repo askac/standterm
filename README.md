@@ -258,6 +258,13 @@ For structured synchronization without display payloads, use
 `wait --for quiet --wait-ms <ms> --quiet-ms <ms>`. These call backend
 `op: "wait"` and return a typed `wait` object with condition, status,
 timeout, and sequence metadata.
+For bounded multi-step automation, clients may post `op: "sequence"` with a
+fixed `steps` array. Each step inherits the outer token and terminal, may use
+the existing `state`, `screen`, `render`, `tail`, `wait`, `send`, or
+`send-wait` operations, and returns its full typed result. The server stops
+deterministically on a failed step, pending human approval, a typed wait
+timeout, a quiet-screen timeout, or a timed-out capture. Sequence control never
+branches on terminal display text.
 
 Use `send-wait` or `send --capture` when the `hello` capabilities include
 `send_capture`. It writes only through the normal Agent gate, then returns typed
