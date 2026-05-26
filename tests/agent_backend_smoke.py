@@ -3551,6 +3551,69 @@ def test_viewport_snapshot_accepts_attached_sid():
 
     client.disconnect()
 
+def test_viewport_snapshot_policy_blocks_and_clears_private_context():
+    client = make_client()
+    session_token = current_session_token()
+    add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+
+    client.emit('replay_terminal', {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot(seq=1, fill='visible'))
+    assert last_payload(client, standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)['status'] == 'accepted'
+    assert standterm.agent_viewport_snapshot_store.get_latest(session_token, standterm.TERMINAL_ID_MAIN, sid)
+
+    client.emit(standterm.AGENT_EVENT_PRIVACY_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'privacy_state': standterm.AGENT_PRIVACY_PRIVATE_INPUT,
+    })
+    assert standterm.agent_viewport_snapshot_store.get_latest(
+        session_token,
+        standterm.TERMINAL_ID_MAIN,
+        sid,
+    ) is None
+
+    client.emit(standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot(seq=2, fill='private'))
+    private_result = last_payload(client, standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)
+    assert private_result['status'] == standterm.AGENT_STATUS_FAILED
+    assert private_result['error_code'] == standterm.AGENT_ERROR_PRIVACY_BLOCKED
+    assert standterm.agent_viewport_snapshot_store.get_latest(
+        session_token,
+        standterm.TERMINAL_ID_MAIN,
+        sid,
+    ) is None
+
+    client.emit(standterm.AGENT_EVENT_PRIVACY_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'privacy_state': standterm.AGENT_PRIVACY_NORMAL,
+    })
+    client.emit(standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot(seq=3, fill='normal'))
+    assert last_payload(client, standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)['status'] == 'accepted'
+    assert standterm.agent_viewport_snapshot_store.get_latest(session_token, standterm.TERMINAL_ID_MAIN, sid)
+
+    client.emit(standterm.AGENT_EVENT_PAUSE, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    assert standterm.agent_viewport_snapshot_store.get_latest(
+        session_token,
+        standterm.TERMINAL_ID_MAIN,
+        sid,
+    ) is None
+    client.emit(standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot(seq=4, fill='paused'))
+    paused_result = last_payload(client, standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)
+    assert paused_result['status'] == standterm.AGENT_STATUS_FAILED
+    assert paused_result['error_code'] == standterm.AGENT_ERROR_PAUSED
+
+    client.emit(standterm.AGENT_EVENT_RESUME, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'mode': 'disabled',
+    })
+    client.emit(standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT, valid_viewport_snapshot(seq=5, fill='disabled'))
+    disabled_result = last_payload(client, standterm.AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT)
+    assert disabled_result['status'] == standterm.AGENT_STATUS_FAILED
+    assert disabled_result['error_code'] == standterm.AGENT_ERROR_EXTERNAL_AGENT_DISABLED
+
+    client.disconnect()
+
 
 def test_viewport_snapshot_rejects_oversized_payload():
     client = make_client()
@@ -3696,6 +3759,7 @@ def main():
         test_ssh_input_does_not_record_invalid_or_oversized_metadata,
         test_viewport_snapshot_is_sid_scoped,
         test_viewport_snapshot_accepts_attached_sid,
+        test_viewport_snapshot_policy_blocks_and_clears_private_context,
         test_viewport_snapshot_rejects_oversized_payload,
         test_viewport_snapshot_stale_sequence_is_rejected,
         test_viewport_snapshot_context_clears_on_terminal_close_and_disconnect,

@@ -773,8 +773,10 @@ event name is retained for compatibility with the earlier viewport adapter. The
 snapshot is scoped to the current browser sid, session token, and terminal id.
 The backend accepts it only when the sid is currently attached to that terminal,
 validates cols, rows, line count, monotonic `snapshot_seq`, non-negative
-`output_seq`, and total byte limits, and clears stored snapshots on terminal
-close, session close, or sid disconnect.
+`output_seq`, total byte limits, and current Agent visibility policy. It rejects
+snapshots while Agent context is paused, disabled, or privacy-blocked, and
+clears stored snapshots on blocked privacy/mode transitions, terminal close,
+session close, or sid disconnect.
 
 ### `agent_viewport_render_result`
 
@@ -1017,7 +1019,9 @@ The viewport snapshot store is separate from terminal transcript and input
 metadata stores. It is keyed by `session_token + terminal_id + browser sid`,
 bounded by row, column, line-byte, total-byte, and TTL limits, and stores the
 latest accepted snapshot only for that sid. Snapshot lines are terminal display
-payload and remain data only.
+payload and remain data only. Frontend snapshot suppression is only a usability
+guard; the backend also enforces the Agent visibility policy at the socket
+boundary.
 
 ## Agent Terminal Mirror Direction
 

@@ -3537,6 +3537,17 @@ def get_external_agent_capture_context_error(state):
         return AGENT_ERROR_PRIVACY_BLOCKED
     return None
 
+def get_agent_viewport_snapshot_policy_error(state):
+    if not state:
+        return None
+    if state.paused or state.mode == AGENT_MODE_PAUSED:
+        return AGENT_ERROR_PAUSED
+    if state.mode == AGENT_MODE_DISABLED:
+        return AGENT_ERROR_EXTERNAL_AGENT_DISABLED
+    if not is_agent_context_allowed(state):
+        return AGENT_ERROR_PRIVACY_BLOCKED
+    return None
+
 def build_external_agent_send_capture_payload(bridge, state, before_output_seq,
                                               limit=AGENT_EXTERNAL_TAIL_MAX_EVENTS,
                                               wait_ms=None, settle_ms=None,
@@ -5886,6 +5897,8 @@ def on_agent_mode_set(data):
                 emit_agent_action_result(request.sid, action, cancel_reason, error_code=cancel_reason)
         state.mode = mode
         state.paused = False
+        if mode == AGENT_MODE_DISABLED:
+            agent_viewport_snapshot_store.discard(session_token, terminal_id=terminal_id, sid=request.sid)
         record_agent_audit_event(
             state,
             AGENT_AUDIT_MODE_SET,
@@ -5920,6 +5933,7 @@ def on_agent_pause(data):
         set_agent_privacy_state(state, AGENT_PRIVACY_PAUSED)
         bump_agent_mode_version(state)
         state.run_id = None
+        agent_viewport_snapshot_store.discard(session_token, terminal_id=terminal_id, sid=request.sid)
         cancelled = cancel_agent_pending_actions(state, AGENT_ERROR_PAUSED)
         for action in cancelled:
             emit_agent_action_failure(request.sid, action, AGENT_ERROR_PAUSED)
@@ -5990,6 +6004,7 @@ def on_agent_privacy_set(data):
             set_agent_privacy_state(state, AGENT_PRIVACY_PAUSED)
             bump_agent_mode_version(state)
             state.run_id = None
+            agent_viewport_snapshot_store.discard(session_token, terminal_id=terminal_id, sid=request.sid)
             cancelled = cancel_agent_pending_actions(state, AGENT_ERROR_PRIVACY_BLOCKED)
         elif state.paused or state.mode == AGENT_MODE_PAUSED:
             emit_agent_error(request.sid, terminal_id, AGENT_ERROR_PAUSED)
@@ -5997,6 +6012,8 @@ def on_agent_privacy_set(data):
             return
         elif set_agent_privacy_state(state, privacy_state):
             state.run_id = None
+            if privacy_state in AGENT_CONTEXT_BLOCKING_PRIVACY_STATES:
+                agent_viewport_snapshot_store.discard(session_token, terminal_id=terminal_id, sid=request.sid)
             cancelled = cancel_agent_pending_actions(state, AGENT_ERROR_PRIVACY_BLOCKED)
         for action in cancelled:
             emit_agent_action_failure(request.sid, action, AGENT_ERROR_PRIVACY_BLOCKED)
@@ -6706,6 +6723,14 @@ def on_agent_viewport_snapshot(data):
         return
     if request.sid not in bridge.attached_sids:
         result_payload['error_code'] = AGENT_ERROR_NOT_ATTACHED
+        socketio.emit(AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT, result_payload, room=request.sid)
+        return
+    with agent_lock:
+        state = get_agent_state(session_token, terminal_id, request.sid)
+        policy_error = get_agent_viewport_snapshot_policy_error(state)
+    if policy_error:
+        agent_viewport_snapshot_store.discard(session_token, terminal_id=terminal_id, sid=request.sid)
+        result_payload['error_code'] = policy_error
         socketio.emit(AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT, result_payload, room=request.sid)
         return
 
