@@ -368,6 +368,75 @@ def test_privacy_states_block_snapshots_and_agent_runs(browser, access_url):
         close_context(context)
 
 
+def test_agent_panel_status_gates_and_external_hint(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        page.click('#agent-toggle-btn')
+        page.wait_for_selector('#agent-panel.visible', timeout=5000)
+        attach_agent(page)
+        set_agent_mode(page, 'approval', 'approval_pending')
+
+        set_privacy(page, 'private_input')
+        wait_for_agent(page, "state.privacy_state === 'private_input'")
+        emit_socket(page, 'agent_provider_run_request', {'terminal_id': TERMINAL_ID})
+        wait_for_last_action_error(page, 'agent_privacy_blocked')
+        page.wait_for_function(
+            "() => document.getElementById('agent-status-detail').innerText.includes('agent_privacy_blocked')",
+            timeout=5000,
+        )
+        panel_state = page.evaluate(
+            """() => ({
+                statusBoxError: document.getElementById('agent-status-box').classList.contains('error'),
+                statusMain: document.getElementById('agent-status-main').innerText,
+                statusDetail: document.getElementById('agent-status-detail').innerText,
+                privacyText: document.getElementById('agent-gate-privacy').innerText,
+                privacyBlocking: document.getElementById('agent-gate-privacy').classList.contains('blocking')
+            })"""
+        )
+        check(panel_state['statusBoxError'] is True, 'agent status row did not mark action error')
+        check('agent_privacy_blocked' in panel_state['statusDetail'], 'agent status row did not show error_code')
+        check('private_input' in panel_state['privacyText'], 'privacy gate chip did not show privacy state')
+        check(panel_state['privacyBlocking'] is True, 'privacy gate chip did not mark blocking state')
+
+        set_privacy(page, 'normal')
+        wait_for_agent(page, "state.privacy_state === 'normal'")
+        emit_socket(page, 'ssh_input', {'terminal_id': TERMINAL_ID, 'data': 'x'})
+        wait_for_agent(page, 'state.human_input_lease_active === true')
+        human_gate = page.evaluate(
+            """() => ({
+                text: document.getElementById('agent-gate-human').innerText,
+                blocking: document.getElementById('agent-gate-human').classList.contains('blocking')
+            })"""
+        )
+        check('locked' in human_gate['text'], 'human input gate chip did not show active lease')
+        check(human_gate['blocking'] is True, 'human input gate chip did not mark blocking state')
+
+        emit_socket(page, 'agent_mode_set', {'terminal_id': TERMINAL_ID, 'mode': 'disabled'})
+        wait_for_agent(page, "state.mode === 'disabled'")
+        disabled_external = page.evaluate(
+            """() => ({
+                buttonDisabled: document.getElementById('agent-external-token-btn').disabled,
+                hint: document.getElementById('agent-external-hint').innerText,
+                commandTag: document.getElementById('agent-external-command').tagName
+            })"""
+        )
+        check(disabled_external['buttonDisabled'] is True, 'external token button stayed enabled in disabled mode')
+        check('Select Observe' in disabled_external['hint'], 'external token hint did not explain disabled prerequisite')
+        check(disabled_external['commandTag'] == 'TEXTAREA', 'external token command output is not a textarea')
+
+        set_agent_mode(page, 'observe', 'observe')
+        enabled_external = page.evaluate(
+            """() => ({
+                buttonDisabled: document.getElementById('agent-external-token-btn').disabled,
+                hint: document.getElementById('agent-external-hint').innerText
+            })"""
+        )
+        check(enabled_external['buttonDisabled'] is False, 'external token button did not enable in observe mode')
+        check('available' in enabled_external['hint'], 'external token hint did not show available state')
+    finally:
+        close_context(context)
+
+
 def test_rendered_viewport_snapshot_returns_png(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
@@ -577,6 +646,7 @@ def main():
         test_operator_observation_warning_ui,
         test_hidden_mirror_ignores_visible_scroll,
         test_privacy_states_block_snapshots_and_agent_runs,
+        test_agent_panel_status_gates_and_external_hint,
         test_rendered_viewport_snapshot_returns_png,
         test_paste_review_approve_and_cancel,
         test_approval_payload_and_stale_rejections,

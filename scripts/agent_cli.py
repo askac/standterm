@@ -3,9 +3,11 @@ import argparse
 import base64
 import copy
 import json
+import os
 import ssl
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from agent_input import KEY_INPUTS
@@ -14,6 +16,7 @@ from agent_input import KEY_INPUTS
 def parse_args():
     parser = argparse.ArgumentParser(description='StandTerm external agent CLI')
     parser.add_argument('--handoff', help='Read url, token, and terminal from a StandTerm external agent handoff JSON file')
+    parser.add_argument('--agentinfo', help='Read tokenless StandTerm agentinfo JSON from a local path or URL')
     parser.add_argument('--url', help='StandTerm base URL, for example http://127.0.0.1:5010')
     parser.add_argument('--token', help='External agent attach token. Omit only on dev servers with STANDTERM_AGENT_DEV_TOKEN=1.')
     parser.add_argument('--terminal', default='main', help='Terminal id')
@@ -21,7 +24,11 @@ def parse_args():
     parser.add_argument('--insecure', action='store_true', help='Disable HTTPS certificate verification')
     subparsers = parser.add_subparsers(dest='command', required=True)
 
-    subparsers.add_parser('hello')
+    discover_parser = subparsers.add_parser('discover')
+    discover_parser.add_argument('--refresh-url', action='store_true', help='Fetch /agentinfo from --url instead of only printing local --agentinfo')
+
+    hello_parser = subparsers.add_parser('hello')
+    hello_parser.add_argument('--discover', action='store_true', help='Include tokenless agentinfo in the hello output when available')
     subparsers.add_parser('attach')
     subparsers.add_parser('state')
     screen_parser = subparsers.add_parser('screen')
@@ -53,6 +60,15 @@ def parse_args():
     wait_quiet_group.add_argument('--region', help='Only return zero-based line range TOP:BOTTOM, with BOTTOM exclusive')
     wait_quiet_parser.add_argument('--wait-ms', type=int, required=True, help='Wait up to this long for a quiet screen')
     wait_quiet_parser.add_argument('--quiet-ms', type=int, required=True, help='Required terminal quiet time before returning screen')
+
+    wait_parser = subparsers.add_parser('wait')
+    wait_parser.add_argument('--for', dest='condition', choices=('output', 'quiet'), required=True, help='Structured wait condition')
+    wait_parser.add_argument('--since', type=int, default=0, help='For output waits, only consider events after this output_seq')
+    wait_parser.add_argument('--limit', type=int, default=50, help='Maximum events to include when --include-events is used')
+    wait_parser.add_argument('--wait-ms', type=int, required=True, help='Maximum wait time')
+    wait_parser.add_argument('--quiet-ms', type=int, help='For quiet waits, required terminal quiet time')
+    wait_parser.add_argument('--include-events', action='store_true', help='Include display tail events for output waits')
+    wait_parser.add_argument('--strip-ansi', action='store_true', help='Strip ANSI/control sequences from included events')
 
     send_parser = subparsers.add_parser('send')
     input_group = send_parser.add_mutually_exclusive_group(required=True)
@@ -87,23 +103,85 @@ def parse_args():
 
     subparsers.add_parser('revoke')
     args = parser.parse_args()
+    apply_agentinfo(args)
+    if args.command == 'discover':
+        if not args.agentinfo_payload and not args.url:
+            parser.error('discover requires --agentinfo or --url')
+        return args
     apply_handoff(args)
     if not args.url:
-        parser.error('--url is required unless --handoff provides url')
+        parser.error('--url is required unless --handoff or --agentinfo provides url')
     return args
 
 
-def load_handoff(path):
+def load_json_file(path, label):
     try:
         with open(path, 'r', encoding='utf-8') as handle:
             payload = json.load(handle)
     except OSError as exc:
-        raise SystemExit(f'failed to read handoff: {exc}') from exc
+        raise SystemExit(f'failed to read {label}: {exc}') from exc
     except json.JSONDecodeError as exc:
-        raise SystemExit(f'failed to parse handoff JSON: {exc}') from exc
+        raise SystemExit(f'failed to parse {label} JSON: {exc}') from exc
     if not isinstance(payload, dict):
-        raise SystemExit('handoff JSON must be an object')
+        raise SystemExit(f'{label} JSON must be an object')
     return payload
+
+
+def load_handoff(path):
+    return load_json_file(path, 'handoff')
+
+
+def is_url(value):
+    try:
+        parsed = urllib.parse.urlsplit(value)
+    except ValueError:
+        return False
+    return parsed.scheme in {'http', 'https'} and bool(parsed.netloc)
+
+
+def get_json(url, ca_file=None, insecure=False):
+    context = build_ssl_context(ca_file=ca_file, insecure=insecure)
+    try:
+        with urllib.request.urlopen(url, timeout=30, context=context) as response:
+            return response.status, json.loads(response.read().decode('utf-8'))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode('utf-8', errors='replace')
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            payload = {'status': 'failed', 'error_code': f'http_{exc.code}', 'message': body}
+        return exc.code, payload
+
+
+def load_agentinfo(source, ca_file=None, insecure=False):
+    if is_url(source):
+        url = source.rstrip('/')
+        if not url.endswith('/agentinfo'):
+            url += '/agentinfo'
+        _status, payload = get_json(url, ca_file=ca_file, insecure=insecure)
+        if not isinstance(payload, dict):
+            raise SystemExit('agentinfo response must be a JSON object')
+        return payload
+    return load_json_file(source, 'agentinfo')
+
+
+def apply_agentinfo(args):
+    args.agentinfo_payload = None
+    if not getattr(args, 'agentinfo', None):
+        return
+    payload = load_agentinfo(args.agentinfo, ca_file=args.ca_file, insecure=args.insecure)
+    args.agentinfo_payload = payload
+    transport = payload.get('transport')
+    if not args.url:
+        args.url = payload.get('base_url')
+    if not args.url and isinstance(transport, dict):
+        args.url = transport.get('base_url')
+    if not args.ca_file and isinstance(transport, dict):
+        args.ca_file = transport.get('tls_ca_cert_path')
+    if not args.ca_file:
+        args.ca_file = payload.get('tls_ca_cert_path')
+    if not args.handoff and isinstance(payload.get('handoff_path'), str) and os.path.isfile(payload['handoff_path']):
+        args.handoff = payload['handoff_path']
 
 
 def apply_handoff(args):
@@ -159,10 +237,30 @@ def command_payload(args):
                 }
             except ValueError as exc:
                 raise SystemExit(f'{command} --region must use TOP:BOTTOM') from exc
+    elif command == 'wait':
+        payload['condition'] = args.condition
+        payload['wait_ms'] = args.wait_ms
+        if args.condition == 'output':
+            payload['since_output_seq'] = args.since
+            payload['limit'] = args.limit
+            if args.include_events:
+                payload['include_events'] = True
+            if args.strip_ansi:
+                payload['strip_ansi'] = True
+        elif args.condition == 'quiet':
+            if args.quiet_ms is None:
+                raise SystemExit('wait --for quiet requires --quiet-ms')
+            payload['quiet_ms'] = args.quiet_ms
     elif command == 'render':
         payload['wait_ms'] = args.wait_ms
     elif command in {'send', 'send-wait', 'key'}:
-        payload['data'] = send_data(args)
+        keys = getattr(args, 'key', None)
+        if keys:
+            payload['kind'] = 'keys'
+            payload['keys'] = list(keys)
+        else:
+            payload['kind'] = 'text'
+            payload['text'] = send_data(args)
         if command == 'send-wait':
             payload['capture'] = True
         elif getattr(args, 'capture', False):
@@ -183,9 +281,6 @@ def command_payload(args):
 
 
 def send_data(args):
-    keys = getattr(args, 'key', None)
-    if keys:
-        return ''.join(KEY_INPUTS[key] for key in keys)
     return sys.stdin.read() if args.stdin else args.text
 
 
@@ -220,6 +315,15 @@ def post_json(base_url, payload, dev_mode=False, ca_file=None, insecure=False):
         return exc.code, payload
 
 
+def discover_result(args):
+    if args.agentinfo_payload and not getattr(args, 'refresh_url', False):
+        return args.agentinfo_payload
+    if not args.url:
+        raise SystemExit('discover requires --agentinfo or --url')
+    _status, result = get_json(args.url.rstrip('/') + '/agentinfo', ca_file=args.ca_file, insecure=args.insecure)
+    return result
+
+
 def print_result(result):
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
 
@@ -249,6 +353,10 @@ def save_render_image(result, path):
 
 def main():
     args = parse_args()
+    if args.command == 'discover':
+        result = discover_result(args)
+        print_result(result)
+        return 0 if result.get('status') != 'failed' else 1
     _status, result = post_json(
         args.url,
         command_payload(args),
@@ -256,6 +364,9 @@ def main():
         ca_file=args.ca_file,
         insecure=args.insecure,
     )
+    if args.command == 'hello' and getattr(args, 'discover', False) and args.agentinfo_payload:
+        result = copy.deepcopy(result)
+        result['agentinfo'] = args.agentinfo_payload
     if result.get('status') != 'failed' and args.command == 'render' and args.save:
         result = save_render_image(result, args.save)
     print_result(result)

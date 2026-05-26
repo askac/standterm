@@ -173,8 +173,21 @@ Typical local flow:
 4. Mint an external-agent token from the browser Agent UI.
 5. Use the startup banner's `External Agent CLI hello` or `render` command.
 
-Token minting writes an ignored local handoff file in the StandTerm launch
-directory:
+Startup writes a tokenless bootstrap file in the StandTerm launch directory:
+
+```text
+standterm_agentinfo.json
+```
+
+StandTerm also serves the same sanitized payload at loopback-only
+`/agentinfo`, and may update a current-instance pointer such as
+`~/.standterm/current_agentinfo.json`. The payload includes launch paths,
+loopback endpoints, CLI/script paths, status hints, and recommended commands,
+but it does not include bearer tokens, browser access tokens, terminal display
+content, cookies, or session IDs.
+
+Token minting writes a separate ignored local handoff file in the StandTerm
+launch directory:
 
 ```text
 standterm_external_agent_handoff.json
@@ -199,7 +212,9 @@ recorded separately as `browser_url`.
 CLI examples:
 
 ```bash
+python scripts/agent_cli.py --agentinfo standterm_agentinfo.json discover
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json hello
+python scripts/agent_cli.py --agentinfo standterm_agentinfo.json hello --discover
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json render
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json render --save viewport.png
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json screen --tail-lines 12
@@ -227,6 +242,9 @@ escapes. In bash, use `$'...'` to send a real carriage return, as shown above.
 On Windows shells, prefer `--stdin` or `agent_jsonl.py` for portable line
 breaks. JSONL `data` fields are JSON-decoded, so `\r` and `\n` become real
 control bytes before sending.
+The CLI posts structured input for new sends: text uses `kind=text`, and named
+navigation keys use `kind=keys` with backend-validated key names. Legacy JSONL
+commands that send a string `data` field remain supported.
 For full-screen TUIs that treat glued text plus `\r` as paste content,
 `send --text '...' --submit` sends a separate structured Enter keypress after
 the text payload. For navigation-only input, `send --key Enter` remains the
@@ -235,6 +253,11 @@ The generic aliases `key`, `wait-output`, and `wait-quiet` map to existing
 `send`, long-poll `tail`, and quiet `screen` payloads. They are naming
 conveniences for terminal automation primitives and do not inspect terminal
 display text as a control signal.
+For structured synchronization without display payloads, use
+`wait --for output --since <output_seq> --wait-ms <ms>` or
+`wait --for quiet --wait-ms <ms> --quiet-ms <ms>`. These call backend
+`op: "wait"` and return a typed `wait` object with condition, status,
+timeout, and sequence metadata.
 
 Use `send-wait` or `send --capture` when the `hello` capabilities include
 `send_capture`. It writes only through the normal Agent gate, then returns typed

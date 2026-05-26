@@ -330,6 +330,7 @@ AGENT_AUDIT_EXTERNAL_AGENT_REVOKED = 'external_agent_revoked'
 AGENT_AUDIT_EXTERNAL_AGENT_SCREEN = 'external_agent_screen'
 AGENT_AUDIT_EXTERNAL_AGENT_RENDER = 'external_agent_render'
 AGENT_AUDIT_EXTERNAL_AGENT_TAIL = 'external_agent_tail'
+AGENT_AUDIT_EXTERNAL_AGENT_WAIT = 'external_agent_wait'
 AGENT_AUDIT_EXTERNAL_AGENT_SEND = 'external_agent_send'
 AGENT_AUDIT_CONTEXT_BUILT = 'context_built'
 AGENT_AUDIT_PROPOSAL_CREATED = 'proposal_created'
@@ -340,10 +341,28 @@ AGENT_AUDIT_DIRECT_WRITE = 'direct_write'
 AGENT_AUDIT_TERMINAL_CLEANUP = 'terminal_cleanup'
 AGENT_AUDIT_ERROR = 'error'
 EXTERNAL_AGENT_PROTOCOL_VERSION = 1
-EXTERNAL_AGENT_CAPABILITIES = ['state', 'screen', 'headless_screen', 'screen_wait', 'render', 'tail', 'send', 'send_capture', 'submit_after', 'strip_ansi', 'revoke']
+EXTERNAL_AGENT_CAPABILITIES = ['state', 'screen', 'headless_screen', 'screen_wait', 'wait', 'render', 'tail', 'send', 'typed_send', 'send_capture', 'submit_after', 'strip_ansi', 'revoke']
 AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_WAIT_MS = 3000
 AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_SETTLE_MS = 150
 AGENT_EXTERNAL_SEND_CAPTURE_MAX_SETTLE_MS = 5000
+EXTERNAL_AGENT_KEY_INPUTS = {
+    'Enter': '\r',
+    'Return': '\r',
+    'Tab': '\t',
+    'Escape': '\x1b',
+    'Esc': '\x1b',
+    'Backspace': '\x7f',
+    'Delete': '\x1b[3~',
+    'Up': '\x1b[A',
+    'Down': '\x1b[B',
+    'Right': '\x1b[C',
+    'Left': '\x1b[D',
+    'Home': '\x1b[H',
+    'End': '\x1b[F',
+    'PageUp': '\x1b[5~',
+    'PageDown': '\x1b[6~',
+}
+EXTERNAL_AGENT_SEND_INPUT_KINDS = {'legacy_data', 'text', 'keys'}
 ANSI_OSC_PATTERN = re.compile(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)')
 ANSI_CSI_PATTERN = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
 ANSI_ESCAPE_PATTERN = re.compile(r'\x1b[@-Z\\-_]')
@@ -444,8 +463,22 @@ HTTPS_ENABLED = HTTPS_REQUESTED
 HTTPS_AUTO_DISABLED = get_prefixed_env('DISABLE_AUTO_HTTPS') == '1'
 APP_DIR = Path(__file__).resolve().parent
 EXTERNAL_AGENT_HANDOFF_PATH = APP_DIR / 'standterm_external_agent_handoff.json'
+EXTERNAL_AGENT_INFO_PATH = APP_DIR / 'standterm_agentinfo.json'
 AUTHORIZED_DIR = APP_DIR / 'authorized'
 AUTHORIZED_BROWSERS_PATH = AUTHORIZED_DIR / 'browsers.json'
+
+def resolve_external_agent_current_info_path():
+    if is_prefixed_env_enabled('DISABLE_AGENTINFO_CURRENT'):
+        return None
+    configured = get_prefixed_env('AGENTINFO_CURRENT_PATH').strip()
+    if configured:
+        return Path(configured).expanduser()
+    runtime_dir = os.getenv('XDG_RUNTIME_DIR')
+    if runtime_dir:
+        return Path(runtime_dir).expanduser() / 'standterm' / 'current_agentinfo.json'
+    return Path.home() / '.standterm' / 'current_agentinfo.json'
+
+EXTERNAL_AGENT_CURRENT_INFO_PATH = resolve_external_agent_current_info_path()
 
 def ensure_authorized_dir():
     try:
@@ -3433,6 +3466,65 @@ def should_external_agent_capture_send(command):
 def should_external_agent_strip_ansi(command):
     return external_agent_flag_enabled(command.get('strip_ansi'))
 
+def normalize_external_agent_key_names(value):
+    if isinstance(value, str):
+        keys = [value]
+    elif isinstance(value, list):
+        keys = value
+    else:
+        return None
+    if not keys:
+        return None
+    normalized = []
+    for key in keys:
+        if not isinstance(key, str) or key not in EXTERNAL_AGENT_KEY_INPUTS:
+            return None
+        normalized.append(key)
+    return normalized
+
+def parse_external_agent_structured_input(input_payload):
+    if not isinstance(input_payload, dict):
+        return None, None, AGENT_ERROR_ACTION_INVALID_DATA
+    kind = input_payload.get('kind')
+    if not isinstance(kind, str):
+        return None, None, AGENT_ERROR_ACTION_INVALID_DATA
+    kind = kind.strip().lower()
+    if kind == 'text':
+        text = input_payload.get('text')
+        if not isinstance(text, str):
+            return None, None, AGENT_ERROR_ACTION_INVALID_DATA
+        return text, {'input_kind': 'text'}, None
+    if kind == 'keys':
+        keys = normalize_external_agent_key_names(input_payload.get('keys'))
+        if not keys:
+            return None, None, AGENT_ERROR_ACTION_INVALID_DATA
+        return ''.join(EXTERNAL_AGENT_KEY_INPUTS[key] for key in keys), {
+            'input_kind': 'keys',
+            'key_names': keys,
+            'key_count': len(keys),
+        }, None
+    return None, None, AGENT_ERROR_ACTION_INVALID_DATA
+
+def parse_external_agent_send_input(command):
+    has_input = command.get('input') is not None
+    has_kind = command.get('kind') is not None
+    has_data = command.get('data') is not None
+    if sum(1 for value in (has_input, has_kind, has_data) if value) != 1:
+        return None, None, AGENT_ERROR_ACTION_INVALID_DATA
+    if has_input:
+        return parse_external_agent_structured_input(command.get('input'))
+    if has_kind:
+        input_payload = {
+            'kind': command.get('kind'),
+            'text': command.get('text'),
+            'keys': command.get('keys'),
+        }
+        return parse_external_agent_structured_input(input_payload)
+    data = command.get('data')
+    if not isinstance(data, str):
+        return None, None, AGENT_ERROR_ACTION_INVALID_DATA
+    return data, {'input_kind': 'legacy_data'}, None
+
 def get_external_agent_capture_context_error(state):
     if state.paused or state.mode == AGENT_MODE_PAUSED:
         return AGENT_ERROR_PAUSED
@@ -3520,6 +3612,90 @@ def build_external_agent_send_capture_payload(bridge, state, before_output_seq,
         'events': tail['events'],
     }, strip_ansi=strip_ansi), None
 
+def parse_external_agent_wait_condition(command):
+    condition = command.get('condition')
+    if condition is None:
+        condition = command.get('kind')
+    if condition is None:
+        condition = command.get('wait_for')
+    if not isinstance(condition, str):
+        return None
+    condition = condition.strip().lower().replace('-', '_')
+    if condition in {'output', 'quiet'}:
+        return condition
+    return None
+
+def build_external_agent_wait_output_payload(bridge, state, command):
+    wait_ms = parse_external_agent_tail_wait_ms(command.get('wait_ms'))
+    tail, error_code = build_external_agent_tail_payload_waiting(
+        bridge,
+        state,
+        since_output_seq=command.get('since_output_seq'),
+        limit=command.get('limit', AGENT_EXTERNAL_TAIL_MAX_EVENTS),
+        wait_ms=wait_ms,
+    )
+    if error_code:
+        return None, error_code
+    gap_detected = bool(tail['gap']['detected'])
+    event_count = len(tail['events'])
+    timed_out = wait_ms > 0 and event_count == 0 and not gap_detected
+    status = 'gap' if gap_detected else 'changed' if event_count else 'timeout' if timed_out else 'idle'
+    payload = {
+        'condition': 'output',
+        'status': status,
+        'timed_out': timed_out,
+        'changed': event_count > 0 or gap_detected,
+        'wait_ms': wait_ms,
+        'since_output_seq': tail['since_output_seq'],
+        'output_seq': tail['output_seq'],
+        'event_count': event_count,
+        'first_available_output_seq': tail['first_available_output_seq'],
+        'dropped_before_output_seq': tail['dropped_before_output_seq'],
+        'gap': tail['gap'],
+    }
+    if external_agent_flag_enabled(command.get('include_events')):
+        formatted_tail = format_external_agent_tail_payload(
+            tail,
+            strip_ansi=should_external_agent_strip_ansi(command),
+        )
+        payload['events'] = formatted_tail['events']
+        payload['limit'] = formatted_tail['limit']
+        if formatted_tail.get('strip_ansi'):
+            payload['strip_ansi'] = True
+            payload['data_format'] = formatted_tail['data_format']
+    return payload, None
+
+def build_external_agent_wait_quiet_payload(bridge, state, command):
+    quiet_ms = parse_external_agent_screen_quiet_ms(command.get('quiet_ms'))
+    if quiet_ms <= 0:
+        return None, AGENT_ERROR_ACTION_INVALID_DATA
+    screen_wait, error_code = build_external_agent_screen_wait_payload(
+        bridge,
+        state,
+        wait_ms=command.get('wait_ms'),
+        quiet_ms=quiet_ms,
+    )
+    if error_code:
+        return None, error_code
+    return {
+        'condition': 'quiet',
+        'status': 'timeout' if screen_wait['timed_out'] else 'settled',
+        'timed_out': screen_wait['timed_out'],
+        'settled': screen_wait['settled'],
+        'wait_ms': screen_wait['wait_ms'],
+        'quiet_ms': screen_wait['quiet_ms'],
+        'terminal_quiet_ms': screen_wait.get('terminal_quiet_ms'),
+        'output_seq': screen_wait.get('output_seq'),
+    }, None
+
+def build_external_agent_wait_payload(bridge, state, command):
+    condition = parse_external_agent_wait_condition(command)
+    if condition == 'output':
+        return build_external_agent_wait_output_payload(bridge, state, command)
+    if condition == 'quiet':
+        return build_external_agent_wait_quiet_payload(bridge, state, command)
+    return None, AGENT_ERROR_ACTION_INVALID_DATA
+
 def build_external_agent_tail_payload_waiting(bridge, state, since_output_seq=None,
                                               limit=AGENT_EXTERNAL_TAIL_MAX_EVENTS,
                                               wait_ms=0):
@@ -3571,7 +3747,7 @@ def build_external_agent_viewport_render_payload(record, state, terminal_id, bri
         return None, error_code, request_payload, wait_ms
     return result, None, request_payload, wait_ms
 
-def external_agent_build_terminal_input_action(state, data, submit_after=False):
+def external_agent_build_terminal_input_action(state, data, submit_after=False, input_metadata=None):
     action = {
         'action_type': AGENT_ACTION_TERMINAL_INPUT,
         'terminal_id': state.terminal_id,
@@ -3579,6 +3755,8 @@ def external_agent_build_terminal_input_action(state, data, submit_after=False):
         'provider_name': 'external_agent',
         'provider_version': '1',
     }
+    if isinstance(input_metadata, dict):
+        action.update(input_metadata)
     if submit_after:
         action['submit_after'] = True
     return action
@@ -3643,6 +3821,13 @@ def build_agent_action(state, proposal, requires_approval):
         action['provider_version'] = provider_version
     if provider_status:
         action['provider_status'] = provider_status
+    input_kind = proposal.get('input_kind') if isinstance(proposal.get('input_kind'), str) else None
+    if input_kind in EXTERNAL_AGENT_SEND_INPUT_KINDS:
+        action['input_kind'] = input_kind
+    key_names = proposal.get('key_names')
+    if isinstance(key_names, list) and all(isinstance(key, str) for key in key_names):
+        action['key_names'] = list(key_names)
+        action['key_count'] = len(key_names)
     action.update(summarize_agent_input(action_data))
     state.pending_actions[action_id] = action
     state.run_id = run_id
@@ -3673,6 +3858,9 @@ def public_agent_action(action):
         'provider_name': action.get('provider_name'),
         'provider_version': action.get('provider_version'),
         'provider_status': action.get('provider_status'),
+        'input_kind': action.get('input_kind'),
+        'key_names': list(action.get('key_names') or []),
+        'key_count': action.get('key_count'),
         'byte_length': action.get('byte_length'),
         'line_count': action.get('line_count'),
         'contains_control_chars': action.get('contains_control_chars'),
@@ -3747,7 +3935,7 @@ def emit_agent_state(sid, state):
 
 def emit_agent_action_result(sid, action, status, error_code=None):
     payload = public_agent_action(action)
-    payload['status'] = status
+    payload['status'] = AGENT_STATUS_FAILED if error_code else status
     if error_code:
         payload['error_code'] = error_code
     socketio.emit(AGENT_EVENT_ACTION_RESULT, payload, room=sid)
@@ -3762,14 +3950,64 @@ def emit_agent_error(sid, terminal_id, error_code, message=None):
         payload['message'] = message
     socketio.emit(AGENT_EVENT_ACTION_RESULT, payload, room=sid)
 
+def emit_agent_action_failure(sid, action, error_code):
+    emit_agent_action_result(sid, action, AGENT_STATUS_FAILED, error_code=error_code)
+
+def emit_agent_decision_error(sid, terminal_id, state, action, error_code):
+    if action:
+        emit_agent_action_failure(sid, action, error_code)
+    else:
+        emit_agent_error(sid, terminal_id, error_code)
+    if state:
+        emit_agent_state(sid, state)
+
 def cancel_agent_pending_actions(state, reason):
     cancelled = []
     for action in state.pending_actions.values():
         if action.get('status') in AGENT_STATUS_OPEN:
-            action['status'] = reason
-            record_agent_audit(state, action, reason, error_code=reason)
+            action['status'] = AGENT_STATUS_FAILED
+            record_agent_audit(state, action, AGENT_STATUS_FAILED, error_code=reason)
             cancelled.append(dict(action))
     return cancelled
+
+def find_agent_action_for_decision(state, action_id, proposal_id):
+    action = state.pending_actions.get(action_id) if isinstance(action_id, str) else None
+    if not action and isinstance(proposal_id, str):
+        action = next(
+            (
+                candidate for candidate in state.pending_actions.values()
+                if candidate.get('proposal_id') == proposal_id
+            ),
+            None,
+        )
+    return action
+
+def validate_agent_action_decision(state, data):
+    action_id = data.get('action_id')
+    proposal_id = data.get('proposal_id')
+    if data.get('session_id') is not None and data.get('session_id') != state.session_id:
+        return None, AGENT_ERROR_STALE_PROPOSAL
+    if data.get('viewer_id') is not None and data.get('viewer_id') != state.viewer_id:
+        return None, AGENT_ERROR_STALE_PROPOSAL
+    if data.get('agent_binding_id') is not None and data.get('agent_binding_id') != state.agent_binding_id:
+        return None, AGENT_ERROR_STALE_PROPOSAL
+    if data.get('mode_version') is not None and data.get('mode_version') != state.mode_version:
+        return None, AGENT_ERROR_STALE_MODE_VERSION
+    if data.get('privacy_version') is not None and data.get('privacy_version') != state.privacy_version:
+        return None, AGENT_ERROR_STALE_PROPOSAL
+
+    action = find_agent_action_for_decision(state, action_id, proposal_id)
+    if not action:
+        return None, AGENT_ERROR_ACTION_NOT_FOUND
+    if isinstance(proposal_id, str) and action.get('proposal_id') != proposal_id:
+        return action, AGENT_ERROR_STALE_PROPOSAL
+    if action.get('session_id') != state.session_id:
+        return action, AGENT_ERROR_STALE_PROPOSAL
+    if action.get('viewer_id') != state.viewer_id:
+        return action, AGENT_ERROR_STALE_PROPOSAL
+    if action.get('agent_binding_id') != state.agent_binding_id:
+        return action, AGENT_ERROR_STALE_PROPOSAL
+    return action, None
 
 def invalidate_agent_states(session_token, terminal_id=None, sid=None, reason=AGENT_REASON_INVALIDATED):
     with agent_lock:
@@ -4504,6 +4742,13 @@ def build_external_agent_discovery_payload(base_url, token, terminal_id):
             'screen_tail': {'op': 'screen', 'tail_lines': 12},
             'screen_region': {'op': 'screen', 'region': {'top': 0, 'bottom': 12}},
             'screen_wait': {'op': 'screen', 'wait_ms': 3000, 'quiet_ms': 500},
+            'wait_output': {
+                'op': 'wait',
+                'condition': 'output',
+                'since_output_seq': 0,
+                'wait_ms': AGENT_EXTERNAL_TAIL_MAX_WAIT_MS,
+            },
+            'wait_quiet': {'op': 'wait', 'condition': 'quiet', 'wait_ms': 3000, 'quiet_ms': 500},
             'render': {'op': 'render', 'wait_ms': AGENT_VIEWPORT_RENDER_WAIT_MS},
             'tail': {
                 'op': 'tail',
@@ -4518,11 +4763,13 @@ def build_external_agent_discovery_payload(base_url, token, terminal_id):
                 'wait_ms': AGENT_EXTERNAL_TAIL_MAX_WAIT_MS,
                 'strip_ansi': True,
             },
-            'send': {'op': 'send', 'data': 'pwd\n'},
-            'send_submit': {'op': 'send', 'data': 'codex prompt', 'submit_after': True},
+            'send': {'op': 'send', 'kind': 'text', 'text': 'pwd\n'},
+            'send_keys': {'op': 'send', 'kind': 'keys', 'keys': ['Down', 'Enter']},
+            'send_submit': {'op': 'send', 'kind': 'text', 'text': 'codex prompt', 'submit_after': True},
             'send_capture': {
                 'op': 'send',
-                'data': 'pwd\n',
+                'kind': 'text',
+                'text': 'pwd\n',
                 'capture': True,
                 'wait_ms': AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_WAIT_MS,
                 'settle_ms': AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_SETTLE_MS,
@@ -4530,7 +4777,8 @@ def build_external_agent_discovery_payload(base_url, token, terminal_id):
             },
             'send_wait': {
                 'op': 'send-wait',
-                'data': 'pwd\n',
+                'kind': 'text',
+                'text': 'pwd\n',
                 'capture': True,
                 'wait_ms': AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_WAIT_MS,
                 'settle_ms': AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_SETTLE_MS,
@@ -4538,7 +4786,8 @@ def build_external_agent_discovery_payload(base_url, token, terminal_id):
             },
             'send_wait_plain': {
                 'op': 'send-wait',
-                'data': 'pwd\n',
+                'kind': 'text',
+                'text': 'pwd\n',
                 'capture': True,
                 'wait_ms': AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_WAIT_MS,
                 'settle_ms': AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_SETTLE_MS,
@@ -4558,19 +4807,144 @@ def build_external_agent_discovery_payload(base_url, token, terminal_id):
         },
     }
 
+def build_external_agentinfo_recommended_commands(agentinfo_path=None):
+    python_arg = sys.executable
+    cli_arg = str(APP_DIR / 'scripts' / 'agent_cli.py')
+    handoff_arg = str(EXTERNAL_AGENT_HANDOFF_PATH)
+    agentinfo_arg = str(agentinfo_path or EXTERNAL_AGENT_INFO_PATH)
+    tls_args = get_external_agent_cli_tls_args()
+    return {
+        'discover': quote_local_command([
+            python_arg, cli_arg, '--agentinfo', agentinfo_arg, *tls_args, 'discover',
+        ]),
+        'hello_after_token_mint': quote_local_command([
+            python_arg, cli_arg, '--handoff', handoff_arg, *tls_args, 'hello',
+        ]),
+        'render_after_token_mint': quote_local_command([
+            python_arg, cli_arg, '--handoff', handoff_arg, *tls_args, 'render',
+        ]),
+    }
+
+def build_external_agentinfo_status_hints():
+    now = time.time()
+    with agent_lock:
+        states = list(agent_states.values())
+        bridged_states = [
+            state for state in states
+            if get_bridge(state.session_token, state.terminal_id)
+        ]
+        visible_states = [
+            state for state in bridged_states
+            if is_external_agent_state_visible(state)
+        ]
+        return {
+            'agent_attached': bool(states),
+            'terminal_count': len(bridged_states),
+            'external_agent_available': bool(visible_states),
+            'modes': sorted({state.mode for state in states}),
+            'paused': any(state.paused or state.mode == AGENT_MODE_PAUSED for state in states),
+            'human_input_lease_active': any(
+                is_agent_human_input_lease_active(state, now=now) for state in states
+            ),
+            'privacy_blocking': any(
+                state.privacy_state in AGENT_CONTEXT_BLOCKING_PRIVACY_STATES for state in states
+            ),
+        }
+
+def build_external_agentinfo_payload(base_url=None, agentinfo_path=None):
+    command_base_url = build_external_agent_loopback_base_url(base_url or get_external_agent_local_base_url())
+    agentinfo_url = command_base_url.rstrip('/') + '/agentinfo'
+    command_endpoint = command_base_url.rstrip('/') + '/agent/external/command'
+    handoff_path = EXTERNAL_AGENT_HANDOFF_PATH
+    transport = {
+        'type': 'loopback_http_json',
+        'base_url': command_base_url,
+        'agentinfo_url': agentinfo_url,
+        'command_endpoint': command_endpoint,
+        'loopback_only': True,
+        'tls_verify': True,
+    }
+    ca_cert_path = get_external_agent_tls_ca_cert_path()
+    if ca_cert_path:
+        transport['tls_ca_cert_path'] = ca_cert_path
+    payload = {
+        'schema': 'standterm_agentinfo',
+        'schema_version': 1,
+        'protocol_version': EXTERNAL_AGENT_PROTOCOL_VERSION,
+        'generated_at': time.time(),
+        'base_url': command_base_url,
+        'agentinfo_url': agentinfo_url,
+        'command_endpoint': command_endpoint,
+        'loopback_only': True,
+        'launch_dir': str(APP_DIR),
+        'agentinfo_path': str(agentinfo_path or EXTERNAL_AGENT_INFO_PATH),
+        'current_agentinfo_path': str(EXTERNAL_AGENT_CURRENT_INFO_PATH) if EXTERNAL_AGENT_CURRENT_INFO_PATH else None,
+        'handoff_path': str(handoff_path),
+        'handoff_exists': handoff_path.is_file(),
+        'handoff_contains_secret': True,
+        'transport': transport,
+        'python_path': sys.executable,
+        'scripts': {
+            'agent_cli': str(APP_DIR / 'scripts' / 'agent_cli.py'),
+            'agent_jsonl': str(APP_DIR / 'scripts' / 'agent_jsonl.py'),
+            'agent_repl': str(APP_DIR / 'scripts' / 'agent_repl.py'),
+            'agent_type': str(APP_DIR / 'scripts' / 'agent_type.py'),
+        },
+        'skill': {
+            'path': str(APP_DIR / 'docs' / 'examples' / 'standterm-external-agent-skill' / 'SKILL.md'),
+            'boot_prompt_path': str(APP_DIR / 'docs' / 'examples' / 'standterm-external-agent-skill' / 'boot_prompt.txt'),
+        },
+        'capabilities': list(EXTERNAL_AGENT_CAPABILITIES),
+        'recommended_commands': build_external_agentinfo_recommended_commands(agentinfo_path=agentinfo_path),
+        'status_hints': build_external_agentinfo_status_hints(),
+        'security': {
+            'tokenless': True,
+            'contains_secret': False,
+            'handoff_contains_secret': True,
+            'terminal_display_included': False,
+            'token_bearing_commands_included': False,
+        },
+    }
+    if ca_cert_path:
+        payload['tls_ca_cert_path'] = ca_cert_path
+    return payload
+
+def write_json_file_atomic(path, payload):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + '.tmp')
+    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+    try:
+        os.chmod(tmp_path, 0o600)
+    except OSError:
+        pass
+    tmp_path.replace(path)
+
+def write_external_agentinfo_files(base_url=None):
+    payload = build_external_agentinfo_payload(base_url=base_url, agentinfo_path=EXTERNAL_AGENT_INFO_PATH)
+    written = []
+    try:
+        write_json_file_atomic(EXTERNAL_AGENT_INFO_PATH, payload)
+        written.append(str(EXTERNAL_AGENT_INFO_PATH))
+    except OSError as exc:
+        print(f"[!] Failed to write External Agent Info {EXTERNAL_AGENT_INFO_PATH}: {exc}", file=sys.stderr)
+    if EXTERNAL_AGENT_CURRENT_INFO_PATH:
+        try:
+            current_payload = dict(payload)
+            current_payload['agentinfo_path'] = str(EXTERNAL_AGENT_INFO_PATH)
+            current_payload['current_agentinfo_path'] = str(EXTERNAL_AGENT_CURRENT_INFO_PATH)
+            write_json_file_atomic(EXTERNAL_AGENT_CURRENT_INFO_PATH, current_payload)
+            written.append(str(EXTERNAL_AGENT_CURRENT_INFO_PATH))
+        except OSError as exc:
+            print(f"[!] Failed to write External Agent Info pointer {EXTERNAL_AGENT_CURRENT_INFO_PATH}: {exc}", file=sys.stderr)
+    return written
+
 def write_external_agent_handoff(payload):
     handoff_path = EXTERNAL_AGENT_HANDOFF_PATH
     write_external_agent_handoff_file(handoff_path, payload)
     return str(handoff_path)
 
 def write_external_agent_handoff_file(handoff_path, payload):
-    tmp_path = handoff_path.with_suffix(handoff_path.suffix + '.tmp')
-    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
-    try:
-        os.chmod(tmp_path, 0o600)
-    except OSError:
-        pass
-    tmp_path.replace(handoff_path)
+    write_json_file_atomic(handoff_path, payload)
 
 def build_external_agent_token_payload(token, record, terminal_id, base_url):
     command_base_url = build_external_agent_loopback_base_url(base_url)
@@ -4600,7 +4974,12 @@ def build_external_agent_startup_lines():
     python_arg = sys.executable
     cli_arg = str(APP_DIR / 'scripts' / 'agent_cli.py')
     handoff_arg = str(EXTERNAL_AGENT_HANDOFF_PATH)
+    agentinfo_arg = str(EXTERNAL_AGENT_INFO_PATH)
     loopback_url = build_external_agent_loopback_base_url(get_external_agent_local_base_url())
+    discover_command = quote_local_command([
+        python_arg, cli_arg, '--agentinfo', agentinfo_arg,
+        *get_external_agent_cli_tls_args(), 'discover',
+    ])
     hello_command = quote_local_command([
         python_arg, cli_arg, '--handoff', handoff_arg, '--url', loopback_url,
         *get_external_agent_cli_tls_args(), 'hello',
@@ -4610,6 +4989,10 @@ def build_external_agent_startup_lines():
         *get_external_agent_cli_tls_args(), 'render',
     ])
     return [
+        f"External Agent Info: {EXTERNAL_AGENT_INFO_PATH}",
+        f"External Agent Info URL: {loopback_url.rstrip('/')}/agentinfo",
+        f"External Agent Info Current: {EXTERNAL_AGENT_CURRENT_INFO_PATH}" if EXTERNAL_AGENT_CURRENT_INFO_PATH else "External Agent Info Current: disabled",
+        f"External Agent CLI discover: {discover_command}",
         f"External Agent Handoff: {EXTERNAL_AGENT_HANDOFF_PATH}",
         "External Agent Handoff is created or refreshed after browser Agent attach and external token mint.",
         f"External Agent CLI hello: {hello_command}",
@@ -4626,6 +5009,16 @@ def find_external_agent_dev_state(terminal_id):
             and is_external_agent_state_visible(state)
         ]
         return matches[-1] if matches else None
+
+@app.route('/agentinfo', methods=['GET'])
+def external_agentinfo():
+    if not is_loopback_client_request():
+        return external_agent_json_response(external_agent_error(AGENT_ERROR_EXTERNAL_AGENT_ORIGIN_BLOCKED), 403)
+    payload = build_external_agentinfo_payload(
+        base_url=request.host_url.rstrip('/'),
+        agentinfo_path=EXTERNAL_AGENT_INFO_PATH,
+    )
+    return external_agent_json_response(payload)
 
 @app.route('/agent/external/token', methods=['POST'])
 def external_agent_token():
@@ -5302,7 +5695,7 @@ def on_agent_detach(data):
         reason=AGENT_REASON_DETACHED,
     )
     for sid, action in cancelled:
-        emit_agent_action_result(sid, action, AGENT_REASON_DETACHED, error_code=AGENT_REASON_DETACHED)
+        emit_agent_action_failure(sid, action, AGENT_REASON_DETACHED)
     socketio.emit(
         AGENT_EVENT_STATE,
         {
@@ -5392,7 +5785,7 @@ def on_agent_pause(data):
         state.run_id = None
         cancelled = cancel_agent_pending_actions(state, AGENT_ERROR_PAUSED)
         for action in cancelled:
-            emit_agent_action_result(request.sid, action, AGENT_ERROR_PAUSED, error_code=AGENT_ERROR_PAUSED)
+            emit_agent_action_failure(request.sid, action, AGENT_ERROR_PAUSED)
         record_agent_audit_event(state, AGENT_AUDIT_PAUSE, cancelled_actions=len(cancelled))
         record_operator_observation_event(
             session_token,
@@ -5469,7 +5862,7 @@ def on_agent_privacy_set(data):
             state.run_id = None
             cancelled = cancel_agent_pending_actions(state, AGENT_ERROR_PRIVACY_BLOCKED)
         for action in cancelled:
-            emit_agent_action_result(request.sid, action, AGENT_ERROR_PRIVACY_BLOCKED, error_code=AGENT_ERROR_PRIVACY_BLOCKED)
+            emit_agent_action_failure(request.sid, action, AGENT_ERROR_PRIVACY_BLOCKED)
         record_agent_audit_event(
             state,
             AGENT_AUDIT_PRIVACY_SET,
@@ -5673,8 +6066,6 @@ def process_agent_terminal_input_proposal(data, proposal_builder,
             proposal_id=action['proposal_id'],
         )
     status = AGENT_STATUS_COMPLETED if ok else AGENT_STATUS_FAILED
-    if result.get('error_code'):
-        status = result['error_code']
     emit_agent_action_result(request.sid, action, status, error_code=result.get('error_code'))
     with agent_lock:
         state = get_agent_state(session_token, terminal_id, request.sid)
@@ -5750,7 +6141,7 @@ def process_external_agent_command(command):
     if op == 'state':
         return build_external_agent_state_payload(record, state)
 
-    if op in {'screen', 'render', 'tail'}:
+    if op in {'screen', 'render', 'tail', 'wait'}:
         if not is_agent_context_allowed(state):
             return external_agent_error(AGENT_ERROR_PRIVACY_BLOCKED, terminal_id=terminal_id)
         bridge = get_bridge(record.get('session_token'), terminal_id)
@@ -5826,47 +6217,75 @@ def process_external_agent_command(command):
                 'state': state.public_state(),
                 'render': render,
             }
-        tail, error_code = build_external_agent_tail_payload_waiting(
-            bridge,
-            state,
-            since_output_seq=command.get('since_output_seq'),
-            limit=command.get('limit', AGENT_EXTERNAL_TAIL_MAX_EVENTS),
-            wait_ms=command.get('wait_ms'),
-        )
+        if op == 'tail':
+            tail, error_code = build_external_agent_tail_payload_waiting(
+                bridge,
+                state,
+                since_output_seq=command.get('since_output_seq'),
+                limit=command.get('limit', AGENT_EXTERNAL_TAIL_MAX_EVENTS),
+                wait_ms=command.get('wait_ms'),
+            )
+            if error_code:
+                return external_agent_error(error_code, terminal_id=terminal_id)
+            strip_ansi = should_external_agent_strip_ansi(command)
+            tail = format_external_agent_tail_payload(tail, strip_ansi=strip_ansi)
+            record_agent_audit_event(
+                state,
+                AGENT_AUDIT_EXTERNAL_AGENT_TAIL,
+                external_agent_id=record.get('external_agent_id'),
+                event_count=len(tail['events']),
+                output_seq=tail['output_seq'],
+                wait_ms=parse_external_agent_tail_wait_ms(command.get('wait_ms')),
+                gap=tail['gap'],
+                strip_ansi=strip_ansi,
+            )
+            payload = {
+                'status': 'ok',
+                'terminal_id': terminal_id,
+                'external_agent_id': record.get('external_agent_id'),
+                'output_seq': tail['output_seq'],
+                'since_output_seq': tail['since_output_seq'],
+                'limit': tail['limit'],
+                'wait_ms': parse_external_agent_tail_wait_ms(command.get('wait_ms')),
+                'first_available_output_seq': tail['first_available_output_seq'],
+                'dropped_before_output_seq': tail['dropped_before_output_seq'],
+                'gap': tail['gap'],
+                'events': tail['events'],
+            }
+            if strip_ansi:
+                payload['strip_ansi'] = True
+                payload['data_format'] = tail['data_format']
+            return payload
+
+        wait_payload, error_code = build_external_agent_wait_payload(bridge, state, command)
         if error_code:
             return external_agent_error(error_code, terminal_id=terminal_id)
-        strip_ansi = should_external_agent_strip_ansi(command)
-        tail = format_external_agent_tail_payload(tail, strip_ansi=strip_ansi)
         record_agent_audit_event(
             state,
-            AGENT_AUDIT_EXTERNAL_AGENT_TAIL,
+            AGENT_AUDIT_EXTERNAL_AGENT_WAIT,
             external_agent_id=record.get('external_agent_id'),
-            event_count=len(tail['events']),
-            output_seq=tail['output_seq'],
-            wait_ms=parse_external_agent_tail_wait_ms(command.get('wait_ms')),
-            gap=tail['gap'],
-            strip_ansi=strip_ansi,
+            condition=wait_payload['condition'],
+            status=wait_payload['status'],
+            timed_out=wait_payload['timed_out'],
+            output_seq=wait_payload.get('output_seq'),
+            wait_ms=wait_payload.get('wait_ms'),
+            quiet_ms=wait_payload.get('quiet_ms'),
+            event_count=wait_payload.get('event_count'),
+            gap=wait_payload.get('gap'),
         )
-        payload = {
+        return {
             'status': 'ok',
             'terminal_id': terminal_id,
             'external_agent_id': record.get('external_agent_id'),
-            'output_seq': tail['output_seq'],
-            'since_output_seq': tail['since_output_seq'],
-            'limit': tail['limit'],
-            'wait_ms': parse_external_agent_tail_wait_ms(command.get('wait_ms')),
-            'first_available_output_seq': tail['first_available_output_seq'],
-            'dropped_before_output_seq': tail['dropped_before_output_seq'],
-            'gap': tail['gap'],
-            'events': tail['events'],
+            'output_seq': wait_payload.get('output_seq'),
+            'state': state.public_state(),
+            'wait': wait_payload,
         }
-        if strip_ansi:
-            payload['strip_ansi'] = True
-            payload['data_format'] = tail['data_format']
-        return payload
 
     if op in {'send', 'send-wait'}:
-        data = command.get('data')
+        data, input_metadata, input_error = parse_external_agent_send_input(command)
+        if input_error:
+            return external_agent_error(input_error, terminal_id=terminal_id)
         bridge = get_bridge(record.get('session_token'), terminal_id)
         if not bridge:
             return external_agent_error(AGENT_ERROR_TERMINAL_NOT_FOUND, terminal_id=terminal_id)
@@ -5887,6 +6306,7 @@ def process_external_agent_command(command):
                     state,
                     data,
                     submit_after=should_external_agent_submit_after(command),
+                    input_metadata=input_metadata,
                 )
                 requires_approval = state.mode != AGENT_MODE_DIRECT_ACTIVE
                 action, error_code = build_agent_action(state, proposal, requires_approval)
@@ -5897,6 +6317,8 @@ def process_external_agent_command(command):
                     AGENT_AUDIT_EXTERNAL_AGENT_SEND,
                     action=action,
                     external_agent_id=record.get('external_agent_id'),
+                    input_kind=input_metadata.get('input_kind') if input_metadata else None,
+                    key_count=input_metadata.get('key_count') if input_metadata else None,
                     capture_requested=capture_requested,
                     strip_ansi=strip_ansi if capture_requested else False,
                 )
@@ -5924,8 +6346,6 @@ def process_external_agent_command(command):
                 proposal_id=action['proposal_id'],
             )
         status = AGENT_STATUS_COMPLETED if ok else AGENT_STATUS_FAILED
-        if result.get('error_code'):
-            status = result['error_code']
         emit_agent_action_result(state.sid, action, status, error_code=result.get('error_code'))
         with agent_lock:
             current_state = get_agent_state(record.get('session_token'), terminal_id, state.sid)
@@ -6047,58 +6467,25 @@ def on_agent_action_approve(data):
         if not state:
             emit_agent_error(request.sid, terminal_id, AGENT_ERROR_NOT_ATTACHED)
             return
-        if data.get('session_id') is not None and data.get('session_id') != state.session_id:
-            emit_agent_error(request.sid, terminal_id, AGENT_ERROR_STALE_PROPOSAL)
-            emit_agent_state(request.sid, state)
-            return
-        if data.get('viewer_id') is not None and data.get('viewer_id') != state.viewer_id:
-            emit_agent_error(request.sid, terminal_id, AGENT_ERROR_STALE_PROPOSAL)
-            emit_agent_state(request.sid, state)
-            return
-        if data.get('agent_binding_id') is not None and data.get('agent_binding_id') != state.agent_binding_id:
-            emit_agent_error(request.sid, terminal_id, AGENT_ERROR_STALE_PROPOSAL)
-            emit_agent_state(request.sid, state)
-            return
-        if data.get('mode_version') is not None and data.get('mode_version') != state.mode_version:
-            emit_agent_error(request.sid, terminal_id, AGENT_ERROR_STALE_MODE_VERSION)
-            emit_agent_state(request.sid, state)
-            return
-        if data.get('privacy_version') is not None and data.get('privacy_version') != state.privacy_version:
-            emit_agent_error(request.sid, terminal_id, AGENT_ERROR_STALE_PROPOSAL)
-            emit_agent_state(request.sid, state)
-            return
-        action = state.pending_actions.get(action_id) if isinstance(action_id, str) else None
-        if not action and isinstance(proposal_id, str):
-            action = next(
-                (
-                    candidate for candidate in state.pending_actions.values()
-                    if candidate.get('proposal_id') == proposal_id
-                ),
-                None,
-            )
-        if not action:
-            emit_agent_error(request.sid, terminal_id, AGENT_ERROR_ACTION_NOT_FOUND)
-            emit_agent_state(request.sid, state)
-            return
-        if isinstance(proposal_id, str) and action.get('proposal_id') != proposal_id:
-            emit_agent_action_result(request.sid, action, AGENT_ERROR_STALE_PROPOSAL, error_code=AGENT_ERROR_STALE_PROPOSAL)
-            emit_agent_state(request.sid, state)
+        action, error_code = validate_agent_action_decision(state, data)
+        if error_code:
+            emit_agent_decision_error(request.sid, terminal_id, state, action, error_code)
             return
         action_id = action['action_id']
         if state.paused or state.mode == AGENT_MODE_PAUSED:
-            emit_agent_action_result(request.sid, action, AGENT_ERROR_PAUSED, error_code=AGENT_ERROR_PAUSED)
+            emit_agent_action_failure(request.sid, action, AGENT_ERROR_PAUSED)
             emit_agent_state(request.sid, state)
             return
         if not is_agent_context_allowed(state):
-            emit_agent_action_result(request.sid, action, AGENT_ERROR_PRIVACY_BLOCKED, error_code=AGENT_ERROR_PRIVACY_BLOCKED)
+            emit_agent_action_failure(request.sid, action, AGENT_ERROR_PRIVACY_BLOCKED)
             emit_agent_state(request.sid, state)
             return
         if action.get('status') != AGENT_STATUS_PENDING_APPROVAL:
-            emit_agent_action_result(request.sid, action, AGENT_ERROR_ACTION_NOT_PENDING, error_code=AGENT_ERROR_ACTION_NOT_PENDING)
+            emit_agent_action_failure(request.sid, action, AGENT_ERROR_ACTION_NOT_PENDING)
             emit_agent_state(request.sid, state)
             return
         if action.get('control_epoch') != state.control_epoch:
-            emit_agent_action_result(request.sid, action, AGENT_ERROR_STALE_ACTION, error_code=AGENT_ERROR_STALE_ACTION)
+            emit_agent_action_failure(request.sid, action, AGENT_ERROR_STALE_ACTION)
             emit_agent_state(request.sid, state)
             return
         action['status'] = AGENT_STATUS_APPROVED
@@ -6116,8 +6503,6 @@ def on_agent_action_approve(data):
         proposal_id=action['proposal_id'],
     )
     status = AGENT_STATUS_COMPLETED if ok else AGENT_STATUS_FAILED
-    if result.get('error_code'):
-        status = result['error_code']
     emit_agent_action_result(request.sid, action, status, error_code=result.get('error_code'))
     with agent_lock:
         state = get_agent_state(session_token, terminal_id, request.sid)
@@ -6140,21 +6525,12 @@ def on_agent_action_reject(data):
         if not state:
             emit_agent_error(request.sid, terminal_id, AGENT_ERROR_NOT_ATTACHED)
             return
-        action = state.pending_actions.get(action_id) if isinstance(action_id, str) else None
-        if not action and isinstance(proposal_id, str):
-            action = next(
-                (
-                    candidate for candidate in state.pending_actions.values()
-                    if candidate.get('proposal_id') == proposal_id
-                ),
-                None,
-            )
-        if not action:
-            emit_agent_error(request.sid, terminal_id, AGENT_ERROR_ACTION_NOT_FOUND)
-            emit_agent_state(request.sid, state)
+        action, error_code = validate_agent_action_decision(state, data)
+        if error_code:
+            emit_agent_decision_error(request.sid, terminal_id, state, action, error_code)
             return
-        if isinstance(proposal_id, str) and action.get('proposal_id') != proposal_id:
-            emit_agent_action_result(request.sid, action, AGENT_ERROR_STALE_PROPOSAL, error_code=AGENT_ERROR_STALE_PROPOSAL)
+        if action.get('status') != AGENT_STATUS_PENDING_APPROVAL:
+            emit_agent_action_failure(request.sid, action, AGENT_ERROR_ACTION_NOT_PENDING)
             emit_agent_state(request.sid, state)
             return
         action['status'] = AGENT_STATUS_REJECTED
@@ -6766,6 +7142,7 @@ if __name__ == '__main__':
         print(f"Forced Connection: {FORCE_CONNECTION_TYPE}")
     print(f"Access URL: {scheme}://{access_host}:{port}/?token={ACCESS_TOKEN}")
     print(f"Listening on: {bind_host}:{port}")
+    write_external_agentinfo_files(base_url=f'{scheme}://{access_host}:{port}')
     for line in build_external_agent_startup_lines():
         print(line)
     if is_wsl() and not is_loopback_bind(bind_host):

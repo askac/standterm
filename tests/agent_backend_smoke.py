@@ -1156,6 +1156,134 @@ def test_external_agent_tail_wait_stops_on_pause():
     client.disconnect()
 
 
+def test_external_agent_wait_output_returns_structured_result_without_display_by_default():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
+        session_token,
+        standterm.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert error_code is None
+
+    result_box = {}
+
+    def request_wait():
+        result_box['wait'] = standterm.process_external_agent_command({
+            'op': 'wait',
+            'condition': 'output',
+            'token': token,
+            'terminal_id': standterm.TERMINAL_ID_MAIN,
+            'since_output_seq': 0,
+            'wait_ms': 1000,
+        })
+
+    thread = threading.Thread(target=request_wait)
+    thread.start()
+    time.sleep(0.05)
+    bridge.emit_output({
+        'message_type': 'terminal',
+        'data': 'typed-wait-output\n',
+    })
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+
+    result = result_box['wait']
+    assert result['status'] == 'ok'
+    assert result['wait']['condition'] == 'output'
+    assert result['wait']['status'] == 'changed'
+    assert result['wait']['timed_out'] is False
+    assert result['wait']['changed'] is True
+    assert result['wait']['event_count'] == 1
+    assert 'events' not in result['wait']
+
+    with_events = standterm.process_external_agent_command({
+        'op': 'wait',
+        'condition': 'output',
+        'token': token,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'since_output_seq': 0,
+        'wait_ms': 0,
+        'include_events': True,
+    })
+    assert with_events['wait']['status'] == 'changed'
+    assert with_events['wait']['events'][0]['data'] == 'typed-wait-output\n'
+
+    audit_events = standterm.agent_audit_store.get_recent(session_token, standterm.TERMINAL_ID_MAIN)
+    wait_audit = [
+        event for event in audit_events
+        if event['event_type'] == standterm.AGENT_AUDIT_EXTERNAL_AGENT_WAIT
+    ][-1]
+    assert wait_audit['condition'] == 'output'
+    assert wait_audit['status'] == 'changed'
+
+    client.disconnect()
+
+
+def test_external_agent_wait_output_timeout_and_wait_quiet_are_typed():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
+        session_token,
+        standterm.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert error_code is None
+
+    output_wait = standterm.process_external_agent_command({
+        'op': 'wait',
+        'condition': 'output',
+        'token': token,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'since_output_seq': 0,
+        'wait_ms': 20,
+    })
+    assert output_wait['status'] == 'ok'
+    assert output_wait['wait']['condition'] == 'output'
+    assert output_wait['wait']['status'] == 'timeout'
+    assert output_wait['wait']['timed_out'] is True
+    assert output_wait['wait']['event_count'] == 0
+
+    bridge.emit_output({
+        'message_type': 'terminal',
+        'data': 'quiet-source\n',
+    })
+    quiet_wait = standterm.process_external_agent_command({
+        'op': 'wait',
+        'condition': 'quiet',
+        'token': token,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'wait_ms': 1000,
+        'quiet_ms': 20,
+    })
+    assert quiet_wait['status'] == 'ok'
+    assert quiet_wait['wait']['condition'] == 'quiet'
+    assert quiet_wait['wait']['status'] == 'settled'
+    assert quiet_wait['wait']['settled'] is True
+    assert quiet_wait['wait']['timed_out'] is False
+    assert quiet_wait['wait']['terminal_quiet_ms'] >= 20
+
+    invalid = standterm.process_external_agent_command({
+        'op': 'wait',
+        'condition': 'quiet',
+        'token': token,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'wait_ms': 20,
+    })
+    assert invalid['status'] == standterm.AGENT_STATUS_FAILED
+    assert invalid['error_code'] == standterm.AGENT_ERROR_ACTION_INVALID_DATA
+
+    client.disconnect()
+
+
 def test_external_agent_observe_cannot_send():
     client = make_client()
     session_token = current_session_token()
@@ -1253,6 +1381,7 @@ def test_external_agent_direct_send_uses_agent_gate():
         'data': 'direct-external\n',
     })
     assert result['status'] == standterm.AGENT_STATUS_COMPLETED
+    assert result['input_kind'] == 'legacy_data'
     assert result['bytes_written'] == len('direct-external\n')
     assert ''.join(bridge.writes) == 'direct-external\n'
     action_result = last_payload(client, standterm.AGENT_EVENT_ACTION_RESULT)
@@ -1287,9 +1416,78 @@ def test_external_agent_submit_after_writes_discrete_enter():
         'submit_after': True,
     })
     assert result['status'] == standterm.AGENT_STATUS_COMPLETED
+    assert result['input_kind'] == 'legacy_data'
     assert result['submit_after'] is True
     assert result['bytes_written'] == len('codex prompt\r')
     assert bridge.writes == ['codex prompt', '\r']
+
+    client.disconnect()
+
+
+def test_external_agent_structured_text_and_keys_send_use_backend_input_kind():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'mode': 'direct',
+    })
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
+        session_token,
+        standterm.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert error_code is None
+
+    text_result = standterm.process_external_agent_command({
+        'op': 'send',
+        'token': token,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'kind': 'text',
+        'text': 'typed-text\n',
+    })
+    assert text_result['status'] == standterm.AGENT_STATUS_COMPLETED
+    assert text_result['input_kind'] == 'text'
+    assert text_result['key_names'] == []
+
+    key_result = standterm.process_external_agent_command({
+        'op': 'send',
+        'token': token,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'input': {
+            'kind': 'keys',
+            'keys': ['Down', 'Enter'],
+        },
+    })
+    assert key_result['status'] == standterm.AGENT_STATUS_COMPLETED
+    assert key_result['input_kind'] == 'keys'
+    assert key_result['key_names'] == ['Down', 'Enter']
+    assert key_result['key_count'] == 2
+    assert bridge.writes == ['typed-text\n', '\x1b[B\r']
+
+    invalid_key = standterm.process_external_agent_command({
+        'op': 'send',
+        'token': token,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'kind': 'keys',
+        'keys': ['NoSuchKey'],
+    })
+    assert invalid_key['status'] == standterm.AGENT_STATUS_FAILED
+    assert invalid_key['error_code'] == standterm.AGENT_ERROR_ACTION_INVALID_DATA
+
+    ambiguous = standterm.process_external_agent_command({
+        'op': 'send',
+        'token': token,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'kind': 'text',
+        'text': 'x',
+        'data': 'legacy',
+    })
+    assert ambiguous['status'] == standterm.AGENT_STATUS_FAILED
+    assert ambiguous['error_code'] == standterm.AGENT_ERROR_ACTION_INVALID_DATA
 
     client.disconnect()
 
@@ -1925,7 +2123,9 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             assert token_payload['protocol_version'] == standterm.EXTERNAL_AGENT_PROTOCOL_VERSION
             assert 'headless_screen' in token_payload['capabilities']
             assert 'screen_wait' in token_payload['capabilities']
+            assert 'wait' in token_payload['capabilities']
             assert 'render' in token_payload['capabilities']
+            assert 'typed_send' in token_payload['capabilities']
             assert 'send_capture' in token_payload['capabilities']
             assert 'submit_after' in token_payload['capabilities']
             assert 'strip_ansi' in token_payload['capabilities']
@@ -1948,10 +2148,29 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
                 'wait_ms': 3000,
                 'quiet_ms': 500,
             }
+            assert token_payload['operations']['wait_output'] == {
+                'op': 'wait',
+                'condition': 'output',
+                'since_output_seq': 0,
+                'wait_ms': standterm.AGENT_EXTERNAL_TAIL_MAX_WAIT_MS,
+            }
+            assert token_payload['operations']['wait_quiet'] == {
+                'op': 'wait',
+                'condition': 'quiet',
+                'wait_ms': 3000,
+                'quiet_ms': 500,
+            }
             assert token_payload['operations']['tail']['wait_ms'] == standterm.AGENT_EXTERNAL_TAIL_MAX_WAIT_MS
             assert token_payload['operations']['tail_plain']['strip_ansi'] is True
+            assert token_payload['operations']['send'] == {'op': 'send', 'kind': 'text', 'text': 'pwd\n'}
+            assert token_payload['operations']['send_keys'] == {
+                'op': 'send',
+                'kind': 'keys',
+                'keys': ['Down', 'Enter'],
+            }
             assert token_payload['operations']['send_submit']['submit_after'] is True
             assert token_payload['operations']['send_wait']['op'] == 'send-wait'
+            assert token_payload['operations']['send_wait']['kind'] == 'text'
             assert token_payload['operations']['send_wait_plain']['strip_ansi'] is True
             assert token_payload['expires_at'] > standterm.time.time()
             assert token_payload['security']['token_lifetime'] == 'idle_timeout'
@@ -2030,19 +2249,82 @@ def test_external_agent_handoff_uses_loopback_command_url_for_non_loopback_brows
     assert "--url https://127.0.0.1:5000" in payload['cli_commands']['jsonl']
 
 
+def assert_agentinfo_is_tokenless(payload):
+    assert payload['schema'] == 'standterm_agentinfo'
+    assert payload['schema_version'] == 1
+    assert payload['protocol_version'] == standterm.EXTERNAL_AGENT_PROTOCOL_VERSION
+    assert payload['loopback_only'] is True
+    assert payload['security']['tokenless'] is True
+    assert payload['security']['contains_secret'] is False
+    assert payload['security']['terminal_display_included'] is False
+    assert payload['security']['token_bearing_commands_included'] is False
+    assert payload['handoff_contains_secret'] is True
+    assert payload['handoff_path'].endswith('standterm_external_agent_handoff.json')
+    assert payload['transport']['command_endpoint'].endswith('/agent/external/command')
+    assert payload['agentinfo_url'].endswith('/agentinfo')
+    assert 'agt_' not in standterm.json.dumps(payload)
+    for command in payload['recommended_commands'].values():
+        assert '--token' not in command
+
+
+def test_external_agentinfo_payload_route_and_pointer_are_tokenless():
+    flask_client = standterm.app.test_client()
+
+    response = flask_client.get('/agentinfo')
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert_agentinfo_is_tokenless(payload)
+    assert payload['base_url'].startswith('http://localhost')
+    assert payload['command_endpoint'] == payload['base_url'].rstrip('/') + '/agent/external/command'
+    assert '--agentinfo' in payload['recommended_commands']['discover']
+    assert '--handoff' in payload['recommended_commands']['hello_after_token_mint']
+    assert '--handoff' in payload['recommended_commands']['render_after_token_mint']
+
+    blocked = flask_client.get('/agentinfo', environ_overrides={'REMOTE_ADDR': '203.0.113.10'})
+    assert blocked.status_code == 403
+    assert blocked.get_json()['error_code'] == standterm.AGENT_ERROR_EXTERNAL_AGENT_ORIGIN_BLOCKED
+
+    original_info_path = standterm.EXTERNAL_AGENT_INFO_PATH
+    original_current_path = standterm.EXTERNAL_AGENT_CURRENT_INFO_PATH
+    with tempfile.TemporaryDirectory(prefix='standterm-agentinfo-smoke-') as temp_dir:
+        info_path = Path(temp_dir) / 'standterm_agentinfo.json'
+        current_path = Path(temp_dir) / 'current_agentinfo.json'
+        standterm.EXTERNAL_AGENT_INFO_PATH = info_path
+        standterm.EXTERNAL_AGENT_CURRENT_INFO_PATH = current_path
+        try:
+            written = standterm.write_external_agentinfo_files(base_url='https://172.17.186.221:5000')
+            assert written == [str(info_path), str(current_path)]
+            launch_payload = standterm.json.loads(info_path.read_text(encoding='utf-8'))
+            current_payload = standterm.json.loads(current_path.read_text(encoding='utf-8'))
+            assert_agentinfo_is_tokenless(launch_payload)
+            assert_agentinfo_is_tokenless(current_payload)
+            assert launch_payload['base_url'] == 'https://127.0.0.1:5000'
+            assert launch_payload['agentinfo_path'] == str(info_path)
+            assert current_payload['agentinfo_path'] == str(info_path)
+            assert current_payload['current_agentinfo_path'] == str(current_path)
+        finally:
+            standterm.EXTERNAL_AGENT_INFO_PATH = original_info_path
+            standterm.EXTERNAL_AGENT_CURRENT_INFO_PATH = original_current_path
+
+
 def test_external_agent_startup_lines_point_to_launch_handoff():
     original_https_enabled = standterm.HTTPS_ENABLED
     lines = standterm.build_external_agent_startup_lines()
     joined = '\n'.join(lines)
+    discover_line = next(line for line in lines if line.startswith('External Agent CLI discover: '))
     hello_line = next(line for line in lines if line.startswith('External Agent CLI hello: '))
     render_line = next(line for line in lines if line.startswith('External Agent CLI render: '))
 
     assert standterm.quote_local_command(['C:\\Program Files\\Python\\python.exe'], platform_name='win32') == (
         '"C:\\Program Files\\Python\\python.exe"'
     )
+    assert str(standterm.EXTERNAL_AGENT_INFO_PATH) in joined
     assert str(standterm.EXTERNAL_AGENT_HANDOFF_PATH) in joined
     assert str(standterm.APP_DIR / 'scripts' / 'agent_cli.py') in joined
     assert standterm.sys.executable in joined
+    assert '--agentinfo' in discover_line
+    assert str(standterm.EXTERNAL_AGENT_INFO_PATH) in discover_line
+    assert discover_line.endswith(' discover')
     assert '--handoff' in hello_line
     assert f'--url http://127.0.0.1:{standterm.DEFAULT_PORT}' in hello_line
     assert str(standterm.EXTERNAL_AGENT_HANDOFF_PATH) in hello_line
@@ -2790,6 +3072,78 @@ def test_mode_change_cancels_pending_action():
     client.disconnect()
 
 
+def test_agent_reject_uses_stale_and_pending_checks():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'mode': 'approval',
+    })
+    client.emit(standterm.AGENT_EVENT_SUGGESTION_REQUEST, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'mock_input': 'reject-stale\n',
+    })
+    stale_action = last_payload(client, standterm.AGENT_EVENT_ACTION_REQUEST)
+    stale_reject = {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'action_id': stale_action['action_id'],
+        'proposal_id': stale_action['proposal_id'],
+        'session_id': stale_action['session_id'],
+        'viewer_id': stale_action['viewer_id'],
+        'agent_binding_id': stale_action['agent_binding_id'],
+        'mode_version': stale_action['mode_version'],
+        'privacy_version': stale_action['privacy_version'],
+    }
+    client.emit(standterm.AGENT_EVENT_PRIVACY_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'privacy_state': standterm.AGENT_PRIVACY_PRIVATE_INPUT,
+    })
+    assert last_payload(client, standterm.AGENT_EVENT_STATE)['privacy_version'] == stale_action['privacy_version'] + 1
+
+    client.emit(standterm.AGENT_EVENT_ACTION_REJECT, stale_reject)
+    stale_result = last_payload(client, standterm.AGENT_EVENT_ACTION_RESULT)
+    assert stale_result['status'] == standterm.AGENT_STATUS_FAILED
+    assert stale_result['error_code'] == standterm.AGENT_ERROR_STALE_PROPOSAL
+    state = standterm.get_agent_state(session_token, standterm.TERMINAL_ID_MAIN, sid)
+    assert state.pending_actions[stale_action['action_id']]['status'] == standterm.AGENT_STATUS_FAILED
+
+    client.emit(standterm.AGENT_EVENT_PRIVACY_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'privacy_state': standterm.AGENT_PRIVACY_NORMAL,
+    })
+    client.emit(standterm.AGENT_EVENT_SUGGESTION_REQUEST, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'mock_input': 'reject-completed\n',
+    })
+    completed_action = last_payload(client, standterm.AGENT_EVENT_ACTION_REQUEST)
+    completed_payload = {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'action_id': completed_action['action_id'],
+        'proposal_id': completed_action['proposal_id'],
+        'session_id': completed_action['session_id'],
+        'viewer_id': completed_action['viewer_id'],
+        'agent_binding_id': completed_action['agent_binding_id'],
+        'mode_version': completed_action['mode_version'],
+        'privacy_version': completed_action['privacy_version'],
+    }
+    client.emit(standterm.AGENT_EVENT_ACTION_APPROVE, completed_payload)
+    assert last_payload(client, standterm.AGENT_EVENT_ACTION_RESULT)['status'] == standterm.AGENT_STATUS_COMPLETED
+    assert bridge.writes == ['reject-completed\n']
+
+    client.emit(standterm.AGENT_EVENT_ACTION_REJECT, completed_payload)
+    not_pending = last_payload(client, standterm.AGENT_EVENT_ACTION_RESULT)
+    assert not_pending['status'] == standterm.AGENT_STATUS_FAILED
+    assert not_pending['error_code'] == standterm.AGENT_ERROR_ACTION_NOT_PENDING
+    assert bridge.writes == ['reject-completed\n']
+    assert state.pending_actions[completed_action['action_id']]['status'] == standterm.AGENT_STATUS_COMPLETED
+
+    client.disconnect()
+
+
 def test_terminal_close_invalidates_pending_action():
     client = make_client()
     session_token = current_session_token()
@@ -3177,10 +3531,13 @@ def main():
         test_external_agent_tail_wait_returns_after_new_output,
         test_external_agent_tail_wait_times_out_without_output,
         test_external_agent_tail_wait_stops_on_pause,
+        test_external_agent_wait_output_returns_structured_result_without_display_by_default,
+        test_external_agent_wait_output_timeout_and_wait_quiet_are_typed,
         test_external_agent_observe_cannot_send,
         test_external_agent_approval_send_waits_for_human_approval,
         test_external_agent_direct_send_uses_agent_gate,
         test_external_agent_submit_after_writes_discrete_enter,
+        test_external_agent_structured_text_and_keys_send_use_backend_input_kind,
         test_external_agent_direct_send_capture_returns_tail_after_write,
         test_external_agent_send_wait_strip_ansi_formats_capture_only_when_requested,
         test_external_agent_send_wait_times_out_without_output,
@@ -3195,6 +3552,7 @@ def main():
         test_external_agent_expired_and_wrong_terminal_tokens_are_rejected,
         test_external_agent_http_bridge_mints_token_and_accepts_cli_command,
         test_external_agent_handoff_uses_loopback_command_url_for_non_loopback_browser_url,
+        test_external_agentinfo_payload_route_and_pointer_are_tokenless,
         test_external_agent_startup_lines_point_to_launch_handoff,
         test_wsl_local_shell_choice_is_structured_and_wsl_only,
         test_terminal_policy_creates_authorized_dir_for_fresh_checkout,
@@ -3218,6 +3576,7 @@ def main():
         test_stale_mode_version_cannot_approve_action,
         test_stale_privacy_version_cannot_approve_action,
         test_mode_change_cancels_pending_action,
+        test_agent_reject_uses_stale_and_pending_checks,
         test_terminal_close_invalidates_pending_action,
         test_disconnect_invalidates_agent_state,
         test_stale_epoch_write_is_rejected,

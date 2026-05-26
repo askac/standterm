@@ -268,6 +268,45 @@
             font: 12px/1.35 Consolas, "Courier New", monospace;
             outline: none;
         }
+        #agent-gate-state { display: flex; flex-wrap: wrap; gap: 6px; }
+        .agent-chip {
+            padding: 4px 7px;
+            border: 1px solid #3a3a3c;
+            border-radius: 5px;
+            background: #1c1c1e;
+            color: #aaa;
+            line-height: 1.2;
+            white-space: nowrap;
+        }
+        .agent-chip.active { border-color: #7a5a1f; background: #2a2110; color: #ffd166; }
+        .agent-chip.blocking { border-color: #7a1f1f; background: #2a1010; color: #ff8a80; }
+        #agent-status-box {
+            display: grid;
+            gap: 5px;
+            padding: 7px;
+            border: 1px solid #333;
+            border-radius: 5px;
+            background: #111;
+            color: #aaa;
+        }
+        #agent-status-box.error { border-color: #7a1f1f; background: #241010; color: #ff8a80; }
+        #agent-status-main { color: #ddd; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        #agent-status-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        #agent-external-hint { color: #aaa; line-height: 1.35; }
+        #agent-external-command {
+            width: 100%;
+            min-height: 54px;
+            max-height: 150px;
+            resize: vertical;
+            box-sizing: border-box;
+            padding: 7px;
+            background: #101010;
+            border: 1px solid #444;
+            border-radius: 5px;
+            color: #ddd;
+            font: 12px/1.35 Consolas, "Courier New", monospace;
+            outline: none;
+        }
         #agent-action-box {
             display: none;
             border: 1px solid #4a3a1f;
@@ -591,6 +630,15 @@
                 <button type="button" data-agent-mode="approval_pending">Approval</button>
                 <button type="button" data-agent-mode="direct_active">Direct</button>
             </div>
+            <div id="agent-gate-state">
+                <span class="agent-chip" id="agent-gate-privacy">privacy: --</span>
+                <span class="agent-chip" id="agent-gate-human">human input: idle</span>
+                <span class="agent-chip" id="agent-gate-pause">pause: off</span>
+            </div>
+            <div id="agent-status-box">
+                <div id="agent-status-main">last: none</div>
+                <div id="agent-status-detail">error: none</div>
+            </div>
             <div id="operator-observation-row">
                 <button type="button" id="operator-observation-start-btn">Observe User</button>
                 <button type="button" id="operator-observation-stop-btn">Stop</button>
@@ -604,7 +652,8 @@
                 <button type="button" id="agent-external-token-btn">External</button>
             </div>
             <div id="agent-external-box">
-                <input type="text" id="agent-external-command" readonly value="">
+                <div id="agent-external-hint">Select Observe, Approval, or Direct before minting external token.</div>
+                <textarea id="agent-external-command" readonly spellcheck="false"></textarea>
             </div>
             <div id="agent-action-box">
                 <div class="agent-preview" id="agent-action-preview"></div>
@@ -886,6 +935,13 @@
             const agentMockSendBtn = document.getElementById('agent-mock-send-btn');
             const agentProviderRunBtn = document.getElementById('agent-provider-run-btn');
             const agentExternalTokenBtn = document.getElementById('agent-external-token-btn');
+            const agentGatePrivacy = document.getElementById('agent-gate-privacy');
+            const agentGateHuman = document.getElementById('agent-gate-human');
+            const agentGatePause = document.getElementById('agent-gate-pause');
+            const agentStatusBox = document.getElementById('agent-status-box');
+            const agentStatusMain = document.getElementById('agent-status-main');
+            const agentStatusDetail = document.getElementById('agent-status-detail');
+            const agentExternalHint = document.getElementById('agent-external-hint');
             const agentExternalCommand = document.getElementById('agent-external-command');
             const agentActionBox = document.getElementById('agent-action-box');
             const agentActionPreview = document.getElementById('agent-action-preview');
@@ -997,6 +1053,8 @@
                     modeVersion: null,
                     privacyState: null,
                     privacyVersion: null,
+                    humanInputLeaseActive: false,
+                    humanInputLeaseExpiresAt: null,
                     pendingActions: 0,
                     openActionIds: new Set(),
                     lastAction: null,
@@ -1197,6 +1255,83 @@
                 return !!(socket && socket.connected && state && state.connected);
             }
 
+            function formatAgentPanelValue(value) {
+                return value === null || value === undefined || value === '' ? '--' : String(value);
+            }
+
+            function setAgentChip(element, text, active = false, blocking = false) {
+                element.innerText = text;
+                element.classList.toggle('active', active && !blocking);
+                element.classList.toggle('blocking', blocking);
+            }
+
+            function getAgentLeaseSecondsRemaining(agent) {
+                const expiresAt = Number(agent && agent.humanInputLeaseExpiresAt);
+                if (!Number.isFinite(expiresAt)) return null;
+                return Math.max(0, Math.ceil(expiresAt - Date.now() / 1000));
+            }
+
+            function renderAgentGateState(state) {
+                const agent = state ? state.agent : null;
+                const privacy = agent ? formatAgentPanelValue(agent.privacyState) : '--';
+                const privacyBlocking = !!(agent && AGENT_SNAPSHOT_BLOCKED_PRIVACY_STATES.has(agent.privacyState));
+                setAgentChip(agentGatePrivacy, `privacy: ${privacy}`, privacy !== 'normal' && privacy !== '--', privacyBlocking);
+
+                const leaseActive = !!(agent && agent.humanInputLeaseActive);
+                const secondsRemaining = leaseActive ? getAgentLeaseSecondsRemaining(agent) : null;
+                const humanText = leaseActive && secondsRemaining !== null
+                    ? `human input: locked ${secondsRemaining}s`
+                    : leaseActive ? 'human input: locked' : 'human input: idle';
+                setAgentChip(agentGateHuman, humanText, leaseActive, leaseActive);
+
+                const paused = !!(agent && (agent.paused || agent.mode === AGENT_MODE_PAUSED));
+                setAgentChip(agentGatePause, paused ? 'pause: on' : 'pause: off', paused, paused);
+            }
+
+            function isAgentActionError(action) {
+                if (!action) return false;
+                if (action.errorCode) return true;
+                return typeof action.status === 'string' && (
+                    action.status === 'failed' ||
+                    action.status.startsWith('agent_')
+                );
+            }
+
+            function renderAgentStatusPanel(state) {
+                const action = state && state.agent ? state.agent.lastAction : null;
+                const hasError = isAgentActionError(action);
+                agentStatusBox.classList.toggle('error', hasError);
+                if (!action) {
+                    agentStatusMain.innerText = 'last: none';
+                    agentStatusDetail.innerText = 'error: none';
+                    return;
+                }
+                const actionId = action.actionId ? action.actionId.slice(0, 8) : '--';
+                const status = formatAgentPanelValue(action.status);
+                const type = formatAgentPanelValue(action.actionType);
+                agentStatusMain.innerText = `last: ${status} · ${type} · ${actionId}`;
+                const parts = [];
+                if (action.errorCode) parts.push(`error: ${action.errorCode}`);
+                else parts.push('error: none');
+                if (Number.isFinite(Number(action.bytesWritten))) parts.push(`written: ${action.bytesWritten}`);
+                else if (Number.isFinite(Number(action.byteLength))) parts.push(`bytes: ${action.byteLength}`);
+                agentStatusDetail.innerText = parts.join(' · ');
+            }
+
+            function updateAgentExternalUi(usable, mode, agent) {
+                const paused = !!(agent && (agent.paused || mode === AGENT_MODE_PAUSED));
+                agentExternalTokenBtn.disabled = !usable || mode === AGENT_MODE_DISABLED || paused;
+                if (!usable) {
+                    agentExternalHint.innerText = 'Connect a terminal before minting external token.';
+                } else if (paused) {
+                    agentExternalHint.innerText = 'Resume Observe, Approval, or Direct before minting external token.';
+                } else if (mode === AGENT_MODE_DISABLED) {
+                    agentExternalHint.innerText = 'Select Observe, Approval, or Direct before minting external token.';
+                } else {
+                    agentExternalHint.innerText = 'External token mint is available for the current Agent binding.';
+                }
+            }
+
             function renderAgentActionPanel(state) {
                 const action = state && state.agent ? state.agent.pendingAction : null;
                 agentActionBox.classList.toggle('visible', !!action);
@@ -1247,7 +1382,9 @@
                 agentMockInput.disabled = !usable || (mode !== 'approval_pending' && mode !== AGENT_MODE_DIRECT_ACTIVE);
                 agentMockSendBtn.disabled = agentMockInput.disabled || !agentMockInput.value;
                 agentProviderRunBtn.disabled = agentMockInput.disabled;
-                agentExternalTokenBtn.disabled = !usable || mode === AGENT_MODE_DISABLED;
+                updateAgentExternalUi(usable, mode, agent);
+                renderAgentGateState(state);
+                renderAgentStatusPanel(state);
                 renderAgentActionPanel(state);
                 updateOperatorObservationUi();
             }
@@ -1607,6 +1744,8 @@
                 if (modeVersion !== null) state.agent.modeVersion = modeVersion;
                 if (Object.prototype.hasOwnProperty.call(data, 'privacy_state')) state.agent.privacyState = getAgentStringField(data, 'privacy_state');
                 if (privacyVersion !== null) state.agent.privacyVersion = privacyVersion;
+                state.agent.humanInputLeaseActive = !!data.human_input_lease_active;
+                state.agent.humanInputLeaseExpiresAt = getAgentNumberField(data, 'human_input_lease_expires_at');
                 state.agent.pendingActions = normalizeAgentCount(data.pending_actions);
                 if (state.agent.pendingActions === 0) {
                     state.agent.openActionIds.clear();
@@ -1637,6 +1776,8 @@
                     actionType: typeof data.action_type === 'string' ? data.action_type : null,
                     status,
                     errorCode: typeof data.error_code === 'string' ? data.error_code : null,
+                    byteLength: getAgentNumberField(data, 'byte_length'),
+                    bytesWritten: getAgentNumberField(data, 'bytes_written'),
                     controlEpoch: Number.isFinite(Number(data.control_epoch)) ? Number(data.control_epoch) : null
                 };
                 if (actionId) {
@@ -2223,6 +2364,8 @@
                     mode_version: state.agent.modeVersion,
                     privacy_state: state.agent.privacyState,
                     privacy_version: state.agent.privacyVersion,
+                    human_input_lease_active: !!state.agent.humanInputLeaseActive,
+                    human_input_lease_expires_at: state.agent.humanInputLeaseExpiresAt,
                     pending_actions: state.agent.pendingActions,
                     pending_action: cloneForTest(state.agent.pendingAction),
                     last_action: cloneForTest(state.agent.lastAction),

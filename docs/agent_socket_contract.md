@@ -156,6 +156,10 @@ The CLI also exposes generic automation aliases over the same protocol:
 long-poll `tail`, and `wait-quiet` maps to `screen --wait-ms --quiet-ms`. These
 aliases are client-side conveniences; they do not add text-matching or branch on
 terminal display payloads.
+For backend-level synchronization without returning display payloads by
+default, clients can call `op: "wait"` with `condition: "output"` or
+`condition: "quiet"`. The response contains a typed `wait` object with status,
+timeout, and sequence metadata.
 
 For terminal-like interaction, use the persistent REPL wrapper instead of
 starting one CLI process per line:
@@ -485,9 +489,15 @@ Propose terminal input:
   "op": "send",
   "token": "agt_...",
   "terminal_id": "main",
-  "data": "pwd\r"
+  "kind": "text",
+  "text": "pwd\r"
 }
 ```
+
+Legacy clients may still send a string `data` field. New clients should use the
+structured forms `kind: "text"` with `text`, or `kind: "keys"` with key names
+such as `["Down", "Enter"]`. The key form is converted by the backend from a
+bounded allowlist; control semantics are not inferred from display text.
 
 `send` in `approval_pending` mode returns public pending action metadata and
 emits `agent_action_request` to the authorizing human browser. `send` in
@@ -502,7 +512,8 @@ a separate carriage return keypress as one structured action:
   "op": "send",
   "token": "agt_...",
   "terminal_id": "main",
-  "data": "codex prompt",
+  "kind": "text",
+  "text": "codex prompt",
   "submit_after": true
 }
 ```

@@ -29,6 +29,8 @@ authorized/
 
 # Local external-agent bearer-token handoff
 standterm_external_agent_handoff.json
+standterm_agentinfo.json
+standterm_agentinfo.json.tmp
 
 # Local operator observation JSONL logs
 operator_observations/

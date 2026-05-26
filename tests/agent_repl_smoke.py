@@ -336,7 +336,8 @@ def test_cli_send_capture_payload():
         'op': 'send',
         'terminal_id': 'main',
         'token': 'agt_unit',
-        'data': 'pwd\n',
+        'kind': 'text',
+        'text': 'pwd\n',
         'capture': True,
         'wait_ms': 2000,
         'settle_ms': 150,
@@ -344,7 +345,7 @@ def test_cli_send_capture_payload():
     }
 
 
-def test_cli_plain_send_payload_stays_compatible():
+def test_cli_plain_send_payload_uses_structured_text():
     args = SimpleNamespace(
         command='send',
         terminal='main',
@@ -360,7 +361,8 @@ def test_cli_plain_send_payload_stays_compatible():
         'op': 'send',
         'terminal_id': 'main',
         'token': 'agt_unit',
-        'data': 'pwd\n',
+        'kind': 'text',
+        'text': 'pwd\n',
     }
 
 
@@ -499,7 +501,8 @@ def test_cli_send_wait_payload_requests_capture():
         'op': 'send-wait',
         'terminal_id': 'main',
         'token': 'agt_unit',
-        'data': 'pwd\n',
+        'kind': 'text',
+        'text': 'pwd\n',
         'capture': True,
     }
 
@@ -521,7 +524,8 @@ def test_cli_send_wait_strip_ansi_payload_requests_plain_capture():
         'op': 'send-wait',
         'terminal_id': 'main',
         'token': 'agt_unit',
-        'data': 'pwd\n',
+        'kind': 'text',
+        'text': 'pwd\n',
         'capture': True,
         'strip_ansi': True,
     }
@@ -544,12 +548,13 @@ def test_cli_send_submit_after_payload_is_structured():
         'op': 'send',
         'terminal_id': 'main',
         'token': 'agt_unit',
-        'data': 'codex prompt',
+        'kind': 'text',
+        'text': 'codex prompt',
         'submit_after': True,
     }
 
 
-def test_cli_send_named_keys_payload_uses_control_sequences():
+def test_cli_send_named_keys_payload_uses_structured_keys():
     args = SimpleNamespace(
         command='send',
         terminal='main',
@@ -567,7 +572,8 @@ def test_cli_send_named_keys_payload_uses_control_sequences():
         'op': 'send',
         'terminal_id': 'main',
         'token': 'agt_unit',
-        'data': '\x1b[B\r',
+        'kind': 'keys',
+        'keys': ['Down', 'Enter'],
     }
 
 
@@ -587,7 +593,8 @@ def test_cli_key_alias_maps_to_send_payload():
         'op': 'send',
         'terminal_id': 'main',
         'token': 'agt_unit',
-        'data': '\x1b[A\r',
+        'kind': 'keys',
+        'keys': ['Up', 'Enter'],
         'capture': True,
         'wait_ms': 1000,
         'settle_ms': 100,
@@ -829,7 +836,7 @@ def main():
         test_repl_startup_type_stops_on_fatal_error,
         test_format_token_status_reports_idle_countdown,
         test_cli_and_repl_apply_handoff_defaults,
-        test_cli_plain_send_payload_stays_compatible,
+        test_cli_plain_send_payload_uses_structured_text,
         test_cli_screen_tail_lines_payload,
         test_cli_screen_region_payload,
         test_cli_screen_wait_payload,
@@ -840,7 +847,7 @@ def main():
         test_cli_send_wait_payload_requests_capture,
         test_cli_send_wait_strip_ansi_payload_requests_plain_capture,
         test_cli_send_submit_after_payload_is_structured,
-        test_cli_send_named_keys_payload_uses_control_sequences,
+        test_cli_send_named_keys_payload_uses_structured_keys,
         test_cli_key_alias_maps_to_send_payload,
         test_cli_render_save_writes_png_and_redacts_base64,
         test_jsonl_client_reuses_defaults_and_preserves_ids,
