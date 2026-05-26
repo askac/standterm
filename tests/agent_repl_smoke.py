@@ -508,26 +508,27 @@ def test_cli_render_mode_payloads_are_structured():
     assert cli.command_payload(args)['render_mode'] == 'mirror_screen'
 
 
-def test_cli_render_mirror_screen_save_fails_locally():
+def test_cli_render_non_png_save_fails_locally():
     original_argv = sys.argv
-    sys.argv = [
-        'agent_cli.py',
-        '--url',
-        'http://127.0.0.1:5010',
-        '--token',
-        'agt_unit',
-        'render',
-        '--mode',
-        'mirror-screen',
-        '--save',
-        'viewport.png',
-    ]
     try:
-        try:
-            cli.main()
-            assert False, 'render mirror-screen --save should fail'
-        except SystemExit as exc:
-            assert 'render --save requires' in str(exc)
+        for mode in ('auto', 'mirror-screen'):
+            sys.argv = [
+                'agent_cli.py',
+                '--url',
+                'http://127.0.0.1:5010',
+                '--token',
+                'agt_unit',
+                'render',
+                '--mode',
+                mode,
+                '--save',
+                'viewport.png',
+            ]
+            try:
+                cli.main()
+                assert False, f'render {mode} --save should fail'
+            except SystemExit as exc:
+                assert 'render --save requires --mode visible-xterm-png' in str(exc)
     finally:
         sys.argv = original_argv
 
@@ -891,7 +892,7 @@ def main():
         test_cli_wait_output_alias_maps_to_tail_payload,
         test_cli_wait_quiet_alias_maps_to_screen_payload,
         test_cli_render_mode_payloads_are_structured,
-        test_cli_render_mirror_screen_save_fails_locally,
+        test_cli_render_non_png_save_fails_locally,
         test_cli_send_capture_payload,
         test_cli_send_wait_payload_requests_capture,
         test_cli_send_wait_strip_ansi_payload_requests_plain_capture,

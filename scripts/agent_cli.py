@@ -355,8 +355,8 @@ def save_render_image(result, path):
 
 def main():
     args = parse_args()
-    if args.command == 'render' and args.save and args.mode == 'mirror-screen':
-        raise SystemExit('render --save requires --mode visible-xterm-png or auto')
+    if args.command == 'render' and args.save and args.mode != 'visible-xterm-png':
+        raise SystemExit('render --save requires --mode visible-xterm-png')
     if args.command == 'discover':
         result = discover_result(args)
         print_result(result)

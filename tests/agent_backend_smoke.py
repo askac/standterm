@@ -819,6 +819,7 @@ def test_external_agent_render_requests_browser_viewport_png():
             'op': 'render',
             'token': token,
             'terminal_id': standterm.TERMINAL_ID_MAIN,
+            'render_mode': 'visible_xterm_png',
             'wait_ms': 1000,
         })
 
@@ -931,6 +932,51 @@ def test_external_agent_render_mirror_screen_returns_structured_screen_without_p
     client.disconnect()
 
 
+def test_external_agent_render_auto_uses_mirror_screen_without_png_request():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+    bridge.emit_output({
+        'message_type': 'terminal',
+        'data': 'auto-mirror-render\n',
+    })
+
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
+        session_token,
+        standterm.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert error_code is None
+
+    result = standterm.process_external_agent_command({
+        'op': 'render',
+        'token': token,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+    })
+    assert result['status'] == 'ok'
+    assert result['render']['render_mode'] == standterm.AGENT_RENDER_MODE_MIRROR_SCREEN
+    assert result['render']['render_type'] == 'terminal_screen'
+    assert result['render']['data_format'] == 'terminal_screen'
+    assert result['render']['mime_type'] == 'application/vnd.standterm.screen+json'
+    assert result['render']['output_seq'] == bridge.output_seq
+    assert 'image_base64' not in result['render']
+
+    render_requests = received_events(client, standterm.AGENT_EVENT_VIEWPORT_RENDER_REQUEST)
+    assert render_requests == []
+
+    audit_events = standterm.agent_audit_store.get_recent(session_token, standterm.TERMINAL_ID_MAIN)
+    render_audit = [
+        event for event in audit_events
+        if event['event_type'] == standterm.AGENT_AUDIT_EXTERNAL_AGENT_RENDER
+    ][-1]
+    assert render_audit['requested_render_mode'] == standterm.AGENT_RENDER_MODE_AUTO
+    assert render_audit['render_mode'] == standterm.AGENT_RENDER_MODE_MIRROR_SCREEN
+
+    client.disconnect()
+
+
 def test_external_agent_render_timeout_is_typed():
     client = make_client()
     session_token = current_session_token()
@@ -950,6 +996,7 @@ def test_external_agent_render_timeout_is_typed():
         'op': 'render',
         'token': token,
         'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'render_mode': 'visible_xterm_png',
         'wait_ms': 10,
     })
     assert result['status'] == standterm.AGENT_STATUS_FAILED
@@ -3775,6 +3822,7 @@ def main():
         test_external_agent_screen_tail_lines_and_region_reduce_viewport_payload,
         test_external_agent_render_requests_browser_viewport_png,
         test_external_agent_render_mirror_screen_returns_structured_screen_without_png_request,
+        test_external_agent_render_auto_uses_mirror_screen_without_png_request,
         test_external_agent_render_timeout_is_typed,
         test_external_agent_tail_reports_gap_metadata,
         test_external_agent_tail_strip_ansi_is_explicit_plain_format,

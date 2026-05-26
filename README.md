@@ -217,7 +217,7 @@ python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json hell
 python scripts/agent_cli.py --agentinfo standterm_agentinfo.json hello --discover
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json render
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json render --mode mirror-screen
-python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json render --save viewport.png
+python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json render --mode visible-xterm-png --save viewport.png
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json screen --tail-lines 12
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json screen --region 0:12
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json screen --wait-ms 3000 --quiet-ms 500
@@ -279,9 +279,9 @@ remove cursor or highlight cues, so inspect raw `screen`, raw tail/capture, or
 `render --mode mirror-screen` returns structured terminal screen data from the
 Agent mirror path and does not include PNG bytes. `render --mode
 visible-xterm-png` captures the operator browser's visible xterm viewport as a
-PNG and is the only mode supported by `--save`. The default `auto` mode keeps
-backward-compatible PNG behavior for now; clients that want lower context cost
-should request `mirror-screen` explicitly.
+PNG and is the only mode supported by `--save`. The default `auto` mode resolves
+to `mirror-screen`; clients that need pixel-level viewport fidelity should
+request `visible-xterm-png` explicitly.
 
 Use `agent_type.py` for paced input into full-screen editors or TUIs. It
 sends one text unit per normal `send` request with configurable rate and newline

@@ -389,8 +389,8 @@ Read rendered xterm viewport:
 }
 ```
 
-`render_mode` is optional and defaults to `auto`. The current `auto` policy is
-backward-compatible and resolves to `visible_xterm_png`. Supported modes are:
+`render_mode` is optional and defaults to `auto`. The current `auto` policy
+resolves to `mirror_screen`. Supported modes are:
 `visible_xterm_png`, which captures the operator browser's current visible
 xterm viewport as PNG, and `mirror_screen`, which returns structured terminal
 screen data from the Agent mirror path without PNG bytes. The discovery payload
