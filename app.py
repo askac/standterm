@@ -342,12 +342,22 @@ AGENT_AUDIT_DIRECT_WRITE = 'direct_write'
 AGENT_AUDIT_TERMINAL_CLEANUP = 'terminal_cleanup'
 AGENT_AUDIT_ERROR = 'error'
 EXTERNAL_AGENT_PROTOCOL_VERSION = 1
-EXTERNAL_AGENT_CAPABILITIES = ['state', 'screen', 'headless_screen', 'screen_wait', 'wait', 'sequence', 'render', 'tail', 'send', 'typed_send', 'send_capture', 'submit_after', 'strip_ansi', 'revoke']
+EXTERNAL_AGENT_CAPABILITIES = ['state', 'screen', 'headless_screen', 'screen_wait', 'wait', 'sequence', 'render', 'render_visible_xterm_png', 'render_mirror_screen', 'tail', 'send', 'typed_send', 'send_capture', 'submit_after', 'strip_ansi', 'revoke']
 AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_WAIT_MS = 3000
 AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_SETTLE_MS = 150
 AGENT_EXTERNAL_SEND_CAPTURE_MAX_SETTLE_MS = 5000
 AGENT_EXTERNAL_SEQUENCE_MAX_STEPS = 16
 EXTERNAL_AGENT_SEQUENCE_OPS = {'state', 'screen', 'render', 'tail', 'wait', 'send', 'send-wait'}
+AGENT_RENDER_MODE_AUTO = 'auto'
+AGENT_RENDER_MODE_VISIBLE_XTERM_PNG = 'visible_xterm_png'
+AGENT_RENDER_MODE_MIRROR_SCREEN = 'mirror_screen'
+AGENT_RENDER_DEFAULT_MODE = AGENT_RENDER_MODE_AUTO
+AGENT_RENDER_EFFECTIVE_AUTO_MODE = AGENT_RENDER_MODE_VISIBLE_XTERM_PNG
+AGENT_RENDER_MODES = {
+    AGENT_RENDER_MODE_AUTO,
+    AGENT_RENDER_MODE_VISIBLE_XTERM_PNG,
+    AGENT_RENDER_MODE_MIRROR_SCREEN,
+}
 EXTERNAL_AGENT_KEY_INPUTS = {
     'Enter': '\r',
     'Return': '\r',
@@ -2521,6 +2531,21 @@ def parse_agent_viewport_render_wait_ms(value):
         wait_ms = AGENT_VIEWPORT_RENDER_WAIT_MS
     return max(0, min(wait_ms, AGENT_VIEWPORT_RENDER_MAX_WAIT_MS))
 
+def parse_agent_render_mode(value):
+    if value is None:
+        return AGENT_RENDER_DEFAULT_MODE
+    if not isinstance(value, str):
+        return None
+    render_mode = value.strip().lower().replace('-', '_')
+    if render_mode in AGENT_RENDER_MODES:
+        return render_mode
+    return None
+
+def resolve_agent_render_mode(render_mode):
+    if render_mode == AGENT_RENDER_MODE_AUTO:
+        return AGENT_RENDER_EFFECTIVE_AUTO_MODE
+    return render_mode
+
 def validate_agent_viewport_render_result_payload(data, expected_request):
     if not isinstance(data, dict) or not isinstance(expected_request, dict):
         return None, AGENT_ERROR_RENDER_INVALID
@@ -2532,6 +2557,14 @@ def validate_agent_viewport_render_result_payload(data, expected_request):
     render_type = data.get('render_type')
     mime_type = data.get('mime_type')
     if render_type != 'xterm_viewport' or mime_type != 'image/png':
+        return None, AGENT_ERROR_RENDER_INVALID
+    render_mode = parse_agent_render_mode(data.get('render_mode'))
+    expected_render_mode = expected_request.get('render_mode')
+    if render_mode is None:
+        return None, AGENT_ERROR_RENDER_INVALID
+    if render_mode == AGENT_RENDER_MODE_AUTO:
+        render_mode = resolve_agent_render_mode(render_mode)
+    if expected_render_mode and render_mode != expected_render_mode:
         return None, AGENT_ERROR_RENDER_INVALID
     try:
         cols = int(data.get('cols'))
@@ -2566,6 +2599,7 @@ def validate_agent_viewport_render_result_payload(data, expected_request):
         'request_id': expected_request.get('request_id'),
         'terminal_id': terminal_id,
         'render_type': render_type,
+        'render_mode': render_mode,
         'mime_type': mime_type,
         'image_base64': image_base64,
         'image_byte_length': len(image_bytes),
@@ -2582,13 +2616,15 @@ class AgentViewportRenderRequestStore:
         self._requests = {}
         self._lock = threading.RLock()
 
-    def create(self, session_token, terminal_id, sid, state, bridge):
+    def create(self, session_token, terminal_id, sid, state, bridge, render_mode=None):
         request_id = 'agrv_' + secrets.token_urlsafe(12)
         now = time.time()
+        render_mode = render_mode or AGENT_RENDER_MODE_VISIBLE_XTERM_PNG
         request_payload = {
             'request_id': request_id,
             'terminal_id': terminal_id,
             'render_type': 'xterm_viewport',
+            'render_mode': render_mode,
             'mime_type': 'image/png',
             'session_id': state.session_id,
             'viewer_id': state.viewer_id,
@@ -3865,7 +3901,18 @@ def build_external_agent_tail_payload_waiting(bridge, state, since_output_seq=No
         if tail['events'] or tail['gap']['detected']:
             return tail, None
 
-def build_external_agent_viewport_render_payload(record, state, terminal_id, bridge, wait_ms=None):
+def build_external_agent_mirror_screen_render_payload(record, terminal_id):
+    context = build_agent_context(record.get('session_token'), terminal_id, record.get('sid'))
+    active_screen = context.get('active_screen') or {}
+    render = dict(active_screen)
+    render['render_mode'] = AGENT_RENDER_MODE_MIRROR_SCREEN
+    render['render_type'] = 'terminal_screen'
+    render['data_format'] = 'terminal_screen'
+    render['mime_type'] = 'application/vnd.standterm.screen+json'
+    return render, context
+
+def build_external_agent_viewport_render_payload(record, state, terminal_id, bridge,
+                                                 wait_ms=None, render_mode=None):
     wait_ms = parse_agent_viewport_render_wait_ms(wait_ms)
     request_payload = agent_viewport_render_request_store.create(
         record.get('session_token'),
@@ -3873,6 +3920,7 @@ def build_external_agent_viewport_render_payload(record, state, terminal_id, bri
         record.get('sid'),
         state,
         bridge,
+        render_mode=render_mode,
     )
     socketio.emit(AGENT_EVENT_VIEWPORT_RENDER_REQUEST, request_payload, room=state.sid)
     result, error_code = agent_viewport_render_request_store.wait(
@@ -4817,6 +4865,20 @@ def build_external_agent_cli_commands(base_url, token, terminal_id):
             extra_args=['--wait-ms', '3000', '--quiet-ms', '500'],
         ),
         'render': build_external_agent_cli_command(base_url, token, terminal_id, op='render'),
+        'render_visible_xterm_png': build_external_agent_cli_command(
+            base_url,
+            token,
+            terminal_id,
+            op='render',
+            extra_args=['--mode', 'visible-xterm-png'],
+        ),
+        'render_mirror_screen': build_external_agent_cli_command(
+            base_url,
+            token,
+            terminal_id,
+            op='render',
+            extra_args=['--mode', 'mirror-screen'],
+        ),
         'tail': build_external_agent_cli_command(base_url, token, terminal_id, op='tail'),
         'tail_wait': build_external_agent_cli_command(
             base_url,
@@ -4871,6 +4933,27 @@ def build_external_agent_discovery_payload(base_url, token, terminal_id):
         'protocol_version': EXTERNAL_AGENT_PROTOCOL_VERSION,
         'transport': transport,
         'capabilities': list(EXTERNAL_AGENT_CAPABILITIES),
+        'render_policy': {
+            'default_mode': AGENT_RENDER_DEFAULT_MODE,
+            'effective_auto_mode': AGENT_RENDER_EFFECTIVE_AUTO_MODE,
+            'supported_modes': [
+                AGENT_RENDER_MODE_AUTO,
+                AGENT_RENDER_MODE_VISIBLE_XTERM_PNG,
+                AGENT_RENDER_MODE_MIRROR_SCREEN,
+            ],
+            AGENT_RENDER_MODE_VISIBLE_XTERM_PNG: {
+                'render_type': 'xterm_viewport',
+                'mime_type': 'image/png',
+                'requires_browser_viewer': True,
+                'save_supported': True,
+            },
+            AGENT_RENDER_MODE_MIRROR_SCREEN: {
+                'render_type': 'terminal_screen',
+                'data_format': 'terminal_screen',
+                'uses_terminal_mirror': True,
+                'save_supported': False,
+            },
+        },
         'operations': {
             'hello': {'op': 'hello'},
             'state': {'op': 'state'},
@@ -4897,7 +4980,20 @@ def build_external_agent_discovery_payload(base_url, token, terminal_id):
                     },
                 ],
             },
-            'render': {'op': 'render', 'wait_ms': AGENT_VIEWPORT_RENDER_WAIT_MS},
+            'render': {
+                'op': 'render',
+                'render_mode': AGENT_RENDER_DEFAULT_MODE,
+                'wait_ms': AGENT_VIEWPORT_RENDER_WAIT_MS,
+            },
+            'render_visible_xterm_png': {
+                'op': 'render',
+                'render_mode': AGENT_RENDER_MODE_VISIBLE_XTERM_PNG,
+                'wait_ms': AGENT_VIEWPORT_RENDER_WAIT_MS,
+            },
+            'render_mirror_screen': {
+                'op': 'render',
+                'render_mode': AGENT_RENDER_MODE_MIRROR_SCREEN,
+            },
             'tail': {
                 'op': 'tail',
                 'since_output_seq': 0,
@@ -6344,12 +6440,44 @@ def process_external_agent_command(command):
                 payload['screen_wait'] = screen_wait
             return payload
         if op == 'render':
+            requested_render_mode = parse_agent_render_mode(command.get('render_mode'))
+            if requested_render_mode is None:
+                return external_agent_error(AGENT_ERROR_ACTION_INVALID_DATA, terminal_id=terminal_id)
+            render_mode = resolve_agent_render_mode(requested_render_mode)
+            if render_mode == AGENT_RENDER_MODE_MIRROR_SCREEN:
+                render, context = build_external_agent_mirror_screen_render_payload(record, terminal_id)
+                record_agent_audit_event(
+                    state,
+                    AGENT_AUDIT_EXTERNAL_AGENT_RENDER,
+                    external_agent_id=record.get('external_agent_id'),
+                    status='ok',
+                    requested_render_mode=requested_render_mode,
+                    render_mode=render_mode,
+                    render_type=render.get('render_type'),
+                    mime_type=render.get('mime_type'),
+                    source=render.get('source'),
+                    line_count=render.get('line_count'),
+                    byte_length=render.get('byte_length'),
+                    cols=render.get('cols'),
+                    rows=render.get('rows'),
+                    output_seq=render.get('output_seq', bridge.output_seq),
+                    context=summarize_agent_context_for_audit(context),
+                )
+                return {
+                    'status': 'ok',
+                    'terminal_id': terminal_id,
+                    'external_agent_id': record.get('external_agent_id'),
+                    'output_seq': render.get('output_seq', bridge.output_seq),
+                    'state': state.public_state(),
+                    'render': render,
+                }
             render, render_error, request_payload, wait_ms = build_external_agent_viewport_render_payload(
                 record,
                 state,
                 terminal_id,
                 bridge,
                 wait_ms=command.get('wait_ms'),
+                render_mode=render_mode,
             )
             record_agent_audit_event(
                 state,
@@ -6359,6 +6487,8 @@ def process_external_agent_command(command):
                 status=AGENT_STATUS_FAILED if render_error else 'ok',
                 error_code=render_error,
                 wait_ms=wait_ms,
+                requested_render_mode=requested_render_mode,
+                render_mode=request_payload.get('render_mode'),
                 render_type=request_payload.get('render_type'),
                 mime_type=request_payload.get('mime_type'),
                 image_byte_length=render.get('image_byte_length') if render else None,
@@ -6374,6 +6504,7 @@ def process_external_agent_command(command):
                 'status': 'ok',
                 'terminal_id': terminal_id,
                 'external_agent_id': record.get('external_agent_id'),
+                'output_seq': render.get('output_seq') if render else bridge.output_seq,
                 'state': state.public_state(),
                 'render': render,
             }

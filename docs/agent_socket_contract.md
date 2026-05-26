@@ -384,29 +384,38 @@ Read rendered xterm viewport:
   "op": "render",
   "token": "agt_...",
   "terminal_id": "main",
+  "render_mode": "visible_xterm_png",
   "wait_ms": 3000
 }
 ```
 
-The CLI wrapper can save the returned PNG directly:
+`render_mode` is optional and defaults to `auto`. The current `auto` policy is
+backward-compatible and resolves to `visible_xterm_png`. Supported modes are:
+`visible_xterm_png`, which captures the operator browser's current visible
+xterm viewport as PNG, and `mirror_screen`, which returns structured terminal
+screen data from the Agent mirror path without PNG bytes. The discovery payload
+includes `render_policy.default_mode`, `effective_auto_mode`, and
+`supported_modes`.
+
+The CLI wrapper can save the returned PNG directly when using the PNG mode:
 
 ```bash
 tools/.venv_wsl/bin/python scripts/agent_cli.py \
   --handoff standterm_external_agent_handoff.json \
-  render --save viewport.png
+  render --mode visible-xterm-png --save viewport.png
 ```
 
 When `--save` is used, the CLI writes `render.image_base64` to the given path,
 omits `image_base64` from stdout, and adds `render.saved_path` to the printed
-JSON metadata.
+JSON metadata. `--save` is not valid with `mirror-screen`.
 
-`render` asks the authorizing browser viewer for a typed in-memory PNG capture
-of the currently rendered xterm viewport. The server emits
-`agent_viewport_render_request` to that browser sid, waits up to `wait_ms`, then
-returns the browser's `agent_viewport_render_result`. The image bytes are
-returned only in the command response as `render.image_base64`; audit records
-store only metadata such as `request_id`, dimensions, byte length, `output_seq`,
-and status.
+For `visible_xterm_png`, `render` asks the authorizing browser viewer for a
+typed in-memory PNG capture of the currently rendered xterm viewport. The server
+emits `agent_viewport_render_request` to that browser sid, waits up to
+`wait_ms`, then returns the browser's `agent_viewport_render_result`. The image
+bytes are returned only in the command response as `render.image_base64`; audit
+records store only metadata such as `request_id`, dimensions, byte length,
+`output_seq`, render mode, and status.
 
 ```json
 {
@@ -417,6 +426,7 @@ and status.
     "request_id": "agrv_...",
     "terminal_id": "main",
     "render_type": "xterm_viewport",
+    "render_mode": "visible_xterm_png",
     "mime_type": "image/png",
     "image_base64": "...",
     "image_byte_length": 12345,
@@ -430,10 +440,31 @@ and status.
 }
 ```
 
+For `mirror_screen`, the response uses the same Agent mirror source as `screen`
+and returns terminal display data as structured JSON:
+
+```json
+{
+  "status": "ok",
+  "terminal_id": "main",
+  "external_agent_id": "exa_...",
+  "render": {
+    "render_mode": "mirror_screen",
+    "render_type": "terminal_screen",
+    "data_format": "terminal_screen",
+    "source": "browser_viewport_snapshot",
+    "cols": 80,
+    "rows": 24,
+    "output_seq": 130,
+    "lines": ["visible terminal line", "..."]
+  }
+}
+```
+
 `render` follows the same visibility and privacy gates as `screen` and `tail`:
 disabled, paused, `private_input`, and `paste_review` states block the request.
-The rendered image is display data only; clients must not parse image contents
-as control state.
+Rendered image bytes and mirror screen lines are display data only; clients must
+not parse image contents or terminal text as control state.
 
 Tail terminal display events:
 

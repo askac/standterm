@@ -452,12 +452,14 @@ def test_rendered_viewport_snapshot_returns_png(browser, access_url):
         result = page.evaluate(
             """async () => await window.terminalTest.buildViewportRenderResult({
                 request_id: 'render-test-1',
-                terminal_id: 'main'
+                terminal_id: 'main',
+                render_mode: 'visible_xterm_png'
             })"""
         )
         check(result['status'] == 'ok', f"render result failed: {result}")
         check(result['request_id'] == 'render-test-1', 'render result used the wrong request id')
         check(result['render_type'] == 'xterm_viewport', 'render result used the wrong render type')
+        check(result['render_mode'] == 'visible_xterm_png', 'render result used the wrong render mode')
         check(result['mime_type'] == 'image/png', 'render result used the wrong MIME type')
         check(result['image_base64'].startswith('iVBORw0KGgo'), 'render result is not a PNG')
         check(result['pixel_width'] > 0 and result['pixel_height'] > 0, 'render result has invalid dimensions')

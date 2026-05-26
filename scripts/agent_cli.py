@@ -39,6 +39,7 @@ def parse_args():
     screen_parser.add_argument('--quiet-ms', type=int, help='Required terminal quiet time before returning screen')
 
     render_parser = subparsers.add_parser('render')
+    render_parser.add_argument('--mode', choices=('auto', 'visible-xterm-png', 'mirror-screen'), default='auto', help='Render mode')
     render_parser.add_argument('--wait-ms', type=int, default=3000, help='Maximum browser render wait time')
     render_parser.add_argument('--save', help='Save returned PNG image bytes to this path and omit image_base64 from stdout')
 
@@ -252,6 +253,7 @@ def command_payload(args):
                 raise SystemExit('wait --for quiet requires --quiet-ms')
             payload['quiet_ms'] = args.quiet_ms
     elif command == 'render':
+        payload['render_mode'] = args.mode.replace('-', '_')
         payload['wait_ms'] = args.wait_ms
     elif command in {'send', 'send-wait', 'key'}:
         keys = getattr(args, 'key', None)
@@ -353,6 +355,8 @@ def save_render_image(result, path):
 
 def main():
     args = parse_args()
+    if args.command == 'render' and args.save and args.mode == 'mirror-screen':
+        raise SystemExit('render --save requires --mode visible-xterm-png or auto')
     if args.command == 'discover':
         result = discover_result(args)
         print_result(result)

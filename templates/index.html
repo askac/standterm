@@ -1579,9 +1579,15 @@
                     request_id: requestId,
                     terminal_id: terminalId,
                     render_type: 'xterm_viewport',
+                    render_mode: 'visible_xterm_png',
                     mime_type: 'image/png',
                     status: 'failed'
                 };
+                const requestedRenderMode = getAgentStringField(requestPayload, 'render_mode');
+                if (requestedRenderMode && requestedRenderMode !== 'visible_xterm_png') {
+                    result.error_code = 'agent_render_invalid';
+                    return result;
+                }
                 if (!requestId || !terminalId || !state || state.id !== terminalId || !shouldRenderAgentViewport(state)) {
                     result.error_code = 'agent_render_invalid';
                     return result;

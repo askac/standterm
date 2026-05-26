@@ -84,13 +84,19 @@ Run a capability check:
 Request a browser-rendered terminal PNG:
 
 ```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json render
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json render --mode visible-xterm-png
+```
+
+Request lower-cost structured Agent mirror screen data:
+
+```text
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json render --mode mirror-screen
 ```
 
 Save a browser-rendered terminal PNG without printing base64 to stdout:
 
 ```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json render --save viewport.png
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json render --mode visible-xterm-png --save viewport.png
 ```
 
 Read terminal output events:

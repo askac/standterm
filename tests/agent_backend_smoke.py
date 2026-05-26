@@ -828,6 +828,7 @@ def test_external_agent_render_requests_browser_viewport_png():
     request_payload = request_event['args'][0]
     assert request_payload['terminal_id'] == standterm.TERMINAL_ID_MAIN
     assert request_payload['render_type'] == 'xterm_viewport'
+    assert request_payload['render_mode'] == standterm.AGENT_RENDER_MODE_VISIBLE_XTERM_PNG
     assert request_payload['mime_type'] == 'image/png'
     assert request_payload['cols'] == 100
     assert request_payload['rows'] == 30
@@ -837,6 +838,7 @@ def test_external_agent_render_requests_browser_viewport_png():
         'request_id': request_payload['request_id'],
         'terminal_id': standterm.TERMINAL_ID_MAIN,
         'render_type': 'xterm_viewport',
+        'render_mode': standterm.AGENT_RENDER_MODE_VISIBLE_XTERM_PNG,
         'mime_type': 'image/png',
         'image_base64': one_pixel_png,
         'cols': 100,
@@ -853,6 +855,7 @@ def test_external_agent_render_requests_browser_viewport_png():
     assert result['status'] == 'ok'
     assert result['render']['request_id'] == request_payload['request_id']
     assert result['render']['render_type'] == 'xterm_viewport'
+    assert result['render']['render_mode'] == standterm.AGENT_RENDER_MODE_VISIBLE_XTERM_PNG
     assert result['render']['mime_type'] == 'image/png'
     assert result['render']['image_base64'] == one_pixel_png
     assert result['render']['image_byte_length'] > 0
@@ -866,6 +869,64 @@ def test_external_agent_render_requests_browser_viewport_png():
     assert render_audit['request_id'] == request_payload['request_id']
     assert render_audit['image_byte_length'] == result['render']['image_byte_length']
     assert 'image_base64' not in render_audit
+
+    client.disconnect()
+
+def test_external_agent_render_mirror_screen_returns_structured_screen_without_png_request():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+    bridge.emit_output({
+        'message_type': 'terminal',
+        'data': 'mirror-render\n',
+    })
+
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    token, _record, error_code = standterm.mint_external_agent_attach_token(
+        session_token,
+        standterm.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert error_code is None
+
+    result = standterm.process_external_agent_command({
+        'op': 'render',
+        'token': token,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'render_mode': 'mirror_screen',
+    })
+    assert result['status'] == 'ok'
+    assert result['output_seq'] == bridge.output_seq
+    assert result['render']['render_mode'] == standterm.AGENT_RENDER_MODE_MIRROR_SCREEN
+    assert result['render']['render_type'] == 'terminal_screen'
+    assert result['render']['data_format'] == 'terminal_screen'
+    assert result['render']['mime_type'] == 'application/vnd.standterm.screen+json'
+    assert result['render']['source'] == standterm.AGENT_HEADLESS_SCREEN_SOURCE
+    assert result['render']['output_seq'] == bridge.output_seq
+    assert 'image_base64' not in result['render']
+
+    render_requests = received_events(client, standterm.AGENT_EVENT_VIEWPORT_RENDER_REQUEST)
+    assert render_requests == []
+
+    invalid = standterm.process_external_agent_command({
+        'op': 'render',
+        'token': token,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'render_mode': 'unknown',
+    })
+    assert invalid['status'] == standterm.AGENT_STATUS_FAILED
+    assert invalid['error_code'] == standterm.AGENT_ERROR_ACTION_INVALID_DATA
+
+    audit_events = standterm.agent_audit_store.get_recent(session_token, standterm.TERMINAL_ID_MAIN)
+    render_audit = [
+        event for event in audit_events
+        if event['event_type'] == standterm.AGENT_AUDIT_EXTERNAL_AGENT_RENDER
+    ][-1]
+    assert render_audit['render_mode'] == standterm.AGENT_RENDER_MODE_MIRROR_SCREEN
+    assert render_audit['render_type'] == 'terminal_screen'
+    assert render_audit['line_count'] == result['render']['line_count']
+    assert 'lines' not in render_audit
 
     client.disconnect()
 
@@ -2225,6 +2286,8 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             assert 'wait' in token_payload['capabilities']
             assert 'sequence' in token_payload['capabilities']
             assert 'render' in token_payload['capabilities']
+            assert 'render_visible_xterm_png' in token_payload['capabilities']
+            assert 'render_mirror_screen' in token_payload['capabilities']
             assert 'typed_send' in token_payload['capabilities']
             assert 'send_capture' in token_payload['capabilities']
             assert 'submit_after' in token_payload['capabilities']
@@ -2234,7 +2297,22 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             assert token_payload['transport']['command_endpoint'].endswith('/agent/external/command')
             assert token_payload['url'] == token_payload['transport']['command_endpoint'].rsplit('/agent/external/command', 1)[0]
             assert token_payload['browser_url'].startswith('http://')
-            assert token_payload['operations']['render']['op'] == 'render'
+            assert token_payload['render_policy']['default_mode'] == standterm.AGENT_RENDER_DEFAULT_MODE
+            assert token_payload['render_policy']['effective_auto_mode'] == standterm.AGENT_RENDER_EFFECTIVE_AUTO_MODE
+            assert standterm.AGENT_RENDER_MODE_VISIBLE_XTERM_PNG in token_payload['render_policy']['supported_modes']
+            assert standterm.AGENT_RENDER_MODE_MIRROR_SCREEN in token_payload['render_policy']['supported_modes']
+            assert token_payload['render_policy']['visible_xterm_png']['save_supported'] is True
+            assert token_payload['render_policy']['mirror_screen']['save_supported'] is False
+            assert token_payload['operations']['render'] == {
+                'op': 'render',
+                'render_mode': standterm.AGENT_RENDER_DEFAULT_MODE,
+                'wait_ms': standterm.AGENT_VIEWPORT_RENDER_WAIT_MS,
+            }
+            assert token_payload['operations']['render_visible_xterm_png']['render_mode'] == 'visible_xterm_png'
+            assert token_payload['operations']['render_mirror_screen'] == {
+                'op': 'render',
+                'render_mode': 'mirror_screen',
+            }
             assert token_payload['operations']['screen_tail'] == {'op': 'screen', 'tail_lines': 12}
             assert token_payload['operations']['screen_region'] == {
                 'op': 'screen',
@@ -2290,6 +2368,8 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             assert f"--url {token_payload['url']}" in token_payload['cli_command']
             assert token_payload['cli_commands']['hello'].endswith('hello')
             assert token_payload['cli_commands']['render'].endswith('render')
+            assert token_payload['cli_commands']['render_visible_xterm_png'].endswith('render --mode visible-xterm-png')
+            assert token_payload['cli_commands']['render_mirror_screen'].endswith('render --mode mirror-screen')
             assert token_payload['cli_commands']['screen_tail'].endswith("screen --tail-lines 12")
             assert token_payload['cli_commands']['screen_region'].endswith("screen --region 0:12")
             assert token_payload['cli_commands']['screen_wait'].endswith("screen --wait-ms 3000 --quiet-ms 500")
@@ -3694,6 +3774,7 @@ def main():
         test_external_agent_screen_falls_back_to_headless_grid_without_browser_snapshot,
         test_external_agent_screen_tail_lines_and_region_reduce_viewport_payload,
         test_external_agent_render_requests_browser_viewport_png,
+        test_external_agent_render_mirror_screen_returns_structured_screen_without_png_request,
         test_external_agent_render_timeout_is_typed,
         test_external_agent_tail_reports_gap_metadata,
         test_external_agent_tail_strip_ansi_is_explicit_plain_format,
