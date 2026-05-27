@@ -1,0 +1,23 @@
+Read this repository first, then create or follow a local repository rule for Python execution.
+
+StandTerm uses repo-local virtual environments. Do not install Python packages into the system Python, do not use `pip --break-system-packages`, and do not assume `/usr/bin/env python3` has the project dependencies. Prefer the launcher-managed environment:
+
+- WSL/Linux: run `./run.sh` from the repository root; it creates and uses `tools/.venv_wsl` on WSL or `tools/.venv_linux` on native Linux.
+- macOS: run `./run.sh`; it creates and uses `tools/.venv_macos`.
+- Windows: run `run.bat`; it creates and uses the Windows-local launcher environment.
+- External-agent helpers: use the active Python path printed by the StandTerm startup banner or stored in the handoff metadata, then call `scripts/agent_cli.py`, `scripts/agent_jsonl.py`, `scripts/agent_repl.py`, or `scripts/agent_type.py` through that Python.
+
+If Python venv support is missing on Ubuntu 24.04 LTS or similar Debian/Ubuntu systems, install it with apt before running StandTerm:
+
+```bash
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip
+```
+
+After apt installs venv support, return to the repository root and run:
+
+```bash
+./run.sh --force
+```
+
+For tests or maintenance commands, use the existing repo-local venv Python after it has been created, for example `tools/.venv_wsl/bin/python` on WSL. If the needed venv does not exist yet, run the launcher first instead of falling back to system Python.

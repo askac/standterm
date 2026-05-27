@@ -127,6 +127,12 @@ It can read the generated handoff file directly. When StandTerm serves HTTPS wit
 its generated local development certificate, the handoff includes the local CA
 path and the wrapper uses it for TLS verification.
 
+Use the active Python path printed by the StandTerm startup banner or stored in
+the handoff metadata. Directly executing `scripts/*.py` may work on a machine
+whose ambient `python3` already has the dependencies installed, but automation
+should treat that as unsupported because it can bypass the repo-local virtual
+environment.
+
 ```bash
 tools/.venv_wsl/bin/python scripts/agent_cli.py \
   --handoff standterm_external_agent_handoff.json \
@@ -407,7 +413,8 @@ tools/.venv_wsl/bin/python scripts/agent_cli.py \
 
 When `--save` is used, the CLI writes `render.image_base64` to the given path,
 omits `image_base64` from stdout, and adds `render.saved_path` to the printed
-JSON metadata. `--save` is not valid with `mirror-screen`.
+JSON metadata. `--save` requires `--mode visible-xterm-png`; it is not valid
+with `auto` or `mirror-screen`.
 
 For `visible_xterm_png`, `render` asks the authorizing browser viewer for a
 typed in-memory PNG capture of the currently rendered xterm viewport. The server

@@ -18,7 +18,9 @@ If the user only provides this skill prompt and asks you to operate StandTerm:
    `scripts/agent_repl.py`, `scripts/agent_type.py`,
    `standterm_agentinfo.json`, and
    `standterm_external_agent_handoff.json` absolute paths. Do not guess the port,
-   URL, token, or working directory.
+   URL, token, or working directory. Direct `scripts/*.py` execution may work on
+   a preconfigured machine, but for automation always invoke the wrappers through
+   the active Python path from the banner or handoff metadata.
 2. If the banner is not available, read tokenless `standterm_agentinfo.json` or
    the current-instance pointer first, then run `discover` before doing anything
    else. After a token has been minted, run `hello` through the handoff.

@@ -47,6 +47,8 @@ else
     git clone "$REPO_URL" "$INSTALL_DIR"
 fi
 
+chmod +x "$INSTALL_DIR/run.sh"
+
 echo "[+] Done. Launching StandTerm..."
 echo ""
 exec bash "$INSTALL_DIR/run.sh"

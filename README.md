@@ -47,6 +47,17 @@ WSL UART access to Windows `COMx` ports uses a Windows Python helper venv at
 - A modern browser with WebCrypto for WSL browser authorization
 
 The launchers create and maintain their own repo-local virtual environments.
+If you use an AI agent or coding assistant in this repository, ask it to create
+or follow a local repo rule from `docs/venv_prompt.txt` so Python commands use
+the launcher-managed venv instead of system Python.
+
+On Ubuntu 24.04 LTS and similar Debian/Ubuntu systems, a minimal Python install
+may not include venv support. Install it with apt before running StandTerm:
+
+```bash
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip
+```
 
 ## Quick Start
 
@@ -344,7 +355,7 @@ Use `skill_prompt.txt` when asking an agent to install or create the local
 skill. The intended prompt shape is:
 
 ```text
-請閱讀 docs/examples/standterm-external-agent-skill/SKILL.md，增加 standterm-external-agent local skill。
+Read docs/examples/standterm-external-agent-skill/SKILL.md and add the standterm-external-agent local skill.
 ```
 
 Use `boot_prompt.txt` when the skill already exists and an agent should start
