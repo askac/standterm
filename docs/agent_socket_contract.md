@@ -200,9 +200,10 @@ The REPL keeps one local process alive, coalesces local keyboard input before
 calling `send`, and renders remote output from long-poll `tail` using
 `output_seq` as its cursor. Its attach banner includes typed token lifetime
 metadata when the server provides it, such as remaining idle seconds. It also
-runs a hidden `state` heartbeat by default to renew the external-agent token
-without writing terminal input or terminal output; use `--keepalive-ms` or
-`--no-keepalive` to tune it. `screen` is only a provisional initial
+runs a hidden `heartbeat` by default to renew the external-agent token during
+passive monitoring without writing terminal input or reading terminal display;
+use `--keepalive-ms` or `--no-keepalive` to tune it. Older servers that do not
+support `heartbeat` fall back to `state` keepalive. `screen` is only a provisional initial
 viewport/debug source; it is not the authoritative terminal stream. The local
 detach key is `Ctrl-]`. In dev
 servers started with `STANDTERM_AGENT_DEV_TOKEN=1`, the REPL may omit `--token` and
@@ -293,7 +294,7 @@ Discover protocol/capabilities:
 ```
 
 `hello` returns `version`, `external_agent_id`, `terminal_id`, current public
-Agent state, and a typed `capabilities` array such as `state`, `screen`,
+Agent state, and a typed `capabilities` array such as `state`, `heartbeat`, `screen`,
 `headless_screen`, `screen_wait`, `wait`, `sequence`, `render`, `tail`, `send`,
 `send_capture`, `submit_after`, `strip_ansi`, and `revoke`.
 
@@ -317,17 +318,31 @@ Read state:
 }
 ```
 
+Renew token lease without reading display:
+
+```json
+{
+  "op": "heartbeat",
+  "token": "agt_...",
+  "terminal_id": "main"
+}
+```
+
+`heartbeat` returns `external_agent_token` and `monitoring_policy`, but no
+`screen`, `events`, `render`, or terminal display payload. It is the preferred
+keepalive for passive monitoring of long builds or compiles. It does not bypass
+token revocation, expiry, terminal disconnect, or disabled/paused Agent state.
+
 `state`, `attach`, and the nested `hello.state` include a `terminal_session`
 object when the terminal bridge is still present. It includes the current
 `output_seq`, `last_output_at`, and `terminal_quiet_ms` so CLI clients can
 distinguish an idle terminal from a slow task without scraping display text.
 They also include `external_agent_token` with typed idle-timeout metadata:
-`token_lifetime`, `idle_timeout_seconds`, `expires_at`, `last_used_at`, and
-`remaining_idle_ms`. These fields are not secrets and do not include the bearer
-token or token hash.
-Because every valid command renews the token idle timeout, `state` is the
-lightweight typed heartbeat for long local reasoning gaps. Use `tail` with
-`wait_ms` instead when the caller also wants to wait for terminal output.
+`token_lifetime`, `idle_timeout_seconds`, `expires_at`, `last_used_at`,
+`remaining_idle_ms`, and `recommended_keepalive_ms`. These fields are not
+secrets and do not include the bearer token or token hash. Use `tail` with
+`wait_ms` when the caller also wants to wait for terminal output; do not poll
+display operations purely to renew the token.
 
 Read screen:
 

@@ -235,8 +235,11 @@ valid external-agent command extends access for another five idle minutes; the
 token is still invalidated by terminal close, browser Agent detach/disconnect,
 server restart, or explicit revoke. Do not commit it, paste it into logs, or
 expose it outside the StandTerm host.
-For long local reasoning gaps, use `state` as a lightweight typed heartbeat or
-`tail --wait-ms` as an output-aware heartbeat; both renew the same idle timeout.
+For long passive monitoring, such as watching a remote build or compile, prefer
+`agent_repl.py`; it keeps one long-poll tail session alive and sends a hidden
+`heartbeat` by default. One-shot clients can call `heartbeat` directly. Display
+polling with `screen` or `tail` is for observing output, not required for token
+renewal.
 
 External clients do not have to run from the StandTerm launch directory. The
 cross-platform connection contract is the loopback command URL, bearer token,
@@ -256,6 +259,7 @@ CLI examples:
 python scripts/agent_cli.py --agentinfo standterm_agentinfo.json discover
 python scripts/agent_cli.py --url https://127.0.0.1:5000 --token agt_... --terminal main --insecure hello
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json hello
+python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json heartbeat
 python scripts/agent_cli.py --agentinfo standterm_agentinfo.json hello --discover
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json render
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json render --mode mirror-screen
@@ -338,9 +342,11 @@ visual fidelity matters.
 For animated full-screen TUIs, `screen --wait-ms 3000 --quiet-ms 500` returns
 after the terminal has been quiet for the requested interval or reports a typed
 timeout.
-`agent_repl.py` also runs a hidden `state` heartbeat by default to keep the
-external-agent token alive during long idle periods. It does not write terminal
-input or terminal output; use `--keepalive-ms` or `--no-keepalive` to tune it.
+`agent_repl.py` also runs a hidden `heartbeat` by default to keep the
+external-agent token alive during long passive monitoring or local reasoning
+gaps. It does not write terminal input or read terminal display; use
+`--keepalive-ms` or `--no-keepalive` to tune it. Older servers that do not
+support `heartbeat` fall back to `state` keepalive.
 For workflows that need one paced paste before interactive follow-up, REPL can
 type `--type-text` or `--type-file` through the same shared pacing helpers and
 then continue the live session. `--type-wait-quiet-ms` asks for a typed quiet

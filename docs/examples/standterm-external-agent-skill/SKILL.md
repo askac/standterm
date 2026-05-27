@@ -67,11 +67,11 @@ If the user only provides this skill prompt and asks you to operate StandTerm:
    token. For `agent_external_disabled`, `agent_not_attached`, or
    `terminal_not_found`, first fix the browser Agent panel, external access
    state, or terminal lifecycle, then mint a new token.
-   External tokens use a sliding idle timeout; active `hello`, `tail`, `render`,
-   `send`, or REPL traffic keeps the current token alive.
+   External tokens use a sliding idle timeout; active `heartbeat`, `hello`,
+   `tail`, `render`, `send`, or REPL traffic keeps the current token alive.
 9. For passive monitoring of a long-running command, keep the token alive with
-   the REPL default state heartbeat, `--keepalive-ms`, or a read-only `screen`,
-   `tail`, or `hello` poll interval shorter than the token idle timeout.
+   the REPL default heartbeat or `--keepalive-ms`. Use `tail --wait-ms` to
+   observe output, but do not poll display operations purely for token renewal.
 10. For `agent_external_unauthorized`, first check typed handoff fields before
    assuming the token is stale. If `transport.loopback_only` or
    `security.remote_use_requires_loopback_tunnel` is true and an older handoff
@@ -105,6 +105,12 @@ Run a capability check:
 
 ```text
 <python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json hello
+```
+
+Renew a token during passive monitoring without reading display:
+
+```text
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json heartbeat
 ```
 
 Request a browser-rendered terminal PNG:
@@ -233,6 +239,10 @@ Use the REPL for interactive work:
 ```text
 <python-from-startup-banner> <standterm-dir>/scripts/agent_repl.py --handoff <standterm-dir>/standterm_external_agent_handoff.json --enter cr
 ```
+
+Prefer the REPL for watching long-running remote builds or compiles. It uses
+long-poll `tail` for output and a hidden heartbeat for token renewal, so quiet
+build phases do not require re-minting a token.
 
 Use REPL startup paced typing when a workflow needs long text entry followed by
 interactive prompt handling in the same session:
