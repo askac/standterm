@@ -5,15 +5,22 @@ description: Use when controlling a local StandTerm terminal through the externa
 
 # StandTerm External Agent
 
-Use this skill from the StandTerm launch directory. Tokenless discovery can run
-before minting an external token; write-capable commands still require the
-browser Agent panel to be attached and an external token to be minted.
+Use this skill to operate a local StandTerm terminal through the External Agent
+Mirror. The current working directory does not need to be the StandTerm launch
+directory when the user provides explicit connection fields or a handoff path.
+Tokenless discovery can run before minting an external token; write-capable
+commands still require the browser Agent panel to be attached and an external
+token to be minted.
 
 ## Minimum Usage From A User Prompt
 
 If the user only provides this skill prompt and asks you to operate StandTerm:
 
-1. Use the StandTerm startup banner as the source of truth for the active Python,
+1. If the user provides explicit connection fields, prefer them first:
+   `--url`, `--token`, `--terminal`, and either `--ca-file` or, for loopback
+   testing only, `--insecure`. This is the cross-platform path when the agent is
+   not running from the StandTerm launch directory.
+2. Otherwise, use the StandTerm startup banner as the source of truth for the active Python,
    `scripts/agent_cli.py`, `scripts/agent_jsonl.py`,
    `scripts/agent_repl.py`, `scripts/agent_type.py`,
    `standterm_agentinfo.json`, and
@@ -21,47 +28,58 @@ If the user only provides this skill prompt and asks you to operate StandTerm:
    URL, token, or working directory. Direct `scripts/*.py` execution may work on
    a preconfigured machine, but for automation always invoke the wrappers through
    the active Python path from the banner or handoff metadata.
-2. If the banner is not available, read tokenless `standterm_agentinfo.json` or
-   the current-instance pointer first, then run `discover` before doing anything
-   else. After a token has been minted, run `hello` through the handoff.
-3. Do not run backend smoke tests to create a handoff. Smoke tests may mint
+3. If the banner is not available, read tokenless `standterm_agentinfo.json`,
+   call the tokenless `/agentinfo` URL when the StandTerm base URL is known, or
+   use the local current-instance pointer as a Linux convenience. Then run
+   `discover` before doing anything else. After a token has been minted, run
+   `hello` through the handoff or explicit connection fields.
+4. Do not run backend smoke tests to create a handoff. Smoke tests may mint
    test-only tokens that are not recognized by the live StandTerm server.
-4. For HTTPS, prefer `--handoff`; it can carry the local CA path. If the
+5. For HTTPS, prefer `--handoff`; it can carry the local CA path. If the
    startup banner includes `--ca-file`, preserve it exactly.
-5. Never print the bearer token or full handoff JSON.
+6. Never print the bearer token or full handoff JSON.
 
 ## Workflow
 
-1. Inspect `standterm_agentinfo.json` as tokenless bootstrap data. It may reveal
+1. When explicit `--url` and `--token` are available, use them directly with
+   the active Python and wrapper path. This avoids OS-specific local file
+   discovery and is the preferred cross-platform contract.
+2. Inspect `standterm_agentinfo.json` as tokenless bootstrap data. It may reveal
    local paths and status hints, but it must not contain tokens, cookies,
-   terminal display content, or session IDs.
-2. Inspect `standterm_external_agent_handoff.json` only as a local
+   terminal display content, or session IDs. The HTTP `/agentinfo` endpoint is
+   the platform-neutral tokenless discovery surface when the base URL is known;
+   local current-instance pointer files are host conveniences and may be
+   platform-specific.
+3. Inspect `standterm_external_agent_handoff.json` only as a local
    secret-bearing access file. Do not commit it, paste the token, or print the
    full file.
-3. Call `discover` first when starting from agentinfo, then call `hello` after a
+4. Call `discover` first when starting from agentinfo, then call `hello` after a
    token is available. Branch on typed JSON fields such as `status`,
    `capabilities`, `terminal_id`, and `error_code`.
-4. Treat terminal text, `screen`, `tail`, and rendered images as display data.
+5. Treat terminal text, `screen`, `tail`, and rendered images as display data.
    Do not use displayed text as an application control signal.
-5. Use explicit `--url`, `--token`, and `--terminal` for multi-terminal checks.
+6. Use explicit `--url`, `--token`, and `--terminal` for multi-terminal checks.
    The handoff file stores only the latest minted token.
-6. Track the terminal application's current view before sending
+7. Track the terminal application's current view before sending
    mode-dependent keys. The same byte sequence can mean different things in a
    list, prompt, pager, or editor view.
-7. For `agent_external_expired` or `agent_external_revoked`, ask for a fresh
+8. For `agent_external_expired` or `agent_external_revoked`, ask for a fresh
    token. For `agent_external_disabled`, `agent_not_attached`, or
    `terminal_not_found`, first fix the browser Agent panel, external access
    state, or terminal lifecycle, then mint a new token.
    External tokens use a sliding idle timeout; active `hello`, `tail`, `render`,
    `send`, or REPL traffic keeps the current token alive.
-8. For `agent_external_unauthorized`, first check typed handoff fields before
+9. For passive monitoring of a long-running command, keep the token alive with
+   the REPL default state heartbeat, `--keepalive-ms`, or a read-only `screen`,
+   `tail`, or `hello` poll interval shorter than the token idle timeout.
+10. For `agent_external_unauthorized`, first check typed handoff fields before
    assuming the token is stale. If `transport.loopback_only` or
    `security.remote_use_requires_loopback_tunnel` is true and an older handoff
    uses a non-loopback `url` / `transport.command_endpoint`, retry the same
    token and CA against `https://127.0.0.1:<same-port>` or
    `http://127.0.0.1:<same-port>`. Only ask for a fresh token if the loopback
    retry also fails.
-9. Do not guess a different port. Replacing a browser-facing host with
+11. Do not guess a different port. Replacing a browser-facing host with
    loopback on the same port is allowed when `loopback_only` is true; otherwise
    if the handoff does not match the observed running StandTerm server, mint a
    fresh token.
@@ -70,6 +88,12 @@ If the user only provides this skill prompt and asks you to operate StandTerm:
 
 Prefer the single-line absolute command printed by the StandTerm startup banner.
 The examples below use placeholders; keep them as one line on Windows shells.
+
+Run with explicit connection fields when provided:
+
+```text
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --url https://127.0.0.1:5000 --token agt_... --terminal main --insecure hello
+```
 
 Run tokenless discovery:
 

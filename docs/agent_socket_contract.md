@@ -122,6 +122,15 @@ machine, route it through an SSH tunnel or equivalent loopback tunnel to the
 StandTerm host; do not expose the command endpoint or bearer token directly on a
 network interface.
 
+External clients do not have to run from the StandTerm launch directory. The
+cross-platform connection contract is the loopback command URL, bearer token,
+terminal id, and TLS mode (`--ca-file` for verified HTTPS or `--insecure` only
+for local loopback testing). Local files such as
+`standterm_agentinfo.json`, `standterm_external_agent_handoff.json`, and any
+current-instance pointer are conveniences for agents on the StandTerm host.
+Pointer file locations are platform-specific; when the base URL is known, the
+tokenless HTTP `/agentinfo` endpoint is the platform-neutral discovery surface.
+
 The CLI wrapper is intentionally small and speaks this JSON command contract.
 It can read the generated handoff file directly. When StandTerm serves HTTPS with
 its generated local development certificate, the handoff includes the local CA
@@ -148,6 +157,10 @@ tools/.venv_wsl/bin/python scripts/agent_cli.py \
   --terminal main \
   send --text $'pwd\r'
 ```
+
+For HTTPS loopback sessions without a handoff file, pass the local CA with
+`--ca-file` when available. `--insecure` is acceptable only for explicit local
+loopback testing where the token is still kept secret.
 
 CLI `--text` is sent verbatim. Normal quoted strings do not decode backslash
 escapes, so `--text "pwd\n"` sends literal backslash and `n` bytes. In bash,

@@ -207,7 +207,8 @@ Typical local flow:
 2. Connect a terminal.
 3. Open the Agent panel for that terminal.
 4. Mint an external-agent token from the browser Agent UI.
-5. Use the startup banner's `External Agent CLI hello` or `render` command.
+5. Use explicit connection fields from the browser Agent UI or the startup
+   banner's `External Agent CLI hello` or `render` command.
 
 Startup writes a tokenless bootstrap file in the StandTerm launch directory:
 
@@ -216,8 +217,8 @@ standterm_agentinfo.json
 ```
 
 StandTerm also serves the same sanitized payload at loopback-only
-`/agentinfo`, and may update a current-instance pointer such as
-`~/.standterm/current_agentinfo.json`. The payload includes launch paths,
+`/agentinfo`, and may update a platform-specific current-instance pointer such
+as `~/.standterm/current_agentinfo.json`. The payload includes launch paths,
 loopback endpoints, CLI/script paths, status hints, and recommended commands,
 but it does not include bearer tokens, browser access tokens, terminal display
 content, cookies, or session IDs.
@@ -237,9 +238,13 @@ expose it outside the StandTerm host.
 For long local reasoning gaps, use `state` as a lightweight typed heartbeat or
 `tail --wait-ms` as an output-aware heartbeat; both renew the same idle timeout.
 
-The handoff file is a convenience for the latest minted token. For
-multi-terminal checks, pass explicit `--url`, `--token`, and `--terminal` values
-from the token payload instead of relying on the single latest handoff file.
+External clients do not have to run from the StandTerm launch directory. The
+cross-platform connection contract is the loopback command URL, bearer token,
+terminal id, and TLS mode (`--ca-file` for verified HTTPS or `--insecure` only
+for local loopback testing). The handoff file is a convenience for the latest
+minted token. For multi-terminal checks, pass explicit `--url`, `--token`, and
+`--terminal` values from the token payload instead of relying on the single
+latest handoff file.
 External-agent commands are loopback-only: even when the browser uses a WSL or
 LAN URL, the handoff `url`, `transport.command_endpoint`, and generated CLI
 commands use loopback for the command endpoint. The browser-facing address is
@@ -249,6 +254,7 @@ CLI examples:
 
 ```bash
 python scripts/agent_cli.py --agentinfo standterm_agentinfo.json discover
+python scripts/agent_cli.py --url https://127.0.0.1:5000 --token agt_... --terminal main --insecure hello
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json hello
 python scripts/agent_cli.py --agentinfo standterm_agentinfo.json hello --discover
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json render
