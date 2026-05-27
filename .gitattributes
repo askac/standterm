@@ -1,0 +1,21 @@
+* text=auto
+
+# POSIX launchers must keep LF line endings, even when cloned on Windows.
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Windows launchers may use CRLF on checkout.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Keep source and documentation normalized in the repository.
+*.py text eol=lf
+*.ps1 text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.js text eol=lf
