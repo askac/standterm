@@ -441,6 +441,7 @@ def test_rendered_viewport_snapshot_returns_png(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
         attach_agent(page)
+        page.evaluate("() => window.terminalTest.applyColorScheme('oneHalfLight')")
         page.evaluate(
             """payload => window.terminalTest.writeTerminalOutput(payload.data, payload.output_seq)""",
             {'data': 'rendered-viewport-check\\r\\n', 'output_seq': 321},
@@ -465,6 +466,31 @@ def test_rendered_viewport_snapshot_returns_png(browser, access_url):
         check(result['pixel_width'] > 0 and result['pixel_height'] > 0, 'render result has invalid dimensions')
         check(result['cols'] > 0 and result['rows'] > 0, 'render result has invalid terminal size')
         check(result['output_seq'] == 321, 'render result did not preserve output_seq')
+        background_pixel = page.evaluate(
+            """async payload => {
+                const image = new Image();
+                const loaded = new Promise((resolve, reject) => {
+                    image.onload = resolve;
+                    image.onerror = () => reject(new Error('png decode failed'));
+                });
+                image.src = `data:image/png;base64,${payload.image_base64}`;
+                await loaded;
+                const canvas = document.createElement('canvas');
+                canvas.width = image.width;
+                canvas.height = image.height;
+                const context = canvas.getContext('2d');
+                context.drawImage(image, 0, 0);
+                const x = Math.max(0, image.width - 2);
+                const y = Math.max(0, image.height - 2);
+                return Array.from(context.getImageData(x, y, 1, 1).data);
+            }""",
+            result,
+        )
+        check(background_pixel[3] == 255, 'rendered PNG background is transparent')
+        check(
+            all(channel >= 245 for channel in background_pixel[:3]),
+            f'rendered PNG background does not match light xterm theme: {background_pixel}',
+        )
     finally:
         close_context(context)
 

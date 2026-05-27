@@ -1533,7 +1533,25 @@
                 return Math.floor(base64Value.length * 3 / 4) - padding;
             }
 
-            function renderElementToPngBase64(element, pixelWidth, pixelHeight) {
+            function isTransparentColor(value) {
+                if (!value || value === 'transparent') return true;
+                const normalized = value.replace(/\s+/g, '').toLowerCase();
+                return normalized === 'rgba(0,0,0,0)' || normalized.endsWith(',0)');
+            }
+
+            function getAgentRenderBackgroundColor(state, element) {
+                const themeBackground = state && state.term && state.term.options && state.term.options.theme
+                    ? state.term.options.theme.background
+                    : null;
+                if (themeBackground) return themeBackground;
+                for (let current = element; current && current !== document.documentElement; current = current.parentElement) {
+                    const background = window.getComputedStyle(current).backgroundColor;
+                    if (!isTransparentColor(background)) return background;
+                }
+                return '#000000';
+            }
+
+            function renderElementToPngBase64(element, pixelWidth, pixelHeight, backgroundColor) {
                 return new Promise((resolve, reject) => {
                     const clone = element.cloneNode(true);
                     inlineComputedStyles(element, clone);
@@ -1544,8 +1562,10 @@
                     wrapper.style.height = `${pixelHeight}px`;
                     wrapper.style.overflow = 'hidden';
                     wrapper.style.margin = '0';
-                    wrapper.style.background = window.getComputedStyle(element).backgroundColor || '#000';
+                    wrapper.style.background = backgroundColor;
+                    wrapper.style.backgroundColor = backgroundColor;
                     clone.style.margin = '0';
+                    clone.style.background = 'transparent';
                     wrapper.appendChild(clone);
                     const serialized = new XMLSerializer().serializeToString(wrapper);
                     const svg = [
@@ -1561,6 +1581,8 @@
                             canvas.width = pixelWidth;
                             canvas.height = pixelHeight;
                             const context = canvas.getContext('2d');
+                            context.fillStyle = backgroundColor;
+                            context.fillRect(0, 0, pixelWidth, pixelHeight);
                             context.drawImage(image, 0, 0);
                             resolve(dataUrlToBase64(canvas.toDataURL('image/png')));
                         } catch (e) {
@@ -1608,7 +1630,8 @@
                     return result;
                 }
                 try {
-                    const imageBase64 = await renderElementToPngBase64(renderElement, pixelWidth, pixelHeight);
+                    const backgroundColor = getAgentRenderBackgroundColor(state, renderElement);
+                    const imageBase64 = await renderElementToPngBase64(renderElement, pixelWidth, pixelHeight, backgroundColor);
                     if (!imageBase64 || estimateBase64Bytes(imageBase64) > AGENT_VIEWPORT_RENDER_MAX_IMAGE_BYTES) {
                         result.error_code = 'agent_render_too_large';
                         return result;
@@ -2414,6 +2437,14 @@
                             request_id: 'test-render',
                             terminal_id: activeTerminalId
                         });
+                    },
+                    applyColorScheme(colorScheme) {
+                        const state = getActiveTerminalState();
+                        if (!state || !SCHEMES[colorScheme]) return false;
+                        prefs.colorScheme = colorScheme;
+                        state.term.options.theme = SCHEMES[colorScheme];
+                        if (state.agentTerminalMirror) state.agentTerminalMirror.options.theme = SCHEMES[colorScheme];
+                        return true;
                     },
                     setPrivacy(privacyState) {
                         emitAgentPrivacyState(getActiveTerminalState(), privacyState);
