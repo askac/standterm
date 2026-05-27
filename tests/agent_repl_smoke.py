@@ -130,7 +130,7 @@ def test_tail_worker_stops_on_not_attached_error():
     assert stop_event.is_set() is True
 
 
-def test_keepalive_worker_sends_hidden_state_heartbeat():
+def test_keepalive_worker_prefers_hidden_heartbeat():
     client = FakeClient(responses=[
         {'status': 'ok'},
     ])
@@ -151,9 +151,37 @@ def test_keepalive_worker_sends_hidden_state_heartbeat():
         wait_func=wait_func,
     )
     assert client.requests == [
-        ('state', {}),
+        ('heartbeat', {}),
     ]
     assert waits == [12.5, 12.5]
+    assert stop_event.is_set() is False
+
+
+def test_keepalive_worker_falls_back_to_state_when_heartbeat_is_unsupported():
+    client = FakeClient(responses=[
+        {'status': 'failed', 'error_code': 'agent_action_not_allowed'},
+        {'status': 'ok'},
+    ])
+    stop_event = threading.Event()
+    waits = []
+
+    def wait_func(interval):
+        waits.append(interval)
+        if len(waits) == 1:
+            return False
+        return True
+
+    repl.keepalive_worker(
+        client,
+        stop_event,
+        interval_seconds=5,
+        debug=False,
+        wait_func=wait_func,
+    )
+    assert client.requests == [
+        ('heartbeat', {}),
+        ('state', {}),
+    ]
     assert stop_event.is_set() is False
 
 
@@ -174,7 +202,7 @@ def test_keepalive_worker_stops_on_fatal_error():
         wait_func=wait_func,
     )
     assert client.requests == [
-        ('state', {}),
+        ('heartbeat', {}),
     ]
     assert stop_event.is_set() is True
 
@@ -442,6 +470,19 @@ def test_cli_tail_strip_ansi_payload():
 
     args.wait_ms = 2500
     assert cli.command_payload(args)['wait_ms'] == 2500
+
+
+def test_cli_heartbeat_payload_is_display_free():
+    args = SimpleNamespace(
+        command='heartbeat',
+        terminal='main',
+        token='agt_unit',
+    )
+    assert cli.command_payload(args) == {
+        'op': 'heartbeat',
+        'terminal_id': 'main',
+        'token': 'agt_unit',
+    }
 
 
 def test_cli_wait_output_alias_maps_to_tail_payload():
@@ -877,7 +918,8 @@ def main():
         test_send_worker_drops_queued_input_after_fatal_error,
         test_send_worker_keeps_running_on_transient_human_lease,
         test_tail_worker_stops_on_not_attached_error,
-        test_keepalive_worker_sends_hidden_state_heartbeat,
+        test_keepalive_worker_prefers_hidden_heartbeat,
+        test_keepalive_worker_falls_back_to_state_when_heartbeat_is_unsupported,
         test_keepalive_worker_stops_on_fatal_error,
         test_repl_startup_type_sends_units_through_shared_pacing,
         test_repl_startup_type_waits_for_quiet_screen_after_typing,
@@ -889,6 +931,7 @@ def main():
         test_cli_screen_region_payload,
         test_cli_screen_wait_payload,
         test_cli_tail_strip_ansi_payload,
+        test_cli_heartbeat_payload_is_display_free,
         test_cli_wait_output_alias_maps_to_tail_payload,
         test_cli_wait_quiet_alias_maps_to_screen_payload,
         test_cli_render_mode_payloads_are_structured,

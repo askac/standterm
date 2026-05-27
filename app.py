@@ -310,6 +310,7 @@ AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS = parse_optional_seconds_env(
     'AGENT_EXTERNAL_IDLE_TIMEOUT_SECONDS',
     default=5 * 60,
 )
+AGENT_EXTERNAL_RECOMMENDED_KEEPALIVE_MAX_MS = 60000
 AGENT_EXTERNAL_TAIL_MAX_EVENTS = 200
 AGENT_EXTERNAL_TAIL_MAX_WAIT_MS = 30000
 AGENT_EXTERNAL_SCREEN_MAX_QUIET_MS = 5000
@@ -342,7 +343,7 @@ AGENT_AUDIT_DIRECT_WRITE = 'direct_write'
 AGENT_AUDIT_TERMINAL_CLEANUP = 'terminal_cleanup'
 AGENT_AUDIT_ERROR = 'error'
 EXTERNAL_AGENT_PROTOCOL_VERSION = 1
-EXTERNAL_AGENT_CAPABILITIES = ['state', 'screen', 'headless_screen', 'screen_wait', 'wait', 'sequence', 'render', 'render_visible_xterm_png', 'render_mirror_screen', 'tail', 'send', 'typed_send', 'send_capture', 'submit_after', 'strip_ansi', 'revoke']
+EXTERNAL_AGENT_CAPABILITIES = ['state', 'heartbeat', 'screen', 'headless_screen', 'screen_wait', 'wait', 'sequence', 'render', 'render_visible_xterm_png', 'render_mirror_screen', 'tail', 'send', 'typed_send', 'send_capture', 'submit_after', 'strip_ansi', 'revoke']
 AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_WAIT_MS = 3000
 AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_SETTLE_MS = 150
 AGENT_EXTERNAL_SEND_CAPTURE_MAX_SETTLE_MS = 5000
@@ -2787,7 +2788,7 @@ class ExternalAgentAttachStore:
         }
         return token, dict(self._tokens[token_hash])
 
-    def validate(self, token, terminal_id=None):
+    def validate(self, token, terminal_id=None, renew=True):
         if not isinstance(token, str) or not token.startswith('agt_'):
             return None, AGENT_ERROR_EXTERNAL_AGENT_UNAUTHORIZED
         token_hash = hash_external_agent_token(token)
@@ -2803,13 +2804,18 @@ class ExternalAgentAttachStore:
             return None, AGENT_ERROR_EXTERNAL_AGENT_EXPIRED
         if terminal_id is not None and record.get('terminal_id') != terminal_id:
             return None, AGENT_ERROR_TERMINAL_MISMATCH
+        if renew:
+            record = self.renew_record(token_hash) or record
+        return dict(record), None
+
+    def renew_record(self, token_hash):
         stored = self._tokens.get(token_hash)
         if stored and stored.get('idle_timeout_seconds') is not None:
             now = time.time()
             stored['last_used_at'] = now
             stored['expires_at'] = now + stored['idle_timeout_seconds']
-            record = dict(stored)
-        return dict(record), None
+            return dict(stored)
+        return dict(stored) if stored else None
 
     def mark_attached(self, token):
         record, error_code = self.validate(token)
@@ -3346,7 +3352,7 @@ def mint_external_agent_attach_token_for_viewer(session_token, terminal_id, view
             return None, None, AGENT_ERROR_STALE_PROPOSAL
         return mint_external_agent_attach_token(session_token, terminal_id, state.sid)
 
-def validate_external_agent_command_token(command, require_terminal=True):
+def validate_external_agent_command_token(command, require_terminal=True, renew_token=True):
     if not isinstance(command, dict):
         return None, None, None, AGENT_ERROR_ACTION_INVALID_DATA
     terminal_id = command.get('terminal_id')
@@ -3356,7 +3362,11 @@ def validate_external_agent_command_token(command, require_terminal=True):
         terminal_id = validate_terminal_id_payload(command)
     token = command.get('token')
     with external_agent_lock:
-        record, error_code = external_agent_attach_store.validate(token, terminal_id=terminal_id)
+        record, error_code = external_agent_attach_store.validate(
+            token,
+            terminal_id=terminal_id,
+            renew=renew_token,
+        )
     if error_code:
         return None, None, terminal_id, error_code
     with agent_lock:
@@ -3364,6 +3374,34 @@ def validate_external_agent_command_token(command, require_terminal=True):
         if error_code:
             return record, state, terminal_id, error_code
     return record, state, terminal_id, None
+
+def get_external_agent_recommended_keepalive_ms(idle_timeout_seconds):
+    if idle_timeout_seconds is None:
+        return None
+    try:
+        idle_ms = int(float(idle_timeout_seconds) * 1000)
+    except (TypeError, ValueError):
+        if AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS is None:
+            return None
+        idle_ms = int(AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS * 1000)
+    if idle_ms <= 0:
+        return 1000
+    return max(1000, min(AGENT_EXTERNAL_RECOMMENDED_KEEPALIVE_MAX_MS, idle_ms // 2))
+
+def build_external_agent_monitoring_policy_payload(record=None):
+    idle_timeout_seconds = (
+        record.get('idle_timeout_seconds')
+        if isinstance(record, dict)
+        else AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS
+    )
+    return {
+        'passive_monitoring_supported': True,
+        'keepalive_op': 'heartbeat',
+        'recommended_keepalive_ms': get_external_agent_recommended_keepalive_ms(idle_timeout_seconds),
+        'display_polling_is_not_required_for_keepalive': True,
+        'tail_wait_max_ms': AGENT_EXTERNAL_TAIL_MAX_WAIT_MS,
+        'screen_quiet_max_ms': AGENT_EXTERNAL_SCREEN_MAX_QUIET_MS,
+    }
 
 def build_external_agent_terminal_session_payload(record):
     bridge = get_bridge(record.get('session_token'), record.get('terminal_id')) if isinstance(record, dict) else None
@@ -3388,17 +3426,28 @@ def build_external_agent_token_state_payload(record, now=None):
         'expires_at': expires_at,
         'last_used_at': record.get('last_used_at'),
         'remaining_idle_ms': remaining_idle_ms,
+        'recommended_keepalive_ms': get_external_agent_recommended_keepalive_ms(record.get('idle_timeout_seconds')),
     }
 
 def build_external_agent_state_payload(record, state):
     payload = state.public_state()
     payload['external_agent_id'] = record.get('external_agent_id')
     payload['external_agent_token'] = build_external_agent_token_state_payload(record)
+    payload['monitoring_policy'] = build_external_agent_monitoring_policy_payload(record)
     terminal_session = build_external_agent_terminal_session_payload(record)
     if terminal_session:
         payload['terminal_session'] = terminal_session
     payload['status'] = 'ok'
     return payload
+
+def build_external_agent_heartbeat_payload(record, terminal_id):
+    return {
+        'status': 'ok',
+        'terminal_id': terminal_id,
+        'external_agent_id': record.get('external_agent_id'),
+        'external_agent_token': build_external_agent_token_state_payload(record),
+        'monitoring_policy': build_external_agent_monitoring_policy_payload(record),
+    }
 
 def build_external_agent_tail_payload(bridge, since_output_seq=None, limit=AGENT_EXTERNAL_TAIL_MAX_EVENTS):
     try:
@@ -4842,6 +4891,7 @@ def build_external_agent_cli_commands(base_url, token, terminal_id):
     return {
         'hello': build_external_agent_cli_command(base_url, token, terminal_id, op='hello'),
         'state': build_external_agent_cli_command(base_url, token, terminal_id, op='state'),
+        'heartbeat': build_external_agent_cli_command(base_url, token, terminal_id, op='heartbeat'),
         'screen': build_external_agent_cli_command(base_url, token, terminal_id, op='screen'),
         'screen_tail': build_external_agent_cli_command(
             base_url,
@@ -4957,6 +5007,7 @@ def build_external_agent_discovery_payload(base_url, token, terminal_id):
         'operations': {
             'hello': {'op': 'hello'},
             'state': {'op': 'state'},
+            'heartbeat': {'op': 'heartbeat'},
             'screen': {'op': 'screen'},
             'screen_tail': {'op': 'screen', 'tail_lines': 12},
             'screen_region': {'op': 'screen', 'region': {'top': 0, 'bottom': 12}},
@@ -5041,6 +5092,9 @@ def build_external_agent_discovery_payload(base_url, token, terminal_id):
             'revoke': {'op': 'revoke'},
         },
         'cli_commands': build_external_agent_cli_commands(command_base_url, token, terminal_id),
+        'monitoring_policy': build_external_agent_monitoring_policy_payload({
+            'idle_timeout_seconds': AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS,
+        }),
         'security': {
             'token_prefix': 'agt_',
             'token_is_secret': True,
@@ -5141,6 +5195,7 @@ def build_external_agentinfo_payload(base_url=None, agentinfo_path=None):
         'capabilities': list(EXTERNAL_AGENT_CAPABILITIES),
         'recommended_commands': build_external_agentinfo_recommended_commands(agentinfo_path=agentinfo_path),
         'status_hints': build_external_agentinfo_status_hints(),
+        'monitoring_policy': build_external_agent_monitoring_policy_payload(),
         'security': {
             'tokenless': True,
             'contains_secret': False,
@@ -5200,6 +5255,7 @@ def build_external_agent_token_payload(token, record, terminal_id, base_url):
         'terminal_id': terminal_id,
         'external_agent_id': record.get('external_agent_id'),
         'expires_at': record.get('expires_at'),
+        'external_agent_token': build_external_agent_token_state_payload(record),
         'url': command_base_url,
         'browser_url': base_url,
         'cli_command': cli_command,
@@ -5228,6 +5284,10 @@ def build_external_agent_startup_lines():
         python_arg, cli_arg, '--handoff', handoff_arg, '--url', loopback_url,
         *get_external_agent_cli_tls_args(), 'hello',
     ])
+    heartbeat_command = quote_local_command([
+        python_arg, cli_arg, '--handoff', handoff_arg, '--url', loopback_url,
+        *get_external_agent_cli_tls_args(), 'heartbeat',
+    ])
     render_command = quote_local_command([
         python_arg, cli_arg, '--handoff', handoff_arg, '--url', loopback_url,
         *get_external_agent_cli_tls_args(), 'render',
@@ -5240,6 +5300,7 @@ def build_external_agent_startup_lines():
         f"External Agent Handoff: {EXTERNAL_AGENT_HANDOFF_PATH}",
         "External Agent Handoff is created or refreshed after browser Agent attach and external token mint.",
         f"External Agent CLI hello: {hello_command}",
+        f"External Agent CLI heartbeat: {heartbeat_command}",
         f"External Agent CLI render: {render_command}",
         "External Agent multi-terminal tests should pass explicit --url, --token, and --terminal; the handoff file stores the latest minted token.",
     ]
@@ -6383,6 +6444,17 @@ def process_external_agent_command(command):
             'external_agent_id': record.get('external_agent_id'),
             'revoked': True,
         }
+
+    if op == 'heartbeat':
+        record, _state, terminal_id, error_code = validate_external_agent_command_token(
+            command,
+            renew_token=False,
+        )
+        if error_code:
+            return external_agent_error(error_code, terminal_id=terminal_id)
+        with external_agent_lock:
+            record = external_agent_attach_store.renew_record(record.get('token_hash')) or record
+        return build_external_agent_heartbeat_payload(record, terminal_id)
 
     record, state, terminal_id, error_code = validate_external_agent_command_token(command)
     if error_code:

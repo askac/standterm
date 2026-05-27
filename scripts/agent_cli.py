@@ -31,6 +31,7 @@ def parse_args():
     hello_parser.add_argument('--discover', action='store_true', help='Include tokenless agentinfo in the hello output when available')
     subparsers.add_parser('attach')
     subparsers.add_parser('state')
+    subparsers.add_parser('heartbeat')
     screen_parser = subparsers.add_parser('screen')
     screen_group = screen_parser.add_mutually_exclusive_group()
     screen_group.add_argument('--tail-lines', type=int, help='Only return the last N viewport lines')

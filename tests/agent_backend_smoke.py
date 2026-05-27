@@ -2145,17 +2145,30 @@ def test_external_agent_privacy_and_disabled_state_block_visibility_and_send():
         'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'approval',
     })
-    token, _record, error_code = standterm.mint_external_agent_attach_token(
+    token, record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
         standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
 
+    stored = standterm.external_agent_attach_store._tokens[record['token_hash']]
     client.emit(standterm.AGENT_EVENT_PRIVACY_SET, {
         'terminal_id': standterm.TERMINAL_ID_MAIN,
         'privacy_state': standterm.AGENT_PRIVACY_PRIVATE_INPUT,
     })
+    stored['expires_at'] = standterm.time.time() + 1
+    heartbeat = standterm.process_external_agent_command({
+        'op': 'heartbeat',
+        'token': token,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+    })
+    assert heartbeat['status'] == 'ok'
+    assert heartbeat['external_agent_token']['remaining_idle_ms'] > 0
+    assert heartbeat['external_agent_token']['expires_at'] == stored['expires_at']
+    assert 'screen' not in heartbeat
+    assert 'events' not in heartbeat
+    assert 'render' not in heartbeat
     screen = standterm.process_external_agent_command({
         'op': 'screen',
         'token': token,
@@ -2186,6 +2199,15 @@ def test_external_agent_privacy_and_disabled_state_block_visibility_and_send():
         'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'disabled',
     })
+    disabled_expires_at = standterm.time.time() + 1
+    stored['expires_at'] = disabled_expires_at
+    result = standterm.process_external_agent_command({
+        'op': 'heartbeat',
+        'token': token,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+    })
+    assert result['error_code'] == standterm.AGENT_ERROR_EXTERNAL_AGENT_DISABLED
+    assert stored['expires_at'] == disabled_expires_at
     result = standterm.process_external_agent_command({
         'op': 'screen',
         'token': token,
@@ -2280,6 +2302,21 @@ def test_external_agent_expired_and_wrong_terminal_tokens_are_rejected():
     assert stored['expires_at'] > first_expires_at
     assert result['external_agent_token']['expires_at'] == stored['expires_at']
     assert result['external_agent_token']['remaining_idle_ms'] > 0
+    stored['expires_at'] = standterm.time.time() + 1
+    result = standterm.process_external_agent_command({
+        'op': 'heartbeat',
+        'token': token,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+    })
+    assert result['status'] == 'ok'
+    assert result['external_agent_token']['expires_at'] == stored['expires_at']
+    assert result['external_agent_token']['recommended_keepalive_ms'] == 30000
+    assert result['monitoring_policy']['keepalive_op'] == 'heartbeat'
+    assert result['monitoring_policy']['display_polling_is_not_required_for_keepalive'] is True
+    assert 'state' not in result
+    assert 'screen' not in result
+    assert 'events' not in result
+    assert 'render' not in result
 
     token, _record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
@@ -2335,6 +2372,7 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             assert 'render' in token_payload['capabilities']
             assert 'render_visible_xterm_png' in token_payload['capabilities']
             assert 'render_mirror_screen' in token_payload['capabilities']
+            assert 'heartbeat' in token_payload['capabilities']
             assert 'typed_send' in token_payload['capabilities']
             assert 'send_capture' in token_payload['capabilities']
             assert 'submit_after' in token_payload['capabilities']
@@ -2360,6 +2398,9 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
                 'op': 'render',
                 'render_mode': 'mirror_screen',
             }
+            assert token_payload['operations']['heartbeat'] == {'op': 'heartbeat'}
+            assert token_payload['monitoring_policy']['keepalive_op'] == 'heartbeat'
+            assert token_payload['monitoring_policy']['recommended_keepalive_ms'] == 60000
             assert token_payload['operations']['screen_tail'] == {'op': 'screen', 'tail_lines': 12}
             assert token_payload['operations']['screen_region'] == {
                 'op': 'screen',
@@ -2409,11 +2450,13 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             assert token_payload['security']['idle_timeout_seconds'] == (
                 standterm.AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS
             )
+            assert token_payload['external_agent_token']['recommended_keepalive_ms'] == 60000
             assert token_payload['security']['remote_use_requires_loopback_tunnel'] is True
             assert token_payload['cli_command'].endswith("send --text 'pwd\n'")
             assert 'scripts/agent_cli.py' in token_payload['cli_command']
             assert f"--url {token_payload['url']}" in token_payload['cli_command']
             assert token_payload['cli_commands']['hello'].endswith('hello')
+            assert token_payload['cli_commands']['heartbeat'].endswith('heartbeat')
             assert token_payload['cli_commands']['render'].endswith('render')
             assert token_payload['cli_commands']['render_visible_xterm_png'].endswith('render --mode visible-xterm-png')
             assert token_payload['cli_commands']['render_mirror_screen'].endswith('render --mode mirror-screen')
@@ -2496,6 +2539,8 @@ def assert_agentinfo_is_tokenless(payload):
     assert payload['handoff_path'].endswith('standterm_external_agent_handoff.json')
     assert payload['transport']['command_endpoint'].endswith('/agent/external/command')
     assert payload['agentinfo_url'].endswith('/agentinfo')
+    assert payload['monitoring_policy']['keepalive_op'] == 'heartbeat'
+    assert payload['monitoring_policy']['display_polling_is_not_required_for_keepalive'] is True
     assert 'agt_' not in standterm.json.dumps(payload)
     for command in payload['recommended_commands'].values():
         assert '--token' not in command
@@ -2547,6 +2592,7 @@ def test_external_agent_startup_lines_point_to_launch_handoff():
     joined = '\n'.join(lines)
     discover_line = next(line for line in lines if line.startswith('External Agent CLI discover: '))
     hello_line = next(line for line in lines if line.startswith('External Agent CLI hello: '))
+    heartbeat_line = next(line for line in lines if line.startswith('External Agent CLI heartbeat: '))
     render_line = next(line for line in lines if line.startswith('External Agent CLI render: '))
 
     assert standterm.quote_local_command(['C:\\Program Files\\Python\\python.exe'], platform_name='win32') == (
@@ -2563,6 +2609,10 @@ def test_external_agent_startup_lines_point_to_launch_handoff():
     assert f'--url http://127.0.0.1:{standterm.DEFAULT_PORT}' in hello_line
     assert str(standterm.EXTERNAL_AGENT_HANDOFF_PATH) in hello_line
     assert hello_line.endswith(' hello')
+    assert '--handoff' in heartbeat_line
+    assert f'--url http://127.0.0.1:{standterm.DEFAULT_PORT}' in heartbeat_line
+    assert str(standterm.EXTERNAL_AGENT_HANDOFF_PATH) in heartbeat_line
+    assert heartbeat_line.endswith(' heartbeat')
     assert '--handoff' in render_line
     assert f'--url http://127.0.0.1:{standterm.DEFAULT_PORT}' in render_line
     assert str(standterm.EXTERNAL_AGENT_HANDOFF_PATH) in render_line
