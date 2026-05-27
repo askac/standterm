@@ -7,11 +7,11 @@ StandTerm uses repo-local virtual environments. Do not install Python packages i
 - Windows: run `run.bat`; it creates and uses the Windows-local launcher environment.
 - External-agent helpers: use the active Python path printed by the StandTerm startup banner or stored in the handoff metadata, then call `scripts/agent_cli.py`, `scripts/agent_jsonl.py`, `scripts/agent_repl.py`, or `scripts/agent_type.py` through that Python.
 
-If Python venv support is missing on Ubuntu 24.04 LTS or similar Debian/Ubuntu systems, install it with apt before running StandTerm:
+If Python venv support is missing on Ubuntu 24.04 LTS or similar Debian/Ubuntu systems, install the required OS packages with apt before running StandTerm:
 
 ```bash
 sudo apt update
-sudo apt install -y python3 python3-venv python3-pip
+sudo apt install -y git python3 python3-venv python3-pip
 ```
 
 After apt installs venv support, return to the repository root and run:
@@ -21,3 +21,5 @@ After apt installs venv support, return to the repository root and run:
 ```
 
 For tests or maintenance commands, use the existing repo-local venv Python after it has been created, for example `tools/.venv_wsl/bin/python` on WSL. If the needed venv does not exist yet, run the launcher first instead of falling back to system Python.
+
+If you intentionally use a non-venv Python, first confirm it can import the required StandTerm packages from `requirements.txt`. The launcher-managed venv path is still preferred for automation because it is reproducible across machines.

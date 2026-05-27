@@ -51,13 +51,26 @@ If you use an AI agent or coding assistant in this repository, ask it to create
 or follow a local repo rule from `docs/venv_prompt.txt` so Python commands use
 the launcher-managed venv instead of system Python.
 
-On Ubuntu 24.04 LTS and similar Debian/Ubuntu systems, a minimal Python install
-may not include venv support. Install it with apt before running StandTerm:
+On Ubuntu 24.04 LTS and similar Debian/Ubuntu/WSL systems, minimal Python
+installs may not include venv support. If the installer or launcher reports
+missing system packages, install them with apt:
 
 ```bash
 sudo apt update
-sudo apt install -y python3 python3-venv python3-pip
+sudo apt install -y git python3 python3-venv python3-pip
 ```
+
+The launchers create a repo-local venv, install `requirements.txt`, and verify
+that the active Python can import the required packages before starting.
+
+On native Windows, install Git and Python first if they are not already on PATH:
+
+```powershell
+winget install --id Git.Git -e
+winget install --id Python.Python.3.12 -e
+```
+
+Reopen PowerShell after installing them so `git` and `python` are available.
 
 ## Quick Start
 
@@ -71,6 +84,18 @@ Install into a specific directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/askac/standterm/main/install.sh | bash -s -- --dir ~/standterm
+```
+
+Install and run on native Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/askac/standterm/main/install.ps1 | iex
+```
+
+Install into a specific Windows directory:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/askac/standterm/main/install.ps1))) -Dir "$HOME\standterm"
 ```
 
 Manual setup:

@@ -51,6 +51,13 @@ echo "========================================"
 echo "   StandTerm Automated Starter ($PLATFORM_NAME)"
 echo "========================================"
 
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "[!] ERROR: python3 is required but not found."
+    echo "    Install with: sudo apt install python3 python3-venv python3-pip   (Debian/Ubuntu/WSL)"
+    echo "                  brew install python3                      (macOS)"
+    exit 1
+fi
+
 # Check for force flag
 FORCE_RECHECK=false
 for arg in "$@"; do
@@ -64,7 +71,9 @@ if [ ! -d "$VENV_DIR" ]; then
     echo "[*] Creating virtual environment: $VENV_DIR..."
     python3 -m venv "$VENV_DIR"
     if [ $? -ne 0 ]; then
-        echo "[!] ERROR: Failed to create virtual environment. Ensure python3-venv is installed."
+        echo "[!] ERROR: Failed to create virtual environment."
+        echo "    Debian/Ubuntu/WSL: sudo apt update && sudo apt install -y python3 python3-venv python3-pip"
+        echo "    macOS: brew install python3"
         exit 1
     fi
     FORCE_RECHECK=true
@@ -76,12 +85,8 @@ echo "[*] Activating virtual environment..."
 source "$VENV_DIR/bin/activate"
 
 echo "[*] Checking Python dependencies..."
-if ! python -c "import serial" >/dev/null 2>&1; then
-    echo "[*] pyserial is missing or unavailable; dependency check will run."
-    FORCE_RECHECK=true
-fi
-if ! python -c "import cryptography" >/dev/null 2>&1; then
-    echo "[*] cryptography is missing or unavailable; dependency check will run."
+if ! python -c "import flask, flask_socketio, simple_websocket, paramiko, eventlet, cryptography, serial" >/dev/null 2>&1; then
+    echo "[*] Python dependencies are missing or unavailable; dependency check will run."
     FORCE_RECHECK=true
 fi
 
@@ -89,13 +94,14 @@ fi
 if [ "$FORCE_RECHECK" = true ] || [ ! -f "$INSTALLED_FLAG" ]; then
     if [ -f "$REQ_FILE" ]; then
         echo "[*] Installing/Updating dependencies from requirements.txt..."
-        pip install -q -r "$REQ_FILE"
+        python -m pip install -q -r "$REQ_FILE"
     else
         echo "[!] WARNING: requirements.txt not found, installing basic packages..."
-        pip install -q Flask Flask-SocketIO paramiko eventlet
+        python -m pip install -q Flask Flask-SocketIO paramiko eventlet
     fi
 
     if [ $? -eq 0 ]; then
+        python -c "import flask, flask_socketio, simple_websocket, paramiko, eventlet, cryptography, serial"
         touch "$INSTALLED_FLAG"
         echo "[+] Dependencies verified and flag created."
     else
