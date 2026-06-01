@@ -136,6 +136,15 @@ Local Shell is selected by default when the browser is allowed to access
 host-local resources, but no shell starts automatically. Use the UI's connect
 button for the selected backend.
 
+Backend plugins publish their start form metadata through
+`terminal_policy.connection_options[*].start_fields`. The built-in SSH, Local
+Shell, and UART controls read defaults and option lists from that typed schema
+while retaining legacy policy keys for compatibility. Runtime defaults such as
+`default_connection_type`, `ssh.default_host`, `ssh.default_port`,
+`ssh.default_user`, `local_shell.default_kind`, and `uart.default_baud_rate` are
+in-memory settings that apply to new connections and to refreshed start field
+defaults.
+
 The WSL Local Shell selector is WSL-only. Native Windows keeps using the native
 launcher shell selection, and native Linux/macOS use the process `SHELL` value or
 `/bin/sh`.
@@ -365,6 +374,9 @@ certificate.
 
 Full protocol details are in `docs/agent_socket_contract.md`.
 
+Backend plugin policy and start form details are in
+`docs/backend_plugin_contract.md`.
+
 ## Operator Observation
 
 The Agent panel can start an operator observation session for documenting how a
@@ -436,6 +448,26 @@ Common settings:
 | `STANDTERM_AGENT_EXTERNAL_IDLE_TIMEOUT_SECONDS` | External-agent bearer token idle timeout. Default `300`; set `session` to rely only on disconnect/revoke. |
 
 Add `&debug=1` to the StandTerm URL to show an on-screen policy overlay.
+
+Runtime settings exposed in the Server Settings panel are in-memory only and
+apply to the next connection. They do not modify launcher flags, environment
+variables, or existing connected terminal sessions.
+
+| Runtime setting | Purpose |
+| --- | --- |
+| `default_connection_type` | Preferred backend for new tabs when no force-connection lock is active. |
+| `ssh.default_host` | Default SSH host for new SSH connections. |
+| `ssh.default_port` | Default SSH port for new SSH connections. |
+| `ssh.default_user` | Default SSH username for new SSH connections. |
+| `local_shell.default_kind` | WSL-only default shell kind for new Local Shell connections. |
+| `uart.default_baud_rate` | Default UART baud rate for new UART connections. |
+
+Settings view is allowed for local or browser-authorized clients. Low-risk
+updates require local access or a scoped admin grant from the browser UI; remote
+browser authorization by itself is read-only.
+
+Backend plugin policy, start form metadata, settings schema, and compatibility
+details are in `docs/backend_plugin_contract.md`.
 
 ## Localhost SSH Key Setup
 

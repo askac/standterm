@@ -3,6 +3,9 @@
 This document describes the internal Agent Socket.IO contract and the backend
 External Agent Mirror command boundary. The current UI contains a mock Agent
 panel for exercising the typed contract; no external provider is connected yet.
+Terminal backend policy, start form metadata, runtime settings, and
+plugin-declared settings schema are documented separately in
+`docs/backend_plugin_contract.md`.
 
 ## Scope
 

@@ -1048,6 +1048,54 @@
                 return field && Array.isArray(field.options) ? field.options : [];
             }
 
+            function getUartPortOptions() {
+                const uartOption = getConnectionOption('uart') || {};
+                return Array.isArray(uartOption.available_ports) ? uartOption.available_ports : [];
+            }
+
+            function getUartBaudOptions() {
+                const uartOption = getConnectionOption('uart') || {};
+                const baudFieldOptions = getConnectionFieldOptions('uart', 'baud_rate');
+                if (baudFieldOptions.length) return baudFieldOptions;
+                if (Array.isArray(uartOption.baud_rates) && uartOption.baud_rates.length) {
+                    return uartOption.baud_rates.map(rate => ({ value: rate, label: String(rate) }));
+                }
+                return [{ value: 115200, label: '115200' }];
+            }
+
+            function getUartDefaultBaud(baudOptions) {
+                const uartOption = getConnectionOption('uart') || {};
+                return getConnectionFieldDefault(
+                    'uart',
+                    'baud_rate',
+                    uartOption.default_baud_rate || (baudOptions[0] || {}).value || 115200
+                );
+            }
+
+            function getLocalShellKindOptions() {
+                const localShellOption = getConnectionOption('local_shell') || {};
+                const shellFieldOptions = getConnectionFieldOptions('local_shell', 'local_shell_kind');
+                if (shellFieldOptions.length) return shellFieldOptions;
+                if (!Array.isArray(localShellOption.shell_options)) return [];
+                return localShellOption.shell_options.map(item => ({
+                    value: item.kind,
+                    label: item.label || item.kind,
+                    default: !!item.default
+                }));
+            }
+
+            function getLocalShellDefaultKind(shellOptions) {
+                const localShellOption = getConnectionOption('local_shell') || {};
+                return getConnectionFieldDefault(
+                    'local_shell',
+                    'local_shell_kind',
+                    localShellOption.default_shell_kind
+                    || (shellOptions.find(shellOption => shellOption && shellOption.default) || {}).value
+                    || (shellOptions[0] || {}).value
+                    || ''
+                );
+            }
+
             function isConnectionFieldEdited(connectionType, fieldName) {
                 return userEditedConnectionFields.has(getConnectionFieldKey(connectionType, fieldName));
             }
@@ -1929,8 +1977,7 @@
             }
 
             function populateUartFields() {
-                const uartOption = getConnectionOption('uart') || {};
-                const ports = Array.isArray(uartOption.available_ports) ? uartOption.available_ports : [];
+                const ports = getUartPortOptions();
                 const previousPort = uartPortInput.value;
                 uartPortList.replaceChildren();
                 ports.forEach(port => {
@@ -1944,12 +1991,7 @@
                     uartPortInput.value = ports[0].device;
                 }
 
-                const baudFieldOptions = getConnectionFieldOptions('uart', 'baud_rate');
-                const baudOptions = baudFieldOptions.length
-                    ? baudFieldOptions
-                    : (Array.isArray(uartOption.baud_rates) && uartOption.baud_rates.length
-                        ? uartOption.baud_rates.map(rate => ({ value: rate, label: String(rate) }))
-                        : [{ value: 115200, label: '115200' }]);
+                const baudOptions = getUartBaudOptions();
                 const previousBaud = uartBaudSelect.value;
                 uartBaudSelect.replaceChildren();
                 baudOptions.forEach(item => {
@@ -1959,11 +2001,7 @@
                     option.innerText = item.label || String(item.value);
                     uartBaudSelect.appendChild(option);
                 });
-                const defaultBaud = getConnectionFieldDefault(
-                    'uart',
-                    'baud_rate',
-                    uartOption.default_baud_rate || (baudOptions[0] || {}).value || 115200
-                );
+                const defaultBaud = getUartDefaultBaud(baudOptions);
                 const hasPreviousBaud = baudOptions.some(item => String(item.value) === previousBaud);
                 uartBaudSelect.value = hasPreviousBaud && isConnectionFieldEdited('uart', 'baud_rate')
                     ? previousBaud
@@ -1971,17 +2009,7 @@
             }
 
             function populateLocalShellFields() {
-                const localShellOption = getConnectionOption('local_shell') || {};
-                const shellFieldOptions = getConnectionFieldOptions('local_shell', 'local_shell_kind');
-                const shellOptions = shellFieldOptions.length
-                    ? shellFieldOptions
-                    : (Array.isArray(localShellOption.shell_options)
-                        ? localShellOption.shell_options.map(item => ({
-                            value: item.kind,
-                            label: item.label || item.kind,
-                            default: !!item.default
-                        }))
-                        : []);
+                const shellOptions = getLocalShellKindOptions();
                 const previousKind = localShellKindSelect.value;
                 localShellKindSelect.replaceChildren();
                 shellOptions.forEach(shellOption => {
@@ -1993,14 +2021,7 @@
                 });
 
                 const hasPreviousKind = shellOptions.some(shellOption => shellOption.value === previousKind);
-                const defaultKind = getConnectionFieldDefault(
-                    'local_shell',
-                    'local_shell_kind',
-                    localShellOption.default_shell_kind
-                    || (shellOptions.find(shellOption => shellOption && shellOption.default) || {}).value
-                    || (shellOptions[0] || {}).value
-                    || ''
-                );
+                const defaultKind = getLocalShellDefaultKind(shellOptions);
                 localShellKindSelect.value = hasPreviousKind && isConnectionFieldEdited('local_shell', 'local_shell_kind')
                     ? previousKind
                     : defaultKind;
