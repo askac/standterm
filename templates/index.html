@@ -984,7 +984,6 @@
             let forcedConnectionType = null;
             let selectedConnectionType = null;
             let userSelectedConnectionType = null;
-            let userSelectedLocalShellKind = false;
             const userEditedConnectionFields = new Set();
             let browserIdentityPromise = null;
             let browserIdentityRegistered = false;
@@ -1042,6 +1041,28 @@
                 const field = getConnectionFieldSchema(connectionType, fieldName);
                 if (!field || field.default_value === undefined || field.default_value === null) return fallback;
                 return field.default_value;
+            }
+
+            function getConnectionFieldOptions(connectionType, fieldName) {
+                const field = getConnectionFieldSchema(connectionType, fieldName);
+                return field && Array.isArray(field.options) ? field.options : [];
+            }
+
+            function isConnectionFieldEdited(connectionType, fieldName) {
+                return userEditedConnectionFields.has(getConnectionFieldKey(connectionType, fieldName));
+            }
+
+            function clearConnectionFieldEdited(connectionType, fieldName) {
+                userEditedConnectionFields.delete(getConnectionFieldKey(connectionType, fieldName));
+            }
+
+            function applyConnectionFieldDefault(connectionType, fieldName, element, fallback) {
+                const defaultValue = getConnectionFieldDefault(connectionType, fieldName, fallback);
+                const normalizedDefault = String(defaultValue ?? '');
+                element.defaultValue = normalizedDefault;
+                if (!isConnectionFieldEdited(connectionType, fieldName)) {
+                    element.value = normalizedDefault;
+                }
             }
 
             function markConnectionFieldEditedById(elementId) {
@@ -1896,6 +1917,17 @@
                 return `Connect to ${CONNECTION_LABELS[mode] || 'Terminal'}`;
             }
 
+            function populateSshFields() {
+                [
+                    ['host', document.getElementById('host')],
+                    ['port', document.getElementById('port')],
+                    ['username', document.getElementById('username')],
+                    ['password', document.getElementById('password')]
+                ].forEach(([fieldName, input]) => {
+                    applyConnectionFieldDefault('ssh', fieldName, input, input.defaultValue || '');
+                });
+            }
+
             function populateUartFields() {
                 const uartOption = getConnectionOption('uart') || {};
                 const ports = Array.isArray(uartOption.available_ports) ? uartOption.available_ports : [];
@@ -1908,43 +1940,70 @@
                     option.label = port.label || port.device;
                     uartPortList.appendChild(option);
                 });
-                if (!previousPort && ports.length > 0) uartPortInput.value = ports[0].device;
+                if (!previousPort && ports.length > 0 && !isConnectionFieldEdited('uart', 'serial_port')) {
+                    uartPortInput.value = ports[0].device;
+                }
 
-                const baudRates = Array.isArray(uartOption.baud_rates) && uartOption.baud_rates.length
-                    ? uartOption.baud_rates
-                    : [115200];
+                const baudFieldOptions = getConnectionFieldOptions('uart', 'baud_rate');
+                const baudOptions = baudFieldOptions.length
+                    ? baudFieldOptions
+                    : (Array.isArray(uartOption.baud_rates) && uartOption.baud_rates.length
+                        ? uartOption.baud_rates.map(rate => ({ value: rate, label: String(rate) }))
+                        : [{ value: 115200, label: '115200' }]);
+                const previousBaud = uartBaudSelect.value;
                 uartBaudSelect.replaceChildren();
-                baudRates.forEach(rate => {
+                baudOptions.forEach(item => {
+                    if (!item || item.value === undefined || item.value === null) return;
                     const option = document.createElement('option');
-                    option.value = String(rate);
-                    option.innerText = String(rate);
+                    option.value = String(item.value);
+                    option.innerText = item.label || String(item.value);
                     uartBaudSelect.appendChild(option);
                 });
-                uartBaudSelect.value = String(uartOption.default_baud_rate || 115200);
+                const defaultBaud = getConnectionFieldDefault(
+                    'uart',
+                    'baud_rate',
+                    uartOption.default_baud_rate || (baudOptions[0] || {}).value || 115200
+                );
+                const hasPreviousBaud = baudOptions.some(item => String(item.value) === previousBaud);
+                uartBaudSelect.value = hasPreviousBaud && isConnectionFieldEdited('uart', 'baud_rate')
+                    ? previousBaud
+                    : String(defaultBaud);
             }
 
             function populateLocalShellFields() {
                 const localShellOption = getConnectionOption('local_shell') || {};
-                const shellOptions = Array.isArray(localShellOption.shell_options)
-                    ? localShellOption.shell_options
-                    : [];
+                const shellFieldOptions = getConnectionFieldOptions('local_shell', 'local_shell_kind');
+                const shellOptions = shellFieldOptions.length
+                    ? shellFieldOptions
+                    : (Array.isArray(localShellOption.shell_options)
+                        ? localShellOption.shell_options.map(item => ({
+                            value: item.kind,
+                            label: item.label || item.kind,
+                            default: !!item.default
+                        }))
+                        : []);
                 const previousKind = localShellKindSelect.value;
                 localShellKindSelect.replaceChildren();
                 shellOptions.forEach(shellOption => {
-                    if (!shellOption || typeof shellOption.kind !== 'string') return;
+                    if (!shellOption || typeof shellOption.value !== 'string') return;
                     const option = document.createElement('option');
-                    option.value = shellOption.kind;
-                    option.innerText = shellOption.label || shellOption.kind;
+                    option.value = shellOption.value;
+                    option.innerText = shellOption.label || shellOption.value;
                     localShellKindSelect.appendChild(option);
                 });
 
-                const hasPreviousKind = shellOptions.some(shellOption => shellOption.kind === previousKind);
-                const defaultKind = localShellOption.default_shell_kind
-                    || (shellOptions.find(shellOption => shellOption && shellOption.default) || {}).kind
-                    || (shellOptions[0] || {}).kind
-                    || '';
-                if (!hasPreviousKind) userSelectedLocalShellKind = false;
-                localShellKindSelect.value = hasPreviousKind && userSelectedLocalShellKind ? previousKind : defaultKind;
+                const hasPreviousKind = shellOptions.some(shellOption => shellOption.value === previousKind);
+                const defaultKind = getConnectionFieldDefault(
+                    'local_shell',
+                    'local_shell_kind',
+                    localShellOption.default_shell_kind
+                    || (shellOptions.find(shellOption => shellOption && shellOption.default) || {}).value
+                    || (shellOptions[0] || {}).value
+                    || ''
+                );
+                localShellKindSelect.value = hasPreviousKind && isConnectionFieldEdited('local_shell', 'local_shell_kind')
+                    ? previousKind
+                    : defaultKind;
             }
 
             function setConnectionType(mode) {
@@ -2038,6 +2097,7 @@
                 const previousLocalShellOption = getConnectionOption('local_shell') || {};
                 terminalPolicy = policy;
                 refreshPolicyState();
+                populateSshFields();
                 populateLocalShellFields();
                 populateUartFields();
                 const nextLocalShellOption = getConnectionOption('local_shell') || {};
@@ -2472,6 +2532,12 @@
                     getActiveAgentState() {
                         return serializeAgentForTest(getActiveTerminalState());
                     },
+                    getTerminalPolicy() {
+                        return cloneForTest(terminalPolicy);
+                    },
+                    applyTerminalPolicy(policy) {
+                        applyTerminalPolicy(cloneForTest(policy));
+                    },
                     getMirrorSnapshot() {
                         return cloneForTest(buildAgentViewportSnapshot(getActiveTerminalState()));
                     },
@@ -2728,7 +2794,8 @@
             }
 
             function resetSshFormFields() {
-                ['host', 'port', 'username', 'password'].forEach(id => {
+                Object.entries(CONNECTION_FIELD_IDS.ssh).forEach(([fieldName, id]) => {
+                    clearConnectionFieldEdited('ssh', fieldName);
                     const input = document.getElementById(id);
                     input.value = input.defaultValue;
                 });
@@ -2757,9 +2824,6 @@
                 pendingReconnect = null;
                 submitConnection(getConnectionFormData());
             };
-            localShellKindSelect.addEventListener('change', () => {
-                userSelectedLocalShellKind = true;
-            });
             connectBtn.onclick = doConnect;
             browserAuthDetailsToggle.onclick = () => {
                 browserAuthDetailsVisible = !browserAuthDetailsVisible;

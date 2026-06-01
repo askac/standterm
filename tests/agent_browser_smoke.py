@@ -676,6 +676,102 @@ def test_settings_server_tab_loads_readonly_snapshot(browser, access_url):
         close_context(context)
 
 
+def test_connection_controls_follow_start_fields_without_legacy_payload(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        state = page.evaluate(
+            """() => {
+                const policy = window.terminalTest.getTerminalPolicy();
+                const ssh = policy.connection_options.find(item => item.connection_type === 'ssh');
+                const localShell = policy.connection_options.find(item => item.connection_type === 'local_shell');
+                const uart = policy.connection_options.find(item => item.connection_type === 'uart');
+                if (!ssh || !localShell || !uart) return null;
+
+                ssh.start_fields = [
+                    { name: 'host', value_type: 'string', input_type: 'text', default_value: 'schema-host' },
+                    { name: 'port', value_type: 'integer', input_type: 'text', default_value: 2022 },
+                    { name: 'username', value_type: 'string', input_type: 'text', default_value: 'schema-user' },
+                    { name: 'password', value_type: 'string', input_type: 'password', secret: true }
+                ];
+                delete localShell.shell_options;
+                delete localShell.default_shell_kind;
+                localShell.start_fields = [{
+                    name: 'local_shell_kind',
+                    value_type: 'enum',
+                    input_type: 'select',
+                    default_value: 'beta',
+                    options: [
+                        { value: 'alpha', label: 'Alpha' },
+                        { value: 'beta', label: 'Beta' }
+                    ]
+                }];
+                delete uart.baud_rates;
+                delete uart.default_baud_rate;
+                uart.start_fields = [
+                    { name: 'serial_port', value_type: 'string', input_type: 'text', default_value: '' },
+                    {
+                        name: 'baud_rate',
+                        value_type: 'integer',
+                        input_type: 'select',
+                        default_value: 9600,
+                        options: [
+                            { value: 9600, label: '9600' },
+                            { value: 115200, label: '115200' }
+                        ]
+                    }
+                ];
+                window.terminalTest.applyTerminalPolicy(policy);
+                return {
+                    host: document.getElementById('host').value,
+                    port: document.getElementById('port').value,
+                    username: document.getElementById('username').value,
+                    localShell: document.getElementById('local-shell-kind').value,
+                    localShellOptions: Array.from(document.getElementById('local-shell-kind').options).map(item => item.value),
+                    uartBaud: document.getElementById('uart-baud').value,
+                    uartBaudOptions: Array.from(document.getElementById('uart-baud').options).map(item => item.value)
+                };
+            }"""
+        )
+        check(state is not None, 'connection policy did not expose expected backend options')
+        check(state['host'] == 'schema-host', 'SSH host did not use start_fields default')
+        check(state['port'] == '2022', 'SSH port did not use start_fields default')
+        check(state['username'] == 'schema-user', 'SSH username did not use start_fields default')
+        check(state['localShellOptions'] == ['alpha', 'beta'], 'Local Shell options did not use start_fields')
+        check(state['localShell'] == 'beta', 'Local Shell default did not use start_fields')
+        check(state['uartBaudOptions'] == ['9600', '115200'], 'UART baud options did not use start_fields')
+        check(state['uartBaud'] == '9600', 'UART baud default did not use start_fields')
+
+        refreshed = page.evaluate(
+            """() => {
+                document.getElementById('host').value = 'manual-host';
+                document.getElementById('host').dispatchEvent(new Event('input', { bubbles: true }));
+                document.getElementById('uart-baud').value = '115200';
+                document.getElementById('uart-baud').dispatchEvent(new Event('change', { bubbles: true }));
+
+                const policy = window.terminalTest.getTerminalPolicy();
+                const ssh = policy.connection_options.find(item => item.connection_type === 'ssh');
+                const localShell = policy.connection_options.find(item => item.connection_type === 'local_shell');
+                const uart = policy.connection_options.find(item => item.connection_type === 'uart');
+                ssh.start_fields.find(item => item.name === 'host').default_value = 'schema-host-2';
+                localShell.start_fields.find(item => item.name === 'local_shell_kind').default_value = 'alpha';
+                uart.start_fields.find(item => item.name === 'baud_rate').default_value = 9600;
+                window.terminalTest.applyTerminalPolicy(policy);
+                return {
+                    host: document.getElementById('host').value,
+                    hostDefault: document.getElementById('host').defaultValue,
+                    localShell: document.getElementById('local-shell-kind').value,
+                    uartBaud: document.getElementById('uart-baud').value
+                };
+            }"""
+        )
+        check(refreshed['host'] == 'manual-host', 'policy refresh overwrote edited SSH host')
+        check(refreshed['hostDefault'] == 'schema-host-2', 'policy refresh did not update SSH host default')
+        check(refreshed['localShell'] == 'alpha', 'policy refresh did not update unedited Local Shell default')
+        check(refreshed['uartBaud'] == '115200', 'policy refresh overwrote edited UART baud')
+    finally:
+        close_context(context)
+
+
 def test_terminal_payload_text_is_not_control(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
@@ -721,6 +817,7 @@ def main():
         test_paste_review_approve_and_cancel,
         test_approval_payload_and_stale_rejections,
         test_settings_server_tab_loads_readonly_snapshot,
+        test_connection_controls_follow_start_fields_without_legacy_payload,
         test_terminal_payload_text_is_not_control,
     ]
     proc = None
