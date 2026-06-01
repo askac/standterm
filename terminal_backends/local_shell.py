@@ -3,7 +3,7 @@ import select
 import sys
 from pathlib import Path
 
-from .base import BackendSettingSchema, TerminalBackendPlugin, TerminalBridge
+from .base import BackendSettingSchema, BackendStartFieldSchema, TerminalBackendPlugin, TerminalBridge
 
 try:
     from ptyprocess import PtyProcessUnicode
@@ -307,6 +307,28 @@ class LocalShellBackendPlugin(TerminalBackendPlugin):
             option['shell_options'] = self._get_wsl_local_shell_options()
             option['default_shell_kind'] = default_shell_kind
         return option
+
+    def get_start_form_schema(self, context=None):
+        if not self._is_wsl():
+            return []
+        shell_options = self._get_wsl_local_shell_options()
+        return [
+            BackendStartFieldSchema(
+                name='local_shell_kind',
+                label='Shell',
+                value_type='enum',
+                input_type='select',
+                default_value=self._get_default_shell_kind(context=context),
+                required=False,
+                options=tuple(
+                    {
+                        'value': item['kind'],
+                        'label': item.get('label') or item['kind'],
+                    }
+                    for item in shell_options
+                ),
+            ),
+        ]
 
     def validate_setting_update(self, setting_key, value, current_value=None):
         if setting_key != 'local_shell.default_kind':

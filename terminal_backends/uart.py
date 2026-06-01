@@ -2,7 +2,7 @@ import json
 import select
 import subprocess
 
-from .base import BackendSettingSchema, TerminalBackendPlugin, TerminalBridge
+from .base import BackendSettingSchema, BackendStartFieldSchema, TerminalBackendPlugin, TerminalBridge
 
 
 class UARTBridge(TerminalBridge):
@@ -321,6 +321,34 @@ class UARTBackendPlugin(TerminalBackendPlugin):
             'default_baud_rate': default_baud_rate,
             'baud_rates': self._baud_rates,
         }
+
+    def get_start_form_schema(self, context=None):
+        default_baud_rate = self._get_default_baud_rate(context=context)
+        return [
+            BackendStartFieldSchema(
+                name='serial_port',
+                label='Port',
+                value_type='string',
+                input_type='text',
+                default_value='',
+                required=True,
+            ),
+            BackendStartFieldSchema(
+                name='baud_rate',
+                label='Baud rate',
+                value_type='integer',
+                input_type='select',
+                default_value=default_baud_rate,
+                required=True,
+                options=tuple(
+                    {
+                        'value': rate,
+                        'label': str(rate),
+                    }
+                    for rate in self._baud_rates
+                ),
+            ),
+        ]
 
     def validate_setting_update(self, setting_key, value, current_value=None):
         if setting_key != 'uart.default_baud_rate':

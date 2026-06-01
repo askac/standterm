@@ -1,3 +1,4 @@
+import re
 import threading
 import time
 from collections import deque
@@ -69,6 +70,46 @@ class BackendSettingSchema:
             payload['min_value'] = self.min_value
         if self.max_value is not None:
             payload['max_value'] = self.max_value
+        return payload
+
+
+@dataclass(frozen=True)
+class BackendStartFieldSchema:
+    name: str
+    value_type: str
+    input_type: str
+    label: Optional[str] = None
+    default_value: Any = None
+    required: bool = False
+    secret: bool = False
+    options: Optional[tuple] = None
+    min_value: Any = None
+    max_value: Any = None
+    max_length: Optional[int] = None
+    max_bytes: Optional[int] = None
+
+    def to_dict(self):
+        payload = {
+            'name': self.name,
+            'value_type': self.value_type,
+            'input_type': self.input_type,
+            'required': bool(self.required),
+            'secret': bool(self.secret),
+        }
+        if self.label is not None:
+            payload['label'] = self.label
+        if self.default_value is not None and not self.secret:
+            payload['default_value'] = self.default_value
+        if self.options is not None:
+            payload['options'] = [dict(item) for item in self.options]
+        if self.min_value is not None:
+            payload['min_value'] = self.min_value
+        if self.max_value is not None:
+            payload['max_value'] = self.max_value
+        if self.max_length is not None:
+            payload['max_length'] = self.max_length
+        if self.max_bytes is not None:
+            payload['max_bytes'] = self.max_bytes
         return payload
 
 
@@ -264,6 +305,9 @@ class TerminalBackendPlugin:
             'allowed': True,
         }
 
+    def get_start_form_schema(self, context=None):
+        return []
+
     def get_settings_schema(self):
         return []
 
@@ -311,6 +355,25 @@ class TerminalBackendPlugin:
 
 
 class TerminalBackendRegistry:
+    _START_FIELD_NAME_PATTERN = re.compile(r'^[a-z][a-z0-9_]*$')
+    _START_FIELD_VALUE_TYPES = {'boolean', 'integer', 'number', 'string', 'enum'}
+    _START_FIELD_INPUT_TYPES = {'checkbox', 'number', 'password', 'select', 'text'}
+    _START_FIELD_ALLOWED_KEYS = {
+        'name',
+        'label',
+        'value_type',
+        'input_type',
+        'default_value',
+        'required',
+        'secret',
+        'options',
+        'min_value',
+        'max_value',
+        'max_length',
+        'max_bytes',
+    }
+    _START_FIELD_OPTION_ALLOWED_KEYS = {'value', 'label'}
+
     def __init__(
         self,
         plugins,
@@ -358,8 +421,122 @@ class TerminalBackendRegistry:
                 raise ValueError(f'Terminal backend {plugin.connection_type} returned mismatched policy option.')
             if not isinstance(option.get('allowed'), bool):
                 raise ValueError(f'Terminal backend {plugin.connection_type} returned non-bool allowed flag.')
+            raw_start_fields = plugin.get_start_form_schema(context=context)
+            if not isinstance(raw_start_fields, list):
+                raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid start form schema.')
+            start_fields = []
+            seen_field_names = set()
+            for item in raw_start_fields:
+                payload = self._normalize_start_field_schema_item(plugin, item)
+                field_name = payload['name']
+                if field_name in seen_field_names:
+                    raise ValueError(f'Terminal backend {plugin.connection_type} returned duplicate start field.')
+                seen_field_names.add(field_name)
+                start_fields.append(payload)
+            option['start_fields'] = start_fields
             options.append(option)
         return options
+
+    def _normalize_start_field_schema_item(self, plugin, item):
+        if isinstance(item, BackendStartFieldSchema):
+            payload = item.to_dict()
+        elif isinstance(item, dict):
+            payload = dict(item)
+        else:
+            raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid start field schema.')
+
+        unknown_keys = set(payload) - self._START_FIELD_ALLOWED_KEYS
+        if unknown_keys:
+            raise ValueError(f'Terminal backend {plugin.connection_type} returned unknown start field metadata.')
+
+        field_name = payload.get('name')
+        if not isinstance(field_name, str) or not self._START_FIELD_NAME_PATTERN.fullmatch(field_name):
+            raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid start field name.')
+        value_type = payload.get('value_type')
+        if value_type not in self._START_FIELD_VALUE_TYPES:
+            raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid start field value type.')
+        input_type = payload.get('input_type')
+        if input_type not in self._START_FIELD_INPUT_TYPES:
+            raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid start field input type.')
+        if input_type == 'password' and value_type != 'string':
+            raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid password field type.')
+        if input_type == 'checkbox' and value_type != 'boolean':
+            raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid checkbox field type.')
+        if input_type == 'number' and value_type not in {'integer', 'number'}:
+            raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid number field type.')
+
+        label = payload.get('label')
+        if label is not None and (not isinstance(label, str) or not label):
+            raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid start field label.')
+        for flag in ('required', 'secret'):
+            if flag in payload and not isinstance(payload[flag], bool):
+                raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid start field flag.')
+            payload[flag] = bool(payload.get(flag))
+
+        if payload['secret']:
+            payload.pop('default_value', None)
+        elif 'default_value' in payload:
+            self._validate_start_field_value(plugin, value_type, payload['default_value'], 'default value')
+
+        options = payload.get('options')
+        if input_type == 'select' or value_type == 'enum':
+            if not isinstance(options, list) or not options:
+                raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid start field options.')
+            payload['options'] = self._normalize_start_field_options(plugin, value_type, options)
+            if 'default_value' in payload and payload['default_value'] not in [
+                option['value'] for option in payload['options']
+            ]:
+                raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid start field default value.')
+        elif options is not None:
+            raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid start field options.')
+
+        for key in ('min_value', 'max_value'):
+            if key in payload:
+                self._validate_start_field_value(plugin, value_type, payload[key], key)
+        for key in ('max_length', 'max_bytes'):
+            value = payload.get(key)
+            if value is not None and (not isinstance(value, int) or value <= 0):
+                raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid start field limit.')
+        return payload
+
+    def _normalize_start_field_options(self, plugin, value_type, options):
+        normalized = []
+        seen_values = set()
+        for option in options:
+            if not isinstance(option, dict):
+                raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid start field option.')
+            unknown_keys = set(option) - self._START_FIELD_OPTION_ALLOWED_KEYS
+            if unknown_keys:
+                raise ValueError(f'Terminal backend {plugin.connection_type} returned unknown start field option metadata.')
+            if 'value' not in option:
+                raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid start field option.')
+            value = option['value']
+            self._validate_start_field_value(plugin, value_type, value, 'option value')
+            if value in seen_values:
+                raise ValueError(f'Terminal backend {plugin.connection_type} returned duplicate start field option.')
+            seen_values.add(value)
+            payload = {'value': value}
+            label = option.get('label')
+            if label is not None:
+                if not isinstance(label, str) or not label:
+                    raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid start field option label.')
+                payload['label'] = label
+            normalized.append(payload)
+        return normalized
+
+    def _validate_start_field_value(self, plugin, value_type, value, label):
+        if value_type == 'boolean':
+            valid = isinstance(value, bool)
+        elif value_type == 'integer':
+            valid = isinstance(value, int) and not isinstance(value, bool)
+        elif value_type == 'number':
+            valid = isinstance(value, (int, float)) and not isinstance(value, bool)
+        elif value_type in {'string', 'enum'}:
+            valid = isinstance(value, str)
+        else:
+            valid = False
+        if not valid:
+            raise ValueError(f'Terminal backend {plugin.connection_type} returned invalid start field {label}.')
 
     def build_settings_schema(self):
         schema = []

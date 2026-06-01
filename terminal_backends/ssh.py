@@ -3,7 +3,7 @@ import getpass
 import os
 from pathlib import Path
 
-from .base import BackendAction, BackendSettingSchema, TerminalBackendPlugin, TerminalBridge
+from .base import BackendAction, BackendSettingSchema, BackendStartFieldSchema, TerminalBackendPlugin, TerminalBridge
 
 
 class SSHBridge(TerminalBridge):
@@ -560,6 +560,47 @@ class SSHBackendPlugin(TerminalBackendPlugin):
                 restart_required=True,
                 apply_scope='restart',
                 readonly_when_remote=True,
+            ),
+        ]
+
+    def get_start_form_schema(self, context=None):
+        return [
+            BackendStartFieldSchema(
+                name='host',
+                label='Host',
+                value_type='string',
+                input_type='text',
+                default_value=self._default_host,
+                required=True,
+                max_length=self._max_host_length,
+            ),
+            BackendStartFieldSchema(
+                name='port',
+                label='Port',
+                value_type='integer',
+                input_type='text',
+                default_value=self._default_port,
+                required=True,
+                min_value=1,
+                max_value=65535,
+            ),
+            BackendStartFieldSchema(
+                name='username',
+                label='Username',
+                value_type='string',
+                input_type='text',
+                default_value=self._default_user,
+                required=True,
+                max_length=self._max_username_length,
+            ),
+            BackendStartFieldSchema(
+                name='password',
+                label='Password',
+                value_type='string',
+                input_type='password',
+                required=False,
+                secret=True,
+                max_bytes=self._max_password_bytes,
             ),
         ]
 

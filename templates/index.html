@@ -985,6 +985,7 @@
             let selectedConnectionType = null;
             let userSelectedConnectionType = null;
             let userSelectedLocalShellKind = false;
+            const userEditedConnectionFields = new Set();
             let browserIdentityPromise = null;
             let browserIdentityRegistered = false;
             let browserPairingResponseTimer = null;
@@ -1006,6 +1007,49 @@
                     ? terminalPolicy.connection_options
                     : [];
                 return options.find(option => normalizeConnectionType(option.connection_type) === normalized) || null;
+            }
+
+            const CONNECTION_FIELD_IDS = {
+                ssh: {
+                    host: 'host',
+                    port: 'port',
+                    username: 'username',
+                    password: 'password'
+                },
+                local_shell: {
+                    local_shell_kind: 'local-shell-kind'
+                },
+                uart: {
+                    serial_port: 'uart-port',
+                    baud_rate: 'uart-baud'
+                }
+            };
+
+            function getConnectionFieldKey(connectionType, fieldName) {
+                return `${normalizeConnectionType(connectionType)}.${fieldName}`;
+            }
+
+            function getConnectionStartFields(connectionType) {
+                const option = getConnectionOption(connectionType);
+                return option && Array.isArray(option.start_fields) ? option.start_fields : [];
+            }
+
+            function getConnectionFieldSchema(connectionType, fieldName) {
+                return getConnectionStartFields(connectionType).find(field => field && field.name === fieldName) || null;
+            }
+
+            function getConnectionFieldDefault(connectionType, fieldName, fallback) {
+                const field = getConnectionFieldSchema(connectionType, fieldName);
+                if (!field || field.default_value === undefined || field.default_value === null) return fallback;
+                return field.default_value;
+            }
+
+            function markConnectionFieldEditedById(elementId) {
+                Object.entries(CONNECTION_FIELD_IDS).forEach(([connectionType, fields]) => {
+                    Object.entries(fields).forEach(([fieldName, id]) => {
+                        if (id === elementId) userEditedConnectionFields.add(getConnectionFieldKey(connectionType, fieldName));
+                    });
+                });
             }
 
             function isConnectionAllowed(value) {
@@ -2933,7 +2977,10 @@
             });
             applyTerminalPolicy(terminalPolicy);
             ['host', 'port', 'username', 'password', 'local-shell-kind', 'uart-port', 'uart-baud'].forEach(id => {
-                document.getElementById(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') doConnect(); });
+                const element = document.getElementById(id);
+                element.addEventListener('input', () => markConnectionFieldEditedById(id));
+                element.addEventListener('change', () => markConnectionFieldEditedById(id));
+                element.addEventListener('keydown', (e) => { if (e.key === 'Enter') doConnect(); });
             });
 
             actionYesBtn.onclick = () => {

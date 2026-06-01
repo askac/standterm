@@ -2849,6 +2849,131 @@ def test_backend_settings_schema_rejects_unsafe_capability_mapping():
         raise AssertionError('unsafe high-risk capability mapping was accepted')
 
 
+def get_start_field(option, field_name):
+    matches = [
+        field for field in option['start_fields']
+        if field['name'] == field_name
+    ]
+    assert len(matches) == 1, field_name
+    return matches[0]
+
+
+def test_backend_start_form_schema_is_declared_and_typed():
+    original_is_wsl = standterm.is_wsl
+    try:
+        standterm.is_wsl = lambda: True
+        context = standterm.BackendPolicyContext(
+            client_ip='127.0.0.1',
+            browser_authorized=False,
+            settings_snapshot={
+                standterm.SETTING_LOCAL_SHELL_DEFAULT_KIND: standterm.LOCAL_SHELL_KIND_POWERSHELL,
+                standterm.SETTING_UART_DEFAULT_BAUD_RATE: 230400,
+            },
+        )
+        options = standterm.TERMINAL_BACKEND_REGISTRY.build_policy_options(context=context)
+    finally:
+        standterm.is_wsl = original_is_wsl
+
+    by_connection = {item['connection_type']: item for item in options}
+    ssh_fields = by_connection[standterm.CONNECTION_TYPE_SSH]['start_fields']
+    assert [field['name'] for field in ssh_fields] == ['host', 'port', 'username', 'password']
+    assert get_start_field(by_connection[standterm.CONNECTION_TYPE_SSH], 'host')['value_type'] == 'string'
+    assert get_start_field(by_connection[standterm.CONNECTION_TYPE_SSH], 'port')['min_value'] == 1
+    assert get_start_field(by_connection[standterm.CONNECTION_TYPE_SSH], 'port')['max_value'] == 65535
+    password_field = get_start_field(by_connection[standterm.CONNECTION_TYPE_SSH], 'password')
+    assert password_field['input_type'] == 'password'
+    assert password_field['secret'] is True
+    assert 'default_value' not in password_field
+
+    local_shell_field = get_start_field(by_connection[standterm.CONNECTION_TYPE_LOCAL_SHELL], 'local_shell_kind')
+    assert local_shell_field['value_type'] == 'enum'
+    assert local_shell_field['input_type'] == 'select'
+    assert local_shell_field['default_value'] == standterm.LOCAL_SHELL_KIND_POWERSHELL
+    assert [option['value'] for option in local_shell_field['options']] == ['bash', 'cmd', 'powershell']
+    assert all('default' not in option for option in local_shell_field['options'])
+
+    uart_field = get_start_field(by_connection[standterm.CONNECTION_TYPE_UART], 'baud_rate')
+    assert uart_field['value_type'] == 'integer'
+    assert uart_field['input_type'] == 'select'
+    assert uart_field['default_value'] == 230400
+    assert [option['value'] for option in uart_field['options']] == standterm.UART_BAUD_RATES
+    assert all('default' not in option for option in uart_field['options'])
+
+
+def test_backend_start_form_schema_rejects_malformed_fields():
+    class FakePlugin(standterm.TerminalBackendPlugin):
+        connection_type = 'fake'
+        label = 'Fake'
+
+        def __init__(self, fields):
+            self._fields = fields
+
+        def get_start_form_schema(self, context=None):
+            return self._fields
+
+    def build_policy(fields):
+        registry = standterm.TerminalBackendRegistry([FakePlugin(fields)], lambda value: value)
+        return registry.build_policy_options()
+
+    invalid_cases = [
+        ([object()], 'invalid start field schema'),
+        ([{
+            'name': 'bad-name',
+            'value_type': 'string',
+            'input_type': 'text',
+        }], 'invalid start field name'),
+        ([{
+            'name': 'field',
+            'value_type': 'object',
+            'input_type': 'text',
+        }], 'invalid start field value type'),
+        ([{
+            'name': 'field',
+            'value_type': 'integer',
+            'input_type': 'password',
+        }], 'invalid password field type'),
+        ([{
+            'name': 'field',
+            'value_type': 'string',
+            'input_type': 'text',
+            'required': 'yes',
+        }], 'invalid start field flag'),
+        ([{
+            'name': 'field',
+            'value_type': 'string',
+            'input_type': 'select',
+            'options': [{'value': 'a', 'default': True}],
+        }], 'unknown start field option metadata'),
+        ([{
+            'name': 'field',
+            'value_type': 'string',
+            'input_type': 'text',
+        }, {
+            'name': 'field',
+            'value_type': 'string',
+            'input_type': 'text',
+        }], 'duplicate start field'),
+    ]
+    for fields, expected_error in invalid_cases:
+        try:
+            build_policy(fields)
+        except ValueError as exc:
+            assert expected_error in str(exc)
+        else:
+            raise AssertionError(f'malformed start field was accepted: {expected_error}')
+
+    policy = build_policy([{
+        'name': 'token',
+        'value_type': 'string',
+        'input_type': 'password',
+        'default_value': 'leak',
+        'secret': True,
+    }])
+    field = policy[0]['start_fields'][0]
+    assert field['secret'] is True
+    assert 'default_value' not in field
+
+
 def test_settings_snapshot_exposes_plugin_schema_without_high_risk_write():
     client = make_client()
 
@@ -2976,6 +3101,7 @@ def test_uart_default_baud_rate_runtime_update_uses_plugin_validation():
         if item['connection_type'] == standterm.CONNECTION_TYPE_UART
     )
     assert uart_option['default_baud_rate'] == target
+    assert get_start_field(uart_option, 'baud_rate')['default_value'] == target
 
     client.emit(standterm.SETTINGS_EVENT_UPDATE_REQUEST, {
         'request_id': 'uart-baud-invalid',
@@ -3043,6 +3169,7 @@ def test_local_shell_default_kind_runtime_update_uses_policy_context():
             if item['connection_type'] == standterm.CONNECTION_TYPE_LOCAL_SHELL
         )
         assert local_shell_option['default_shell_kind'] == standterm.LOCAL_SHELL_KIND_POWERSHELL
+        assert get_start_field(local_shell_option, 'local_shell_kind')['default_value'] == standterm.LOCAL_SHELL_KIND_POWERSHELL
 
         payload, error = standterm.validate_start_ssh_payload(
             {
@@ -4070,6 +4197,8 @@ def main():
         test_readonly_settings_snapshot_socket_event_is_typed,
         test_backend_settings_schema_is_declared_and_typed,
         test_backend_settings_schema_rejects_unsafe_capability_mapping,
+        test_backend_start_form_schema_is_declared_and_typed,
+        test_backend_start_form_schema_rejects_malformed_fields,
         test_settings_snapshot_exposes_plugin_schema_without_high_risk_write,
         test_settings_snapshot_requires_local_or_browser_authorized_client,
         test_low_risk_settings_update_is_versioned_and_audited,
