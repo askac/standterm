@@ -2803,7 +2803,11 @@ def test_backend_settings_schema_is_declared_and_typed():
 
     by_key = {item['setting_key']: item for item in schema}
     assert by_key['ssh.default_host']['connection_type'] == standterm.CONNECTION_TYPE_SSH
+    assert by_key['ssh.default_host']['apply_scope'] == 'next_connection'
+    assert by_key['ssh.default_host']['mutable'] is True
     assert by_key['ssh.default_port']['value_type'] == 'integer'
+    assert by_key['ssh.default_port']['mutable'] is True
+    assert by_key['ssh.default_user']['mutable'] is True
     assert by_key['local_shell.default_kind']['allowed_values'] == ['bash', 'cmd', 'powershell']
     assert by_key['local_shell.default_kind']['apply_scope'] == 'next_connection'
     assert by_key['local_shell.default_kind']['mutable'] is True
@@ -2817,6 +2821,9 @@ def test_backend_settings_schema_is_declared_and_typed():
     assert all('required_capability' in item for item in schema)
     assert all('value' not in item for item in schema)
     assert [item['setting_key'] for item in schema if item['mutable']] == [
+        standterm.SETTING_SSH_DEFAULT_HOST,
+        standterm.SETTING_SSH_DEFAULT_PORT,
+        standterm.SETTING_SSH_DEFAULT_USER,
         standterm.SETTING_LOCAL_SHELL_DEFAULT_KIND,
         standterm.SETTING_UART_DEFAULT_BAUD_RATE,
     ]
@@ -2866,6 +2873,9 @@ def test_backend_start_form_schema_is_declared_and_typed():
             client_ip='127.0.0.1',
             browser_authorized=False,
             settings_snapshot={
+                standterm.SETTING_SSH_DEFAULT_HOST: 'runtime-host',
+                standterm.SETTING_SSH_DEFAULT_PORT: 2200,
+                standterm.SETTING_SSH_DEFAULT_USER: 'runtime-user',
                 standterm.SETTING_LOCAL_SHELL_DEFAULT_KIND: standterm.LOCAL_SHELL_KIND_POWERSHELL,
                 standterm.SETTING_UART_DEFAULT_BAUD_RATE: 230400,
             },
@@ -2878,6 +2888,9 @@ def test_backend_start_form_schema_is_declared_and_typed():
     ssh_fields = by_connection[standterm.CONNECTION_TYPE_SSH]['start_fields']
     assert [field['name'] for field in ssh_fields] == ['host', 'port', 'username', 'password']
     assert get_start_field(by_connection[standterm.CONNECTION_TYPE_SSH], 'host')['value_type'] == 'string'
+    assert get_start_field(by_connection[standterm.CONNECTION_TYPE_SSH], 'host')['default_value'] == 'runtime-host'
+    assert get_start_field(by_connection[standterm.CONNECTION_TYPE_SSH], 'port')['default_value'] == 2200
+    assert get_start_field(by_connection[standterm.CONNECTION_TYPE_SSH], 'username')['default_value'] == 'runtime-user'
     assert get_start_field(by_connection[standterm.CONNECTION_TYPE_SSH], 'port')['min_value'] == 1
     assert get_start_field(by_connection[standterm.CONNECTION_TYPE_SSH], 'port')['max_value'] == 65535
     password_field = get_start_field(by_connection[standterm.CONNECTION_TYPE_SSH], 'password')
@@ -2986,6 +2999,9 @@ def test_settings_snapshot_exposes_plugin_schema_without_high_risk_write():
     assert by_key['uart.remote_access']['required_capability'] == standterm.CAPABILITY_SETTINGS_UPDATE_HIGH_RISK
     assert snapshot['capabilities'][standterm.CAPABILITY_SETTINGS_UPDATE_HIGH_RISK]['allowed'] is False
     assert standterm.SETTING_DEFAULT_CONNECTION_TYPE in snapshot['mutable_settings']
+    assert standterm.SETTING_SSH_DEFAULT_HOST in snapshot['mutable_settings']
+    assert standterm.SETTING_SSH_DEFAULT_PORT in snapshot['mutable_settings']
+    assert standterm.SETTING_SSH_DEFAULT_USER in snapshot['mutable_settings']
     assert 'uart.remote_access' not in snapshot['mutable_settings']
     assert 'local_shell.remote_access' not in snapshot['mutable_settings']
 
@@ -3062,6 +3078,91 @@ def test_low_risk_settings_update_is_versioned_and_audited():
     assert any(
         event['event_type'] == standterm.SETTINGS_AUDIT_UPDATE_FAILED
         and event.get('error_code') == 'settings_version_conflict'
+        for event in events
+    )
+
+    client.disconnect()
+
+
+def test_ssh_defaults_runtime_update_uses_plugin_validation_and_policy_context():
+    client = make_client()
+
+    client.emit(standterm.SETTINGS_EVENT_SNAPSHOT_REQUEST)
+    snapshot = last_payload(client, standterm.SETTINGS_EVENT_SNAPSHOT)
+    assert snapshot['mutable_settings'][standterm.SETTING_SSH_DEFAULT_HOST]['value'] == standterm.SSH_HOST
+    assert snapshot['mutable_settings'][standterm.SETTING_SSH_DEFAULT_PORT]['value'] == standterm.SSH_PORT
+    assert snapshot['mutable_settings'][standterm.SETTING_SSH_DEFAULT_USER]['value'] == standterm.SSH_USER
+
+    updates = [
+        ('ssh-host-ok', standterm.SETTING_SSH_DEFAULT_HOST, 'example.test'),
+        ('ssh-port-ok', standterm.SETTING_SSH_DEFAULT_PORT, '2201'),
+        ('ssh-user-ok', standterm.SETTING_SSH_DEFAULT_USER, 'operator'),
+    ]
+    expected_version = snapshot['settings_version']
+    schema_digest = snapshot['settings_schema_digest']
+    for request_id, setting_key, value in updates:
+        client.emit(standterm.SETTINGS_EVENT_UPDATE_REQUEST, {
+            'request_id': request_id,
+            'setting_key': setting_key,
+            'value': value,
+            'expected_version': expected_version,
+            'expected_schema_digest': schema_digest,
+        })
+        result = last_payload(client, standterm.SETTINGS_EVENT_UPDATE_RESULT)
+        assert result['status'] == 'ok'
+        assert result['setting_key'] == setting_key
+        expected_version = result['settings_version']
+        schema_digest = result['settings_schema_digest']
+
+    client.emit(standterm.SETTINGS_EVENT_SNAPSHOT_REQUEST)
+    updated = last_payload(client, standterm.SETTINGS_EVENT_SNAPSHOT)
+    assert updated['mutable_settings'][standterm.SETTING_SSH_DEFAULT_HOST]['value'] == 'example.test'
+    assert updated['mutable_settings'][standterm.SETTING_SSH_DEFAULT_PORT]['value'] == 2201
+    assert updated['mutable_settings'][standterm.SETTING_SSH_DEFAULT_USER]['value'] == 'operator'
+    assert updated['effective_settings'][standterm.SETTING_SSH_DEFAULT_HOST] == 'example.test'
+    assert updated['effective_settings'][standterm.SETTING_SSH_DEFAULT_PORT] == 2201
+    assert updated['effective_settings'][standterm.SETTING_SSH_DEFAULT_USER] == 'operator'
+
+    with standterm.app.test_request_context('/'):
+        policy = standterm.build_terminal_policy(browser_authorized=False, client_ip='127.0.0.1')
+    ssh_option = next(
+        item for item in policy['connection_options']
+        if item['connection_type'] == standterm.CONNECTION_TYPE_SSH
+    )
+    assert get_start_field(ssh_option, 'host')['default_value'] == 'example.test'
+    assert get_start_field(ssh_option, 'port')['default_value'] == 2201
+    assert get_start_field(ssh_option, 'username')['default_value'] == 'operator'
+
+    payload, error = standterm.validate_start_ssh_payload(
+        {
+            'connection_type': standterm.CONNECTION_TYPE_SSH,
+            'terminal_id': standterm.TERMINAL_ID_MAIN,
+            'password': '',
+        },
+        client_ip='127.0.0.1',
+        browser_authorized=False,
+    )
+    assert error is None
+    assert payload['host'] == 'example.test'
+    assert payload['port'] == 2201
+    assert payload['username'] == 'operator'
+
+    client.emit(standterm.SETTINGS_EVENT_UPDATE_REQUEST, {
+        'request_id': 'ssh-port-invalid',
+        'setting_key': standterm.SETTING_SSH_DEFAULT_PORT,
+        'value': 70000,
+        'expected_version': standterm.get_runtime_settings_version(),
+        'expected_schema_digest': updated['settings_schema_digest'],
+    })
+    invalid = last_payload(client, standterm.SETTINGS_EVENT_UPDATE_RESULT)
+    assert invalid['status'] == 'failed'
+    assert invalid['error_code'] == 'settings_invalid_value'
+
+    events = standterm.settings_audit_store.get_recent()
+    assert any(
+        event['event_type'] == standterm.SETTINGS_AUDIT_UPDATE_SUCCEEDED
+        and event.get('setting_key') == standterm.SETTING_SSH_DEFAULT_HOST
+        and event.get('new_value') == 'example.test'
         for event in events
     )
 
@@ -4202,6 +4303,7 @@ def main():
         test_settings_snapshot_exposes_plugin_schema_without_high_risk_write,
         test_settings_snapshot_requires_local_or_browser_authorized_client,
         test_low_risk_settings_update_is_versioned_and_audited,
+        test_ssh_defaults_runtime_update_uses_plugin_validation_and_policy_context,
         test_uart_default_baud_rate_runtime_update_uses_plugin_validation,
         test_local_shell_default_kind_runtime_update_uses_policy_context,
         test_local_shell_default_kind_is_readonly_outside_wsl,

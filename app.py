@@ -204,6 +204,9 @@ SETTINGS_VERSION = 1
 SETTINGS_ADMIN_GRANT_TTL_SECONDS = 120
 SETTINGS_AUDIT_EVENTS = 500
 SETTING_DEFAULT_CONNECTION_TYPE = 'default_connection_type'
+SETTING_SSH_DEFAULT_HOST = 'ssh.default_host'
+SETTING_SSH_DEFAULT_PORT = 'ssh.default_port'
+SETTING_SSH_DEFAULT_USER = 'ssh.default_user'
 SETTING_LOCAL_SHELL_DEFAULT_KIND = 'local_shell.default_kind'
 SETTING_UART_DEFAULT_BAUD_RATE = 'uart.default_baud_rate'
 CAPABILITY_SETTINGS_VIEW = 'settings_view'
@@ -599,6 +602,23 @@ def get_runtime_default_connection_type():
     with runtime_settings_lock:
         return runtime_settings.get(SETTING_DEFAULT_CONNECTION_TYPE) or DEFAULT_CONNECTION_TYPE
 
+def get_runtime_ssh_default_host():
+    with runtime_settings_lock:
+        value = runtime_settings.get(SETTING_SSH_DEFAULT_HOST, SSH_HOST)
+    return value if isinstance(value, str) and value else SSH_HOST
+
+def get_runtime_ssh_default_port():
+    with runtime_settings_lock:
+        try:
+            return int(runtime_settings.get(SETTING_SSH_DEFAULT_PORT, SSH_PORT))
+        except (TypeError, ValueError):
+            return SSH_PORT
+
+def get_runtime_ssh_default_user():
+    with runtime_settings_lock:
+        value = runtime_settings.get(SETTING_SSH_DEFAULT_USER, SSH_USER)
+    return value if isinstance(value, str) and value else SSH_USER
+
 def get_runtime_uart_default_baud_rate():
     with runtime_settings_lock:
         try:
@@ -616,6 +636,9 @@ def get_runtime_local_shell_default_kind():
 def build_effective_runtime_settings():
     return {
         SETTING_DEFAULT_CONNECTION_TYPE: get_runtime_default_connection_type(),
+        SETTING_SSH_DEFAULT_HOST: get_runtime_ssh_default_host(),
+        SETTING_SSH_DEFAULT_PORT: get_runtime_ssh_default_port(),
+        SETTING_SSH_DEFAULT_USER: get_runtime_ssh_default_user(),
         SETTING_LOCAL_SHELL_DEFAULT_KIND: get_runtime_local_shell_default_kind(),
         SETTING_UART_DEFAULT_BAUD_RATE: get_runtime_uart_default_baud_rate(),
     }
@@ -625,6 +648,9 @@ def reset_runtime_settings_for_test():
     with runtime_settings_lock:
         runtime_settings.clear()
         runtime_settings[SETTING_DEFAULT_CONNECTION_TYPE] = DEFAULT_CONNECTION_TYPE
+        runtime_settings[SETTING_SSH_DEFAULT_HOST] = SSH_HOST
+        runtime_settings[SETTING_SSH_DEFAULT_PORT] = SSH_PORT
+        runtime_settings[SETTING_SSH_DEFAULT_USER] = SSH_USER
         runtime_settings[SETTING_LOCAL_SHELL_DEFAULT_KIND] = LOCAL_SHELL_KIND_BASH
         runtime_settings[SETTING_UART_DEFAULT_BAUD_RATE] = DEFAULT_UART_BAUD_RATE
         runtime_settings_version = SETTINGS_VERSION
@@ -638,6 +664,18 @@ def build_settings_precedence():
             'safe_fallback',
         ],
         SETTING_UART_DEFAULT_BAUD_RATE: [
+            'runtime',
+            'cli_default',
+        ],
+        SETTING_SSH_DEFAULT_HOST: [
+            'runtime',
+            'cli_default',
+        ],
+        SETTING_SSH_DEFAULT_PORT: [
+            'runtime',
+            'cli_default',
+        ],
+        SETTING_SSH_DEFAULT_USER: [
             'runtime',
             'cli_default',
         ],
@@ -1033,6 +1071,24 @@ def build_readonly_settings_snapshot(client_ip, browser_authorized=False, sid=No
             'apply_scope': 'next_connection',
         },
     }
+    effective_runtime_settings = build_effective_runtime_settings()
+    for setting_key in (
+        SETTING_SSH_DEFAULT_HOST,
+        SETTING_SSH_DEFAULT_PORT,
+        SETTING_SSH_DEFAULT_USER,
+    ):
+        schema = schema_by_key.get(setting_key)
+        if isinstance(schema, dict) and schema.get('mutable'):
+            mutable_settings[setting_key] = {
+                'value': effective_runtime_settings.get(setting_key),
+                'risk_level': schema.get('risk_level'),
+                'required_capability': schema.get('required_capability'),
+                'allowed_values': list(schema.get('allowed_values') or []),
+                'locked': False,
+                'locked_by': None,
+                'storage_owner': schema.get('storage_owner'),
+                'apply_scope': schema.get('apply_scope'),
+            }
     uart_default_schema = schema_by_key.get(SETTING_UART_DEFAULT_BAUD_RATE)
     if isinstance(uart_default_schema, dict) and uart_default_schema.get('mutable'):
         mutable_settings[SETTING_UART_DEFAULT_BAUD_RATE] = {
@@ -1074,6 +1130,9 @@ def build_readonly_settings_snapshot(client_ip, browser_authorized=False, sid=No
             'default_connection_type': policy.get('default_connection'),
             'force_connection_type': policy.get('force_connection'),
             'cli_default_connection_type': DEFAULT_CONNECTION_TYPE,
+            SETTING_SSH_DEFAULT_HOST: get_runtime_ssh_default_host(),
+            SETTING_SSH_DEFAULT_PORT: get_runtime_ssh_default_port(),
+            SETTING_SSH_DEFAULT_USER: get_runtime_ssh_default_user(),
             SETTING_LOCAL_SHELL_DEFAULT_KIND: get_runtime_local_shell_default_kind(),
             SETTING_UART_DEFAULT_BAUD_RATE: get_runtime_uart_default_baud_rate(),
             'https_enabled': bool(policy.get('https_enabled')),
@@ -1803,7 +1862,13 @@ TERMINAL_BACKEND_REGISTRY = TerminalBackendRegistry([
     ),
     known_settings_capabilities=SETTINGS_KNOWN_UPDATE_CAPABILITIES,
     risk_capability_rules=SETTINGS_RISK_CAPABILITY_RULES,
-    mutable_setting_keys=(SETTING_LOCAL_SHELL_DEFAULT_KIND, SETTING_UART_DEFAULT_BAUD_RATE),
+    mutable_setting_keys=(
+        SETTING_SSH_DEFAULT_HOST,
+        SETTING_SSH_DEFAULT_PORT,
+        SETTING_SSH_DEFAULT_USER,
+        SETTING_LOCAL_SHELL_DEFAULT_KIND,
+        SETTING_UART_DEFAULT_BAUD_RATE,
+    ),
 )
 
 bridges = {}
@@ -1908,6 +1973,9 @@ settings_audit_store = SettingsAuditStore()
 runtime_settings_lock = threading.RLock()
 runtime_settings = {
     SETTING_DEFAULT_CONNECTION_TYPE: DEFAULT_CONNECTION_TYPE,
+    SETTING_SSH_DEFAULT_HOST: SSH_HOST,
+    SETTING_SSH_DEFAULT_PORT: SSH_PORT,
+    SETTING_SSH_DEFAULT_USER: SSH_USER,
     SETTING_LOCAL_SHELL_DEFAULT_KIND: LOCAL_SHELL_KIND_BASH,
     SETTING_UART_DEFAULT_BAUD_RATE: DEFAULT_UART_BAUD_RATE,
 }

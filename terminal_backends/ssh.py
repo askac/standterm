@@ -522,9 +522,10 @@ class SSHBackendPlugin(TerminalBackendPlugin):
                 risk_level='low',
                 required_capability=self._low_risk_settings_capability,
                 default_value=self._default_host,
-                restart_required=True,
-                apply_scope='restart',
+                restart_required=False,
+                apply_scope='next_connection',
                 readonly_when_remote=True,
+                mutable=True,
             ),
             BackendSettingSchema(
                 setting_key='ssh.default_port',
@@ -535,9 +536,10 @@ class SSHBackendPlugin(TerminalBackendPlugin):
                 default_value=self._default_port,
                 min_value=1,
                 max_value=65535,
-                restart_required=True,
-                apply_scope='restart',
+                restart_required=False,
+                apply_scope='next_connection',
                 readonly_when_remote=True,
+                mutable=True,
             ),
             BackendSettingSchema(
                 setting_key='ssh.default_user',
@@ -546,9 +548,10 @@ class SSHBackendPlugin(TerminalBackendPlugin):
                 risk_level='low',
                 required_capability=self._low_risk_settings_capability,
                 default_value=self._default_user,
-                restart_required=True,
-                apply_scope='restart',
+                restart_required=False,
+                apply_scope='next_connection',
                 readonly_when_remote=True,
+                mutable=True,
             ),
             BackendSettingSchema(
                 setting_key='ssh.localhost_key_setup_action',
@@ -563,14 +566,59 @@ class SSHBackendPlugin(TerminalBackendPlugin):
             ),
         ]
 
+    def _get_default_host(self, context=None):
+        settings_snapshot = context.settings_snapshot if context else None
+        if isinstance(settings_snapshot, dict):
+            value = settings_snapshot.get('ssh.default_host')
+            if value is not None:
+                normalized, error = self.validate_setting_update(
+                    'ssh.default_host',
+                    value,
+                    current_value=self._default_host,
+                )
+                if not error:
+                    return normalized
+        return self._default_host
+
+    def _get_default_port(self, context=None):
+        settings_snapshot = context.settings_snapshot if context else None
+        if isinstance(settings_snapshot, dict):
+            value = settings_snapshot.get('ssh.default_port')
+            if value is not None:
+                normalized, error = self.validate_setting_update(
+                    'ssh.default_port',
+                    value,
+                    current_value=self._default_port,
+                )
+                if not error:
+                    return normalized
+        return self._default_port
+
+    def _get_default_user(self, context=None):
+        settings_snapshot = context.settings_snapshot if context else None
+        if isinstance(settings_snapshot, dict):
+            value = settings_snapshot.get('ssh.default_user')
+            if value is not None:
+                normalized, error = self.validate_setting_update(
+                    'ssh.default_user',
+                    value,
+                    current_value=self._default_user,
+                )
+                if not error:
+                    return normalized
+        return self._default_user
+
     def get_start_form_schema(self, context=None):
+        default_host = self._get_default_host(context=context)
+        default_port = self._get_default_port(context=context)
+        default_user = self._get_default_user(context=context)
         return [
             BackendStartFieldSchema(
                 name='host',
                 label='Host',
                 value_type='string',
                 input_type='text',
-                default_value=self._default_host,
+                default_value=default_host,
                 required=True,
                 max_length=self._max_host_length,
             ),
@@ -579,7 +627,7 @@ class SSHBackendPlugin(TerminalBackendPlugin):
                 label='Port',
                 value_type='integer',
                 input_type='text',
-                default_value=self._default_port,
+                default_value=default_port,
                 required=True,
                 min_value=1,
                 max_value=65535,
@@ -589,7 +637,7 @@ class SSHBackendPlugin(TerminalBackendPlugin):
                 label='Username',
                 value_type='string',
                 input_type='text',
-                default_value=self._default_user,
+                default_value=default_user,
                 required=True,
                 max_length=self._max_username_length,
             ),
@@ -604,8 +652,64 @@ class SSHBackendPlugin(TerminalBackendPlugin):
             ),
         ]
 
+    def validate_setting_update(self, setting_key, value, current_value=None):
+        if setting_key == 'ssh.default_host':
+            if not isinstance(value, str):
+                return None, {
+                    'error_code': 'settings_invalid_value',
+                    'message': 'SSH default host must be a string.',
+                }
+            host = value.strip()
+            if not host or len(host) > self._max_host_length:
+                return None, {
+                    'error_code': 'settings_invalid_value',
+                    'message': 'SSH default host is empty or too long.',
+                }
+            if self._has_control_chars(host):
+                return None, {
+                    'error_code': 'settings_invalid_value',
+                    'message': 'SSH default host contains invalid control characters.',
+                }
+            return host, None
+
+        if setting_key == 'ssh.default_port':
+            try:
+                port = int(value)
+            except (TypeError, ValueError):
+                return None, {
+                    'error_code': 'settings_invalid_value',
+                    'message': 'SSH default port must be a number.',
+                }
+            if port < 1 or port > 65535:
+                return None, {
+                    'error_code': 'settings_invalid_value',
+                    'message': 'SSH default port must be between 1 and 65535.',
+                }
+            return port, None
+
+        if setting_key == 'ssh.default_user':
+            if not isinstance(value, str):
+                return None, {
+                    'error_code': 'settings_invalid_value',
+                    'message': 'SSH default user must be a string.',
+                }
+            user = value.strip()
+            if not user or len(user) > self._max_username_length:
+                return None, {
+                    'error_code': 'settings_invalid_value',
+                    'message': 'SSH default user is empty or too long.',
+                }
+            if self._has_control_chars(user):
+                return None, {
+                    'error_code': 'settings_invalid_value',
+                    'message': 'SSH default user contains invalid control characters.',
+                }
+            return user, None
+
+        return super().validate_setting_update(setting_key, value, current_value=current_value)
+
     def validate_start_payload(self, data, terminal_id, client_ip, browser_authorized=False, context=None):
-        host = data.get('host', self._default_host)
+        host = data.get('host', self._get_default_host(context=context))
         if not isinstance(host, str):
             return None, 'Host must be a string.'
         host = host.strip()
@@ -615,13 +719,13 @@ class SSHBackendPlugin(TerminalBackendPlugin):
             return None, 'Host contains invalid control characters.'
 
         try:
-            port = int(data.get('port', self._default_port))
+            port = int(data.get('port', self._get_default_port(context=context)))
         except (TypeError, ValueError):
             return None, 'Port must be a number.'
         if port < 1 or port > 65535:
             return None, 'Port must be between 1 and 65535.'
 
-        user = data.get('username', self._default_user)
+        user = data.get('username', self._get_default_user(context=context))
         if not isinstance(user, str):
             return None, 'Username must be a string.'
         user = user.strip()
