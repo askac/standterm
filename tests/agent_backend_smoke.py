@@ -2806,6 +2806,7 @@ def test_backend_settings_schema_is_declared_and_typed():
     assert by_key['ssh.default_port']['value_type'] == 'integer'
     assert by_key['local_shell.default_kind']['allowed_values'] == ['bash', 'cmd', 'powershell']
     assert by_key['local_shell.default_kind']['apply_scope'] == 'next_connection'
+    assert by_key['local_shell.default_kind']['mutable'] is True
     assert by_key['local_shell.default_kind']['storage_owner'] == 'core'
     assert by_key['local_shell.remote_access']['risk_level'] == 'high'
     assert by_key['local_shell.remote_access']['apply_scope'] == 'restart'
@@ -2815,7 +2816,10 @@ def test_backend_settings_schema_is_declared_and_typed():
     assert by_key['uart.manual_port_policy']['required_capability'] == standterm.CAPABILITY_SETTINGS_UPDATE_HIGH_RISK
     assert all('required_capability' in item for item in schema)
     assert all('value' not in item for item in schema)
-    assert [item['setting_key'] for item in schema if item['mutable']] == [standterm.SETTING_UART_DEFAULT_BAUD_RATE]
+    assert [item['setting_key'] for item in schema if item['mutable']] == [
+        standterm.SETTING_LOCAL_SHELL_DEFAULT_KIND,
+        standterm.SETTING_UART_DEFAULT_BAUD_RATE,
+    ]
 
 
 def test_backend_settings_schema_rejects_unsafe_capability_mapping():
@@ -2858,6 +2862,7 @@ def test_settings_snapshot_exposes_plugin_schema_without_high_risk_write():
     assert snapshot['capabilities'][standterm.CAPABILITY_SETTINGS_UPDATE_HIGH_RISK]['allowed'] is False
     assert standterm.SETTING_DEFAULT_CONNECTION_TYPE in snapshot['mutable_settings']
     assert 'uart.remote_access' not in snapshot['mutable_settings']
+    assert 'local_shell.remote_access' not in snapshot['mutable_settings']
 
     client.disconnect()
 
@@ -2990,6 +2995,160 @@ def test_uart_default_baud_rate_runtime_update_uses_plugin_validation():
         and event.get('storage_owner') == 'core'
         for event in events
     )
+
+    client.disconnect()
+
+
+def test_local_shell_default_kind_runtime_update_uses_policy_context():
+    original_is_wsl = standterm.is_wsl
+    try:
+        standterm.is_wsl = lambda: True
+        client = make_client()
+
+        client.emit(standterm.SETTINGS_EVENT_SNAPSHOT_REQUEST)
+        snapshot = last_payload(client, standterm.SETTINGS_EVENT_SNAPSHOT)
+        assert snapshot['mutable_settings'][standterm.SETTING_LOCAL_SHELL_DEFAULT_KIND]['value'] == standterm.LOCAL_SHELL_KIND_BASH
+
+        client.emit(standterm.SETTINGS_EVENT_UPDATE_REQUEST, {
+            'request_id': 'local-shell-kind-ok',
+            'setting_key': standterm.SETTING_LOCAL_SHELL_DEFAULT_KIND,
+            'value': standterm.LOCAL_SHELL_KIND_POWERSHELL,
+            'expected_version': snapshot['settings_version'],
+            'expected_schema_digest': snapshot['settings_schema_digest'],
+        })
+        events = client.get_received()
+        update_results = [
+            event['args'][0] for event in events
+            if event['name'] == standterm.SETTINGS_EVENT_UPDATE_RESULT
+        ]
+        assert update_results[-1]['status'] == 'ok'
+        assert update_results[-1]['setting_key'] == standterm.SETTING_LOCAL_SHELL_DEFAULT_KIND
+        assert update_results[-1]['value'] == standterm.LOCAL_SHELL_KIND_POWERSHELL
+
+        policies = [
+            event['args'][0] for event in events
+            if event['name'] == 'terminal_policy'
+        ]
+        assert policies
+        local_shell_option = next(
+            item for item in policies[-1]['connection_options']
+            if item['connection_type'] == standterm.CONNECTION_TYPE_LOCAL_SHELL
+        )
+        assert local_shell_option['default_shell_kind'] == standterm.LOCAL_SHELL_KIND_POWERSHELL
+
+        with standterm.app.test_request_context('/'):
+            policy = standterm.build_terminal_policy(browser_authorized=False, client_ip='127.0.0.1')
+        local_shell_option = next(
+            item for item in policy['connection_options']
+            if item['connection_type'] == standterm.CONNECTION_TYPE_LOCAL_SHELL
+        )
+        assert local_shell_option['default_shell_kind'] == standterm.LOCAL_SHELL_KIND_POWERSHELL
+
+        payload, error = standterm.validate_start_ssh_payload(
+            {
+                'connection_type': standterm.CONNECTION_TYPE_LOCAL_SHELL,
+                'terminal_id': standterm.TERMINAL_ID_MAIN,
+            },
+            client_ip='127.0.0.1',
+            browser_authorized=False,
+        )
+        assert error is None
+        assert payload['local_shell_config']['shell_kind'] == standterm.LOCAL_SHELL_KIND_POWERSHELL
+
+        payload, error = standterm.validate_start_ssh_payload(
+            {
+                'connection_type': standterm.CONNECTION_TYPE_LOCAL_SHELL,
+                'terminal_id': standterm.TERMINAL_ID_MAIN,
+                'local_shell_kind': standterm.LOCAL_SHELL_KIND_CMD,
+            },
+            client_ip='127.0.0.1',
+            browser_authorized=False,
+        )
+        assert error is None
+        assert payload['local_shell_config']['shell_kind'] == standterm.LOCAL_SHELL_KIND_CMD
+
+        client.emit(standterm.SETTINGS_EVENT_UPDATE_REQUEST, {
+            'request_id': 'local-shell-kind-invalid',
+            'setting_key': standterm.SETTING_LOCAL_SHELL_DEFAULT_KIND,
+            'value': 'zsh',
+            'expected_version': standterm.get_runtime_settings_version(),
+            'expected_schema_digest': update_results[-1]['settings_schema_digest'],
+        })
+        invalid = last_payload(client, standterm.SETTINGS_EVENT_UPDATE_RESULT)
+        assert invalid['status'] == 'failed'
+        assert invalid['error_code'] == 'settings_invalid_value'
+
+        events = standterm.settings_audit_store.get_recent()
+        assert any(
+            event['event_type'] == standterm.SETTINGS_AUDIT_UPDATE_SUCCEEDED
+            and event.get('setting_key') == standterm.SETTING_LOCAL_SHELL_DEFAULT_KIND
+            and event.get('new_value') == standterm.LOCAL_SHELL_KIND_POWERSHELL
+            for event in events
+        )
+
+        client.disconnect()
+    finally:
+        standterm.is_wsl = original_is_wsl
+
+
+def test_local_shell_default_kind_is_readonly_outside_wsl():
+    original_is_wsl = standterm.is_wsl
+    try:
+        standterm.is_wsl = lambda: False
+        client = make_client()
+
+        client.emit(standterm.SETTINGS_EVENT_SNAPSHOT_REQUEST)
+        snapshot = last_payload(client, standterm.SETTINGS_EVENT_SNAPSHOT)
+        by_key = {
+            item['setting_key']: item
+            for item in snapshot['settings_schema']['plugins']
+        }
+        assert by_key[standterm.SETTING_LOCAL_SHELL_DEFAULT_KIND]['mutable'] is False
+        assert standterm.SETTING_LOCAL_SHELL_DEFAULT_KIND not in snapshot['mutable_settings']
+
+        client.emit(standterm.SETTINGS_EVENT_UPDATE_REQUEST, {
+            'request_id': 'local-shell-kind-non-wsl',
+            'setting_key': standterm.SETTING_LOCAL_SHELL_DEFAULT_KIND,
+            'value': standterm.LOCAL_SHELL_KIND_CMD,
+            'expected_version': snapshot['settings_version'],
+            'expected_schema_digest': snapshot['settings_schema_digest'],
+        })
+        denied = last_payload(client, standterm.SETTINGS_EVENT_UPDATE_RESULT)
+        assert denied['status'] == 'failed'
+        assert denied['error_code'] == 'settings_not_mutable'
+
+        client.disconnect()
+    finally:
+        standterm.is_wsl = original_is_wsl
+
+
+def test_restart_and_high_risk_settings_are_not_low_risk_mutable():
+    client = make_client()
+
+    client.emit(standterm.SETTINGS_EVENT_SNAPSHOT_REQUEST)
+    snapshot = last_payload(client, standterm.SETTINGS_EVENT_SNAPSHOT)
+    mutable_keys = set(snapshot['mutable_settings'])
+    schema_items = snapshot['settings_schema']['core'] + snapshot['settings_schema']['plugins']
+    for item in schema_items:
+        if item.get('restart_required') or item.get('apply_scope') == 'restart':
+            assert item['setting_key'] not in mutable_keys
+
+    for setting_key, value in (
+        ('local_shell.remote_access', True),
+        ('uart.remote_access', True),
+        ('uart.manual_port_policy', 'manual'),
+        ('ssh.localhost_key_setup_action', True),
+    ):
+        client.emit(standterm.SETTINGS_EVENT_UPDATE_REQUEST, {
+            'request_id': f'{setting_key}-denied',
+            'setting_key': setting_key,
+            'value': value,
+            'expected_version': standterm.get_runtime_settings_version(),
+            'expected_schema_digest': snapshot['settings_schema_digest'],
+        })
+        denied = last_payload(client, standterm.SETTINGS_EVENT_UPDATE_RESULT)
+        assert denied['status'] == 'failed'
+        assert denied['error_code'] in {'settings_not_mutable', 'settings_capability_not_supported'}
 
     client.disconnect()
 
@@ -3915,6 +4074,9 @@ def main():
         test_settings_snapshot_requires_local_or_browser_authorized_client,
         test_low_risk_settings_update_is_versioned_and_audited,
         test_uart_default_baud_rate_runtime_update_uses_plugin_validation,
+        test_local_shell_default_kind_runtime_update_uses_policy_context,
+        test_local_shell_default_kind_is_readonly_outside_wsl,
+        test_restart_and_high_risk_settings_are_not_low_risk_mutable,
         test_remote_browser_authorization_alone_cannot_update_settings,
         test_settings_admin_grant_is_scoped_and_revocable,
         test_ssh_backend_action_contract_uses_public_bridge_method,

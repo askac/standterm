@@ -262,6 +262,7 @@ class LocalShellBackendPlugin(TerminalBackendPlugin):
                 allowed_values=tuple(allowed_kinds),
                 restart_required=False,
                 readonly_when_remote=True,
+                mutable=bool(allowed_kinds),
             ),
             BackendSettingSchema(
                 setting_key='local_shell.remote_access',
@@ -276,9 +277,24 @@ class LocalShellBackendPlugin(TerminalBackendPlugin):
             ),
         ]
 
+    def _get_default_shell_kind(self, context=None):
+        settings_snapshot = context.settings_snapshot if context else None
+        if isinstance(settings_snapshot, dict):
+            value = settings_snapshot.get('local_shell.default_kind')
+            if value is not None:
+                normalized, error = self.validate_setting_update(
+                    'local_shell.default_kind',
+                    value,
+                    current_value=self._default_shell_kind,
+                )
+                if not error:
+                    return normalized
+        return self._default_shell_kind
+
     def build_policy_option(self, context=None, browser_authorized=False):
         client_ip = context.client_ip if context else 'unknown'
         browser_authorized = context.browser_authorized if context else browser_authorized
+        default_shell_kind = self._get_default_shell_kind(context=context)
         allowed = self._is_allowed_for_client(client_ip, browser_authorized=browser_authorized)
         option = {
             'connection_type': self.connection_type,
@@ -289,8 +305,25 @@ class LocalShellBackendPlugin(TerminalBackendPlugin):
         }
         if self._is_wsl():
             option['shell_options'] = self._get_wsl_local_shell_options()
-            option['default_shell_kind'] = self._default_shell_kind
+            option['default_shell_kind'] = default_shell_kind
         return option
+
+    def validate_setting_update(self, setting_key, value, current_value=None):
+        if setting_key != 'local_shell.default_kind':
+            return super().validate_setting_update(setting_key, value, current_value=current_value)
+        if not self._is_wsl():
+            return None, {
+                'error_code': 'settings_not_mutable',
+                'message': 'Local Shell default kind is only mutable on WSL.',
+            }
+        allowed_kinds = [item['kind'] for item in self._get_wsl_local_shell_options()]
+        normalized = value.strip().lower() if isinstance(value, str) else ''
+        if normalized not in allowed_kinds:
+            return None, {
+                'error_code': 'settings_invalid_value',
+                'message': 'Local Shell default kind must be bash, cmd, or powershell.',
+            }
+        return normalized, None
 
     def validate_start_payload(self, data, terminal_id, client_ip, browser_authorized=False, context=None):
         if not self._is_allowed_for_client(client_ip, browser_authorized=browser_authorized):
@@ -298,7 +331,10 @@ class LocalShellBackendPlugin(TerminalBackendPlugin):
                 'message': 'Local Shell is not available for this client.',
                 'error_code': 'local_shell_unavailable_for_client',
             }
-        shell_config, shell_error = self._get_local_shell_config(data.get('local_shell_kind'))
+        requested_kind = data.get('local_shell_kind')
+        if not isinstance(requested_kind, str) or not requested_kind.strip():
+            requested_kind = self._get_default_shell_kind(context=context)
+        shell_config, shell_error = self._get_local_shell_config(requested_kind)
         if shell_error:
             return None, shell_error
         return {'local_shell_config': shell_config}, None

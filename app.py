@@ -202,6 +202,7 @@ SETTINGS_VERSION = 1
 SETTINGS_ADMIN_GRANT_TTL_SECONDS = 120
 SETTINGS_AUDIT_EVENTS = 500
 SETTING_DEFAULT_CONNECTION_TYPE = 'default_connection_type'
+SETTING_LOCAL_SHELL_DEFAULT_KIND = 'local_shell.default_kind'
 SETTING_UART_DEFAULT_BAUD_RATE = 'uart.default_baud_rate'
 CAPABILITY_SETTINGS_VIEW = 'settings_view'
 CAPABILITY_SETTINGS_UPDATE_LOW_RISK = 'settings_update_low_risk'
@@ -603,9 +604,17 @@ def get_runtime_uart_default_baud_rate():
         except (TypeError, ValueError):
             return DEFAULT_UART_BAUD_RATE
 
+def get_runtime_local_shell_default_kind():
+    with runtime_settings_lock:
+        value = runtime_settings.get(SETTING_LOCAL_SHELL_DEFAULT_KIND, LOCAL_SHELL_KIND_BASH)
+    if is_wsl() and value in WSL_LOCAL_SHELL_KINDS:
+        return value
+    return LOCAL_SHELL_KIND_BASH
+
 def build_effective_runtime_settings():
     return {
         SETTING_DEFAULT_CONNECTION_TYPE: get_runtime_default_connection_type(),
+        SETTING_LOCAL_SHELL_DEFAULT_KIND: get_runtime_local_shell_default_kind(),
         SETTING_UART_DEFAULT_BAUD_RATE: get_runtime_uart_default_baud_rate(),
     }
 
@@ -614,6 +623,7 @@ def reset_runtime_settings_for_test():
     with runtime_settings_lock:
         runtime_settings.clear()
         runtime_settings[SETTING_DEFAULT_CONNECTION_TYPE] = DEFAULT_CONNECTION_TYPE
+        runtime_settings[SETTING_LOCAL_SHELL_DEFAULT_KIND] = LOCAL_SHELL_KIND_BASH
         runtime_settings[SETTING_UART_DEFAULT_BAUD_RATE] = DEFAULT_UART_BAUD_RATE
         runtime_settings_version = SETTINGS_VERSION
 
@@ -628,6 +638,10 @@ def build_settings_precedence():
         SETTING_UART_DEFAULT_BAUD_RATE: [
             'runtime',
             'cli_default',
+        ],
+        SETTING_LOCAL_SHELL_DEFAULT_KIND: [
+            'runtime',
+            'safe_fallback',
         ],
         'security_policy': [
             'environment_overrides',
@@ -1029,6 +1043,18 @@ def build_readonly_settings_snapshot(client_ip, browser_authorized=False, sid=No
             'storage_owner': uart_default_schema.get('storage_owner'),
             'apply_scope': uart_default_schema.get('apply_scope'),
         }
+    local_shell_default_schema = schema_by_key.get(SETTING_LOCAL_SHELL_DEFAULT_KIND)
+    if isinstance(local_shell_default_schema, dict) and local_shell_default_schema.get('mutable'):
+        mutable_settings[SETTING_LOCAL_SHELL_DEFAULT_KIND] = {
+            'value': get_runtime_local_shell_default_kind(),
+            'risk_level': local_shell_default_schema.get('risk_level'),
+            'required_capability': local_shell_default_schema.get('required_capability'),
+            'allowed_values': list(local_shell_default_schema.get('allowed_values') or []),
+            'locked': False,
+            'locked_by': None,
+            'storage_owner': local_shell_default_schema.get('storage_owner'),
+            'apply_scope': local_shell_default_schema.get('apply_scope'),
+        }
     return {
         'status': 'ok',
         'settings_version': get_runtime_settings_version(),
@@ -1046,6 +1072,7 @@ def build_readonly_settings_snapshot(client_ip, browser_authorized=False, sid=No
             'default_connection_type': policy.get('default_connection'),
             'force_connection_type': policy.get('force_connection'),
             'cli_default_connection_type': DEFAULT_CONNECTION_TYPE,
+            SETTING_LOCAL_SHELL_DEFAULT_KIND: get_runtime_local_shell_default_kind(),
             SETTING_UART_DEFAULT_BAUD_RATE: get_runtime_uart_default_baud_rate(),
             'https_enabled': bool(policy.get('https_enabled')),
             'runtime_name': get_runtime_name(),
@@ -1774,7 +1801,7 @@ TERMINAL_BACKEND_REGISTRY = TerminalBackendRegistry([
     ),
     known_settings_capabilities=SETTINGS_KNOWN_UPDATE_CAPABILITIES,
     risk_capability_rules=SETTINGS_RISK_CAPABILITY_RULES,
-    mutable_setting_keys=(SETTING_UART_DEFAULT_BAUD_RATE,),
+    mutable_setting_keys=(SETTING_LOCAL_SHELL_DEFAULT_KIND, SETTING_UART_DEFAULT_BAUD_RATE),
 )
 
 bridges = {}
@@ -1879,6 +1906,7 @@ settings_audit_store = SettingsAuditStore()
 runtime_settings_lock = threading.RLock()
 runtime_settings = {
     SETTING_DEFAULT_CONNECTION_TYPE: DEFAULT_CONNECTION_TYPE,
+    SETTING_LOCAL_SHELL_DEFAULT_KIND: LOCAL_SHELL_KIND_BASH,
     SETTING_UART_DEFAULT_BAUD_RATE: DEFAULT_UART_BAUD_RATE,
 }
 runtime_settings_version = SETTINGS_VERSION
@@ -5952,6 +5980,7 @@ def on_settings_update_request(data=None):
         ),
         room=request.sid,
     )
+    emit_terminal_policy(request.sid)
 
 @socketio.on('replay_terminal')
 def on_replay_terminal(data):
