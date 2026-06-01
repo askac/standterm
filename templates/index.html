@@ -984,6 +984,7 @@
             let forcedConnectionType = null;
             let selectedConnectionType = null;
             let userSelectedConnectionType = null;
+            let userSelectedLocalShellKind = false;
             let browserIdentityPromise = null;
             let browserIdentityRegistered = false;
             let browserPairingResponseTimer = null;
@@ -1898,7 +1899,8 @@
                     || (shellOptions.find(shellOption => shellOption && shellOption.default) || {}).kind
                     || (shellOptions[0] || {}).kind
                     || '';
-                localShellKindSelect.value = hasPreviousKind ? previousKind : defaultKind;
+                if (!hasPreviousKind) userSelectedLocalShellKind = false;
+                localShellKindSelect.value = hasPreviousKind && userSelectedLocalShellKind ? previousKind : defaultKind;
             }
 
             function setConnectionType(mode) {
@@ -2711,6 +2713,9 @@
                 pendingReconnect = null;
                 submitConnection(getConnectionFormData());
             };
+            localShellKindSelect.addEventListener('change', () => {
+                userSelectedLocalShellKind = true;
+            });
             connectBtn.onclick = doConnect;
             browserAuthDetailsToggle.onclick = () => {
                 browserAuthDetailsVisible = !browserAuthDetailsVisible;

@@ -587,6 +587,10 @@ def test_settings_server_tab_loads_readonly_snapshot(browser, access_url):
                 uartBaud: document.querySelector(
                     '#server-settings-mutable-controls .server-setting-input[data-setting-key="uart.default_baud_rate"]'
                 )?.value,
+                localShellDefault: document.querySelector(
+                    '#server-settings-mutable-controls .server-setting-input[data-setting-key="local_shell.default_kind"]'
+                )?.value,
+                localShellSelector: document.getElementById('local-shell-kind')?.value,
                 schemaKeys: Array.from(
                     document.querySelectorAll('#server-settings-schema li[data-setting-key]')
                 ).map(element => element.dataset.settingKey),
@@ -601,8 +605,46 @@ def test_settings_server_tab_loads_readonly_snapshot(browser, access_url):
         check('default_connection_type' in state['mutableKeys'], 'settings server tab did not render core mutable control')
         check('uart.default_baud_rate' in state['mutableKeys'], 'settings server tab did not render UART mutable control')
         check(state['uartBaud'], 'settings server tab did not populate UART baud control')
+        check('local_shell.default_kind' in state['mutableKeys'], 'settings server tab did not render Local Shell default control')
+        check(state['localShellDefault'] in {'bash', 'cmd', 'powershell'}, 'settings server tab did not populate Local Shell default control')
+        check(state['localShellSelector'] == state['localShellDefault'], 'Local Shell selector did not start on runtime default')
         check('uart.remote_access' in state['schemaKeys'], 'settings server tab did not expose high-risk schema read-only')
         check(state['connectionCount'] > 0, 'settings server tab did not list connection types')
+        clear_emitted(page)
+        selected_shell_kind = page.evaluate(
+            """() => {
+                const input = document.querySelector(
+                    '#server-settings-mutable-controls .server-setting-input[data-setting-key="local_shell.default_kind"]'
+                );
+                const apply = document.querySelector(
+                    '#server-settings-mutable-controls button[data-setting-key="local_shell.default_kind"]'
+                );
+                const option = Array.from(input.options).find(item => item.value !== input.value) || input.options[0];
+                input.value = option.value;
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                apply.click();
+                return option.value;
+            }"""
+        )
+        page.wait_for_function(
+            """() => window.terminalTest.getEmitted().some(entry => (
+                entry.event === 'settings_update_request'
+                && entry.args?.[0]?.setting_key === 'local_shell.default_kind'
+            ))""",
+            timeout=5000,
+        )
+        local_shell_payload = get_emitted(page, 'settings_update_request')[-1]['args'][0]
+        check(local_shell_payload['setting_key'] == 'local_shell.default_kind', 'Local Shell update did not use typed setting_key')
+        check(local_shell_payload['value'] == selected_shell_kind, 'Local Shell update did not send selected shell kind')
+        check(local_shell_payload.get('expected_schema_digest'), 'Local Shell update did not include expected schema digest')
+        page.wait_for_function(
+            """target => document.querySelector(
+                    '#server-settings-mutable-controls .server-setting-input[data-setting-key="local_shell.default_kind"]'
+                )?.value === target
+                && document.getElementById('local-shell-kind')?.value === target""",
+            arg=selected_shell_kind,
+            timeout=10000,
+        )
         clear_emitted(page)
         selected_baud = page.evaluate(
             """() => {
