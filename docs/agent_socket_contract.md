@@ -280,6 +280,30 @@ JSONL `data` is JSON-decoded, so escapes such as `\r` and `\n` become real
 control bytes before sending; this is intentionally different from raw CLI
 `--text`.
 
+For clients that speak the Model Context Protocol, `scripts/agent_mcp.py`
+provides an optional stdio MCP adapter over this same command boundary:
+
+```bash
+tools/.venv_wsl/bin/python scripts/agent_mcp.py \
+  --handoff standterm_external_agent_handoff.json
+```
+
+The adapter is a facade, not a second terminal-control protocol. It does not
+mint external-agent tokens, write handoff files, or bypass the browser Agent
+mode/privacy gates. It reads the existing handoff or tokenless agentinfo data,
+redacts bearer tokens from discovery output, and forwards MCP tools through
+`/agent/external/command`. The first tools are `standterm_discover`,
+`standterm_hello`, `standterm_state`, `standterm_heartbeat`,
+`standterm_observe`, `standterm_wait`, `standterm_send`, `standterm_render`,
+`standterm_sequence`, and `standterm_revoke`.
+
+`standterm_observe` defaults to `mode: "since_cursor"`, which maps to `tail`
+with `since_output_seq`; this is the preferred low-token observation mode for
+high-interaction terminals. `viewport`, `full`, and `render` modes are display
+inspection tools and should be requested only when visual terminal state is
+needed. MCP responses include structured typed results and mark terminal
+display payloads as display data, not control signals.
+
 ### External Command Shape
 
 The command boundary is JSON object based. Future IPC transports should carry

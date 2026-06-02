@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
 import agent_cli as cli
 import agent_jsonl as jsonl
+import agent_mcp as mcp
 import agent_repl as repl
 import agent_type as typer
 
@@ -797,6 +798,128 @@ def test_jsonl_client_preserves_backend_failed_result():
     }
 
 
+def test_mcp_tools_list_exposes_incremental_observe():
+    server = mcp.StandTermMcpServer(mcp.StandTermConnection(SimpleNamespace()))
+    response = server.handle_request({
+        'jsonrpc': '2.0',
+        'id': 1,
+        'method': 'tools/list',
+    })
+    tool_names = [tool['name'] for tool in response['result']['tools']]
+    assert 'standterm_observe' in tool_names
+    observe = next(tool for tool in response['result']['tools'] if tool['name'] == 'standterm_observe')
+    assert observe['inputSchema']['properties']['mode']['default'] == 'since_cursor'
+    assert 'since_cursor' in observe['inputSchema']['properties']['mode']['enum']
+
+
+def test_mcp_observe_since_cursor_forwards_tail_command():
+    args = SimpleNamespace(
+        handoff=None,
+        agentinfo=None,
+        url='https://127.0.0.1:5010',
+        token='agt_secret',
+        terminal='term-2',
+        ca_file='/tmp/ca.crt',
+        insecure=False,
+    )
+    fake_post = FakePostJson(responses=[(200, {'status': 'ok', 'output_seq': 8})])
+    server = mcp.StandTermMcpServer(mcp.StandTermConnection(args, post_json=fake_post))
+    response = server.handle_request({
+        'jsonrpc': '2.0',
+        'id': 2,
+        'method': 'tools/call',
+        'params': {
+            'name': 'standterm_observe',
+            'arguments': {
+                'terminal_id': 'term-3',
+                'since_output_seq': 5,
+                'limit': 20,
+                'wait_ms': 25000,
+            },
+        },
+    })
+    assert fake_post.calls[0]['payload'] == {
+        'op': 'tail',
+        'terminal_id': 'term-3',
+        'token': 'agt_secret',
+        'since_output_seq': 5,
+        'limit': 20,
+        'wait_ms': 25000,
+    }
+    result = response['result']['structuredContent']
+    assert result['ok'] is True
+    assert result['observation']['display_is_control_signal'] is False
+
+
+def test_mcp_send_accepts_structured_keys_only():
+    args = SimpleNamespace(
+        handoff=None,
+        agentinfo=None,
+        url='https://127.0.0.1:5010',
+        token='agt_secret',
+        terminal='term-2',
+        ca_file=None,
+        insecure=False,
+    )
+    fake_post = FakePostJson(responses=[(200, {'status': 'completed'})])
+    server = mcp.StandTermMcpServer(mcp.StandTermConnection(args, post_json=fake_post))
+    response = server.handle_request({
+        'jsonrpc': '2.0',
+        'id': 3,
+        'method': 'tools/call',
+        'params': {
+            'name': 'standterm_send',
+            'arguments': {
+                'input': {
+                    'kind': 'keys',
+                    'keys': ['Down', 'Enter'],
+                },
+                'capture': True,
+            },
+        },
+    })
+    assert fake_post.calls[0]['payload'] == {
+        'op': 'send',
+        'terminal_id': 'term-2',
+        'token': 'agt_secret',
+        'capture': True,
+        'kind': 'keys',
+        'keys': ['Down', 'Enter'],
+    }
+    assert response['result']['isError'] is False
+
+
+def test_mcp_discover_redacts_handoff_token():
+    args = SimpleNamespace(
+        handoff='handoff.json',
+        agentinfo=None,
+        url=None,
+        token=None,
+        terminal='main',
+        ca_file=None,
+        insecure=False,
+    )
+    connection = mcp.StandTermConnection(args)
+    connection._load_handoff = lambda: {
+        'token': 'agt_secret',
+        'terminal_id': 'term-2',
+        'cli_commands': {'hello': ['python', 'agent_cli.py', '--token', 'agt_secret']},
+    }
+    server = mcp.StandTermMcpServer(connection)
+    response = server.handle_request({
+        'jsonrpc': '2.0',
+        'id': 4,
+        'method': 'tools/call',
+        'params': {
+            'name': 'standterm_discover',
+            'arguments': {},
+        },
+    })
+    result = response['result']['structuredContent']['result']
+    assert result['token'] == '[redacted]'
+    assert result['cli_commands'] == '[redacted]'
+
+
 def test_type_units_translate_newlines_and_preserve_unicode_characters():
     assert list(typer.iter_type_units('a\n測b', newline_mode='cr')) == ['a', '\r', '測', 'b']
     assert list(typer.iter_type_units('a\nb', newline_mode='lf')) == ['a', '\n', 'b']
@@ -946,6 +1069,10 @@ def main():
         test_jsonl_client_reuses_defaults_and_preserves_ids,
         test_jsonl_client_reports_invalid_json_as_jsonl_error,
         test_jsonl_client_preserves_backend_failed_result,
+        test_mcp_tools_list_exposes_incremental_observe,
+        test_mcp_observe_since_cursor_forwards_tail_command,
+        test_mcp_send_accepts_structured_keys_only,
+        test_mcp_discover_redacts_handoff_token,
         test_type_units_translate_newlines_and_preserve_unicode_characters,
         test_type_helper_defaults_to_generic_cadence_profile,
         test_type_helper_sends_one_unit_per_plain_send_without_capture,

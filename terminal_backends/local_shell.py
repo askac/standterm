@@ -6,14 +6,22 @@ from pathlib import Path
 from .base import BackendSettingSchema, BackendStartFieldSchema, TerminalBackendPlugin, TerminalBridge
 
 try:
-    from ptyprocess import PtyProcessUnicode
+    from ptyprocess import PtyProcess
 except Exception:
-    PtyProcessUnicode = None
+    PtyProcess = None
 
 try:
     from winpty import PtyProcess as WinPtyProcess
 except Exception:
     WinPtyProcess = None
+
+
+def decode_local_shell_output(data):
+    if isinstance(data, bytes):
+        return data.decode('utf-8', errors='replace')
+    if isinstance(data, str):
+        return data
+    return str(data)
 
 
 class LocalShellBridge(TerminalBridge):
@@ -27,8 +35,9 @@ class LocalShellBridge(TerminalBridge):
         *,
         ssh_term,
         get_default_local_shell_config,
+        runtime=None,
     ):
-        super().__init__(owner_session, terminal_id)
+        super().__init__(owner_session, terminal_id, runtime=runtime)
         self.process = None
         self._ssh_term = ssh_term
         shell_config = shell_config or get_default_local_shell_config()[0]
@@ -40,7 +49,7 @@ class LocalShellBridge(TerminalBridge):
     def connect(self, cols=80, rows=24):
         if sys.platform.startswith('win'):
             return self._connect_windows(cols, rows)
-        if PtyProcessUnicode is None:
+        if PtyProcess is None:
             return False, {
                 'message': 'Local Shell requires ptyprocess. Re-run the launcher with --force to install dependencies.',
                 'error_code': 'local_shell_dependency_missing',
@@ -50,7 +59,7 @@ class LocalShellBridge(TerminalBridge):
             env = dict(os.environ)
             env['TERM'] = self._ssh_term
             cwd = str(Path.home())
-            self.process = PtyProcessUnicode.spawn(
+            self.process = PtyProcess.spawn(
                 self.shell_command,
                 cwd=cwd,
                 env=env,
@@ -125,7 +134,7 @@ class LocalShellBridge(TerminalBridge):
                 if data:
                     self.emit_output({
                         'message_type': 'terminal',
-                        'data': data,
+                        'data': decode_local_shell_output(data),
                     })
             except EOFError:
                 if self.closing:
@@ -186,6 +195,8 @@ class LocalShellBridge(TerminalBridge):
     def write(self, data):
         if self.process:
             try:
+                if not sys.platform.startswith('win') and isinstance(data, str):
+                    data = data.encode('utf-8')
                 self.process.write(data)
             except Exception as exc:
                 print(f"[!] Local shell write error: {exc}")

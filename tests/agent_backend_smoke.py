@@ -3540,6 +3540,116 @@ def test_local_shell_bridge_is_provided_by_backend_module():
     bridge.close()
 
 
+def test_local_shell_output_decode_tolerates_non_utf8_bytes():
+    from terminal_backends.local_shell import decode_local_shell_output
+
+    assert decode_local_shell_output(b'\xffhello') == '\ufffdhello'
+    assert decode_local_shell_output(b'\xa3hello') == '\ufffdhello'
+    assert decode_local_shell_output('already text') == 'already text'
+
+
+def test_local_shell_read_loop_emits_replacement_text_for_non_utf8_bytes():
+    from terminal_backends.local_shell import LocalShellBridge
+
+    class FakeRuntime:
+        max_replay_events = 10
+        max_replay_bytes = 1024
+        close_process = None
+        update_headless_mirror = None
+
+        def __init__(self):
+            self.emitted = []
+            self.unregistered = []
+            self.slept = 0
+
+        def sleep(self, _seconds):
+            self.slept += 1
+
+        def emit_socket(self, event, payload, room=None):
+            self.emitted.append((event, payload, room))
+
+        def build_metadata(self, *_args):
+            return {}
+
+        def append_transcript(self, *_args):
+            return None
+
+        def unregister_bridge(self, owner_session, terminal_id, bridge):
+            self.unregistered.append((owner_session, terminal_id, bridge))
+
+    class FakeProcess:
+        fd = 999
+
+        def __init__(self):
+            self.reads = 0
+
+        def read(self, size=4096):
+            self.reads += 1
+            if self.reads == 1:
+                return b'\xa3hello'
+            raise EOFError()
+
+        def isalive(self):
+            return True
+
+    runtime = FakeRuntime()
+    bridge = LocalShellBridge(
+        'session-1',
+        standterm.TERMINAL_ID_MAIN,
+        {'shell_display': 'fake', 'shell_command': ['fake'], 'terminal_kind': 'local', 'terminal_label': 'fake'},
+        ssh_term='xterm-256color',
+        get_default_local_shell_config=lambda: (None, None),
+        runtime=runtime,
+    )
+    bridge.attach('sid-1')
+    bridge.process = FakeProcess()
+    original_select = standterm.LocalShellBridge.__module__
+    import terminal_backends.local_shell as local_shell_module
+
+    old_select = local_shell_module.select.select
+    local_shell_module.select.select = lambda *_args, **_kwargs: ([bridge.process.fd], [], [])
+    try:
+        bridge.read_loop()
+    finally:
+        local_shell_module.select.select = old_select
+
+    terminal_payloads = [
+        payload for event, payload, _room in runtime.emitted
+        if event == 'ssh_output' and payload.get('message_type') == 'terminal'
+    ]
+    close_payloads = [
+        payload for event, payload, _room in runtime.emitted
+        if event == 'ssh_output' and payload.get('message_type') == 'ssh_closed'
+    ]
+    assert terminal_payloads[0]['data'] == '\ufffdhello'
+    assert close_payloads[0]['message'] == 'Local shell session closed.'
+    assert close_payloads[0].get('error_code') != 'local_shell_read_error'
+    assert runtime.unregistered
+    assert original_select == 'terminal_backends.local_shell'
+
+
+def test_local_shell_posix_write_encodes_text_as_utf8_bytes():
+    from terminal_backends.local_shell import LocalShellBridge
+
+    class FakeProcess:
+        def __init__(self):
+            self.writes = []
+
+        def write(self, data):
+            self.writes.append(data)
+
+    bridge = LocalShellBridge(
+        'session-1',
+        standterm.TERMINAL_ID_MAIN,
+        {'shell_display': 'fake', 'shell_command': ['fake'], 'terminal_kind': 'local', 'terminal_label': 'fake'},
+        ssh_term='xterm-256color',
+        get_default_local_shell_config=lambda: (None, None),
+    )
+    bridge.process = FakeProcess()
+    bridge.write('ab測\r')
+    assert bridge.process.writes == ['ab測\r'.encode('utf-8')]
+
+
 def test_uart_bridge_is_provided_by_backend_module():
     assert standterm.UARTBridge.__module__ == 'terminal_backends.uart'
     plugin = standterm.TERMINAL_BACKEND_REGISTRY.get(standterm.CONNECTION_TYPE_UART)
@@ -4373,6 +4483,9 @@ def main():
         test_ssh_backend_action_contract_uses_public_bridge_method,
         test_ssh_bridge_is_provided_by_backend_module,
         test_local_shell_bridge_is_provided_by_backend_module,
+        test_local_shell_output_decode_tolerates_non_utf8_bytes,
+        test_local_shell_read_loop_emits_replacement_text_for_non_utf8_bytes,
+        test_local_shell_posix_write_encodes_text_as_utf8_bytes,
         test_uart_bridge_is_provided_by_backend_module,
         test_wsl_uart_scan_lists_windows_and_wsl_devices,
         test_wsl_manual_uart_port_identifies_windows_or_wsl_source,

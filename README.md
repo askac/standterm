@@ -369,6 +369,25 @@ starts one persistent local process, reads the handoff once, accepts one JSON
 command per stdin line, and writes one JSON response per stdout line while still
 using the same loopback HTTP command endpoint.
 
+For agents that support the Model Context Protocol, `agent_mcp.py` exposes an
+optional stdio MCP adapter over the same External Agent Mirror command
+boundary:
+
+```bash
+python scripts/agent_mcp.py --handoff standterm_external_agent_handoff.json
+```
+
+The MCP adapter does not mint tokens, write handoff files, or add a second
+terminal-control protocol. It reads the existing handoff or agentinfo metadata,
+redacts bearer tokens from discovery output, and forwards tools such as
+`standterm_hello`, `standterm_heartbeat`, `standterm_observe`,
+`standterm_wait`, `standterm_send`, `standterm_render`, and
+`standterm_sequence` through `/agent/external/command`. `standterm_observe`
+defaults to incremental `since_cursor` observation using `output_seq`; use
+viewport, full screen, or render modes only when terminal visual state is
+needed. Tool results keep terminal display payloads marked as display data, not
+control signals.
+
 Prefer the exact absolute commands printed by the StandTerm startup banner. They
 use the active runtime Python, platform-appropriate quoting, and the generated
 local CA path when StandTerm is serving HTTPS with its local development
