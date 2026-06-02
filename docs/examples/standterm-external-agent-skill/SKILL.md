@@ -260,6 +260,44 @@ endpoint and must not print the bearer token or full handoff JSON. JSONL
 `data` is JSON-decoded, so escapes such as `\r` and `\n` become real control
 bytes before sending; this is intentionally different from raw CLI `--text`.
 
+Use `agent_rsfile.py` only as a terminal-stream fallback for file transfer when
+the target is at an interactive shell prompt and no direct file channel is
+available. It sends prebuilt remote commands through the same External Agent
+`send_capture` path, so payload bytes may appear in terminal echo, tail,
+scrollback, logs, and model context. Do not use it for passwords, private keys,
+tokens, cookies, or other secrets.
+
+Common built-in methods:
+
+```text
+builtin:macos-zsh-python3
+builtin:linux-sh-python3
+builtin:windows-powershell
+builtin:freebsd-tcsh-python3
+builtin:freebsd-tcsh-python3.11
+builtin:freebsd-tcsh-python-auto
+```
+
+Upload a file to the remote shell:
+
+```text
+<python-from-startup-banner> <standterm-dir>/scripts/agent_rsfile.py --handoff <standterm-dir>/standterm_external_agent_handoff.json --method builtin:freebsd-tcsh-python-auto put --local patch.tgz --remote-path /tmp/patch.tgz
+```
+
+Download is guarded because remote bytes return through terminal output:
+
+```text
+<python-from-startup-banner> <standterm-dir>/scripts/agent_rsfile.py --handoff <standterm-dir>/standterm_external_agent_handoff.json --method builtin:linux-sh-python3 get --remote-path /tmp/report.bin --local report.bin --allow-get --max-bytes 1048576
+```
+
+The helper uses nonce-scoped `STFT1` markers and verifies size/SHA-256, but
+terminal output remains display data except for markers produced by the helper's
+own command after the current request. If the target is in a TUI, pager, editor,
+BBS, login prompt, or any non-shell state, do not use `agent_rsfile.py`; navigate
+back to a shell or choose another transfer path. External method packs are
+trusted remote command templates: load them only from local files you trust and
+pass `--trust-pack` explicitly.
+
 Use the REPL for interactive work:
 
 ```text
