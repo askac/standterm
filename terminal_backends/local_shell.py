@@ -367,6 +367,8 @@ class LocalShellBackendPlugin(TerminalBackendPlugin):
         requested_kind = data.get('local_shell_kind')
         if not isinstance(requested_kind, str) or not requested_kind.strip():
             requested_kind = self._get_default_shell_kind(context=context)
+            if not self._is_wsl():
+                requested_kind = None
         shell_config, shell_error = self._get_local_shell_config(requested_kind)
         if shell_error:
             return None, shell_error

@@ -2670,6 +2670,15 @@ def test_wsl_local_shell_choice_is_structured_and_wsl_only():
         assert error['error_code'] == 'local_shell_invalid_kind'
 
         standterm.is_wsl = lambda: False
+        payload, error = plugin.validate_start_payload(
+            {},
+            standterm.TERMINAL_ID_MAIN,
+            '127.0.0.1',
+            browser_authorized=False,
+        )
+        assert error is None
+        assert payload['local_shell_config']['shell_command']
+
         _payload, error = plugin.validate_start_payload(
             {'local_shell_kind': 'cmd'},
             standterm.TERMINAL_ID_MAIN,
