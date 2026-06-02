@@ -236,6 +236,64 @@ def test_agent_panel_can_be_dragged(browser, access_url):
         close_context(context)
 
 
+def test_terminal_pip_hides_selected_tab_and_keeps_background_tab(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        initial = page.evaluate(
+            """() => ({
+                canPip: window.terminalTest.canMoveActiveTerminalToPip(),
+                tabs: window.terminalTest.getTerminalTabsState()
+            })"""
+        )
+        check(initial['canPip'] is False, 'single tab should not offer Terminal to PiP')
+        check(len(initial['tabs']['tabs']) == 1, 'initial workspace should have one terminal tab')
+
+        page.click('#new-tab-btn')
+        page.wait_for_function("() => window.terminalTest.getTerminalTabsState().tabs.length === 2", timeout=5000)
+        page.evaluate("terminalId => window.terminalTest.switchTerminalForTest(terminalId)", TERMINAL_ID)
+        page.wait_for_function(
+            "terminalId => window.terminalTest.getTerminalTabsState().activeTerminalId === terminalId",
+            arg=TERMINAL_ID,
+            timeout=5000,
+        )
+        before_pip = page.evaluate(
+            """() => ({
+                canPip: window.terminalTest.canMoveActiveTerminalToPip(),
+                tabs: window.terminalTest.getTerminalTabsState()
+            })"""
+        )
+        check(before_pip['canPip'] is True, 'two visible tabs should offer Terminal to PiP')
+        active_id = before_pip['tabs']['activeTerminalId']
+        background_id = next(item['id'] for item in before_pip['tabs']['tabs'] if item['id'] != active_id)
+
+        moved = page.evaluate("terminalId => window.terminalTest.setTerminalPipModeForTest(terminalId, true)", active_id)
+        check(moved is True, 'test hook could not move terminal into PiP mode')
+        in_pip = page.evaluate(
+            """() => ({
+                canPip: window.terminalTest.canMoveActiveTerminalToPip(),
+                tabs: window.terminalTest.getTerminalTabsState()
+            })"""
+        )
+        moved_tab = next(item for item in in_pip['tabs']['tabs'] if item['id'] == active_id)
+        background_tab = next(item for item in in_pip['tabs']['tabs'] if item['id'] == background_id)
+        check(in_pip['canPip'] is False, 'remaining single background tab should not offer another PiP move')
+        check(in_pip['tabs']['activeTerminalId'] == background_id, 'background did not switch to remaining tab')
+        check(moved_tab['inPip'] is True and moved_tab['hidden'] is True, 'PiP tab did not disappear from tab list')
+        check(background_tab['active'] is True and background_tab['hidden'] is False, 'remaining tab was not active and visible')
+
+        target_set = page.evaluate("terminalId => window.terminalTest.setAgentPanelTargetForTest(terminalId)", active_id)
+        check(target_set is True, 'test hook could not target Agent panel at PiP terminal')
+        agent_target = page.evaluate("() => window.terminalTest.getTerminalTabsState()")
+        check(agent_target['agentPanelTerminalId'] == active_id, 'Agent panel did not target PiP terminal')
+
+        page.evaluate("terminalId => window.terminalTest.setTerminalPipModeForTest(terminalId, false)", active_id)
+        restored = page.evaluate("() => window.terminalTest.getTerminalTabsState()")
+        restored_tab = next(item for item in restored['tabs'] if item['id'] == active_id)
+        check(restored_tab['inPip'] is False and restored_tab['hidden'] is False, 'restored PiP tab did not return to tab list')
+    finally:
+        close_context(context)
+
+
 def test_operator_observation_warning_ui(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
@@ -707,6 +765,10 @@ def test_connection_controls_follow_start_fields_without_legacy_payload(browser,
                 }];
                 delete uart.baud_rates;
                 delete uart.default_baud_rate;
+                uart.available_ports = [
+                    { device: 'COM3', label: 'COM3 (Windows)', backend: 'windows' },
+                    { device: '/dev/ttyUSB0', label: '/dev/ttyUSB0 (WSL)', backend: 'wsl' }
+                ];
                 uart.start_fields = [
                     { name: 'serial_port', value_type: 'string', input_type: 'text', default_value: '' },
                     {
@@ -727,6 +789,12 @@ def test_connection_controls_follow_start_fields_without_legacy_payload(browser,
                     username: document.getElementById('username').value,
                     localShell: document.getElementById('local-shell-kind').value,
                     localShellOptions: Array.from(document.getElementById('local-shell-kind').options).map(item => item.value),
+                    uartPortSelectDisplay: document.getElementById('uart-port-select').style.display,
+                    uartPortOptions: Array.from(document.getElementById('uart-port-select').options).map(item => item.value),
+                    uartPortLabels: Array.from(document.getElementById('uart-port-select').options).map(item => item.text),
+                    uartPort: document.getElementById('uart-port-select').value,
+                    uartManualDisplay: document.getElementById('uart-port').style.display,
+                    uartManualValue: document.getElementById('uart-port').value,
                     uartBaud: document.getElementById('uart-baud').value,
                     uartBaudOptions: Array.from(document.getElementById('uart-baud').options).map(item => item.value)
                 };
@@ -738,8 +806,33 @@ def test_connection_controls_follow_start_fields_without_legacy_payload(browser,
         check(state['username'] == 'schema-user', 'SSH username did not use start_fields default')
         check(state['localShellOptions'] == ['alpha', 'beta'], 'Local Shell options did not use start_fields')
         check(state['localShell'] == 'beta', 'Local Shell default did not use start_fields')
+        check(state['uartPortSelectDisplay'] != 'none', 'UART port selector did not render detected ports')
+        check(state['uartPortOptions'] == ['COM3', '/dev/ttyUSB0', '__manual__'], 'UART port selector did not list detected ports and manual fallback')
+        check(state['uartPortLabels'][:2] == ['COM3 (Windows)', '/dev/ttyUSB0 (WSL)'], 'UART port selector did not label port sources')
+        check(state['uartPort'] == 'COM3', 'UART port selector did not default to first detected port')
+        check(state['uartManualDisplay'] == 'none', 'UART manual input was visible while a detected port was selected')
+        check(state['uartManualValue'] == 'COM3', 'UART manual backing value did not mirror selected port')
         check(state['uartBaudOptions'] == ['9600', '115200'], 'UART baud options did not use start_fields')
         check(state['uartBaud'] == '9600', 'UART baud default did not use start_fields')
+
+        manual_state = page.evaluate(
+            """() => {
+                const selector = document.getElementById('uart-port-select');
+                const input = document.getElementById('uart-port');
+                selector.value = '__manual__';
+                selector.dispatchEvent(new Event('change', { bubbles: true }));
+                input.value = '/dev/ttyUSB1';
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                return {
+                    selector: selector.value,
+                    input: input.value,
+                    inputDisplay: input.style.display
+                };
+            }"""
+        )
+        check(manual_state['selector'] == '__manual__', 'UART manual selector value was not retained')
+        check(manual_state['input'] == '/dev/ttyUSB1', 'UART manual input did not accept WSL device path')
+        check(manual_state['inputDisplay'] != 'none', 'UART manual input did not show for manual fallback')
 
         refreshed = page.evaluate(
             """() => {
@@ -809,6 +902,7 @@ def main():
     sync_playwright, PlaywrightError, _ = load_playwright()
     tests = [
         test_agent_panel_can_be_dragged,
+        test_terminal_pip_hides_selected_tab_and_keeps_background_tab,
         test_operator_observation_warning_ui,
         test_hidden_mirror_ignores_visible_scroll,
         test_privacy_states_block_snapshots_and_agent_runs,

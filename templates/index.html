@@ -16,6 +16,7 @@
         .terminal-tab.connecting .tab-state { background: #ffcc00; }
         .terminal-tab.error .tab-state { background: #ff9f0a; }
         .terminal-tab.operator-observing { border-color: #ff453a; box-shadow: inset 0 -2px 0 #ff453a; }
+        .terminal-tab.in-pip { display: none; }
         .tab-state { width: 7px; height: 7px; border-radius: 50%; background: #777; flex: 0 0 auto; }
         .tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
         .tab-close { width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border: none; border-radius: 4px; background: transparent; color: #888; cursor: pointer; font-size: 15px; line-height: 1; padding: 0; flex: 0 0 auto; }
@@ -574,6 +575,7 @@
             <select id="local-shell-kind"></select>
         </div>
         <div id="uart-fields">
+            <select id="uart-port-select"></select>
             <input type="text" id="uart-port" list="uart-port-list" placeholder="COM3 or /dev/ttyUSB0">
             <datalist id="uart-port-list"></datalist>
             <select id="uart-baud"></select>
@@ -912,6 +914,7 @@
             const localShellFields = document.getElementById('local-shell-fields');
             const localShellKindSelect = document.getElementById('local-shell-kind');
             const uartFields = document.getElementById('uart-fields');
+            const uartPortSelect = document.getElementById('uart-port-select');
             const uartPortInput = document.getElementById('uart-port');
             const uartPortList = document.getElementById('uart-port-list');
             const uartBaudSelect = document.getElementById('uart-baud');
@@ -985,11 +988,13 @@
             let selectedConnectionType = null;
             let userSelectedConnectionType = null;
             const userEditedConnectionFields = new Set();
+            const UART_MANUAL_PORT_VALUE = '__manual__';
             let browserIdentityPromise = null;
             let browserIdentityRegistered = false;
             let browserPairingResponseTimer = null;
             let browserAuthDetailsVisible = false;
             let agentPanelVisible = false;
+            let agentPanelTerminalIdOverride = null;
             let agentPanelPosition = null;
             let agentPanelDrag = null;
             let pendingPasteReview = null;
@@ -1072,6 +1077,21 @@
                 );
             }
 
+            function getSelectedUartPort() {
+                if (
+                    uartPortSelect.style.display !== 'none'
+                    && uartPortSelect.value
+                    && uartPortSelect.value !== UART_MANUAL_PORT_VALUE
+                ) {
+                    return uartPortSelect.value;
+                }
+                return uartPortInput.value;
+            }
+
+            function setUartManualPortVisible(visible) {
+                uartPortInput.style.display = visible ? '' : 'none';
+            }
+
             function getLocalShellKindOptions() {
                 const localShellOption = getConnectionOption('local_shell') || {};
                 const shellFieldOptions = getConnectionFieldOptions('local_shell', 'local_shell_kind');
@@ -1114,6 +1134,10 @@
             }
 
             function markConnectionFieldEditedById(elementId) {
+                if (elementId === 'uart-port-select') {
+                    userEditedConnectionFields.add(getConnectionFieldKey('uart', 'serial_port'));
+                    return;
+                }
                 Object.entries(CONNECTION_FIELD_IDS).forEach(([connectionType, fields]) => {
                     Object.entries(fields).forEach(([fieldName, id]) => {
                         if (id === elementId) userEditedConnectionFields.add(getConnectionFieldKey(connectionType, fieldName));
@@ -1303,6 +1327,7 @@
             }
 
             function getStatusBarHeight() {
+                if (agentPanel.ownerDocument !== document) return 0;
                 const value = getComputedStyle(document.documentElement).getPropertyValue('--status-bar-height');
                 const parsed = parseFloat(value);
                 return Number.isFinite(parsed) ? parsed : 0;
@@ -1310,8 +1335,9 @@
 
             function clampAgentPanelPosition(position) {
                 const rect = agentPanel.getBoundingClientRect();
-                const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
-                const maxTop = Math.max(8, window.innerHeight - getStatusBarHeight() - rect.height - 8);
+                const panelWindow = agentPanel.ownerDocument.defaultView || window;
+                const maxLeft = Math.max(8, panelWindow.innerWidth - rect.width - 8);
+                const maxTop = Math.max(8, panelWindow.innerHeight - getStatusBarHeight() - rect.height - 8);
                 return {
                     left: Math.min(Math.max(8, position.left), maxLeft),
                     top: Math.min(Math.max(8, position.top), maxTop),
@@ -1319,6 +1345,13 @@
             }
 
             function applyAgentPanelPosition() {
+                if (agentPanel.ownerDocument !== document) {
+                    agentPanel.style.left = '';
+                    agentPanel.style.top = '';
+                    agentPanel.style.right = '';
+                    agentPanel.style.bottom = '';
+                    return;
+                }
                 if (!agentPanelPosition) {
                     agentPanel.style.left = '';
                     agentPanel.style.top = '';
@@ -1367,6 +1400,15 @@
 
             function canUseAgentPanel(state) {
                 return !!(socket && socket.connected && state && state.connected);
+            }
+
+            function getAgentPanelTerminalState() {
+                if (agentPanelTerminalIdOverride) {
+                    const overrideState = terminals.get(agentPanelTerminalIdOverride);
+                    if (overrideState) return overrideState;
+                    agentPanelTerminalIdOverride = null;
+                }
+                return getActiveTerminalState();
             }
 
             function formatAgentPanelValue(value) {
@@ -1476,9 +1518,12 @@
             }
 
             function updateAgentPanel() {
-                const state = getActiveTerminalState();
+                const state = getAgentPanelTerminalState();
                 const usable = canUseAgentPanel(state);
-                if (!usable) agentPanelVisible = false;
+                if (!usable) {
+                    agentPanelVisible = false;
+                    agentPanelTerminalIdOverride = null;
+                }
                 agentPanel.classList.toggle('visible', usable && agentPanelVisible);
                 if (usable && agentPanelVisible) applyAgentPanelPosition();
                 agentToggleBtn.disabled = !usable;
@@ -1978,17 +2023,50 @@
 
             function populateUartFields() {
                 const ports = getUartPortOptions();
-                const previousPort = uartPortInput.value;
+                const previousPort = getSelectedUartPort();
                 uartPortList.replaceChildren();
+                uartPortSelect.replaceChildren();
                 ports.forEach(port => {
                     if (!port || typeof port.device !== 'string') return;
-                    const option = document.createElement('option');
-                    option.value = port.device;
-                    option.label = port.label || port.device;
-                    uartPortList.appendChild(option);
+                    const listOption = document.createElement('option');
+                    listOption.value = port.device;
+                    listOption.label = port.label || port.device;
+                    uartPortList.appendChild(listOption);
+
+                    const selectOption = document.createElement('option');
+                    selectOption.value = port.device;
+                    selectOption.innerText = port.label || port.device;
+                    uartPortSelect.appendChild(selectOption);
                 });
-                if (!previousPort && ports.length > 0 && !isConnectionFieldEdited('uart', 'serial_port')) {
-                    uartPortInput.value = ports[0].device;
+                const detectedDevices = ports
+                    .filter(port => port && typeof port.device === 'string')
+                    .map(port => port.device);
+                if (detectedDevices.length > 0) {
+                    const manualOption = document.createElement('option');
+                    manualOption.value = UART_MANUAL_PORT_VALUE;
+                    manualOption.innerText = 'Manual COM or /dev...';
+                    uartPortSelect.appendChild(manualOption);
+                    uartPortSelect.style.display = '';
+
+                    const hasPreviousPort = detectedDevices.includes(previousPort);
+                    const keepEditedPort = previousPort && isConnectionFieldEdited('uart', 'serial_port');
+                    if (keepEditedPort && hasPreviousPort) {
+                        uartPortSelect.value = previousPort;
+                        uartPortInput.value = previousPort;
+                        setUartManualPortVisible(false);
+                    } else if (keepEditedPort) {
+                        uartPortSelect.value = UART_MANUAL_PORT_VALUE;
+                        uartPortInput.value = previousPort;
+                        setUartManualPortVisible(true);
+                    } else {
+                        const defaultPort = detectedDevices[0];
+                        uartPortSelect.value = defaultPort;
+                        uartPortInput.value = defaultPort;
+                        setUartManualPortVisible(false);
+                    }
+                } else {
+                    uartPortSelect.style.display = 'none';
+                    setUartManualPortVisible(true);
                 }
 
                 const baudOptions = getUartBaudOptions();
@@ -2287,8 +2365,9 @@
             }
 
             function notifyTerminalResize(state = getActiveTerminalState()) {
-                if (!state || state.id !== activeTerminalId) return;
-                updateTerminalSizeStatus();
+                if (!state || (state.id !== activeTerminalId && !state.inPip)) return;
+                if (state.id === activeTerminalId) updateTerminalSizeStatus();
+                updatePipStatus(state);
                 syncAgentTerminalMirrorSize(state);
                 if (!socket || !socket.connected || !state.connected) return;
                 if (state.lastNotifiedSize.cols === state.term.cols && state.lastNotifiedSize.rows === state.term.rows) return;
@@ -2299,6 +2378,10 @@
 
             function fitAndNotifyResize() {
                 const state = getActiveTerminalState();
+                fitTerminalState(state);
+            }
+
+            function fitTerminalState(state) {
                 if (!state) return;
                 if (state.fitAddon) state.fitAddon.fit();
                 notifyTerminalResize(state);
@@ -2325,11 +2408,17 @@
                 state.tabEl.classList.toggle('connecting', state.connecting);
                 state.tabEl.classList.toggle('error', state.error);
                 state.tabEl.classList.toggle('operator-observing', !!(state.observation && state.observation.active));
+                state.tabEl.classList.toggle('in-pip', !!state.inPip);
                 state.titleEl.innerText = state.title;
+                updatePipStatus(state);
+            }
+
+            function getVisibleTerminalStates() {
+                return [...terminals.values()].filter(state => !state.inPip);
             }
 
             function updateTabBarVisibility() {
-                document.body.classList.toggle('has-terminal-tabs', terminals.size > 1);
+                document.body.classList.toggle('has-terminal-tabs', getVisibleTerminalStates().length > 1);
             }
 
             function updateTerminalActions() {
@@ -2361,7 +2450,7 @@
 
             function switchTerminal(terminalId) {
                 const nextState = terminals.get(terminalId);
-                if (!nextState || terminalId === activeTerminalId) return;
+                if (!nextState || nextState.inPip || terminalId === activeTerminalId) return;
                 const previousState = getActiveTerminalState();
                 if (previousState) previousState.container.classList.remove('active');
                 activeTerminalId = terminalId;
@@ -2374,6 +2463,38 @@
                     nextState.term.focus();
                     scheduleAgentViewportSnapshot(nextState);
                 });
+            }
+
+            function getNextVisibleTerminalState(excludeTerminalId = null) {
+                return getVisibleTerminalStates().find(state => state.id !== excludeTerminalId) || null;
+            }
+
+            function canMoveActiveTerminalToPip() {
+                const state = getActiveTerminalState();
+                return !!(state && !state.inPip && getVisibleTerminalStates().length > 1);
+            }
+
+            function setTerminalPipMode(state, inPip) {
+                if (!state || state.inPip === inPip) return;
+                state.inPip = inPip;
+                if (inPip && state.id === activeTerminalId) {
+                    state.container.classList.remove('active');
+                    const nextState = getNextVisibleTerminalState(state.id);
+                    if (nextState) {
+                        activeTerminalId = nextState.id;
+                        nextState.container.classList.add('active');
+                    }
+                } else if (!inPip) {
+                    if (agentPanelTerminalIdOverride === state.id && !state.pipWindow) {
+                        agentPanelTerminalIdOverride = null;
+                        agentPanelVisible = false;
+                    }
+                    if (!terminals.has(activeTerminalId)) {
+                        activeTerminalId = state.id;
+                        state.container.classList.add('active');
+                    }
+                }
+                updateActiveTerminalUi();
             }
 
             function createTerminalTab(terminalId, title) {
@@ -2430,7 +2551,17 @@
                     titleEl,
                     term,
                     fitAddon,
-                    webLinksAddon: null
+                    webLinksAddon: null,
+                    inPip: false,
+                    pipWindow: null,
+                    pipBar: null,
+                    pipTitleEl: null,
+                    pipSizeEl: null,
+                    pipAgentBtn: null,
+                    pipTerminalHost: null,
+                    pipReturnNextSibling: null,
+                    pipPagehideHandler: null,
+                    pipResizeHandler: null
                 };
                 terminals.set(terminalId, state);
                 configureWebLinks(state);
@@ -2452,6 +2583,7 @@
             }
 
             function removeTerminalState(state) {
+                restoreTerminalFromPip(state, { closeWindow: true });
                 detachAgentFromTerminal(state);
                 if (state.webLinksAddon) state.webLinksAddon.dispose();
                 if (state.agentTerminalMirror) state.agentTerminalMirror.dispose();
@@ -2482,13 +2614,15 @@
                 removeTerminalState(state);
                 updateTabBarVisibility();
                 if (terminalId === activeTerminalId) {
-                    const nextState = terminals.values().next().value;
-                    activeTerminalId = nextState.id;
-                    nextState.container.classList.add('active');
+                    const nextState = getNextVisibleTerminalState() || terminals.values().next().value;
+                    if (nextState) {
+                        activeTerminalId = nextState.id;
+                        nextState.container.classList.add('active');
+                    }
                     updateActiveTerminalUi();
                     requestAnimationFrame(() => {
                         fitAndNotifyResize();
-                        nextState.term.focus();
+                        if (nextState) nextState.term.focus();
                     });
                 }
             }
@@ -2552,6 +2686,45 @@
                     },
                     getActiveAgentState() {
                         return serializeAgentForTest(getActiveTerminalState());
+                    },
+                    getTerminalTabsState() {
+                        return {
+                            activeTerminalId,
+                            agentPanelTerminalId: (getAgentPanelTerminalState() || {}).id || null,
+                            agentPanelInMainDocument: agentPanel.ownerDocument === document,
+                            tabs: [...terminals.values()].map(state => ({
+                                id: state.id,
+                                active: state.id === activeTerminalId,
+                                inPip: !!state.inPip,
+                                hidden: state.tabEl.classList.contains('in-pip'),
+                                title: state.title,
+                                pipTitle: state.pipTitleEl ? state.pipTitleEl.innerText : null,
+                                pipSize: state.pipSizeEl ? state.pipSizeEl.innerText : null
+                            }))
+                        };
+                    },
+                    canMoveActiveTerminalToPip() {
+                        return canMoveActiveTerminalToPip();
+                    },
+                    setTerminalPipModeForTest(terminalId, inPip) {
+                        const state = terminals.get(terminalId);
+                        if (!state) return false;
+                        setTerminalPipMode(state, !!inPip);
+                        return true;
+                    },
+                    switchTerminalForTest(terminalId) {
+                        const state = terminals.get(terminalId);
+                        if (!state || state.inPip) return false;
+                        switchTerminal(terminalId);
+                        return true;
+                    },
+                    setAgentPanelTargetForTest(terminalId) {
+                        const state = terminals.get(terminalId);
+                        if (!state) return false;
+                        agentPanelTerminalIdOverride = terminalId;
+                        agentPanelVisible = true;
+                        updateAgentPanel();
+                        return true;
                     },
                     getTerminalPolicy() {
                         return cloneForTest(terminalPolicy);
@@ -2808,7 +2981,7 @@
                 } else if (connectionType === 'local_shell' && localShellKindSelect.value) {
                     formData.local_shell_kind = localShellKindSelect.value;
                 } else if (connectionType === 'uart') {
-                    formData.serial_port = uartPortInput.value;
+                    formData.serial_port = getSelectedUartPort();
                     formData.baud_rate = uartBaudSelect.value;
                 }
                 return formData;
@@ -2889,7 +3062,7 @@
                     });
             };
             agentPauseBtn.onclick = () => {
-                const state = getActiveTerminalState();
+                const state = getAgentPanelTerminalState();
                 if (!socket || !socket.connected || !hasAgentPauseCapability(state)) return;
                 socket.emit('agent_pause', { terminal_id: state.id });
                 state.agent.paused = true;
@@ -2903,7 +3076,7 @@
             };
             agentModeButtons.forEach(button => {
                 button.onclick = () => {
-                    const state = getActiveTerminalState();
+                    const state = getAgentPanelTerminalState();
                     const mode = button.dataset.agentMode;
                     if (!canUseAgentPanel(state) || !mode) return;
                     const eventName = state.agent.paused && mode !== AGENT_MODE_DISABLED ? 'agent_resume' : 'agent_mode_set';
@@ -2924,7 +3097,7 @@
                 }
             });
             agentMockSendBtn.onclick = () => {
-                const state = getActiveTerminalState();
+                const state = getAgentPanelTerminalState();
                 if (!canUseAgentPanel(state) || agentMockSendBtn.disabled) return;
                 socket.emit('agent_suggestion_request', {
                     terminal_id: state.id,
@@ -2932,7 +3105,7 @@
                 });
             };
             agentProviderRunBtn.onclick = () => {
-                const state = getActiveTerminalState();
+                const state = getAgentPanelTerminalState();
                 if (!canUseAgentPanel(state) || agentProviderRunBtn.disabled) return;
                 sendAgentViewportSnapshot(state);
                 socket.emit('agent_provider_run_request', {
@@ -2943,7 +3116,7 @@
                 return `'${String(value).replace(/'/g, `'\\''`)}'`;
             }
             agentExternalTokenBtn.onclick = async () => {
-                const state = getActiveTerminalState();
+                const state = getAgentPanelTerminalState();
                 if (!canUseAgentPanel(state) || agentExternalTokenBtn.disabled) return;
                 const payload = {
                     terminal_id: state.id,
@@ -2995,13 +3168,13 @@
                 return payload;
             }
             agentApproveBtn.onclick = () => {
-                const state = getActiveTerminalState();
+                const state = getAgentPanelTerminalState();
                 const action = getPendingAgentAction(state);
                 if (!canUseAgentPanel(state) || !action || !action.action_id) return;
                 socket.emit('agent_action_approve', buildAgentActionDecisionPayload(state, action));
             };
             agentRejectBtn.onclick = () => {
-                const state = getActiveTerminalState();
+                const state = getAgentPanelTerminalState();
                 const action = getPendingAgentAction(state);
                 if (!canUseAgentPanel(state) || !action || !action.action_id) return;
                 socket.emit('agent_action_reject', buildAgentActionDecisionPayload(state, action));
@@ -3011,21 +3184,23 @@
             };
             agentToggleBtn.onclick = () => {
                 if (!canUseAgentPanel(getActiveTerminalState())) return;
+                agentPanelTerminalIdOverride = null;
+                restoreAgentPanelToMainDocument();
                 agentPanelVisible = !agentPanelVisible;
                 updateAgentPanel();
             };
             operatorObservationStartBtn.onclick = () => {
-                const state = getActiveTerminalState();
+                const state = getAgentPanelTerminalState();
                 if (!state || !state.connected || !socket || !socket.connected) return;
                 socket.emit('operator_observation_start', { terminal_id: state.id });
             };
             operatorObservationStopBtn.onclick = () => {
-                const state = getActiveTerminalState();
+                const state = getAgentPanelTerminalState();
                 if (!state || !socket || !socket.connected) return;
                 socket.emit('operator_observation_stop', { terminal_id: state.id });
             };
             operatorObservationMarkBtn.onclick = () => {
-                const state = getActiveTerminalState();
+                const state = getAgentPanelTerminalState();
                 if (!state || !socket || !socket.connected) return;
                 socket.emit('operator_observation_mark', { terminal_id: state.id });
             };
@@ -3061,11 +3236,20 @@
                 });
             });
             applyTerminalPolicy(terminalPolicy);
-            ['host', 'port', 'username', 'password', 'local-shell-kind', 'uart-port', 'uart-baud'].forEach(id => {
+            ['host', 'port', 'username', 'password', 'local-shell-kind', 'uart-port-select', 'uart-port', 'uart-baud'].forEach(id => {
                 const element = document.getElementById(id);
                 element.addEventListener('input', () => markConnectionFieldEditedById(id));
                 element.addEventListener('change', () => markConnectionFieldEditedById(id));
                 element.addEventListener('keydown', (e) => { if (e.key === 'Enter') doConnect(); });
+            });
+            uartPortSelect.addEventListener('change', () => {
+                if (uartPortSelect.value === UART_MANUAL_PORT_VALUE) {
+                    setUartManualPortVisible(true);
+                    uartPortInput.focus();
+                } else {
+                    uartPortInput.value = uartPortSelect.value;
+                    setUartManualPortVisible(false);
+                }
             });
 
             actionYesBtn.onclick = () => {
@@ -3200,6 +3384,7 @@
             const urlOverlay = document.getElementById('url-overlay');
             const openOption = document.getElementById('open-overlay-option');
             const searchOption = document.getElementById('search-google-option');
+            const pipOption = document.getElementById('pip-option');
             const menuSepSel = document.getElementById('menu-sep-sel');
             const overlayIframe = document.getElementById('overlay-iframe');
             const overlayImg = document.getElementById('overlay-img');
@@ -3209,12 +3394,14 @@
             const OVERLAY_MIN_WIDTH = 200;
             const OVERLAY_MIN_HEIGHT = 150;
             const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp'];
+            let pipTerminalState = null;
 
             function showContextMenu(x, y) {
                 const activeTerm = getActiveTerm();
                 const sel = activeTerm ? activeTerm.getSelection().trim() : '';
                 const hasSel = !!sel;
                 openOption.classList.toggle('hidden', !hasSel); searchOption.classList.toggle('hidden', !hasSel); menuSepSel.style.display = hasSel ? 'block' : 'none';
+                pipOption.classList.toggle('hidden', !canMoveActiveTerminalToPip());
                 if (hasSel) { openOption.dataset.url = sel; searchOption.dataset.query = sel; }
                 contextMenu.style.left = `${x}px`; contextMenu.style.top = `${y}px`; contextMenu.style.display = 'block';
                 requestAnimationFrame(() => { const r = contextMenu.getBoundingClientRect(); if (r.right > window.innerWidth) contextMenu.style.left = `${x - r.width}px`; if (r.bottom > window.innerHeight) contextMenu.style.top = `${y - r.height}px`; });
@@ -3357,17 +3544,167 @@
             };
             window.onmouseup = () => { isDragging = false; isResizing = false; currentResizer = null; shield.style.display = 'none'; };
 
-            document.getElementById('pip-option').addEventListener('click', async () => {
-                if (!window.documentPictureInPicture) return alert("PiP not supported.");
-                const pipWindow = await window.documentPictureInPicture.requestWindow({ width: 800, height: 480 });
-                pipWindow.document.body.append(terminalContainer);
+            function copyStylesToPipWindow(pipWindow) {
                 [...document.styleSheets].forEach((s) => {
-                    try { const style = document.createElement('style'); style.textContent = [...s.cssRules].map((r) => r.cssText).join(''); pipWindow.document.head.appendChild(style); }
-                    catch (e) { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = s.href; pipWindow.document.head.appendChild(l); }
+                    try {
+                        const style = document.createElement('style');
+                        style.textContent = [...s.cssRules].map((r) => r.cssText).join('');
+                        pipWindow.document.head.appendChild(style);
+                    } catch (e) {
+                        const l = document.createElement('link');
+                        l.rel = 'stylesheet';
+                        l.href = s.href;
+                        pipWindow.document.head.appendChild(l);
+                    }
                 });
-                requestAnimationFrame(fitAndNotifyResize);
-                pipWindow.addEventListener('resize', fitAndNotifyResize);
-                pipWindow.addEventListener('pagehide', () => { document.body.insertBefore(terminalContainer, document.getElementById('status-bar')); fitAndNotifyResize(); });
+                const pipStyle = pipWindow.document.createElement('style');
+                pipStyle.textContent = [
+                    'html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #000; }',
+                    'body { display: flex; flex-direction: column; }',
+                    '.pip-title-bar { height: 26px; box-sizing: border-box; display: flex; align-items: center; gap: 10px; padding: 0 8px; background: #111; border-top: 1px solid #222; color: #ddd; font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }',
+                    '.pip-title-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #fff; font-weight: 700; }',
+                    '.pip-title-meta { color: #aaa; white-space: nowrap; }',
+                    '.pip-title-spacer { flex: 1; }',
+                    '.pip-agent-toggle { flex: 0 0 auto; height: 22px; border: 1px solid #333; border-radius: 5px; background: #202020; color: #b6b6b6; cursor: pointer; font-size: 12px; padding: 0 8px; }',
+                    '.pip-agent-toggle:hover { color: #fff; border-color: #0a84ff; background: #252b33; }',
+                    '.pip-agent-toggle:disabled { opacity: 0.4; cursor: default; }',
+                    '.pip-terminal-host { flex: 1; min-height: 0; width: 100%; }',
+                    '.pip-terminal-host .terminal-pane { display: block !important; width: 100%; height: 100%; }',
+                    '#agent-panel { bottom: 10px; }'
+                ].join(' ');
+                pipWindow.document.head.appendChild(pipStyle);
+            }
+
+            function updatePipStatus(state) {
+                if (!state || !state.inPip || !state.pipTitleEl || !state.pipSizeEl) return;
+                state.pipTitleEl.innerText = state.title || state.label || state.id;
+                const label = state.label && state.label !== 'Disconnected' ? state.label : state.id;
+                state.pipTitleEl.title = label;
+                state.pipSizeEl.innerText = state.term ? `${state.term.cols}x${state.term.rows}` : '--x--';
+                if (state.pipAgentBtn) {
+                    const usable = canUseAgentPanel(state);
+                    const showing = agentPanelVisible && agentPanelTerminalIdOverride === state.id && agentPanel.ownerDocument === state.pipWindow.document;
+                    state.pipAgentBtn.disabled = !usable;
+                    state.pipAgentBtn.innerText = showing ? 'Hide Agent Panel' : 'Show Agent Panel';
+                    state.pipAgentBtn.title = usable ? state.pipAgentBtn.innerText : 'Connect this terminal before using Agent panel';
+                }
+            }
+
+            function restoreAgentPanelToMainDocument() {
+                if (agentPanel.ownerDocument === document) return;
+                document.body.appendChild(agentPanel);
+                applyAgentPanelPosition();
+            }
+
+            function showAgentPanelForPipTerminal(state) {
+                if (!state || !state.pipWindow || !canUseAgentPanel(state)) return;
+                if (
+                    agentPanelVisible
+                    && agentPanelTerminalIdOverride === state.id
+                    && agentPanel.ownerDocument === state.pipWindow.document
+                ) {
+                    agentPanelVisible = false;
+                    agentPanelTerminalIdOverride = null;
+                    restoreAgentPanelToMainDocument();
+                    updateAgentPanel();
+                    updatePipStatus(state);
+                    return;
+                }
+                agentPanelTerminalIdOverride = state.id;
+                agentPanelVisible = true;
+                state.pipWindow.document.body.appendChild(agentPanel);
+                updateAgentPanel();
+                updatePipStatus(state);
+            }
+
+            function createPipShell(state, pipWindow) {
+                const bar = pipWindow.document.createElement('div');
+                bar.className = 'pip-title-bar';
+                const title = pipWindow.document.createElement('span');
+                title.className = 'pip-title-main';
+                const meta = pipWindow.document.createElement('span');
+                meta.className = 'pip-title-meta';
+                const spacer = pipWindow.document.createElement('span');
+                spacer.className = 'pip-title-spacer';
+                const agentButton = pipWindow.document.createElement('button');
+                agentButton.type = 'button';
+                agentButton.className = 'pip-agent-toggle';
+                agentButton.addEventListener('click', () => showAgentPanelForPipTerminal(state));
+                bar.append(title, meta, spacer, agentButton);
+
+                const host = pipWindow.document.createElement('div');
+                host.className = 'pip-terminal-host';
+                pipWindow.document.body.replaceChildren(host, bar);
+                state.pipBar = bar;
+                state.pipTitleEl = title;
+                state.pipSizeEl = meta;
+                state.pipAgentBtn = agentButton;
+                state.pipTerminalHost = host;
+                updatePipStatus(state);
+                return host;
+            }
+
+            function restoreTerminalFromPip(state, options = {}) {
+                if (!state || !state.inPip) return;
+                const pipWindow = state.pipWindow;
+                const closeWindow = options.closeWindow === true;
+                if (pipWindow && state.pipResizeHandler) pipWindow.removeEventListener('resize', state.pipResizeHandler);
+                if (pipWindow && state.pipPagehideHandler) pipWindow.removeEventListener('pagehide', state.pipPagehideHandler);
+                if (agentPanelTerminalIdOverride === state.id) {
+                    agentPanelTerminalIdOverride = null;
+                    agentPanelVisible = false;
+                    restoreAgentPanelToMainDocument();
+                }
+                const nextSibling = state.pipReturnNextSibling;
+                if (nextSibling && nextSibling.parentNode === terminalContainer) {
+                    terminalContainer.insertBefore(state.container, nextSibling);
+                } else {
+                    terminalContainer.appendChild(state.container);
+                }
+                state.container.classList.toggle('active', state.id === activeTerminalId);
+                state.pipWindow = null;
+                state.pipBar = null;
+                state.pipTitleEl = null;
+                state.pipSizeEl = null;
+                state.pipAgentBtn = null;
+                state.pipTerminalHost = null;
+                state.pipReturnNextSibling = null;
+                state.pipPagehideHandler = null;
+                state.pipResizeHandler = null;
+                if (pipTerminalState === state) pipTerminalState = null;
+                setTerminalPipMode(state, false);
+                if (closeWindow && pipWindow && !pipWindow.closed) pipWindow.close();
+                requestAnimationFrame(() => {
+                    fitTerminalState(state);
+                    fitAndNotifyResize();
+                });
+            }
+
+            pipOption.addEventListener('click', async () => {
+                contextMenu.style.display = 'none';
+                if (!canMoveActiveTerminalToPip()) return;
+                if (!window.documentPictureInPicture) return alert("PiP not supported.");
+                const state = getActiveTerminalState();
+                if (!state) return;
+                if (pipTerminalState && pipTerminalState !== state) {
+                    restoreTerminalFromPip(pipTerminalState, { closeWindow: true });
+                }
+                const pipWindow = await window.documentPictureInPicture.requestWindow({ width: 800, height: 480 });
+                pipTerminalState = state;
+                state.pipWindow = pipWindow;
+                state.pipReturnNextSibling = state.container.nextSibling;
+                state.pipResizeHandler = () => fitTerminalState(state);
+                state.pipPagehideHandler = () => restoreTerminalFromPip(state);
+
+                setTerminalPipMode(state, true);
+                const host = createPipShell(state, pipWindow);
+                host.append(state.container);
+                state.container.classList.add('active');
+                copyStylesToPipWindow(pipWindow);
+                updatePipStatus(state);
+                requestAnimationFrame(() => fitTerminalState(state));
+                pipWindow.addEventListener('resize', state.pipResizeHandler);
+                pipWindow.addEventListener('pagehide', state.pipPagehideHandler);
             });
 
             function formatSettingsFlag(value) {

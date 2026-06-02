@@ -3560,6 +3560,66 @@ def test_uart_bridge_is_provided_by_backend_module():
     bridge.close()
 
 
+def test_wsl_uart_scan_lists_windows_and_wsl_devices():
+    class FakePort:
+        def __init__(self, device, description='', hwid=''):
+            self.device = device
+            self.description = description
+            self.hwid = hwid
+
+    class FakeListPorts:
+        @staticmethod
+        def comports():
+            return [
+                FakePort('/dev/ttyS0', 'WSL ttyS alias'),
+                FakePort('/dev/ttyUSB0', 'USB Serial'),
+                FakePort('/dev/ttyACM0', 'CDC ACM'),
+            ]
+
+    original_is_wsl = standterm.is_wsl
+    original_detect_windows = standterm.detect_windows_serial_ports_for_wsl
+    original_get_serial_modules = standterm.get_serial_modules
+    try:
+        standterm.is_wsl = lambda: True
+        standterm.detect_windows_serial_ports_for_wsl = lambda: [{
+            'device': 'COM3',
+            'label': 'COM3 (Windows)',
+            'description': 'Windows serial port',
+            'hwid': '',
+            'backend': 'windows',
+        }]
+        standterm.get_serial_modules = lambda: (object(), FakeListPorts)
+
+        ports = standterm.scan_serial_ports()
+    finally:
+        standterm.is_wsl = original_is_wsl
+        standterm.detect_windows_serial_ports_for_wsl = original_detect_windows
+        standterm.get_serial_modules = original_get_serial_modules
+
+    by_device = {port['device']: port for port in ports}
+    assert list(by_device) == ['COM3', '/dev/ttyACM0', '/dev/ttyUSB0']
+    assert by_device['COM3']['backend'] == 'windows'
+    assert by_device['/dev/ttyACM0']['backend'] == 'wsl'
+    assert by_device['/dev/ttyUSB0']['backend'] == 'wsl'
+    assert '/dev/ttyS0' not in by_device
+
+
+def test_wsl_manual_uart_port_identifies_windows_or_wsl_source():
+    original_is_wsl = standterm.is_wsl
+    try:
+        standterm.is_wsl = lambda: True
+        windows_port = standterm.get_manual_serial_port('com7')
+        wsl_port = standterm.get_manual_serial_port('/dev/ttyUSB1')
+    finally:
+        standterm.is_wsl = original_is_wsl
+
+    assert windows_port['device'] == 'COM7'
+    assert windows_port['backend'] == 'windows'
+    assert wsl_port['device'] == '/dev/ttyUSB1'
+    assert wsl_port['backend'] == 'wsl'
+    assert wsl_port['label'] == '/dev/ttyUSB1 (WSL)'
+
+
 def test_agent_audit_records_typed_events_without_raw_action_data():
     client = make_client()
     session_token = current_session_token()
@@ -4314,6 +4374,8 @@ def main():
         test_ssh_bridge_is_provided_by_backend_module,
         test_local_shell_bridge_is_provided_by_backend_module,
         test_uart_bridge_is_provided_by_backend_module,
+        test_wsl_uart_scan_lists_windows_and_wsl_devices,
+        test_wsl_manual_uart_port_identifies_windows_or_wsl_source,
         test_agent_audit_records_typed_events_without_raw_action_data,
         test_wrong_sid_cannot_approve_action,
         test_stale_mode_version_cannot_approve_action,

@@ -1412,10 +1412,7 @@ def detect_windows_serial_ports_for_wsl():
         })
     return ports
 
-def scan_serial_ports():
-    if is_wsl():
-        return detect_windows_serial_ports_for_wsl()
-
+def detect_local_serial_ports(skip_linux_ttys=False, source_label=None, backend=None):
     try:
         _, list_ports_module = get_serial_modules()
     except Exception:
@@ -1427,16 +1424,53 @@ def scan_serial_ports():
         device = getattr(port_info, 'device', '') or ''
         if not device or device in seen_devices:
             continue
+        path_name = Path(device).name
+        if skip_linux_ttys and sys.platform.startswith('linux') and path_name.startswith('ttyS'):
+            suffix = path_name[4:]
+            if suffix.isdigit():
+                continue
         if len(device) > MAX_UART_PORT_LENGTH or has_control_chars(device):
             continue
         seen_devices.add(device)
-        ports.append({
+        label = _format_serial_label(port_info)
+        if source_label:
+            label = f'{label} ({source_label})'
+        port = {
             'device': device,
-            'label': _format_serial_label(port_info),
+            'label': label,
             'description': getattr(port_info, 'description', '') or '',
             'hwid': getattr(port_info, 'hwid', '') or '',
-        })
+        }
+        if backend:
+            port['backend'] = backend
+        ports.append(port)
     return ports
+
+def scan_serial_ports():
+    if is_wsl():
+        ports = []
+        seen_devices = set()
+        for port in (
+            detect_windows_serial_ports_for_wsl()
+            + detect_local_serial_ports(skip_linux_ttys=True, source_label='WSL', backend='wsl')
+        ):
+            device = port.get('device')
+            if not device or device in seen_devices:
+                continue
+            seen_devices.add(device)
+            ports.append(port)
+        return ports
+
+    return detect_local_serial_ports()
+
+def _get_manual_serial_backend():
+    return 'wsl' if is_wsl() else 'manual'
+
+def _get_manual_serial_description():
+    return 'Manual WSL serial device' if is_wsl() else 'Manual serial device'
+
+def _get_manual_serial_label(selected_device):
+    return f'{selected_device} (WSL)' if is_wsl() else selected_device
 
 def detect_serial_ports():
     now = time.time()
@@ -1470,10 +1504,10 @@ def get_manual_serial_port(device):
     if selected_device.startswith('/dev/'):
         return {
             'device': selected_device,
-            'label': selected_device,
-            'description': 'Manual serial device',
+            'label': _get_manual_serial_label(selected_device),
+            'description': _get_manual_serial_description(),
             'hwid': '',
-            'backend': 'manual',
+            'backend': _get_manual_serial_backend(),
         }
 
     return None

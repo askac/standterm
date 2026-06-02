@@ -79,8 +79,10 @@ UART declares:
 - `baud_rate`: required integer select field.
 
 UART detected port listing is still carried by the legacy `available_ports`
-policy key because the current UI uses a datalist-style text input for manual
-or detected serial devices.
+policy key because the current UI uses a detected-port selector with a manual
+fallback. On WSL, detected ports may include both Windows `COMx` ports and
+WSL-local `/dev/...` devices; manual input is interpreted by the same visible
+port format.
 
 ## Runtime Defaults
 

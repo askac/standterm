@@ -192,8 +192,10 @@ certificate directory.
 ## UART Notes
 
 Native Windows, macOS, and Linux use pyserial discovery. WSL lists Windows
-`COMx` ports through Windows APIs and bridges COM access through the Windows
-Python helper venv.
+`COMx` ports through Windows APIs and WSL-local serial devices such as
+`/dev/ttyUSB0` through pyserial. Windows `COMx` access is bridged through the
+Windows Python helper venv; WSL-local `/dev/...` devices are opened from the WSL
+Python environment.
 
 UART access follows the same local-client/browser-authorization gate as Local
 Shell unless `STANDTERM_ALLOW_REMOTE_UART=1` is set.
