@@ -3550,11 +3550,87 @@ def test_local_shell_bridge_is_provided_by_backend_module():
 
 
 def test_local_shell_output_decode_tolerates_non_utf8_bytes():
+    import codecs
+
     from terminal_backends.local_shell import decode_local_shell_output
 
     assert decode_local_shell_output(b'\xffhello') == '\ufffdhello'
     assert decode_local_shell_output(b'\xa3hello') == '\ufffdhello'
     assert decode_local_shell_output('already text') == 'already text'
+    decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
+    split = '詐騙請去'.encode('utf-8')
+    assert decode_local_shell_output(split[:2], decoder) == ''
+    assert decode_local_shell_output(split[2:], decoder) == '詐騙請去'
+
+
+def test_local_shell_read_loop_preserves_split_utf8_characters():
+    from terminal_backends.local_shell import LocalShellBridge
+
+    class FakeRuntime:
+        max_replay_events = 10
+        max_replay_bytes = 1024
+        close_process = None
+        update_headless_mirror = None
+
+        def __init__(self):
+            self.emitted = []
+            self.unregistered = []
+
+        def sleep(self, _seconds):
+            return None
+
+        def emit_socket(self, event, payload, room=None):
+            self.emitted.append((event, payload, room))
+
+        def build_metadata(self, *_args):
+            return {}
+
+        def append_transcript(self, *_args):
+            return None
+
+        def unregister_bridge(self, owner_session, terminal_id, bridge):
+            self.unregistered.append((owner_session, terminal_id, bridge))
+
+    class FakeProcess:
+        fd = 999
+
+        def __init__(self):
+            text = '詐騙請去'.encode('utf-8')
+            self.chunks = [text[:2], text[2:]]
+
+        def read(self, size=4096):
+            if self.chunks:
+                return self.chunks.pop(0)
+            raise EOFError()
+
+        def isalive(self):
+            return True
+
+    runtime = FakeRuntime()
+    bridge = LocalShellBridge(
+        'session-1',
+        standterm.TERMINAL_ID_MAIN,
+        {'shell_display': 'fake', 'shell_command': ['fake'], 'terminal_kind': 'local', 'terminal_label': 'fake'},
+        ssh_term='xterm-256color',
+        get_default_local_shell_config=lambda: (None, None),
+        runtime=runtime,
+    )
+    bridge.attach('sid-1')
+    bridge.process = FakeProcess()
+    import terminal_backends.local_shell as local_shell_module
+
+    old_select = local_shell_module.select.select
+    local_shell_module.select.select = lambda *_args, **_kwargs: ([bridge.process.fd], [], [])
+    try:
+        bridge.read_loop()
+    finally:
+        local_shell_module.select.select = old_select
+
+    terminal_payloads = [
+        payload for event, payload, _room in runtime.emitted
+        if event == 'ssh_output' and payload.get('message_type') == 'terminal'
+    ]
+    assert [payload['data'] for payload in terminal_payloads] == ['詐騙請去']
 
 
 def test_local_shell_read_loop_emits_replacement_text_for_non_utf8_bytes():
@@ -4493,6 +4569,7 @@ def main():
         test_ssh_bridge_is_provided_by_backend_module,
         test_local_shell_bridge_is_provided_by_backend_module,
         test_local_shell_output_decode_tolerates_non_utf8_bytes,
+        test_local_shell_read_loop_preserves_split_utf8_characters,
         test_local_shell_read_loop_emits_replacement_text_for_non_utf8_bytes,
         test_local_shell_posix_write_encodes_text_as_utf8_bytes,
         test_uart_bridge_is_provided_by_backend_module,

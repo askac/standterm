@@ -1,4 +1,5 @@
 import base64
+import codecs
 import getpass
 import os
 from pathlib import Path
@@ -27,6 +28,7 @@ class SSHBridge(TerminalBridge):
         self.ssh = None
         self._reset_ssh_client()
         self.channel = None
+        self._output_decoder = codecs.getincrementaldecoder('utf-8')(errors='ignore')
 
     def _reset_ssh_client(self, trust_unknown_host=False):
         paramiko_module = self._get_paramiko()
@@ -417,7 +419,7 @@ class SSHBridge(TerminalBridge):
 
             try:
                 if self.channel.recv_ready():
-                    data = self.channel.recv(4096).decode('utf-8', errors='ignore')
+                    data = self._output_decoder.decode(self.channel.recv(4096))
                     if data:
                         self.emit_output({
                             'message_type': 'terminal',

@@ -1,3 +1,4 @@
+import codecs
 import os
 import select
 import sys
@@ -16,8 +17,10 @@ except Exception:
     WinPtyProcess = None
 
 
-def decode_local_shell_output(data):
+def decode_local_shell_output(data, decoder=None, *, final=False):
     if isinstance(data, bytes):
+        if decoder is not None:
+            return decoder.decode(data, final=final)
         return data.decode('utf-8', errors='replace')
     if isinstance(data, str):
         return data
@@ -45,6 +48,7 @@ class LocalShellBridge(TerminalBridge):
         self.shell_command = shell_config['shell_command']
         self.terminal_kind = shell_config['terminal_kind']
         self.terminal_label = shell_config['terminal_label']
+        self._output_decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
 
     def connect(self, cols=80, rows=24):
         if sys.platform.startswith('win'):
@@ -132,9 +136,12 @@ class LocalShellBridge(TerminalBridge):
 
                 data = self.process.read(size=4096)
                 if data:
+                    decoded = decode_local_shell_output(data, self._output_decoder)
+                    if not decoded:
+                        continue
                     self.emit_output({
                         'message_type': 'terminal',
-                        'data': decode_local_shell_output(data),
+                        'data': decoded,
                     })
             except EOFError:
                 if self.closing:
