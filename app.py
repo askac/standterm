@@ -5342,13 +5342,18 @@ def build_external_agentinfo_payload(base_url=None, agentinfo_path=None):
 
 def write_json_file_atomic(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + '.tmp')
-    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+    tmp_path = path.with_name(f'.{path.name}.{secrets.token_urlsafe(8)}.tmp')
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        os.chmod(tmp_path, 0o600)
-    except OSError:
-        pass
-    tmp_path.replace(path)
+        with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+            handle.write(json.dumps(payload, indent=2, sort_keys=True) + '\n')
+        tmp_path.replace(path)
+    except Exception:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise
 
 def write_external_agentinfo_files(base_url=None):
     payload = build_external_agentinfo_payload(base_url=base_url, agentinfo_path=EXTERNAL_AGENT_INFO_PATH)

@@ -458,6 +458,10 @@ screen data from the Agent mirror path without PNG bytes. The discovery payload
 includes `render_policy.default_mode`, `effective_auto_mode`, and
 `supported_modes`.
 
+If browser PNG rendering fails with `agent_render_timeout` or
+`agent_render_stale`, clients that do not require pixel-level viewport fidelity
+should retry with `mirror_screen` or use the `screen` operation.
+
 The CLI wrapper can save the returned PNG directly when using the PNG mode:
 
 ```bash
@@ -1047,6 +1051,8 @@ explicit `error_code`.
 - `agent_provider_failed`
 - `agent_provider_timeout`
 - `agent_provider_invalid_proposal`
+- `agent_render_timeout`
+- `agent_render_stale`
 - `agent_external_unauthorized`
 - `agent_external_expired`
 - `agent_external_revoked`

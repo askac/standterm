@@ -36,6 +36,7 @@ def parse_args(argv=None):
         )
     )
     parser.add_argument('--handoff', help='Read url, token, and terminal from a StandTerm external agent handoff JSON file')
+    parser.add_argument('--agentinfo', help='Read tokenless StandTerm agentinfo JSON from a local path or URL')
     parser.add_argument('--url', help='StandTerm base URL, for example http://127.0.0.1:5010')
     parser.add_argument('--token', help='External agent attach token. Omit only on dev servers with STANDTERM_AGENT_DEV_TOKEN=1.')
     parser.add_argument('--terminal', default='main', help='Terminal id')
@@ -67,9 +68,10 @@ def parse_args(argv=None):
     parser.add_argument('--progress', action='store_true', help='Print one JSONL progress record per sent unit to stderr')
     args = parser.parse_args(argv)
     normalize_cadence_args(args)
+    cli.apply_agentinfo(args)
     cli.apply_handoff(args)
     if not args.url and not args.dry_run:
-        parser.error('--url is required unless --handoff provides url')
+        parser.error('--url is required unless --handoff or --agentinfo provides url')
     return args
 
 

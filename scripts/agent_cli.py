@@ -40,7 +40,7 @@ def parse_args():
     screen_parser.add_argument('--quiet-ms', type=int, help='Required terminal quiet time before returning screen')
 
     render_parser = subparsers.add_parser('render')
-    render_parser.add_argument('--mode', choices=('auto', 'visible-xterm-png', 'mirror-screen'), default='auto', help='Render mode')
+    render_parser.add_argument('--mode', choices=('auto', 'visible-xterm-png', 'mirror-screen'), default='auto', help='Render mode; auto resolves to mirror-screen')
     render_parser.add_argument('--wait-ms', type=int, default=3000, help='Maximum browser render wait time')
     render_parser.add_argument('--save', help='Save returned PNG image bytes to this path and omit image_base64 from stdout')
 

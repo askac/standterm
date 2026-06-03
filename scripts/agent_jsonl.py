@@ -9,15 +9,17 @@ import agent_cli as cli
 def parse_args():
     parser = argparse.ArgumentParser(description='Persistent JSONL client for StandTerm external agent commands')
     parser.add_argument('--handoff', help='Read url, token, and terminal from a StandTerm external agent handoff JSON file')
+    parser.add_argument('--agentinfo', help='Read tokenless StandTerm agentinfo JSON from a local path or URL')
     parser.add_argument('--url', help='StandTerm base URL, for example http://127.0.0.1:5010')
     parser.add_argument('--token', help='External agent attach token. Omit only on dev servers with STANDTERM_AGENT_DEV_TOKEN=1.')
     parser.add_argument('--terminal', default='main', help='Default terminal id')
     parser.add_argument('--ca-file', help='CA certificate bundle used to verify HTTPS StandTerm servers')
     parser.add_argument('--insecure', action='store_true', help='Disable HTTPS certificate verification')
     args = parser.parse_args()
+    cli.apply_agentinfo(args)
     cli.apply_handoff(args)
     if not args.url:
-        parser.error('--url is required unless --handoff provides url')
+        parser.error('--url is required unless --handoff or --agentinfo provides url')
     return args
 
 

@@ -349,6 +349,50 @@ def test_cli_and_repl_apply_handoff_defaults(tmp_path=None):
         handoff_path.unlink(missing_ok=True)
 
 
+def test_agentinfo_bootstraps_jsonl_repl_and_type_helpers():
+    with tempfile.TemporaryDirectory(prefix='standterm-agentinfo-helper-smoke-') as temp_dir:
+        temp_path = Path(temp_dir)
+        handoff_path = temp_path / 'handoff.json'
+        agentinfo_path = temp_path / 'agentinfo.json'
+        handoff_path.write_text(
+            json.dumps({
+                'url': 'https://127.0.0.1:5012',
+                'token': 'agt_unit',
+                'terminal_id': 'term-7',
+                'transport': {'tls_ca_cert_path': '/tmp/standterm-test-ca.crt'},
+            }) + '\n',
+            encoding='utf-8',
+        )
+        agentinfo_path.write_text(
+            json.dumps({
+                'base_url': 'https://127.0.0.1:5012',
+                'handoff_path': str(handoff_path),
+                'transport': {'tls_ca_cert_path': '/tmp/standterm-test-ca.crt'},
+            }) + '\n',
+            encoding='utf-8',
+        )
+
+        old_argv = sys.argv
+        try:
+            sys.argv = ['agent_jsonl.py', '--agentinfo', str(agentinfo_path)]
+            jsonl_args = jsonl.parse_args()
+            sys.argv = ['agent_repl.py', '--agentinfo', str(agentinfo_path), '--no-initial-screen']
+            repl_args = repl.parse_args()
+            type_args = typer.parse_args([
+                '--agentinfo', str(agentinfo_path),
+                '--text', 'abc',
+                '--dry-run',
+            ])
+        finally:
+            sys.argv = old_argv
+
+        for args in (jsonl_args, repl_args, type_args):
+            assert args.url == 'https://127.0.0.1:5012'
+            assert args.token == 'agt_unit'
+            assert args.terminal == 'term-7'
+            assert args.ca_file == '/tmp/standterm-test-ca.crt'
+
+
 def test_cli_send_capture_payload():
     args = SimpleNamespace(
         command='send',
@@ -1049,6 +1093,7 @@ def main():
         test_repl_startup_type_stops_on_fatal_error,
         test_format_token_status_reports_idle_countdown,
         test_cli_and_repl_apply_handoff_defaults,
+        test_agentinfo_bootstraps_jsonl_repl_and_type_helpers,
         test_cli_plain_send_payload_uses_structured_text,
         test_cli_screen_tail_lines_payload,
         test_cli_screen_region_payload,

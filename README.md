@@ -149,12 +149,12 @@ The WSL Local Shell selector is WSL-only. Native Windows keeps using the native
 launcher shell selection, and native Linux/macOS use the process `SHELL` value or
 `/bin/sh`.
 
-Useful launcher flags:
+Useful launcher options:
 
 ```bash
 ./run.sh --default-connection local_shell
 ./run.sh --force-connection ssh
-./run.sh --host 127.0.0.1 --port 5000
+STANDTERM_HOST=127.0.0.1 STANDTERM_PORT=5000 ./run.sh
 ```
 
 ## Browser Authorization And HTTPS
@@ -164,6 +164,9 @@ modern browsers can use WebCrypto for browser authorization. Local Shell and
 UART only bypass browser authorization for true loopback clients by default.
 WSL host/NAT client IPs must authorize the browser unless you explicitly trust
 that WSL network with `STANDTERM_TRUST_WSL_CLIENT_IPS=1`.
+
+On WSL, the default bind is `0.0.0.0` so Windows browsers can reach the WSL
+server IP. Use `STANDTERM_HOST=127.0.0.1` when you only need loopback access.
 
 On WSL, the Authorizer panel provides a StandTerm CA download link and pairing
 steps. Import `standterm-local-ca.crt` into Windows Trusted Root Certification
@@ -454,7 +457,7 @@ Common settings:
 
 | Setting | Purpose |
 | --- | --- |
-| `STANDTERM_HOST` | Default bind host when `--host` is not passed. |
+| `STANDTERM_HOST` | Bind host used by the launcher when set. |
 | `STANDTERM_PORT` | Default port, usually `5000`. |
 | `STANDTERM_HTTPS=1` | Force HTTPS. |
 | `STANDTERM_DISABLE_AUTO_HTTPS=1` | Disable automatic HTTPS for non-loopback binds. |

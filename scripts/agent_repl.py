@@ -11,6 +11,7 @@ import time
 import urllib.error
 import urllib.request
 
+import agent_cli as cli
 import agent_input as inputlib
 
 try:
@@ -102,6 +103,7 @@ class AgentHttpClient:
 def parse_args():
     parser = argparse.ArgumentParser(description='Interactive REPL for a StandTerm external agent terminal')
     parser.add_argument('--handoff', help='Read url, token, and terminal from a StandTerm external agent handoff JSON file')
+    parser.add_argument('--agentinfo', help='Read tokenless StandTerm agentinfo JSON from a local path or URL')
     parser.add_argument('--url', help='StandTerm base URL, for example http://127.0.0.1:5012')
     parser.add_argument('--token', help='External agent attach token. Omit only on dev servers with STANDTERM_AGENT_DEV_TOKEN=1.')
     parser.add_argument('--terminal', default='main', help='Terminal id')
@@ -142,10 +144,11 @@ def parse_args():
     parser.add_argument('--debug', action='store_true', help='Print command acknowledgements to stderr')
     parser.add_argument('--escape', default='ctrl-]', help='Local detach key. Only ctrl-] is supported for now.')
     args = parser.parse_args()
+    cli.apply_agentinfo(args)
     apply_handoff(args)
     normalize_type_args(args)
     if not args.url:
-        parser.error('--url is required unless --handoff provides url')
+        parser.error('--url is required unless --handoff or --agentinfo provides url')
     return args
 
 

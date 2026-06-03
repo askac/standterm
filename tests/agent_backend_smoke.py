@@ -2581,6 +2581,9 @@ def test_external_agentinfo_payload_route_and_pointer_are_tokenless():
             assert launch_payload['agentinfo_path'] == str(info_path)
             assert current_payload['agentinfo_path'] == str(info_path)
             assert current_payload['current_agentinfo_path'] == str(current_path)
+            assert info_path.stat().st_mode & 0o777 == 0o600
+            assert current_path.stat().st_mode & 0o777 == 0o600
+            assert list(Path(temp_dir).glob('.*.tmp')) == []
         finally:
             standterm.EXTERNAL_AGENT_INFO_PATH = original_info_path
             standterm.EXTERNAL_AGENT_CURRENT_INFO_PATH = original_current_path
