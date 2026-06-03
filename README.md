@@ -311,10 +311,18 @@ python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json key 
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send-wait --text $'pwd\r'
 python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send-wait --text $'pwd\r' --strip-ansi
 python scripts/agent_jsonl.py --handoff standterm_external_agent_handoff.json
+python scripts/agent_jsonl.py --agentinfo standterm_agentinfo.json
 python scripts/agent_repl.py --handoff standterm_external_agent_handoff.json --enter cr
+python scripts/agent_repl.py --agentinfo standterm_agentinfo.json --enter cr
 python scripts/agent_repl.py --handoff standterm_external_agent_handoff.json --type-file body.txt --type-cps 3 --type-wait-quiet-ms 500
 python scripts/agent_type.py --handoff standterm_external_agent_handoff.json --from-file body.txt --cps 3 --newline cr
+python scripts/agent_type.py --agentinfo standterm_agentinfo.json --from-file body.txt --cps 3 --newline cr
 ```
+
+`--agentinfo` is tokenless bootstrap data. Helpers use it for launch paths,
+loopback URL, terminal id, TLS CA, and the current handoff path when present.
+Commands that read or write terminal state still need a minted external-agent
+token from `standterm_external_agent_handoff.json` or explicit `--token`.
 
 CLI `--text` is sent verbatim; normal quoted strings do not decode backslash
 escapes. In bash, use `$'...'` to send a real carriage return, as shown above.
