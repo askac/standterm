@@ -1,5 +1,29 @@
 DEFAULT_INVALID_DATA_ERROR_CODE = 'agent_action_invalid_data'
 
+EXTERNAL_AGENT_PROTOCOL_VERSION = 1
+
+EXTERNAL_AGENT_CAPABILITIES = [
+    'state',
+    'heartbeat',
+    'screen',
+    'headless_screen',
+    'screen_wait',
+    'wait',
+    'sequence',
+    'render',
+    'render_visible_xterm_png',
+    'render_mirror_screen',
+    'tail',
+    'send',
+    'typed_send',
+    'send_capture',
+    'submit_after',
+    'strip_ansi',
+    'revoke',
+]
+
+EXTERNAL_AGENT_SEQUENCE_OPS = {'state', 'screen', 'render', 'tail', 'wait', 'send', 'send-wait'}
+
 EXTERNAL_AGENT_KEY_INPUTS = {
     'Enter': '\r',
     'Return': '\r',

@@ -22,6 +22,9 @@ from flask import Flask, render_template, request, abort, make_response, redirec
 from flask_socketio import SocketIO
 from external_agent_dispatch import ExternalAgentCommandDispatcher
 from external_agent_protocol import (
+    EXTERNAL_AGENT_CAPABILITIES,
+    EXTERNAL_AGENT_PROTOCOL_VERSION,
+    EXTERNAL_AGENT_SEQUENCE_OPS,
     EXTERNAL_AGENT_SEND_INPUT_KINDS,
     apply_external_agent_screen_options,
     external_agent_flag_enabled,
@@ -365,13 +368,10 @@ AGENT_AUDIT_ACTION_RESULT = 'action_result'
 AGENT_AUDIT_DIRECT_WRITE = 'direct_write'
 AGENT_AUDIT_TERMINAL_CLEANUP = 'terminal_cleanup'
 AGENT_AUDIT_ERROR = 'error'
-EXTERNAL_AGENT_PROTOCOL_VERSION = 1
-EXTERNAL_AGENT_CAPABILITIES = ['state', 'heartbeat', 'screen', 'headless_screen', 'screen_wait', 'wait', 'sequence', 'render', 'render_visible_xterm_png', 'render_mirror_screen', 'tail', 'send', 'typed_send', 'send_capture', 'submit_after', 'strip_ansi', 'revoke']
 AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_WAIT_MS = 3000
 AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_SETTLE_MS = 150
 AGENT_EXTERNAL_SEND_CAPTURE_MAX_SETTLE_MS = 5000
 AGENT_EXTERNAL_SEQUENCE_MAX_STEPS = 16
-EXTERNAL_AGENT_SEQUENCE_OPS = {'state', 'screen', 'render', 'tail', 'wait', 'send', 'send-wait'}
 AGENT_RENDER_MODE_AUTO = 'auto'
 AGENT_RENDER_MODE_VISIBLE_XTERM_PNG = 'visible_xterm_png'
 AGENT_RENDER_MODE_MIRROR_SCREEN = 'mirror_screen'
