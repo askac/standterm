@@ -38,6 +38,112 @@ def should_external_agent_strip_ansi(command):
     return external_agent_flag_enabled(command.get('strip_ansi'))
 
 
+def parse_external_agent_screen_options(
+    command,
+    invalid_data_error_code=DEFAULT_INVALID_DATA_ERROR_CODE,
+):
+    has_tail_lines = command.get('tail_lines') is not None
+    has_region = command.get('region') is not None
+    if has_tail_lines and has_region:
+        return None, invalid_data_error_code
+
+    if has_tail_lines:
+        try:
+            tail_lines = int(command.get('tail_lines'))
+        except (TypeError, ValueError):
+            return None, invalid_data_error_code
+        if tail_lines < 0:
+            return None, invalid_data_error_code
+        return {'mode': 'tail_lines', 'tail_lines': tail_lines}, None
+
+    if has_region:
+        region = command.get('region')
+        if not isinstance(region, dict):
+            return None, invalid_data_error_code
+        try:
+            top = int(region.get('top'))
+            bottom = int(region.get('bottom'))
+        except (TypeError, ValueError):
+            return None, invalid_data_error_code
+        if top < 0 or bottom < top:
+            return None, invalid_data_error_code
+        return {'mode': 'region', 'top': top, 'bottom': bottom}, None
+
+    return {'mode': 'full'}, None
+
+
+def apply_external_agent_screen_options(screen, options):
+    if not isinstance(screen, dict) or options.get('mode') == 'full':
+        return screen
+    lines = list(screen.get('lines') or [])
+    original_line_count = len(lines)
+    if options.get('mode') == 'tail_lines':
+        tail_lines = options['tail_lines']
+        start = max(0, original_line_count - tail_lines)
+        end = original_line_count
+        selected = lines[start:end]
+        region = {
+            'top': start,
+            'bottom': end,
+            'tail_lines': tail_lines,
+        }
+    else:
+        start = min(options['top'], original_line_count)
+        end = min(options['bottom'], original_line_count)
+        selected = lines[start:end]
+        region = {
+            'top': start,
+            'bottom': end,
+        }
+    sliced = dict(screen)
+    sliced['lines'] = selected
+    sliced['line_count'] = len(selected)
+    sliced['original_line_count'] = original_line_count
+    sliced['region'] = region
+    sliced['truncated'] = len(selected) != original_line_count
+    return sliced
+
+
+def parse_external_agent_tail_wait_ms(value, max_wait_ms):
+    try:
+        wait_ms = int(value if value is not None else 0)
+    except (TypeError, ValueError):
+        wait_ms = 0
+    return max(0, min(wait_ms, max_wait_ms))
+
+
+def parse_external_agent_screen_quiet_ms(value, max_quiet_ms):
+    try:
+        quiet_ms = int(value if value is not None else 0)
+    except (TypeError, ValueError):
+        quiet_ms = 0
+    return max(0, min(quiet_ms, max_quiet_ms))
+
+
+def parse_external_agent_send_capture_wait_ms(
+    value,
+    default_wait_ms,
+    max_wait_ms,
+):
+    try:
+        wait_ms = int(value if value is not None else default_wait_ms)
+    except (TypeError, ValueError):
+        wait_ms = default_wait_ms
+    return max(0, min(wait_ms, max_wait_ms))
+
+
+def parse_external_agent_send_capture_settle_ms(
+    value,
+    default_settle_ms,
+    max_settle_ms,
+):
+    try:
+        settle_ms = int(value if value is not None else default_settle_ms)
+    except (TypeError, ValueError):
+        settle_ms = default_settle_ms
+    return max(0, min(settle_ms, max_settle_ms))
+
+
 def normalize_external_agent_key_names(value):
     if isinstance(value, str):
         keys = [value]

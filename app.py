@@ -23,8 +23,14 @@ from flask_socketio import SocketIO
 from external_agent_dispatch import ExternalAgentCommandDispatcher
 from external_agent_protocol import (
     EXTERNAL_AGENT_SEND_INPUT_KINDS,
+    apply_external_agent_screen_options,
     external_agent_flag_enabled,
+    parse_external_agent_screen_options as parse_external_agent_screen_options_payload,
+    parse_external_agent_screen_quiet_ms as parse_external_agent_screen_quiet_ms_payload,
+    parse_external_agent_send_capture_settle_ms as parse_external_agent_send_capture_settle_ms_payload,
+    parse_external_agent_send_capture_wait_ms as parse_external_agent_send_capture_wait_ms_payload,
     parse_external_agent_send_input as parse_external_agent_send_input_payload,
+    parse_external_agent_tail_wait_ms as parse_external_agent_tail_wait_ms_payload,
     parse_external_agent_wait_condition,
     should_external_agent_capture_send,
     should_external_agent_strip_ansi,
@@ -3213,65 +3219,10 @@ class CompositeTerminalMirrorAdapter(AgentTerminalMirror):
 AGENT_TERMINAL_MIRROR = CompositeTerminalMirrorAdapter()
 
 def parse_external_agent_screen_options(command):
-    has_tail_lines = command.get('tail_lines') is not None
-    has_region = command.get('region') is not None
-    if has_tail_lines and has_region:
-        return None, AGENT_ERROR_ACTION_INVALID_DATA
-
-    if has_tail_lines:
-        try:
-            tail_lines = int(command.get('tail_lines'))
-        except (TypeError, ValueError):
-            return None, AGENT_ERROR_ACTION_INVALID_DATA
-        if tail_lines < 0:
-            return None, AGENT_ERROR_ACTION_INVALID_DATA
-        return {'mode': 'tail_lines', 'tail_lines': tail_lines}, None
-
-    if has_region:
-        region = command.get('region')
-        if not isinstance(region, dict):
-            return None, AGENT_ERROR_ACTION_INVALID_DATA
-        try:
-            top = int(region.get('top'))
-            bottom = int(region.get('bottom'))
-        except (TypeError, ValueError):
-            return None, AGENT_ERROR_ACTION_INVALID_DATA
-        if top < 0 or bottom < top:
-            return None, AGENT_ERROR_ACTION_INVALID_DATA
-        return {'mode': 'region', 'top': top, 'bottom': bottom}, None
-
-    return {'mode': 'full'}, None
-
-def apply_external_agent_screen_options(screen, options):
-    if not isinstance(screen, dict) or options.get('mode') == 'full':
-        return screen
-    lines = list(screen.get('lines') or [])
-    original_line_count = len(lines)
-    if options.get('mode') == 'tail_lines':
-        tail_lines = options['tail_lines']
-        start = max(0, original_line_count - tail_lines)
-        end = original_line_count
-        selected = lines[start:end]
-        region = {
-            'top': start,
-            'bottom': end,
-            'tail_lines': tail_lines,
-        }
-    else:
-        start = min(options['top'], original_line_count)
-        end = min(options['bottom'], original_line_count)
-        selected = lines[start:end]
-        region = {
-            'top': start,
-            'bottom': end,
-        }
-    sliced = dict(screen)
-    sliced['lines'] = selected
-    sliced['line_count'] = len(selected)
-    sliced['original_line_count'] = original_line_count
-    sliced['region'] = region
-    sliced['truncated'] = len(selected) != original_line_count
-    return sliced
+    return parse_external_agent_screen_options_payload(
+        command,
+        invalid_data_error_code=AGENT_ERROR_ACTION_INVALID_DATA,
+    )
 
 def build_external_agent_screen_wait_payload(bridge, state, wait_ms=None, quiet_ms=None):
     wait_ms = parse_external_agent_tail_wait_ms(wait_ms)
@@ -3638,32 +3589,30 @@ def format_external_agent_tail_payload(tail, strip_ansi=False):
     return payload
 
 def parse_external_agent_tail_wait_ms(value):
-    try:
-        wait_ms = int(value if value is not None else 0)
-    except (TypeError, ValueError):
-        wait_ms = 0
-    return max(0, min(wait_ms, AGENT_EXTERNAL_TAIL_MAX_WAIT_MS))
+    return parse_external_agent_tail_wait_ms_payload(
+        value,
+        max_wait_ms=AGENT_EXTERNAL_TAIL_MAX_WAIT_MS,
+    )
 
 def parse_external_agent_screen_quiet_ms(value):
-    try:
-        quiet_ms = int(value if value is not None else 0)
-    except (TypeError, ValueError):
-        quiet_ms = 0
-    return max(0, min(quiet_ms, AGENT_EXTERNAL_SCREEN_MAX_QUIET_MS))
+    return parse_external_agent_screen_quiet_ms_payload(
+        value,
+        max_quiet_ms=AGENT_EXTERNAL_SCREEN_MAX_QUIET_MS,
+    )
 
 def parse_external_agent_send_capture_wait_ms(value):
-    try:
-        wait_ms = int(value if value is not None else AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_WAIT_MS)
-    except (TypeError, ValueError):
-        wait_ms = AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_WAIT_MS
-    return max(0, min(wait_ms, AGENT_EXTERNAL_TAIL_MAX_WAIT_MS))
+    return parse_external_agent_send_capture_wait_ms_payload(
+        value,
+        default_wait_ms=AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_WAIT_MS,
+        max_wait_ms=AGENT_EXTERNAL_TAIL_MAX_WAIT_MS,
+    )
 
 def parse_external_agent_send_capture_settle_ms(value):
-    try:
-        settle_ms = int(value if value is not None else AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_SETTLE_MS)
-    except (TypeError, ValueError):
-        settle_ms = AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_SETTLE_MS
-    return max(0, min(settle_ms, AGENT_EXTERNAL_SEND_CAPTURE_MAX_SETTLE_MS))
+    return parse_external_agent_send_capture_settle_ms_payload(
+        value,
+        default_settle_ms=AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_SETTLE_MS,
+        max_settle_ms=AGENT_EXTERNAL_SEND_CAPTURE_MAX_SETTLE_MS,
+    )
 
 def parse_external_agent_send_input(command):
     return parse_external_agent_send_input_payload(
