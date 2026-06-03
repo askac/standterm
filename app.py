@@ -21,6 +21,15 @@ from pathlib import Path
 from flask import Flask, render_template, request, abort, make_response, redirect, send_file, jsonify
 from flask_socketio import SocketIO
 from external_agent_dispatch import ExternalAgentCommandDispatcher
+from external_agent_protocol import (
+    EXTERNAL_AGENT_SEND_INPUT_KINDS,
+    external_agent_flag_enabled,
+    parse_external_agent_send_input as parse_external_agent_send_input_payload,
+    parse_external_agent_wait_condition,
+    should_external_agent_capture_send,
+    should_external_agent_strip_ansi,
+    should_external_agent_submit_after,
+)
 from terminal_backends import (
     BackendAction,
     BackendActionStore,
@@ -366,24 +375,6 @@ AGENT_RENDER_MODES = {
     AGENT_RENDER_MODE_VISIBLE_XTERM_PNG,
     AGENT_RENDER_MODE_MIRROR_SCREEN,
 }
-EXTERNAL_AGENT_KEY_INPUTS = {
-    'Enter': '\r',
-    'Return': '\r',
-    'Tab': '\t',
-    'Escape': '\x1b',
-    'Esc': '\x1b',
-    'Backspace': '\x7f',
-    'Delete': '\x1b[3~',
-    'Up': '\x1b[A',
-    'Down': '\x1b[B',
-    'Right': '\x1b[C',
-    'Left': '\x1b[D',
-    'Home': '\x1b[H',
-    'End': '\x1b[F',
-    'PageUp': '\x1b[5~',
-    'PageDown': '\x1b[6~',
-}
-EXTERNAL_AGENT_SEND_INPUT_KINDS = {'legacy_data', 'text', 'keys'}
 ANSI_OSC_PATTERN = re.compile(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)')
 ANSI_CSI_PATTERN = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
 ANSI_ESCAPE_PATTERN = re.compile(r'\x1b[@-Z\\-_]')
@@ -3674,77 +3665,11 @@ def parse_external_agent_send_capture_settle_ms(value):
         settle_ms = AGENT_EXTERNAL_SEND_CAPTURE_DEFAULT_SETTLE_MS
     return max(0, min(settle_ms, AGENT_EXTERNAL_SEND_CAPTURE_MAX_SETTLE_MS))
 
-def external_agent_flag_enabled(value):
-    return value is True or value == 1
-
-def should_external_agent_submit_after(command):
-    return external_agent_flag_enabled(command.get('submit_after')) \
-        or external_agent_flag_enabled(command.get('submit'))
-
-def should_external_agent_capture_send(command):
-    return external_agent_flag_enabled(command.get('capture'))
-
-def should_external_agent_strip_ansi(command):
-    return external_agent_flag_enabled(command.get('strip_ansi'))
-
-def normalize_external_agent_key_names(value):
-    if isinstance(value, str):
-        keys = [value]
-    elif isinstance(value, list):
-        keys = value
-    else:
-        return None
-    if not keys:
-        return None
-    normalized = []
-    for key in keys:
-        if not isinstance(key, str) or key not in EXTERNAL_AGENT_KEY_INPUTS:
-            return None
-        normalized.append(key)
-    return normalized
-
-def parse_external_agent_structured_input(input_payload):
-    if not isinstance(input_payload, dict):
-        return None, None, AGENT_ERROR_ACTION_INVALID_DATA
-    kind = input_payload.get('kind')
-    if not isinstance(kind, str):
-        return None, None, AGENT_ERROR_ACTION_INVALID_DATA
-    kind = kind.strip().lower()
-    if kind == 'text':
-        text = input_payload.get('text')
-        if not isinstance(text, str):
-            return None, None, AGENT_ERROR_ACTION_INVALID_DATA
-        return text, {'input_kind': 'text'}, None
-    if kind == 'keys':
-        keys = normalize_external_agent_key_names(input_payload.get('keys'))
-        if not keys:
-            return None, None, AGENT_ERROR_ACTION_INVALID_DATA
-        return ''.join(EXTERNAL_AGENT_KEY_INPUTS[key] for key in keys), {
-            'input_kind': 'keys',
-            'key_names': keys,
-            'key_count': len(keys),
-        }, None
-    return None, None, AGENT_ERROR_ACTION_INVALID_DATA
-
 def parse_external_agent_send_input(command):
-    has_input = command.get('input') is not None
-    has_kind = command.get('kind') is not None
-    has_data = command.get('data') is not None
-    if sum(1 for value in (has_input, has_kind, has_data) if value) != 1:
-        return None, None, AGENT_ERROR_ACTION_INVALID_DATA
-    if has_input:
-        return parse_external_agent_structured_input(command.get('input'))
-    if has_kind:
-        input_payload = {
-            'kind': command.get('kind'),
-            'text': command.get('text'),
-            'keys': command.get('keys'),
-        }
-        return parse_external_agent_structured_input(input_payload)
-    data = command.get('data')
-    if not isinstance(data, str):
-        return None, None, AGENT_ERROR_ACTION_INVALID_DATA
-    return data, {'input_kind': 'legacy_data'}, None
+    return parse_external_agent_send_input_payload(
+        command,
+        invalid_data_error_code=AGENT_ERROR_ACTION_INVALID_DATA,
+    )
 
 def get_external_agent_capture_context_error(state):
     if state.paused or state.mode == AGENT_MODE_PAUSED:
@@ -3843,19 +3768,6 @@ def build_external_agent_send_capture_payload(bridge, state, before_output_seq,
         'gap': tail['gap'],
         'events': tail['events'],
     }, strip_ansi=strip_ansi), None
-
-def parse_external_agent_wait_condition(command):
-    condition = command.get('condition')
-    if condition is None:
-        condition = command.get('kind')
-    if condition is None:
-        condition = command.get('wait_for')
-    if not isinstance(condition, str):
-        return None
-    condition = condition.strip().lower().replace('-', '_')
-    if condition in {'output', 'quiet'}:
-        return condition
-    return None
 
 def build_external_agent_wait_output_payload(bridge, state, command):
     wait_ms = parse_external_agent_tail_wait_ms(command.get('wait_ms'))
