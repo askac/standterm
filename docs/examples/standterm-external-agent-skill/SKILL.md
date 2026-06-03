@@ -130,6 +130,7 @@ Start the optional MCP stdio adapter when configuring an MCP-capable client:
 
 ```text
 <python-from-startup-banner> <standterm-dir>/scripts/agent_mcp.py --handoff <standterm-dir>/standterm_external_agent_handoff.json
+<python-from-startup-banner> <standterm-dir>/scripts/agent_mcp.py --agentinfo <standterm-dir>/standterm_agentinfo.json
 ```
 
 MCP tools map to the same typed operations as the CLI. Use

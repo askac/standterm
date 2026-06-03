@@ -404,6 +404,7 @@ boundary:
 
 ```bash
 python scripts/agent_mcp.py --handoff standterm_external_agent_handoff.json
+python scripts/agent_mcp.py --agentinfo standterm_agentinfo.json
 ```
 
 The MCP adapter does not mint tokens, write handoff files, or add a second

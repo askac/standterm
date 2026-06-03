@@ -304,6 +304,9 @@ provides an optional stdio MCP adapter over this same command boundary:
 ```bash
 tools/.venv_wsl/bin/python scripts/agent_mcp.py \
   --handoff standterm_external_agent_handoff.json
+
+tools/.venv_wsl/bin/python scripts/agent_mcp.py \
+  --agentinfo standterm_agentinfo.json
 ```
 
 The adapter is a facade, not a second terminal-control protocol. It does not
