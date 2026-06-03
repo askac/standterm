@@ -197,6 +197,10 @@ starting one CLI process per line:
 tools/.venv_wsl/bin/python scripts/agent_repl.py \
   --handoff standterm_external_agent_handoff.json \
   --enter cr
+
+tools/.venv_wsl/bin/python scripts/agent_repl.py \
+  --agentinfo standterm_agentinfo.json \
+  --enter cr
 ```
 
 The REPL keeps one local process alive, coalesces local keyboard input before
@@ -237,6 +241,12 @@ tools/.venv_wsl/bin/python scripts/agent_type.py \
   --from-file body.txt \
   --cps 3 \
   --newline cr
+
+tools/.venv_wsl/bin/python scripts/agent_type.py \
+  --agentinfo standterm_agentinfo.json \
+  --from-file body.txt \
+  --cps 3 \
+  --newline cr
 ```
 
 The typer posts one normal `send` operation per text unit and stops on rejected
@@ -259,7 +269,15 @@ forwards each command to the same loopback HTTP command endpoint:
 ```bash
 tools/.venv_wsl/bin/python scripts/agent_jsonl.py \
   --handoff standterm_external_agent_handoff.json
+
+tools/.venv_wsl/bin/python scripts/agent_jsonl.py \
+  --agentinfo standterm_agentinfo.json
 ```
+
+`--agentinfo` is tokenless bootstrap data. Helpers use it for launch paths,
+loopback URL, terminal id, TLS CA, and the current handoff path when present.
+Commands that read or write terminal state still need a minted external-agent
+token from `standterm_external_agent_handoff.json` or explicit `--token`.
 
 Each stdin line is a JSON command object. The wrapper fills in the default
 `token` and `terminal_id` from the handoff when omitted, preserves an optional
