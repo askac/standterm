@@ -254,7 +254,13 @@ starting one CLI process per command:
 
 ```text
 <python-from-startup-banner> <standterm-dir>/scripts/agent_jsonl.py --handoff <standterm-dir>/standterm_external_agent_handoff.json
+<python-from-startup-banner> <standterm-dir>/scripts/agent_jsonl.py --agentinfo <standterm-dir>/standterm_agentinfo.json
 ```
+
+`--agentinfo` is tokenless bootstrap data. Helpers use it for launch paths,
+loopback URL, terminal id, TLS CA, and the current handoff path when present.
+Commands that read or write terminal state still need a minted external-agent
+token from `standterm_external_agent_handoff.json` or explicit `--token`.
 
 Send one JSON command per stdin line and read one JSON response per stdout line:
 
@@ -313,6 +319,7 @@ Use the REPL for interactive work:
 
 ```text
 <python-from-startup-banner> <standterm-dir>/scripts/agent_repl.py --handoff <standterm-dir>/standterm_external_agent_handoff.json --enter cr
+<python-from-startup-banner> <standterm-dir>/scripts/agent_repl.py --agentinfo <standterm-dir>/standterm_agentinfo.json --enter cr
 ```
 
 Prefer the REPL for watching long-running remote builds or compiles. It uses
@@ -334,6 +341,7 @@ controlled cadence:
 
 ```text
 <python-from-startup-banner> <standterm-dir>/scripts/agent_type.py --handoff <standterm-dir>/standterm_external_agent_handoff.json --from-file body.txt --cps 3 --newline cr
+<python-from-startup-banner> <standterm-dir>/scripts/agent_type.py --agentinfo <standterm-dir>/standterm_agentinfo.json --from-file body.txt --cps 3 --newline cr
 ```
 
 The typer sends one normal `send` operation per text unit and stops on rejected
