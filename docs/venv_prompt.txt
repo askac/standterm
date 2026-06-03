@@ -20,6 +20,6 @@ After apt installs venv support, return to the repository root and run:
 ./run.sh --force
 ```
 
-For tests or maintenance commands, use the existing repo-local venv Python after it has been created, for example `tools/.venv_wsl/bin/python` on WSL. If the needed venv does not exist yet, run the launcher first instead of falling back to system Python.
+For tests or maintenance commands, use the existing repo-local venv Python after it has been created, for example `tools/.venv_wsl/bin/python scripts/run_smoke_tests.py` on WSL. If the needed venv does not exist yet, run the launcher first instead of falling back to system Python.
 
 If you intentionally use a non-venv Python, first confirm it can import the required StandTerm packages from `requirements.txt`. The launcher-managed venv path is still preferred for automation because it is reproducible across machines.

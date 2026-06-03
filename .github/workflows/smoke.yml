@@ -1,0 +1,27 @@
+name: Smoke Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  headless-smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m venv tools/.venv_linux
+          tools/.venv_linux/bin/python -m pip install --upgrade pip
+          tools/.venv_linux/bin/python -m pip install -r requirements.txt
+
+      - name: Run headless smoke tests
+        run: tools/.venv_linux/bin/python scripts/run_smoke_tests.py

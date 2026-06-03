@@ -72,6 +72,24 @@ winget install --id Python.Python.3.12 -e
 
 Reopen PowerShell after installing them so `git` and `python` are available.
 
+## Tests
+
+After the launcher has created the repo-local venv, run the headless smoke suite
+with that venv Python:
+
+```bash
+tools/.venv_wsl/bin/python scripts/run_smoke_tests.py
+```
+
+On native Linux, use `tools/.venv_linux/bin/python` instead. The smoke runner
+compiles the main Python entry points and runs the backend, REPL/CLI, and rsfile
+smoke tests. Browser smoke tests require Playwright browser setup and remain a
+separate manual check:
+
+```bash
+tools/.venv_wsl/bin/python tests/agent_browser_smoke.py
+```
+
 ## Quick Start
 
 Install and run on macOS, Linux, or WSL:
