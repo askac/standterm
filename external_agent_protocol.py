@@ -230,3 +230,30 @@ def parse_external_agent_wait_condition(command):
     if condition in {'output', 'quiet'}:
         return condition
     return None
+
+
+def parse_external_agent_sequence_steps(
+    command,
+    max_steps,
+    allowed_ops,
+    invalid_data_error_code=DEFAULT_INVALID_DATA_ERROR_CODE,
+):
+    steps = command.get('steps')
+    if not isinstance(steps, list) or not steps or len(steps) > max_steps:
+        return None, invalid_data_error_code
+    parsed_steps = []
+    for step in steps:
+        if not isinstance(step, dict):
+            return None, invalid_data_error_code
+        step_op = step.get('op')
+        if not isinstance(step_op, str):
+            return None, invalid_data_error_code
+        step_op = step_op.strip().lower()
+        if step_op not in allowed_ops:
+            return None, invalid_data_error_code
+        if 'token' in step or 'terminal_id' in step:
+            return None, invalid_data_error_code
+        parsed_step = dict(step)
+        parsed_step['op'] = step_op
+        parsed_steps.append(parsed_step)
+    return parsed_steps, None

@@ -27,6 +27,7 @@ from external_agent_protocol import (
     external_agent_flag_enabled,
     parse_external_agent_screen_options as parse_external_agent_screen_options_payload,
     parse_external_agent_screen_quiet_ms as parse_external_agent_screen_quiet_ms_payload,
+    parse_external_agent_sequence_steps as parse_external_agent_sequence_steps_payload,
     parse_external_agent_send_capture_settle_ms as parse_external_agent_send_capture_settle_ms_payload,
     parse_external_agent_send_capture_wait_ms as parse_external_agent_send_capture_wait_ms_payload,
     parse_external_agent_send_input as parse_external_agent_send_input_payload,
@@ -3790,25 +3791,12 @@ def build_external_agent_wait_payload(bridge, state, command):
     return None, AGENT_ERROR_ACTION_INVALID_DATA
 
 def parse_external_agent_sequence_steps(command):
-    steps = command.get('steps')
-    if not isinstance(steps, list) or not steps or len(steps) > AGENT_EXTERNAL_SEQUENCE_MAX_STEPS:
-        return None, AGENT_ERROR_ACTION_INVALID_DATA
-    parsed_steps = []
-    for step in steps:
-        if not isinstance(step, dict):
-            return None, AGENT_ERROR_ACTION_INVALID_DATA
-        step_op = step.get('op')
-        if not isinstance(step_op, str):
-            return None, AGENT_ERROR_ACTION_INVALID_DATA
-        step_op = step_op.strip().lower()
-        if step_op not in EXTERNAL_AGENT_SEQUENCE_OPS:
-            return None, AGENT_ERROR_ACTION_INVALID_DATA
-        if 'token' in step or 'terminal_id' in step:
-            return None, AGENT_ERROR_ACTION_INVALID_DATA
-        parsed_step = dict(step)
-        parsed_step['op'] = step_op
-        parsed_steps.append(parsed_step)
-    return parsed_steps, None
+    return parse_external_agent_sequence_steps_payload(
+        command,
+        max_steps=AGENT_EXTERNAL_SEQUENCE_MAX_STEPS,
+        allowed_ops=EXTERNAL_AGENT_SEQUENCE_OPS,
+        invalid_data_error_code=AGENT_ERROR_ACTION_INVALID_DATA,
+    )
 
 def classify_external_agent_sequence_stop(result):
     if not isinstance(result, dict):
