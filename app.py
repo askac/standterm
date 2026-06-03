@@ -6522,363 +6522,423 @@ def process_agent_terminal_input_proposal(data, proposal_builder,
             emit_agent_state(request.sid, state)
 
 
-def process_external_agent_command(command):
+def normalize_external_agent_command_op(command):
     if not isinstance(command, dict):
-        return external_agent_error(AGENT_ERROR_ACTION_INVALID_DATA)
+        return None, AGENT_ERROR_ACTION_INVALID_DATA
     op = command.get('op')
     if not isinstance(op, str):
-        return external_agent_error(AGENT_ERROR_ACTION_INVALID_DATA)
-    op = op.strip().lower()
+        return None, AGENT_ERROR_ACTION_INVALID_DATA
+    return op.strip().lower(), None
 
-    if op == 'hello':
-        record, state, terminal_id, error_code = validate_external_agent_command_token(
-            command,
-            require_terminal=False,
-        )
-        if error_code:
-            return external_agent_error(error_code, terminal_id=terminal_id)
-        state_payload = build_external_agent_state_payload(record, state)
-        state_payload.pop('status', None)
-        return {
-            'status': 'ok',
-            'version': EXTERNAL_AGENT_PROTOCOL_VERSION,
-            'external_agent_id': record.get('external_agent_id'),
-            'terminal_id': record.get('terminal_id'),
-            'capabilities': list(EXTERNAL_AGENT_CAPABILITIES),
-            'state': state_payload,
-        }
 
-    if op == 'attach':
-        record, state, terminal_id, error_code = validate_external_agent_command_token(command)
-        if error_code:
-            return external_agent_error(error_code, terminal_id=terminal_id)
-        with external_agent_lock:
-            record, error_code = external_agent_attach_store.mark_attached(command.get('token'))
-        if error_code:
-            return external_agent_error(error_code, terminal_id=terminal_id)
+def process_external_agent_hello_command(_op, command):
+    record, state, terminal_id, error_code = validate_external_agent_command_token(
+        command,
+        require_terminal=False,
+    )
+    if error_code:
+        return external_agent_error(error_code, terminal_id=terminal_id)
+    state_payload = build_external_agent_state_payload(record, state)
+    state_payload.pop('status', None)
+    return {
+        'status': 'ok',
+        'version': EXTERNAL_AGENT_PROTOCOL_VERSION,
+        'external_agent_id': record.get('external_agent_id'),
+        'terminal_id': record.get('terminal_id'),
+        'capabilities': list(EXTERNAL_AGENT_CAPABILITIES),
+        'state': state_payload,
+    }
+
+
+def process_external_agent_attach_command(_op, command):
+    record, state, terminal_id, error_code = validate_external_agent_command_token(command)
+    if error_code:
+        return external_agent_error(error_code, terminal_id=terminal_id)
+    with external_agent_lock:
+        record, error_code = external_agent_attach_store.mark_attached(command.get('token'))
+    if error_code:
+        return external_agent_error(error_code, terminal_id=terminal_id)
+    record_agent_audit_event(
+        state,
+        AGENT_AUDIT_EXTERNAL_AGENT_ATTACHED,
+        external_agent_id=record.get('external_agent_id'),
+    )
+    return build_external_agent_state_payload(record, state)
+
+
+def process_external_agent_revoke_command(_op, command):
+    record, state, terminal_id, error_code = validate_external_agent_command_token(command)
+    if error_code:
+        return external_agent_error(error_code, terminal_id=terminal_id)
+    with external_agent_lock:
+        record, error_code = external_agent_attach_store.revoke(command.get('token'))
+    if error_code:
+        return external_agent_error(error_code, terminal_id=terminal_id)
+    record_agent_audit_event(
+        state,
+        AGENT_AUDIT_EXTERNAL_AGENT_REVOKED,
+        external_agent_id=record.get('external_agent_id'),
+    )
+    return {
+        'status': 'ok',
+        'terminal_id': terminal_id,
+        'external_agent_id': record.get('external_agent_id'),
+        'revoked': True,
+    }
+
+
+def process_external_agent_heartbeat_command(_op, command):
+    record, _state, terminal_id, error_code = validate_external_agent_command_token(
+        command,
+        renew_token=False,
+    )
+    if error_code:
+        return external_agent_error(error_code, terminal_id=terminal_id)
+    with external_agent_lock:
+        record = external_agent_attach_store.renew_record(record.get('token_hash')) or record
+    return build_external_agent_heartbeat_payload(record, terminal_id)
+
+
+def process_external_agent_state_command(_op, _command, record, state, _terminal_id):
+    return build_external_agent_state_payload(record, state)
+
+
+def process_external_agent_sequence_command(_op, command, record, state, terminal_id):
+    payload, error_code = build_external_agent_sequence_payload(record, state, terminal_id, command)
+    if error_code:
+        return external_agent_error(error_code, terminal_id=terminal_id)
+    return payload
+
+
+def process_external_agent_screen_command(_op, command, record, state, terminal_id, bridge):
+    screen_options, screen_options_error = parse_external_agent_screen_options(command)
+    if screen_options_error:
+        return external_agent_error(screen_options_error, terminal_id=terminal_id)
+    screen_wait, screen_wait_error = build_external_agent_screen_wait_payload(
+        bridge,
+        state,
+        wait_ms=command.get('wait_ms'),
+        quiet_ms=command.get('quiet_ms'),
+    )
+    if screen_wait_error:
+        return external_agent_error(screen_wait_error, terminal_id=terminal_id)
+    context = build_agent_context(record.get('session_token'), terminal_id, record.get('sid'))
+    active_screen = apply_external_agent_screen_options(
+        context.get('active_screen'),
+        screen_options,
+    )
+    record_agent_audit_event(
+        state,
+        AGENT_AUDIT_EXTERNAL_AGENT_SCREEN,
+        external_agent_id=record.get('external_agent_id'),
+        context=summarize_agent_context_for_audit(context),
+        screen_options=screen_options,
+        screen_wait=screen_wait,
+    )
+    payload = {
+        'status': 'ok',
+        'terminal_id': terminal_id,
+        'external_agent_id': record.get('external_agent_id'),
+        'output_seq': bridge.output_seq,
+        'state': state.public_state(),
+        'screen': active_screen,
+    }
+    if screen_wait and (screen_wait.get('wait_ms') or screen_wait.get('quiet_ms')):
+        payload['screen_wait'] = screen_wait
+    return payload
+
+
+def process_external_agent_render_command(_op, command, record, state, terminal_id, bridge):
+    requested_render_mode = parse_agent_render_mode(command.get('render_mode'))
+    if requested_render_mode is None:
+        return external_agent_error(AGENT_ERROR_ACTION_INVALID_DATA, terminal_id=terminal_id)
+    render_mode = resolve_agent_render_mode(requested_render_mode)
+    if render_mode == AGENT_RENDER_MODE_MIRROR_SCREEN:
+        render, context = build_external_agent_mirror_screen_render_payload(record, terminal_id)
         record_agent_audit_event(
             state,
-            AGENT_AUDIT_EXTERNAL_AGENT_ATTACHED,
+            AGENT_AUDIT_EXTERNAL_AGENT_RENDER,
             external_agent_id=record.get('external_agent_id'),
-        )
-        return build_external_agent_state_payload(record, state)
-
-    if op == 'revoke':
-        record, state, terminal_id, error_code = validate_external_agent_command_token(command)
-        if error_code:
-            return external_agent_error(error_code, terminal_id=terminal_id)
-        with external_agent_lock:
-            record, error_code = external_agent_attach_store.revoke(command.get('token'))
-        if error_code:
-            return external_agent_error(error_code, terminal_id=terminal_id)
-        record_agent_audit_event(
-            state,
-            AGENT_AUDIT_EXTERNAL_AGENT_REVOKED,
-            external_agent_id=record.get('external_agent_id'),
+            status='ok',
+            requested_render_mode=requested_render_mode,
+            render_mode=render_mode,
+            render_type=render.get('render_type'),
+            mime_type=render.get('mime_type'),
+            source=render.get('source'),
+            line_count=render.get('line_count'),
+            byte_length=render.get('byte_length'),
+            cols=render.get('cols'),
+            rows=render.get('rows'),
+            output_seq=render.get('output_seq', bridge.output_seq),
+            context=summarize_agent_context_for_audit(context),
         )
         return {
             'status': 'ok',
             'terminal_id': terminal_id,
             'external_agent_id': record.get('external_agent_id'),
-            'revoked': True,
+            'output_seq': render.get('output_seq', bridge.output_seq),
+            'state': state.public_state(),
+            'render': render,
         }
+    render, render_error, request_payload, wait_ms = build_external_agent_viewport_render_payload(
+        record,
+        state,
+        terminal_id,
+        bridge,
+        wait_ms=command.get('wait_ms'),
+        render_mode=render_mode,
+    )
+    record_agent_audit_event(
+        state,
+        AGENT_AUDIT_EXTERNAL_AGENT_RENDER,
+        external_agent_id=record.get('external_agent_id'),
+        request_id=request_payload.get('request_id'),
+        status=AGENT_STATUS_FAILED if render_error else 'ok',
+        error_code=render_error,
+        wait_ms=wait_ms,
+        requested_render_mode=requested_render_mode,
+        render_mode=request_payload.get('render_mode'),
+        render_type=request_payload.get('render_type'),
+        mime_type=request_payload.get('mime_type'),
+        image_byte_length=render.get('image_byte_length') if render else None,
+        cols=render.get('cols') if render else None,
+        rows=render.get('rows') if render else None,
+        pixel_width=render.get('pixel_width') if render else None,
+        pixel_height=render.get('pixel_height') if render else None,
+        output_seq=render.get('output_seq') if render else bridge.output_seq,
+    )
+    if render_error:
+        return external_agent_error(render_error, terminal_id=terminal_id)
+    return {
+        'status': 'ok',
+        'terminal_id': terminal_id,
+        'external_agent_id': record.get('external_agent_id'),
+        'output_seq': render.get('output_seq') if render else bridge.output_seq,
+        'state': state.public_state(),
+        'render': render,
+    }
 
-    if op == 'heartbeat':
-        record, _state, terminal_id, error_code = validate_external_agent_command_token(
-            command,
-            renew_token=False,
+
+def process_external_agent_tail_command(_op, command, record, state, terminal_id, bridge):
+    tail, error_code = build_external_agent_tail_payload_waiting(
+        bridge,
+        state,
+        since_output_seq=command.get('since_output_seq'),
+        limit=command.get('limit', AGENT_EXTERNAL_TAIL_MAX_EVENTS),
+        wait_ms=command.get('wait_ms'),
+    )
+    if error_code:
+        return external_agent_error(error_code, terminal_id=terminal_id)
+    strip_ansi = should_external_agent_strip_ansi(command)
+    tail = format_external_agent_tail_payload(tail, strip_ansi=strip_ansi)
+    record_agent_audit_event(
+        state,
+        AGENT_AUDIT_EXTERNAL_AGENT_TAIL,
+        external_agent_id=record.get('external_agent_id'),
+        event_count=len(tail['events']),
+        output_seq=tail['output_seq'],
+        wait_ms=parse_external_agent_tail_wait_ms(command.get('wait_ms')),
+        gap=tail['gap'],
+        strip_ansi=strip_ansi,
+    )
+    payload = {
+        'status': 'ok',
+        'terminal_id': terminal_id,
+        'external_agent_id': record.get('external_agent_id'),
+        'output_seq': tail['output_seq'],
+        'since_output_seq': tail['since_output_seq'],
+        'limit': tail['limit'],
+        'wait_ms': parse_external_agent_tail_wait_ms(command.get('wait_ms')),
+        'first_available_output_seq': tail['first_available_output_seq'],
+        'dropped_before_output_seq': tail['dropped_before_output_seq'],
+        'gap': tail['gap'],
+        'events': tail['events'],
+    }
+    if strip_ansi:
+        payload['strip_ansi'] = True
+        payload['data_format'] = tail['data_format']
+    return payload
+
+
+def process_external_agent_wait_command(_op, command, record, state, terminal_id, bridge):
+    wait_payload, error_code = build_external_agent_wait_payload(bridge, state, command)
+    if error_code:
+        return external_agent_error(error_code, terminal_id=terminal_id)
+    record_agent_audit_event(
+        state,
+        AGENT_AUDIT_EXTERNAL_AGENT_WAIT,
+        external_agent_id=record.get('external_agent_id'),
+        condition=wait_payload['condition'],
+        status=wait_payload['status'],
+        timed_out=wait_payload['timed_out'],
+        output_seq=wait_payload.get('output_seq'),
+        wait_ms=wait_payload.get('wait_ms'),
+        quiet_ms=wait_payload.get('quiet_ms'),
+        event_count=wait_payload.get('event_count'),
+        gap=wait_payload.get('gap'),
+    )
+    return {
+        'status': 'ok',
+        'terminal_id': terminal_id,
+        'external_agent_id': record.get('external_agent_id'),
+        'output_seq': wait_payload.get('output_seq'),
+        'state': state.public_state(),
+        'wait': wait_payload,
+    }
+
+
+def process_external_agent_read_command(op, command, record, state, terminal_id):
+    if not is_agent_context_allowed(state):
+        return external_agent_error(AGENT_ERROR_PRIVACY_BLOCKED, terminal_id=terminal_id)
+    bridge = get_bridge(record.get('session_token'), terminal_id)
+    if not bridge:
+        return external_agent_error(AGENT_ERROR_TERMINAL_NOT_FOUND, terminal_id=terminal_id)
+    handler = EXTERNAL_AGENT_READ_COMMAND_HANDLERS.get(op)
+    if not handler:
+        return external_agent_error(AGENT_ERROR_ACTION_NOT_ALLOWED, terminal_id=terminal_id)
+    return handler(op, command, record, state, terminal_id, bridge)
+
+
+def process_external_agent_send_command(op, command, record, state, terminal_id):
+    data, input_metadata, input_error = parse_external_agent_send_input(command)
+    if input_error:
+        return external_agent_error(input_error, terminal_id=terminal_id)
+    bridge = get_bridge(record.get('session_token'), terminal_id)
+    if not bridge:
+        return external_agent_error(AGENT_ERROR_TERMINAL_NOT_FOUND, terminal_id=terminal_id)
+    capture_requested = op == 'send-wait' or should_external_agent_capture_send(command)
+    strip_ansi = should_external_agent_strip_ansi(command)
+    before_output_seq = None
+    with bridge.input_lock:
+        with agent_lock:
+            if state.paused or state.mode == AGENT_MODE_PAUSED:
+                return external_agent_error(AGENT_ERROR_PAUSED, terminal_id=terminal_id)
+            if not is_agent_context_allowed(state):
+                return external_agent_error(AGENT_ERROR_PRIVACY_BLOCKED, terminal_id=terminal_id)
+            if is_agent_human_input_lease_active(state):
+                return external_agent_error(AGENT_ERROR_HUMAN_INPUT_ACTIVE, terminal_id=terminal_id)
+            if state.mode not in {AGENT_MODE_APPROVAL_PENDING, AGENT_MODE_DIRECT_ACTIVE}:
+                return external_agent_error(AGENT_ERROR_MODE_NOT_WRITABLE, terminal_id=terminal_id)
+            proposal = external_agent_build_terminal_input_action(
+                state,
+                data,
+                submit_after=should_external_agent_submit_after(command),
+                input_metadata=input_metadata,
+            )
+            requires_approval = state.mode != AGENT_MODE_DIRECT_ACTIVE
+            action, error_code = build_agent_action(state, proposal, requires_approval)
+            if error_code:
+                return external_agent_error(error_code, terminal_id=terminal_id)
+            record_agent_audit_event(
+                state,
+                AGENT_AUDIT_EXTERNAL_AGENT_SEND,
+                action=action,
+                external_agent_id=record.get('external_agent_id'),
+                input_kind=input_metadata.get('input_kind') if input_metadata else None,
+                key_count=input_metadata.get('key_count') if input_metadata else None,
+                capture_requested=capture_requested,
+                strip_ansi=strip_ansi if capture_requested else False,
+            )
+            socketio.emit(AGENT_EVENT_ACTION_REQUEST, public_agent_action(action), room=state.sid)
+            emit_agent_state(state.sid, state)
+        if requires_approval:
+            payload = public_agent_action(action)
+            payload['status'] = AGENT_STATUS_PENDING_APPROVAL
+            if capture_requested:
+                payload['capture'] = {
+                    'status': 'skipped',
+                    'reason': 'pending_approval',
+                    'requested': True,
+                }
+            return payload
+        with bridge.output_condition:
+            before_output_seq = bridge.output_seq
+        ok, result = write_agent_terminal_input(
+            record.get('session_token'),
+            terminal_id,
+            state.sid,
+            action['action_id'],
+            action['control_epoch'],
+            mode_version=action['mode_version'],
+            proposal_id=action['proposal_id'],
         )
-        if error_code:
-            return external_agent_error(error_code, terminal_id=terminal_id)
-        with external_agent_lock:
-            record = external_agent_attach_store.renew_record(record.get('token_hash')) or record
-        return build_external_agent_heartbeat_payload(record, terminal_id)
+    status = AGENT_STATUS_COMPLETED if ok else AGENT_STATUS_FAILED
+    emit_agent_action_result(state.sid, action, status, error_code=result.get('error_code'))
+    with agent_lock:
+        current_state = get_agent_state(record.get('session_token'), terminal_id, state.sid)
+        if current_state:
+            emit_agent_state(state.sid, current_state)
+    payload = public_agent_action(action)
+    payload['status'] = status
+    if result.get('error_code'):
+        payload['error_code'] = result.get('error_code')
+    payload['bytes_written'] = result.get('bytes_written', 0)
+    if capture_requested and ok:
+        capture, capture_error = build_external_agent_send_capture_payload(
+            bridge,
+            state,
+            before_output_seq if isinstance(before_output_seq, int) else 0,
+            limit=command.get('limit', AGENT_EXTERNAL_TAIL_MAX_EVENTS),
+            wait_ms=command.get('wait_ms'),
+            settle_ms=command.get('settle_ms'),
+            strip_ansi=strip_ansi,
+        )
+        if capture_error:
+            payload['capture'] = {
+                'status': AGENT_STATUS_FAILED,
+                'error_code': capture_error,
+                'requested': True,
+            }
+        else:
+            capture['requested'] = True
+            payload['capture'] = capture
+            payload['before_output_seq'] = capture['before_output_seq']
+            payload['after_output_seq'] = capture['output_seq']
+    return payload
+
+
+EXTERNAL_AGENT_PREAUTH_COMMAND_HANDLERS = {
+    'hello': process_external_agent_hello_command,
+    'attach': process_external_agent_attach_command,
+    'revoke': process_external_agent_revoke_command,
+    'heartbeat': process_external_agent_heartbeat_command,
+}
+
+EXTERNAL_AGENT_READ_COMMAND_HANDLERS = {
+    'screen': process_external_agent_screen_command,
+    'render': process_external_agent_render_command,
+    'tail': process_external_agent_tail_command,
+    'wait': process_external_agent_wait_command,
+}
+
+EXTERNAL_AGENT_AUTHENTICATED_COMMAND_HANDLERS = {
+    'state': process_external_agent_state_command,
+    'sequence': process_external_agent_sequence_command,
+    'screen': process_external_agent_read_command,
+    'render': process_external_agent_read_command,
+    'tail': process_external_agent_read_command,
+    'wait': process_external_agent_read_command,
+    'send': process_external_agent_send_command,
+    'send-wait': process_external_agent_send_command,
+}
+
+
+def process_external_agent_command(command):
+    op, error_code = normalize_external_agent_command_op(command)
+    if error_code:
+        return external_agent_error(error_code)
+
+    preauth_handler = EXTERNAL_AGENT_PREAUTH_COMMAND_HANDLERS.get(op)
+    if preauth_handler:
+        return preauth_handler(op, command)
 
     record, state, terminal_id, error_code = validate_external_agent_command_token(command)
     if error_code:
         return external_agent_error(error_code, terminal_id=terminal_id)
 
-    if op == 'state':
-        return build_external_agent_state_payload(record, state)
-
-    if op == 'sequence':
-        payload, error_code = build_external_agent_sequence_payload(record, state, terminal_id, command)
-        if error_code:
-            return external_agent_error(error_code, terminal_id=terminal_id)
-        return payload
-
-    if op in {'screen', 'render', 'tail', 'wait'}:
-        if not is_agent_context_allowed(state):
-            return external_agent_error(AGENT_ERROR_PRIVACY_BLOCKED, terminal_id=terminal_id)
-        bridge = get_bridge(record.get('session_token'), terminal_id)
-        if not bridge:
-            return external_agent_error(AGENT_ERROR_TERMINAL_NOT_FOUND, terminal_id=terminal_id)
-        if op == 'screen':
-            screen_options, screen_options_error = parse_external_agent_screen_options(command)
-            if screen_options_error:
-                return external_agent_error(screen_options_error, terminal_id=terminal_id)
-            screen_wait, screen_wait_error = build_external_agent_screen_wait_payload(
-                bridge,
-                state,
-                wait_ms=command.get('wait_ms'),
-                quiet_ms=command.get('quiet_ms'),
-            )
-            if screen_wait_error:
-                return external_agent_error(screen_wait_error, terminal_id=terminal_id)
-            context = build_agent_context(record.get('session_token'), terminal_id, record.get('sid'))
-            active_screen = apply_external_agent_screen_options(
-                context.get('active_screen'),
-                screen_options,
-            )
-            record_agent_audit_event(
-                state,
-                AGENT_AUDIT_EXTERNAL_AGENT_SCREEN,
-                external_agent_id=record.get('external_agent_id'),
-                context=summarize_agent_context_for_audit(context),
-                screen_options=screen_options,
-                screen_wait=screen_wait,
-            )
-            payload = {
-                'status': 'ok',
-                'terminal_id': terminal_id,
-                'external_agent_id': record.get('external_agent_id'),
-                'output_seq': bridge.output_seq,
-                'state': state.public_state(),
-                'screen': active_screen,
-            }
-            if screen_wait and (screen_wait.get('wait_ms') or screen_wait.get('quiet_ms')):
-                payload['screen_wait'] = screen_wait
-            return payload
-        if op == 'render':
-            requested_render_mode = parse_agent_render_mode(command.get('render_mode'))
-            if requested_render_mode is None:
-                return external_agent_error(AGENT_ERROR_ACTION_INVALID_DATA, terminal_id=terminal_id)
-            render_mode = resolve_agent_render_mode(requested_render_mode)
-            if render_mode == AGENT_RENDER_MODE_MIRROR_SCREEN:
-                render, context = build_external_agent_mirror_screen_render_payload(record, terminal_id)
-                record_agent_audit_event(
-                    state,
-                    AGENT_AUDIT_EXTERNAL_AGENT_RENDER,
-                    external_agent_id=record.get('external_agent_id'),
-                    status='ok',
-                    requested_render_mode=requested_render_mode,
-                    render_mode=render_mode,
-                    render_type=render.get('render_type'),
-                    mime_type=render.get('mime_type'),
-                    source=render.get('source'),
-                    line_count=render.get('line_count'),
-                    byte_length=render.get('byte_length'),
-                    cols=render.get('cols'),
-                    rows=render.get('rows'),
-                    output_seq=render.get('output_seq', bridge.output_seq),
-                    context=summarize_agent_context_for_audit(context),
-                )
-                return {
-                    'status': 'ok',
-                    'terminal_id': terminal_id,
-                    'external_agent_id': record.get('external_agent_id'),
-                    'output_seq': render.get('output_seq', bridge.output_seq),
-                    'state': state.public_state(),
-                    'render': render,
-                }
-            render, render_error, request_payload, wait_ms = build_external_agent_viewport_render_payload(
-                record,
-                state,
-                terminal_id,
-                bridge,
-                wait_ms=command.get('wait_ms'),
-                render_mode=render_mode,
-            )
-            record_agent_audit_event(
-                state,
-                AGENT_AUDIT_EXTERNAL_AGENT_RENDER,
-                external_agent_id=record.get('external_agent_id'),
-                request_id=request_payload.get('request_id'),
-                status=AGENT_STATUS_FAILED if render_error else 'ok',
-                error_code=render_error,
-                wait_ms=wait_ms,
-                requested_render_mode=requested_render_mode,
-                render_mode=request_payload.get('render_mode'),
-                render_type=request_payload.get('render_type'),
-                mime_type=request_payload.get('mime_type'),
-                image_byte_length=render.get('image_byte_length') if render else None,
-                cols=render.get('cols') if render else None,
-                rows=render.get('rows') if render else None,
-                pixel_width=render.get('pixel_width') if render else None,
-                pixel_height=render.get('pixel_height') if render else None,
-                output_seq=render.get('output_seq') if render else bridge.output_seq,
-            )
-            if render_error:
-                return external_agent_error(render_error, terminal_id=terminal_id)
-            return {
-                'status': 'ok',
-                'terminal_id': terminal_id,
-                'external_agent_id': record.get('external_agent_id'),
-                'output_seq': render.get('output_seq') if render else bridge.output_seq,
-                'state': state.public_state(),
-                'render': render,
-            }
-        if op == 'tail':
-            tail, error_code = build_external_agent_tail_payload_waiting(
-                bridge,
-                state,
-                since_output_seq=command.get('since_output_seq'),
-                limit=command.get('limit', AGENT_EXTERNAL_TAIL_MAX_EVENTS),
-                wait_ms=command.get('wait_ms'),
-            )
-            if error_code:
-                return external_agent_error(error_code, terminal_id=terminal_id)
-            strip_ansi = should_external_agent_strip_ansi(command)
-            tail = format_external_agent_tail_payload(tail, strip_ansi=strip_ansi)
-            record_agent_audit_event(
-                state,
-                AGENT_AUDIT_EXTERNAL_AGENT_TAIL,
-                external_agent_id=record.get('external_agent_id'),
-                event_count=len(tail['events']),
-                output_seq=tail['output_seq'],
-                wait_ms=parse_external_agent_tail_wait_ms(command.get('wait_ms')),
-                gap=tail['gap'],
-                strip_ansi=strip_ansi,
-            )
-            payload = {
-                'status': 'ok',
-                'terminal_id': terminal_id,
-                'external_agent_id': record.get('external_agent_id'),
-                'output_seq': tail['output_seq'],
-                'since_output_seq': tail['since_output_seq'],
-                'limit': tail['limit'],
-                'wait_ms': parse_external_agent_tail_wait_ms(command.get('wait_ms')),
-                'first_available_output_seq': tail['first_available_output_seq'],
-                'dropped_before_output_seq': tail['dropped_before_output_seq'],
-                'gap': tail['gap'],
-                'events': tail['events'],
-            }
-            if strip_ansi:
-                payload['strip_ansi'] = True
-                payload['data_format'] = tail['data_format']
-            return payload
-
-        wait_payload, error_code = build_external_agent_wait_payload(bridge, state, command)
-        if error_code:
-            return external_agent_error(error_code, terminal_id=terminal_id)
-        record_agent_audit_event(
-            state,
-            AGENT_AUDIT_EXTERNAL_AGENT_WAIT,
-            external_agent_id=record.get('external_agent_id'),
-            condition=wait_payload['condition'],
-            status=wait_payload['status'],
-            timed_out=wait_payload['timed_out'],
-            output_seq=wait_payload.get('output_seq'),
-            wait_ms=wait_payload.get('wait_ms'),
-            quiet_ms=wait_payload.get('quiet_ms'),
-            event_count=wait_payload.get('event_count'),
-            gap=wait_payload.get('gap'),
-        )
-        return {
-            'status': 'ok',
-            'terminal_id': terminal_id,
-            'external_agent_id': record.get('external_agent_id'),
-            'output_seq': wait_payload.get('output_seq'),
-            'state': state.public_state(),
-            'wait': wait_payload,
-        }
-
-    if op in {'send', 'send-wait'}:
-        data, input_metadata, input_error = parse_external_agent_send_input(command)
-        if input_error:
-            return external_agent_error(input_error, terminal_id=terminal_id)
-        bridge = get_bridge(record.get('session_token'), terminal_id)
-        if not bridge:
-            return external_agent_error(AGENT_ERROR_TERMINAL_NOT_FOUND, terminal_id=terminal_id)
-        capture_requested = op == 'send-wait' or should_external_agent_capture_send(command)
-        strip_ansi = should_external_agent_strip_ansi(command)
-        before_output_seq = None
-        with bridge.input_lock:
-            with agent_lock:
-                if state.paused or state.mode == AGENT_MODE_PAUSED:
-                    return external_agent_error(AGENT_ERROR_PAUSED, terminal_id=terminal_id)
-                if not is_agent_context_allowed(state):
-                    return external_agent_error(AGENT_ERROR_PRIVACY_BLOCKED, terminal_id=terminal_id)
-                if is_agent_human_input_lease_active(state):
-                    return external_agent_error(AGENT_ERROR_HUMAN_INPUT_ACTIVE, terminal_id=terminal_id)
-                if state.mode not in {AGENT_MODE_APPROVAL_PENDING, AGENT_MODE_DIRECT_ACTIVE}:
-                    return external_agent_error(AGENT_ERROR_MODE_NOT_WRITABLE, terminal_id=terminal_id)
-                proposal = external_agent_build_terminal_input_action(
-                    state,
-                    data,
-                    submit_after=should_external_agent_submit_after(command),
-                    input_metadata=input_metadata,
-                )
-                requires_approval = state.mode != AGENT_MODE_DIRECT_ACTIVE
-                action, error_code = build_agent_action(state, proposal, requires_approval)
-                if error_code:
-                    return external_agent_error(error_code, terminal_id=terminal_id)
-                record_agent_audit_event(
-                    state,
-                    AGENT_AUDIT_EXTERNAL_AGENT_SEND,
-                    action=action,
-                    external_agent_id=record.get('external_agent_id'),
-                    input_kind=input_metadata.get('input_kind') if input_metadata else None,
-                    key_count=input_metadata.get('key_count') if input_metadata else None,
-                    capture_requested=capture_requested,
-                    strip_ansi=strip_ansi if capture_requested else False,
-                )
-                socketio.emit(AGENT_EVENT_ACTION_REQUEST, public_agent_action(action), room=state.sid)
-                emit_agent_state(state.sid, state)
-            if requires_approval:
-                payload = public_agent_action(action)
-                payload['status'] = AGENT_STATUS_PENDING_APPROVAL
-                if capture_requested:
-                    payload['capture'] = {
-                        'status': 'skipped',
-                        'reason': 'pending_approval',
-                        'requested': True,
-                    }
-                return payload
-            with bridge.output_condition:
-                before_output_seq = bridge.output_seq
-            ok, result = write_agent_terminal_input(
-                record.get('session_token'),
-                terminal_id,
-                state.sid,
-                action['action_id'],
-                action['control_epoch'],
-                mode_version=action['mode_version'],
-                proposal_id=action['proposal_id'],
-            )
-        status = AGENT_STATUS_COMPLETED if ok else AGENT_STATUS_FAILED
-        emit_agent_action_result(state.sid, action, status, error_code=result.get('error_code'))
-        with agent_lock:
-            current_state = get_agent_state(record.get('session_token'), terminal_id, state.sid)
-            if current_state:
-                emit_agent_state(state.sid, current_state)
-        payload = public_agent_action(action)
-        payload['status'] = status
-        if result.get('error_code'):
-            payload['error_code'] = result.get('error_code')
-        payload['bytes_written'] = result.get('bytes_written', 0)
-        if capture_requested and ok:
-            capture, capture_error = build_external_agent_send_capture_payload(
-                bridge,
-                state,
-                before_output_seq if isinstance(before_output_seq, int) else 0,
-                limit=command.get('limit', AGENT_EXTERNAL_TAIL_MAX_EVENTS),
-                wait_ms=command.get('wait_ms'),
-                settle_ms=command.get('settle_ms'),
-                strip_ansi=strip_ansi,
-            )
-            if capture_error:
-                payload['capture'] = {
-                    'status': AGENT_STATUS_FAILED,
-                    'error_code': capture_error,
-                    'requested': True,
-                }
-            else:
-                capture['requested'] = True
-                payload['capture'] = capture
-                payload['before_output_seq'] = capture['before_output_seq']
-                payload['after_output_seq'] = capture['output_seq']
-        return payload
+    handler = EXTERNAL_AGENT_AUTHENTICATED_COMMAND_HANDLERS.get(op)
+    if handler:
+        return handler(op, command, record, state, terminal_id)
 
     return external_agent_error(AGENT_ERROR_ACTION_NOT_ALLOWED, terminal_id=terminal_id)
 
