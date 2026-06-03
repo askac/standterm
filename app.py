@@ -20,6 +20,7 @@ from collections import deque
 from pathlib import Path
 from flask import Flask, render_template, request, abort, make_response, redirect, send_file, jsonify
 from flask_socketio import SocketIO
+from external_agent_dispatch import ExternalAgentCommandDispatcher
 from terminal_backends import (
     BackendAction,
     BackendActionStore,
@@ -6522,15 +6523,6 @@ def process_agent_terminal_input_proposal(data, proposal_builder,
             emit_agent_state(request.sid, state)
 
 
-def normalize_external_agent_command_op(command):
-    if not isinstance(command, dict):
-        return None, AGENT_ERROR_ACTION_INVALID_DATA
-    op = command.get('op')
-    if not isinstance(op, str):
-        return None, AGENT_ERROR_ACTION_INVALID_DATA
-    return op.strip().lower(), None
-
-
 def process_external_agent_hello_command(_op, command):
     record, state, terminal_id, error_code = validate_external_agent_command_token(
         command,
@@ -6923,24 +6915,18 @@ EXTERNAL_AGENT_AUTHENTICATED_COMMAND_HANDLERS = {
 }
 
 
+external_agent_command_dispatcher = ExternalAgentCommandDispatcher(
+    preauth_handlers=EXTERNAL_AGENT_PREAUTH_COMMAND_HANDLERS,
+    authenticated_handlers=EXTERNAL_AGENT_AUTHENTICATED_COMMAND_HANDLERS,
+    validate_token=validate_external_agent_command_token,
+    build_error=external_agent_error,
+    invalid_data_error_code=AGENT_ERROR_ACTION_INVALID_DATA,
+    action_not_allowed_error_code=AGENT_ERROR_ACTION_NOT_ALLOWED,
+)
+
+
 def process_external_agent_command(command):
-    op, error_code = normalize_external_agent_command_op(command)
-    if error_code:
-        return external_agent_error(error_code)
-
-    preauth_handler = EXTERNAL_AGENT_PREAUTH_COMMAND_HANDLERS.get(op)
-    if preauth_handler:
-        return preauth_handler(op, command)
-
-    record, state, terminal_id, error_code = validate_external_agent_command_token(command)
-    if error_code:
-        return external_agent_error(error_code, terminal_id=terminal_id)
-
-    handler = EXTERNAL_AGENT_AUTHENTICATED_COMMAND_HANDLERS.get(op)
-    if handler:
-        return handler(op, command, record, state, terminal_id)
-
-    return external_agent_error(AGENT_ERROR_ACTION_NOT_ALLOWED, terminal_id=terminal_id)
+    return external_agent_command_dispatcher.dispatch(command)
 
 
 @socketio.on(AGENT_EVENT_SUGGESTION_REQUEST)
