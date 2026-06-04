@@ -7,6 +7,7 @@ from external_agent_dispatch import ExternalAgentCommandDispatcher
 from external_agent_handlers import (
     ExternalAgentBasicCommandHandlers,
     ExternalAgentLifecycleCommandHandlers,
+    ExternalAgentReadCommandRouter,
 )
 
 
@@ -445,6 +446,144 @@ def test_lifecycle_handlers_revoke_maps_store_error_without_audit():
     ]
 
 
+def make_read_router(
+    *,
+    read_handlers=None,
+    is_context_allowed=None,
+    get_bridge=None,
+):
+    calls = []
+
+    def build_error(error_code, terminal_id=None):
+        calls.append(('error', error_code, terminal_id))
+        return {'status': 'failed', 'error_code': error_code, 'terminal_id': terminal_id}
+
+    if is_context_allowed is None:
+        def is_context_allowed(_state):
+            calls.append('context')
+            return True
+
+    if get_bridge is None:
+        def get_bridge(session_token, terminal_id):
+            calls.append(('bridge', session_token, terminal_id))
+            return {'bridge': True}
+
+    router = ExternalAgentReadCommandRouter(
+        read_handlers=read_handlers or {},
+        build_error=build_error,
+        is_context_allowed=is_context_allowed,
+        get_bridge=get_bridge,
+        privacy_blocked_error_code='privacy_blocked',
+        terminal_not_found_error_code='terminal_not_found',
+        action_not_allowed_error_code='not_allowed',
+    )
+    return router, calls
+
+
+def test_read_router_rejects_privacy_block_before_bridge_lookup():
+    calls = []
+
+    def is_context_allowed(state):
+        calls.append(('context', state))
+        return False
+
+    def get_bridge(_session_token, _terminal_id):
+        calls.append('bridge')
+        return {'bridge': True}
+
+    router, router_calls = make_read_router(
+        is_context_allowed=is_context_allowed,
+        get_bridge=get_bridge,
+    )
+
+    assert router.process_read_command(
+        'screen',
+        {'op': 'screen'},
+        {'session_token': 'session-1'},
+        {'privacy': 'blocked'},
+        'term-1',
+    ) == {
+        'status': 'failed',
+        'error_code': 'privacy_blocked',
+        'terminal_id': 'term-1',
+    }
+    assert calls == [('context', {'privacy': 'blocked'})]
+    assert router_calls == [('error', 'privacy_blocked', 'term-1')]
+
+
+def test_read_router_maps_missing_bridge():
+    calls = []
+
+    def get_bridge(session_token, terminal_id):
+        calls.append(('bridge', session_token, terminal_id))
+        return None
+
+    router, router_calls = make_read_router(get_bridge=get_bridge)
+
+    assert router.process_read_command(
+        'screen',
+        {'op': 'screen'},
+        {'session_token': 'session-1'},
+        {'privacy': 'allowed'},
+        'term-1',
+    ) == {
+        'status': 'failed',
+        'error_code': 'terminal_not_found',
+        'terminal_id': 'term-1',
+    }
+    assert calls == [('bridge', 'session-1', 'term-1')]
+    assert router_calls == [
+        'context',
+        ('error', 'terminal_not_found', 'term-1'),
+    ]
+
+
+def test_read_router_maps_unknown_read_op_after_bridge_lookup():
+    router, calls = make_read_router()
+
+    assert router.process_read_command(
+        'unknown',
+        {'op': 'unknown'},
+        {'session_token': 'session-1'},
+        {'privacy': 'allowed'},
+        'term-1',
+    ) == {
+        'status': 'failed',
+        'error_code': 'not_allowed',
+        'terminal_id': 'term-1',
+    }
+    assert calls == [
+        'context',
+        ('bridge', 'session-1', 'term-1'),
+        ('error', 'not_allowed', 'term-1'),
+    ]
+
+
+def test_read_router_delegates_to_concrete_handler_with_bridge():
+    calls = []
+
+    def handle_screen(op, command, record, state, terminal_id, bridge):
+        calls.append((op, command, record, state, terminal_id, bridge))
+        return {'status': 'ok', 'op': op}
+
+    router, router_calls = make_read_router(read_handlers={'screen': handle_screen})
+    command = {'op': 'screen'}
+    record = {'session_token': 'session-1'}
+    state = {'privacy': 'allowed'}
+
+    assert router.process_read_command('screen', command, record, state, 'term-1') == {
+        'status': 'ok',
+        'op': 'screen',
+    }
+    assert router_calls == [
+        'context',
+        ('bridge', 'session-1', 'term-1'),
+    ]
+    assert calls == [
+        ('screen', command, record, state, 'term-1', {'bridge': True}),
+    ]
+
+
 def test_app_command_registry_keeps_command_specific_auth_handlers():
     import app as standterm
 
@@ -458,6 +597,11 @@ def test_app_command_registry_keeps_command_specific_auth_handlers():
         standterm.EXTERNAL_AGENT_AUTHENTICATED_COMMAND_HANDLERS['state']
         == standterm.external_agent_basic_command_handlers.process_state_command
     )
+    for op in ('screen', 'render', 'tail', 'wait'):
+        assert (
+            standterm.EXTERNAL_AGENT_AUTHENTICATED_COMMAND_HANDLERS[op]
+            == standterm.external_agent_read_command_router.process_read_command
+        )
 
 
 def main():
@@ -475,6 +619,10 @@ def main():
         test_lifecycle_handlers_attach_maps_store_error_without_audit,
         test_lifecycle_handlers_revoke_marks_record_and_audits,
         test_lifecycle_handlers_revoke_maps_store_error_without_audit,
+        test_read_router_rejects_privacy_block_before_bridge_lookup,
+        test_read_router_maps_missing_bridge,
+        test_read_router_maps_unknown_read_op_after_bridge_lookup,
+        test_read_router_delegates_to_concrete_handler_with_bridge,
         test_app_command_registry_keeps_command_specific_auth_handlers,
     ]
     for test in tests:

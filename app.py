@@ -24,6 +24,7 @@ from external_agent_dispatch import ExternalAgentCommandDispatcher
 from external_agent_handlers import (
     ExternalAgentBasicCommandHandlers,
     ExternalAgentLifecycleCommandHandlers,
+    ExternalAgentReadCommandRouter,
 )
 from external_agent_protocol import (
     EXTERNAL_AGENT_CAPABILITIES,
@@ -6590,18 +6591,6 @@ def process_external_agent_wait_command(_op, command, record, state, terminal_id
     }
 
 
-def process_external_agent_read_command(op, command, record, state, terminal_id):
-    if not is_agent_context_allowed(state):
-        return external_agent_error(AGENT_ERROR_PRIVACY_BLOCKED, terminal_id=terminal_id)
-    bridge = get_bridge(record.get('session_token'), terminal_id)
-    if not bridge:
-        return external_agent_error(AGENT_ERROR_TERMINAL_NOT_FOUND, terminal_id=terminal_id)
-    handler = EXTERNAL_AGENT_READ_COMMAND_HANDLERS.get(op)
-    if not handler:
-        return external_agent_error(AGENT_ERROR_ACTION_NOT_ALLOWED, terminal_id=terminal_id)
-    return handler(op, command, record, state, terminal_id, bridge)
-
-
 def process_external_agent_send_command(op, command, record, state, terminal_id):
     data, input_metadata, input_error = parse_external_agent_send_input(command)
     if input_error:
@@ -6769,13 +6758,24 @@ EXTERNAL_AGENT_READ_COMMAND_HANDLERS = {
     'wait': process_external_agent_wait_command,
 }
 
+
+external_agent_read_command_router = ExternalAgentReadCommandRouter(
+    read_handlers=EXTERNAL_AGENT_READ_COMMAND_HANDLERS,
+    build_error=external_agent_error,
+    is_context_allowed=is_agent_context_allowed,
+    get_bridge=get_bridge,
+    privacy_blocked_error_code=AGENT_ERROR_PRIVACY_BLOCKED,
+    terminal_not_found_error_code=AGENT_ERROR_TERMINAL_NOT_FOUND,
+    action_not_allowed_error_code=AGENT_ERROR_ACTION_NOT_ALLOWED,
+)
+
 EXTERNAL_AGENT_AUTHENTICATED_COMMAND_HANDLERS = {
     'state': external_agent_basic_command_handlers.process_state_command,
     'sequence': process_external_agent_sequence_command,
-    'screen': process_external_agent_read_command,
-    'render': process_external_agent_read_command,
-    'tail': process_external_agent_read_command,
-    'wait': process_external_agent_read_command,
+    'screen': external_agent_read_command_router.process_read_command,
+    'render': external_agent_read_command_router.process_read_command,
+    'tail': external_agent_read_command_router.process_read_command,
+    'wait': external_agent_read_command_router.process_read_command,
     'send': process_external_agent_send_command,
     'send-wait': process_external_agent_send_command,
 }

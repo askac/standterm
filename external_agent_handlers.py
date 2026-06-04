@@ -96,3 +96,44 @@ class ExternalAgentLifecycleCommandHandlers:
             return self.build_error(error_code, terminal_id=terminal_id)
         record = self.renew_record(record)
         return self.build_heartbeat_payload(record, terminal_id)
+
+
+class ExternalAgentReadCommandRouter:
+    def __init__(
+        self,
+        *,
+        read_handlers,
+        build_error,
+        is_context_allowed,
+        get_bridge,
+        privacy_blocked_error_code,
+        terminal_not_found_error_code,
+        action_not_allowed_error_code,
+    ):
+        self.read_handlers = dict(read_handlers)
+        self.build_error = build_error
+        self.is_context_allowed = is_context_allowed
+        self.get_bridge = get_bridge
+        self.privacy_blocked_error_code = privacy_blocked_error_code
+        self.terminal_not_found_error_code = terminal_not_found_error_code
+        self.action_not_allowed_error_code = action_not_allowed_error_code
+
+    def process_read_command(self, op, command, record, state, terminal_id):
+        if not self.is_context_allowed(state):
+            return self.build_error(
+                self.privacy_blocked_error_code,
+                terminal_id=terminal_id,
+            )
+        bridge = self.get_bridge(record.get('session_token'), terminal_id)
+        if not bridge:
+            return self.build_error(
+                self.terminal_not_found_error_code,
+                terminal_id=terminal_id,
+            )
+        handler = self.read_handlers.get(op)
+        if not handler:
+            return self.build_error(
+                self.action_not_allowed_error_code,
+                terminal_id=terminal_id,
+            )
+        return handler(op, command, record, state, terminal_id, bridge)
