@@ -224,6 +224,7 @@
             z-index: 4500;
             width: min(380px, calc(100vw - 20px));
             display: none;
+            opacity: 0.9;
             background: rgba(22, 22, 22, 0.97);
             color: #ddd;
             border: 1px solid #3a3a3c;
@@ -238,7 +239,40 @@
         #agent-panel.operator-observing #agent-panel-header { border-bottom-color: #5a1d1d; background: #2a1010; }
         #agent-panel-title { color: #fff; font-weight: 700; }
         #agent-panel-state { color: #aaa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        #agent-panel-close-btn {
+            width: 22px;
+            height: 22px;
+            margin: 0;
+            padding: 0;
+            border: 1px solid #333;
+            border-radius: 5px;
+            background: #202020;
+            color: #b6b6b6;
+            cursor: pointer;
+            font-size: 16px;
+            line-height: 1;
+            flex: 0 0 auto;
+        }
+        #agent-panel-close-btn:hover { color: #fff; border-color: #0a84ff; background: #252b33; }
         #agent-panel-body { padding: 10px; display: grid; gap: 10px; }
+        #agent-access-row { display: flex; align-items: center; gap: 8px; }
+        #agent-access-toggle-btn {
+            width: auto;
+            margin: 0;
+            padding: 7px 9px;
+            border: 1px solid #0a84ff;
+            border-radius: 5px;
+            background: #183452;
+            color: #fff;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 700;
+            flex: 1;
+        }
+        #agent-access-toggle-btn.disable { border-color: #555; background: #2a2a2a; color: #ddd; }
+        #agent-access-toggle-btn:disabled { opacity: 0.45; cursor: default; border-color: #333; background: #202020; color: #888; }
+        #agent-access-summary { color: #aaa; white-space: nowrap; }
+        #agent-permission-hint { color: #aaa; line-height: 1.35; }
         #operator-observation-row { display: flex; align-items: center; gap: 7px; }
         #operator-observation-state { margin-left: auto; color: #aaa; white-space: nowrap; }
         #agent-mode-controls, #agent-action-controls, #agent-mock-row { display: flex; gap: 7px; }
@@ -293,10 +327,25 @@
         #agent-status-box.error { border-color: #7a1f1f; background: #241010; color: #ff8a80; }
         #agent-status-main { color: #ddd; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         #agent-status-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        #agent-external-actions { display: flex; gap: 7px; align-items: center; }
+        #agent-external-actions button {
+            width: auto;
+            margin: 0;
+            padding: 7px 9px;
+            border: 1px solid #444;
+            border-radius: 5px;
+            background: #2a2a2a;
+            color: #ddd;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            flex: 1;
+        }
+        #agent-external-actions button:disabled { opacity: 0.45; cursor: default; }
         #agent-external-hint { color: #aaa; line-height: 1.35; }
         #agent-external-command {
             width: 100%;
-            min-height: 54px;
+            min-height: 126px;
             max-height: 150px;
             resize: vertical;
             box-sizing: border-box;
@@ -332,6 +381,10 @@
         #agent-approve-btn { background: #0a84ff !important; border-color: #0a84ff !important; color: #fff !important; }
         #agent-reject-btn { background: #444 !important; }
         #agent-action-pause-btn { background: #3a1212 !important; border-color: #7a1f1f !important; color: #ff6b6b !important; }
+        #agent-advanced-tools { border-top: 1px solid #2c2c2e; padding-top: 8px; }
+        #agent-external-output summary, #agent-advanced-tools summary { color: #aaa; cursor: pointer; user-select: none; }
+        #agent-external-output[open], #agent-advanced-tools[open] { display: grid; gap: 8px; }
+        #agent-external-output[open] summary, #agent-advanced-tools[open] summary { margin-bottom: 8px; }
         
         /* Status Bar */
         #status-bar { position: absolute; bottom: 0; left: 0; right: 0; height: var(--status-bar-height); box-sizing: border-box; background: #111; color: #888; font-size: 12px; padding: 2px 10px; z-index: 50; border-top: 1px solid #222; display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
@@ -624,14 +677,19 @@
         <div id="agent-panel-header">
             <span id="agent-panel-title">Agent</span>
             <span id="agent-panel-state">disabled</span>
+            <button type="button" id="agent-panel-close-btn" title="Hide Agent panel" aria-label="Hide Agent panel">&times;</button>
         </div>
         <div id="agent-panel-body">
-            <div id="agent-mode-controls">
-                <button type="button" data-agent-mode="disabled">Off</button>
-                <button type="button" data-agent-mode="observe">Observe</button>
-                <button type="button" data-agent-mode="approval_pending">Approval</button>
-                <button type="button" data-agent-mode="direct_active">Direct</button>
+            <div id="agent-access-row">
+                <button type="button" id="agent-access-toggle-btn">Enable external agent</button>
+                <span id="agent-access-summary">Off</span>
             </div>
+            <div id="agent-mode-controls" aria-label="External agent permission">
+                <button type="button" data-agent-mode="observe" aria-pressed="false">Observer</button>
+                <button type="button" data-agent-mode="approval_pending">Approval</button>
+                <button type="button" data-agent-mode="direct_active">Full</button>
+            </div>
+            <div id="agent-permission-hint">Enable external agent to choose what a local agent can do.</div>
             <div id="agent-gate-state">
                 <span class="agent-chip" id="agent-gate-privacy">privacy: --</span>
                 <span class="agent-chip" id="agent-gate-human">human input: idle</span>
@@ -641,22 +699,30 @@
                 <div id="agent-status-main">last: none</div>
                 <div id="agent-status-detail">error: none</div>
             </div>
-            <div id="operator-observation-row">
-                <button type="button" id="operator-observation-start-btn">Observe User</button>
-                <button type="button" id="operator-observation-stop-btn">Stop</button>
-                <button type="button" id="operator-observation-mark-btn">Mark</button>
-                <span id="operator-observation-state">Off</span>
-            </div>
-            <div id="agent-mock-row">
-                <input type="text" id="agent-mock-input" autocomplete="off" spellcheck="false" value="whoami\n">
-                <button type="button" id="agent-mock-send-btn">Send</button>
-                <button type="button" id="agent-provider-run-btn">Run</button>
-                <button type="button" id="agent-external-token-btn">External</button>
-            </div>
             <div id="agent-external-box">
-                <div id="agent-external-hint">Select Observe, Approval, or Direct before minting external token.</div>
-                <textarea id="agent-external-command" readonly spellcheck="false"></textarea>
+                <div id="agent-external-actions">
+                    <button type="button" id="agent-external-token-btn">Mint token</button>
+                </div>
+                <div id="agent-external-hint">Enable external agent before minting a token.</div>
+                <details id="agent-external-output">
+                    <summary>Command output</summary>
+                    <textarea id="agent-external-command" rows="6" readonly spellcheck="false" aria-label="External agent command"></textarea>
+                </details>
             </div>
+            <details id="agent-advanced-tools">
+                <summary>Advanced tools</summary>
+                <div id="operator-observation-row">
+                    <button type="button" id="operator-observation-start-btn">Observe User</button>
+                    <button type="button" id="operator-observation-stop-btn">Stop</button>
+                    <button type="button" id="operator-observation-mark-btn">Mark</button>
+                    <span id="operator-observation-state">Off</span>
+                </div>
+                <div id="agent-mock-row">
+                    <input type="text" id="agent-mock-input" autocomplete="off" spellcheck="false" value="whoami\n">
+                    <button type="button" id="agent-mock-send-btn">Send</button>
+                    <button type="button" id="agent-provider-run-btn">Run</button>
+                </div>
+            </details>
             <div id="agent-action-box">
                 <div class="agent-preview" id="agent-action-preview"></div>
                 <div id="agent-action-meta">
@@ -690,6 +756,8 @@
             uart: 'UART'
         };
         const AGENT_MODE_DISABLED = 'disabled';
+        const AGENT_MODE_OBSERVE = 'observe';
+        const AGENT_MODE_APPROVAL_PENDING = 'approval_pending';
         const AGENT_MODE_DIRECT_ACTIVE = 'direct_active';
         const AGENT_MODE_PAUSED = 'paused';
         const AGENT_OPEN_ACTION_STATUSES = new Set(['pending_approval', 'direct_pending', 'approved']);
@@ -1042,7 +1110,11 @@
             const agentPanel = document.getElementById('agent-panel');
             const agentPanelHeader = document.getElementById('agent-panel-header');
             const agentPanelState = document.getElementById('agent-panel-state');
+            const agentPanelCloseBtn = document.getElementById('agent-panel-close-btn');
+            const agentAccessToggleBtn = document.getElementById('agent-access-toggle-btn');
+            const agentAccessSummary = document.getElementById('agent-access-summary');
             const agentModeButtons = [...document.querySelectorAll('[data-agent-mode]')];
+            const agentPermissionHint = document.getElementById('agent-permission-hint');
             const agentMockInput = document.getElementById('agent-mock-input');
             const agentMockSendBtn = document.getElementById('agent-mock-send-btn');
             const agentProviderRunBtn = document.getElementById('agent-provider-run-btn');
@@ -1054,6 +1126,7 @@
             const agentStatusMain = document.getElementById('agent-status-main');
             const agentStatusDetail = document.getElementById('agent-status-detail');
             const agentExternalHint = document.getElementById('agent-external-hint');
+            const agentExternalOutput = document.getElementById('agent-external-output');
             const agentExternalCommand = document.getElementById('agent-external-command');
             const agentActionBox = document.getElementById('agent-action-box');
             const agentActionPreview = document.getElementById('agent-action-preview');
@@ -1070,6 +1143,7 @@
             const operatorObservationStopBtn = document.getElementById('operator-observation-stop-btn');
             const operatorObservationMarkBtn = document.getElementById('operator-observation-mark-btn');
             const operatorObservationState = document.getElementById('operator-observation-state');
+            const agentAdvancedTools = document.getElementById('agent-advanced-tools');
             const pasteReviewModal = document.getElementById('paste-review-modal');
             const pasteReviewMeta = document.getElementById('paste-review-meta');
             const pasteReviewPreview = document.getElementById('paste-review-preview');
@@ -1106,6 +1180,8 @@
             let agentPanelTerminalIdOverride = null;
             let agentPanelPosition = null;
             let agentPanelDrag = null;
+            let agentExternalTokenCountdownTimer = null;
+            let pipTerminalState = null;
             let pendingPasteReview = null;
             let serverSettingsSnapshot = null;
             let currentSettingsAdminGrant = null;
@@ -1310,6 +1386,8 @@
                     snapshotTimer: null,
                     lastSnapshotResult: null,
                     lastRenderResult: null,
+                    externalTokenExpiresAt: null,
+                    externalTokenStatus: null,
                     observation: {
                         active: false,
                         enabled: false,
@@ -1371,6 +1449,7 @@
                 agentPauseBtn.classList.toggle('visible', visible);
                 agentToggleBtn.classList.toggle('shifted', visible);
                 agentPauseBtn.disabled = !(visible && socket && socket.connected && state && state.connected);
+                updatePipStatus(pipTerminalState);
             }
 
             function updateOperatorObservationUi() {
@@ -1380,6 +1459,7 @@
                 const enabled = !!(observation && observation.enabled);
                 document.body.classList.toggle('operator-observing', active);
                 agentPanel.classList.toggle('operator-observing', active);
+                if (active) agentAdvancedTools.open = true;
                 operatorObservationStartBtn.disabled = !state || !state.connected || !enabled || active;
                 operatorObservationStopBtn.disabled = !active;
                 operatorObservationMarkBtn.disabled = !active;
@@ -1536,6 +1616,54 @@
                 return Math.max(0, Math.ceil(expiresAt - Date.now() / 1000));
             }
 
+            function formatAgentModeLabel(mode) {
+                if (mode === AGENT_MODE_OBSERVE) return 'Observer';
+                if (mode === AGENT_MODE_APPROVAL_PENDING) return 'Approval';
+                if (mode === AGENT_MODE_DIRECT_ACTIVE) return 'Full';
+                if (mode === AGENT_MODE_PAUSED) return 'Paused';
+                return 'Off';
+            }
+
+            function formatExternalAgentPermissionHint(mode) {
+                if (mode === AGENT_MODE_OBSERVE) return 'Observer can read terminal output. It cannot type.';
+                if (mode === AGENT_MODE_APPROVAL_PENDING) return 'Approval lets the agent propose input. You approve before it is sent.';
+                if (mode === AGENT_MODE_DIRECT_ACTIVE) return 'Full lets the agent type into this terminal without approval.';
+                if (mode === AGENT_MODE_PAUSED) return 'Agent input is paused. Choose a permission to resume or disable access.';
+                return 'Enable external agent to choose what a local agent can do.';
+            }
+
+            function clearAgentExternalTokenCountdownTimer() {
+                if (!agentExternalTokenCountdownTimer) return;
+                clearTimeout(agentExternalTokenCountdownTimer);
+                agentExternalTokenCountdownTimer = null;
+            }
+
+            function getAgentExternalTokenSecondsRemaining(agent) {
+                const expiresAt = Number(agent && agent.externalTokenExpiresAt);
+                if (!Number.isFinite(expiresAt)) return null;
+                return Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
+            }
+
+            function getExternalAgentTokenExpiresAt(tokenState) {
+                if (!tokenState || typeof tokenState !== 'object') return null;
+                const remainingMs = tokenState.remaining_idle_ms;
+                if (remainingMs !== null && remainingMs !== undefined && remainingMs !== '') {
+                    const remaining = Math.max(0, Number(remainingMs));
+                    if (Number.isFinite(remaining)) return Date.now() + remaining;
+                }
+                const expiresAt = Number(tokenState.expires_at);
+                return Number.isFinite(expiresAt) ? expiresAt * 1000 : null;
+            }
+
+            function scheduleAgentExternalTokenCountdown(secondsRemaining) {
+                clearAgentExternalTokenCountdownTimer();
+                if (secondsRemaining === null || secondsRemaining <= 0) return;
+                agentExternalTokenCountdownTimer = setTimeout(() => {
+                    agentExternalTokenCountdownTimer = null;
+                    updateAgentPanel();
+                }, 1000);
+            }
+
             function renderAgentGateState(state) {
                 const agent = state ? state.agent : null;
                 const privacy = agent ? formatAgentPanelValue(agent.privacyState) : '--';
@@ -1583,18 +1711,54 @@
                 agentStatusDetail.innerText = parts.join(' · ');
             }
 
+            function hasMintedExternalAgentCommand() {
+                const value = agentExternalCommand.value.trim();
+                return !!value && !value.startsWith('error:') && !value.startsWith('minting ');
+            }
+
             function updateAgentExternalUi(usable, mode, agent) {
+                clearAgentExternalTokenCountdownTimer();
                 const paused = !!(agent && (agent.paused || mode === AGENT_MODE_PAUSED));
-                agentExternalTokenBtn.disabled = !usable || mode === AGENT_MODE_DISABLED || paused;
+                const disabled = !usable || mode === AGENT_MODE_DISABLED || paused;
+                agentExternalTokenBtn.disabled = disabled;
+                agentExternalTokenBtn.innerText = hasMintedExternalAgentCommand() ? 'Renew token' : 'Mint token';
                 if (!usable) {
-                    agentExternalHint.innerText = 'Connect a terminal before minting external token.';
+                    agentExternalHint.innerText = 'Connect a terminal before minting a token.';
                 } else if (paused) {
-                    agentExternalHint.innerText = 'Resume Observe, Approval, or Direct before minting external token.';
+                    agentExternalHint.innerText = 'Resume Observer, Approval, or Full before minting a token.';
                 } else if (mode === AGENT_MODE_DISABLED) {
-                    agentExternalHint.innerText = 'Select Observe, Approval, or Direct before minting external token.';
+                    agentExternalHint.innerText = 'Enable external agent before minting a token.';
+                } else if (hasMintedExternalAgentCommand() && agent) {
+                    if (agent.externalTokenStatus === 'revoked') {
+                        agentExternalHint.innerText = 'Permission revoked. Renew the token to continue.';
+                        return;
+                    }
+                    if (agent.externalTokenStatus === 'invalidated') {
+                        agentExternalHint.innerText = 'Permission invalidated. Mint a new token to continue.';
+                        return;
+                    }
+                    const secondsRemaining = getAgentExternalTokenSecondsRemaining(agent);
+                    if (secondsRemaining === null) {
+                        agentExternalHint.innerText = 'Token minted for this terminal and permission.';
+                    } else if (secondsRemaining <= 0) {
+                        agentExternalHint.innerText = 'Permission expired. Renew the token to continue.';
+                    } else {
+                        agentExternalHint.innerText = `Permission expires in ${secondsRemaining}s without activity.`;
+                    }
+                    scheduleAgentExternalTokenCountdown(secondsRemaining);
                 } else {
-                    agentExternalHint.innerText = 'External token mint is available for the current Agent binding.';
+                    agentExternalHint.innerText = 'Mint a local-only token for this terminal and permission.';
                 }
+            }
+
+            function applyAgentExternalTokenState(data) {
+                if (!data || typeof data.terminal_id !== 'string') return;
+                const state = terminals.get(data.terminal_id);
+                if (!state || !state.agent) return;
+                state.agent.externalTokenStatus = typeof data.token_status === 'string' ? data.token_status : 'active';
+                state.agent.externalTokenExpiresAt = getExternalAgentTokenExpiresAt(data.external_agent_token);
+                updateAgentPanel();
+                updateAgentDebugState('agent.external_token_state', state);
             }
 
             function renderAgentActionPanel(state) {
@@ -1641,11 +1805,22 @@
                 const agent = state ? state.agent : null;
                 const mode = agent ? agent.mode : AGENT_MODE_DISABLED;
                 const pending = agent ? agent.pendingActions : 0;
-                agentPanelState.innerText = state ? `${state.label || state.id} · ${mode}${pending ? ` · ${pending} pending` : ''}` : AGENT_MODE_DISABLED;
+                const accessEnabled = mode !== AGENT_MODE_DISABLED;
+                const modeLabel = formatAgentModeLabel(mode);
+                agentPanelState.innerText = state ? `${state.label || state.id} · ${modeLabel}${pending ? ` · ${pending} pending` : ''}` : 'Off';
+                agentAccessToggleBtn.disabled = !usable;
+                agentAccessToggleBtn.innerText = accessEnabled ? 'Disable external agent' : 'Enable external agent';
+                agentAccessToggleBtn.classList.toggle('disable', accessEnabled);
+                agentAccessToggleBtn.title = accessEnabled
+                    ? 'Turn off external agent access for this terminal'
+                    : 'Enable external agent access in Observer mode';
+                agentAccessSummary.innerText = accessEnabled ? modeLabel : 'Off';
+                agentPermissionHint.innerText = formatExternalAgentPermissionHint(mode);
                 agentModeButtons.forEach(button => {
                     const buttonMode = button.dataset.agentMode;
-                    button.disabled = !usable;
+                    button.disabled = !usable || !accessEnabled;
                     button.classList.toggle('active', buttonMode === mode);
+                    button.setAttribute('aria-pressed', buttonMode === mode ? 'true' : 'false');
                 });
                 agentMockInput.disabled = !usable || (mode !== 'approval_pending' && mode !== AGENT_MODE_DIRECT_ACTIVE);
                 agentMockSendBtn.disabled = agentMockInput.disabled || !agentMockInput.value;
@@ -2674,6 +2849,7 @@
                     pipTitleEl: null,
                     pipSizeEl: null,
                     pipAgentBtn: null,
+                    pipAgentPauseBtn: null,
                     pipTerminalHost: null,
                     pipReturnNextSibling: null,
                     pipPagehideHandler: null,
@@ -3022,6 +3198,9 @@
             socket.on('agent_viewport_snapshot_result', data => {
                 applyAgentViewportSnapshotResult(data);
             });
+            socket.on('agent_external_token_state', data => {
+                applyAgentExternalTokenState(data);
+            });
             socket.on('agent_viewport_render_request', data => {
                 handleAgentViewportRenderRequest(data);
             });
@@ -3177,8 +3356,13 @@
                         updateBrowserAuthUi(err.message);
                     });
             };
-            agentPauseBtn.onclick = () => {
-                const state = getAgentPanelTerminalState();
+            function setAgentMode(state, mode) {
+                if (!canUseAgentPanel(state) || !mode) return;
+                const eventName = state.agent.paused && mode !== AGENT_MODE_DISABLED ? 'agent_resume' : 'agent_mode_set';
+                socket.emit(eventName, { terminal_id: state.id, mode });
+            }
+
+            function pauseAgentForState(state) {
                 if (!socket || !socket.connected || !hasAgentPauseCapability(state)) return;
                 socket.emit('agent_pause', { terminal_id: state.id });
                 state.agent.paused = true;
@@ -3189,14 +3373,24 @@
                 updateAgentPauseButton();
                 updateAgentPanel();
                 updateAgentDebugState('agent.pause_requested', state);
+            }
+
+            agentPauseBtn.onclick = () => {
+                pauseAgentForState(getAgentPanelTerminalState());
+            };
+            agentAccessToggleBtn.onclick = () => {
+                const state = getAgentPanelTerminalState();
+                if (!canUseAgentPanel(state)) return;
+                setAgentMode(
+                    state,
+                    state.agent.mode === AGENT_MODE_DISABLED ? AGENT_MODE_OBSERVE : AGENT_MODE_DISABLED,
+                );
             };
             agentModeButtons.forEach(button => {
                 button.onclick = () => {
                     const state = getAgentPanelTerminalState();
                     const mode = button.dataset.agentMode;
-                    if (!canUseAgentPanel(state) || !mode) return;
-                    const eventName = state.agent.paused && mode !== AGENT_MODE_DISABLED ? 'agent_resume' : 'agent_mode_set';
-                    socket.emit(eventName, { terminal_id: state.id, mode });
+                    setAgentMode(state, mode);
                 };
             });
             function getMockAgentInput() {
@@ -3251,6 +3445,8 @@
                     const result = await response.json();
                     if (!response.ok || result.status !== 'ok') {
                         agentExternalCommand.value = `error: ${result.error_code || response.status}`;
+                        agentExternalOutput.open = true;
+                        updateAgentPanel();
                         return;
                     }
                     const cli = result.cli_command || `tools/.venv_wsl/bin/python scripts/agent_cli.py --url ${shellQuote(result.url)} --token ${shellQuote(result.token)} --terminal ${shellQuote(result.terminal_id)} send --text ${shellQuote('pwd\n')}`;
@@ -3258,9 +3454,18 @@
                     if (result.handoff_path) {
                         agentExternalCommand.value += `\n# local handoff: ${result.handoff_path}`;
                     }
+                    applyAgentExternalTokenState({
+                        terminal_id: state.id,
+                        token_status: 'active',
+                        external_agent_token: result.external_agent_token,
+                    });
+                    updateAgentPanel();
+                    agentExternalOutput.open = true;
                     agentExternalCommand.select();
                 } catch (error) {
                     agentExternalCommand.value = `error: ${error.message || error}`;
+                    agentExternalOutput.open = true;
+                    updateAgentPanel();
                 }
             };
             function getPendingAgentAction(state) {
@@ -3297,6 +3502,23 @@
             };
             agentActionPauseBtn.onclick = () => {
                 agentPauseBtn.click();
+            };
+            agentPanelCloseBtn.addEventListener('pointerdown', event => {
+                event.stopPropagation();
+            });
+            agentPanelCloseBtn.addEventListener('pointermove', event => {
+                event.stopPropagation();
+            });
+            agentPanelCloseBtn.addEventListener('pointerup', event => {
+                event.stopPropagation();
+            });
+            agentPanelCloseBtn.onclick = event => {
+                event.stopPropagation();
+                agentPanelVisible = false;
+                agentPanelTerminalIdOverride = null;
+                restoreAgentPanelToMainDocument();
+                updateAgentPanel();
+                updatePipStatus(pipTerminalState);
             };
             agentToggleBtn.onclick = () => {
                 if (!canUseAgentPanel(getActiveTerminalState())) return;
@@ -3510,8 +3732,6 @@
             const OVERLAY_MIN_WIDTH = 200;
             const OVERLAY_MIN_HEIGHT = 150;
             const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp'];
-            let pipTerminalState = null;
-
             function showContextMenu(x, y) {
                 const activeTerm = getActiveTerm();
                 const sel = activeTerm ? activeTerm.getSelection().trim() : '';
@@ -3681,9 +3901,11 @@
                     '.pip-title-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #fff; font-weight: 700; }',
                     '.pip-title-meta { color: #aaa; white-space: nowrap; }',
                     '.pip-title-spacer { flex: 1; }',
-                    '.pip-agent-toggle { flex: 0 0 auto; height: 22px; border: 1px solid #333; border-radius: 5px; background: #202020; color: #b6b6b6; cursor: pointer; font-size: 12px; padding: 0 8px; }',
-                    '.pip-agent-toggle:hover { color: #fff; border-color: #0a84ff; background: #252b33; }',
-                    '.pip-agent-toggle:disabled { opacity: 0.4; cursor: default; }',
+                    '.pip-agent-button { flex: 0 0 auto; height: 22px; border: 1px solid #333; border-radius: 5px; background: #202020; color: #b6b6b6; cursor: pointer; font-size: 12px; padding: 0 8px; }',
+                    '.pip-agent-button:hover { color: #fff; border-color: #0a84ff; background: #252b33; }',
+                    '.pip-agent-button:disabled { opacity: 0.4; cursor: default; }',
+                    '.pip-agent-pause { display: none; border-color: #7a1f1f; background: #3a1212; color: #ff6b6b; }',
+                    '.pip-agent-pause.visible { display: inline-block; }',
                     '.pip-terminal-host { flex: 1; min-height: 0; width: 100%; }',
                     '.pip-terminal-host .terminal-pane { display: block !important; width: 100%; height: 100%; }',
                     '#agent-panel { bottom: 10px; }'
@@ -3703,6 +3925,12 @@
                     state.pipAgentBtn.disabled = !usable;
                     state.pipAgentBtn.innerText = showing ? 'Hide Agent Panel' : 'Show Agent Panel';
                     state.pipAgentBtn.title = usable ? state.pipAgentBtn.innerText : 'Connect this terminal before using Agent panel';
+                }
+                if (state.pipAgentPauseBtn) {
+                    const pauseVisible = hasAgentPauseCapability(state);
+                    state.pipAgentPauseBtn.classList.toggle('visible', pauseVisible);
+                    state.pipAgentPauseBtn.disabled = !(pauseVisible && socket && socket.connected && state.connected);
+                    state.pipAgentPauseBtn.title = pauseVisible ? 'Pause Agent terminal input' : 'Agent pause is not available';
                 }
             }
 
@@ -3742,11 +3970,16 @@
                 meta.className = 'pip-title-meta';
                 const spacer = pipWindow.document.createElement('span');
                 spacer.className = 'pip-title-spacer';
+                const pauseButton = pipWindow.document.createElement('button');
+                pauseButton.type = 'button';
+                pauseButton.className = 'pip-agent-button pip-agent-pause';
+                pauseButton.innerText = 'Pause Agent';
+                pauseButton.addEventListener('click', () => pauseAgentForState(state));
                 const agentButton = pipWindow.document.createElement('button');
                 agentButton.type = 'button';
-                agentButton.className = 'pip-agent-toggle';
+                agentButton.className = 'pip-agent-button';
                 agentButton.addEventListener('click', () => showAgentPanelForPipTerminal(state));
-                bar.append(title, meta, spacer, agentButton);
+                bar.append(title, meta, spacer, pauseButton, agentButton);
 
                 const host = pipWindow.document.createElement('div');
                 host.className = 'pip-terminal-host';
@@ -3755,6 +3988,7 @@
                 state.pipTitleEl = title;
                 state.pipSizeEl = meta;
                 state.pipAgentBtn = agentButton;
+                state.pipAgentPauseBtn = pauseButton;
                 state.pipTerminalHost = host;
                 updatePipStatus(state);
                 return host;
@@ -3783,6 +4017,7 @@
                 state.pipTitleEl = null;
                 state.pipSizeEl = null;
                 state.pipAgentBtn = null;
+                state.pipAgentPauseBtn = null;
                 state.pipTerminalHost = null;
                 state.pipReturnNextSibling = null;
                 state.pipPagehideHandler = null;

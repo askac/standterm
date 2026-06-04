@@ -212,6 +212,7 @@ AGENT_EVENT_ACTION_REQUEST = 'agent_action_request'
 AGENT_EVENT_ACTION_RESULT = 'agent_action_result'
 AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT = 'agent_viewport_snapshot_result'
 AGENT_EVENT_PRIVACY_SET = 'agent_privacy_set'
+AGENT_EVENT_EXTERNAL_TOKEN_STATE = 'agent_external_token_state'
 OPERATOR_OBSERVATION_EVENT_START = 'operator_observation_start'
 OPERATOR_OBSERVATION_EVENT_STOP = 'operator_observation_stop'
 OPERATOR_OBSERVATION_EVENT_MARK = 'operator_observation_mark'
@@ -3408,6 +3409,7 @@ def mint_external_agent_attach_token(session_token, terminal_id, sid,
             external_agent_id=record.get('external_agent_id'),
             expires_at=record.get('expires_at'),
         )
+        emit_external_agent_token_state(record)
         return token, record, None
 
 def mint_external_agent_attach_token_for_viewer(session_token, terminal_id, viewer_id,
@@ -3449,6 +3451,8 @@ def validate_external_agent_command_token(command, require_terminal=True, renew_
         )
     if error_code:
         return None, None, terminal_id, error_code
+    if renew_token:
+        emit_external_agent_token_state(record)
     with agent_lock:
         state, error_code = get_external_agent_authorized_state(record)
         if error_code:
@@ -3508,6 +3512,32 @@ def build_external_agent_token_state_payload(record, now=None):
         'remaining_idle_ms': remaining_idle_ms,
         'recommended_keepalive_ms': get_external_agent_recommended_keepalive_ms(record.get('idle_timeout_seconds')),
     }
+
+def build_external_agent_token_state_event_payload(record, token_status=None):
+    if not isinstance(record, dict):
+        return None
+    if token_status is None:
+        if record.get('revoked'):
+            token_status = 'revoked'
+        elif record.get('invalidated'):
+            token_status = 'invalidated'
+        else:
+            token_status = 'active'
+    return {
+        'status': 'ok',
+        'terminal_id': record.get('terminal_id'),
+        'external_agent_id': record.get('external_agent_id'),
+        'token_status': token_status,
+        'attached': bool(record.get('attached')),
+        'revoked': bool(record.get('revoked')),
+        'external_agent_token': build_external_agent_token_state_payload(record),
+    }
+
+def emit_external_agent_token_state(record, token_status=None):
+    payload = build_external_agent_token_state_event_payload(record, token_status=token_status)
+    sid = record.get('sid') if isinstance(record, dict) else None
+    if payload and sid:
+        socketio.emit(AGENT_EVENT_EXTERNAL_TOKEN_STATE, payload, room=sid)
 
 def build_external_agent_state_payload(record, state):
     payload = state.public_state()
@@ -6679,7 +6709,9 @@ external_agent_basic_command_handlers = ExternalAgentBasicCommandHandlers(
 
 def renew_external_agent_record(record):
     with external_agent_lock:
-        return external_agent_attach_store.renew_record(record.get('token_hash')) or record
+        renewed = external_agent_attach_store.renew_record(record.get('token_hash')) or record
+    emit_external_agent_token_state(renewed)
+    return renewed
 
 
 def attach_external_agent_record(token):
@@ -6693,6 +6725,7 @@ def record_external_agent_attached(state, record):
         AGENT_AUDIT_EXTERNAL_AGENT_ATTACHED,
         external_agent_id=record.get('external_agent_id'),
     )
+    emit_external_agent_token_state(record, token_status='attached')
 
 
 def revoke_external_agent_record(token):
@@ -6706,6 +6739,7 @@ def record_external_agent_revoked(state, record):
         AGENT_AUDIT_EXTERNAL_AGENT_REVOKED,
         external_agent_id=record.get('external_agent_id'),
     )
+    emit_external_agent_token_state(record, token_status='revoked')
 
 
 external_agent_lifecycle_command_handlers = ExternalAgentLifecycleCommandHandlers(

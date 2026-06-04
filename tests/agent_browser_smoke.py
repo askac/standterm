@@ -232,6 +232,11 @@ def test_agent_panel_can_be_dragged(browser, access_url):
         saved = page.evaluate("() => JSON.parse(localStorage.getItem('agentPanelPosition.v1'))")
         check(isinstance(saved.get('left'), (int, float)), 'agent panel left position was not saved')
         check(isinstance(saved.get('top'), (int, float)), 'agent panel top position was not saved')
+        page.click('#agent-panel-close-btn')
+        page.wait_for_function(
+            "() => !document.getElementById('agent-panel').classList.contains('visible')",
+            timeout=5000,
+        )
     finally:
         close_context(context)
 
@@ -475,22 +480,33 @@ def test_agent_panel_status_gates_and_external_hint(browser, access_url):
             """() => ({
                 buttonDisabled: document.getElementById('agent-external-token-btn').disabled,
                 hint: document.getElementById('agent-external-hint').innerText,
-                commandTag: document.getElementById('agent-external-command').tagName
+                commandTag: document.getElementById('agent-external-command').tagName,
+                commandOutputOpen: document.getElementById('agent-external-output').open,
+                accessText: document.getElementById('agent-access-toggle-btn').innerText,
+                modeButtonsDisabled: Array.from(document.querySelectorAll('[data-agent-mode]')).every(button => button.disabled)
             })"""
         )
+        check(disabled_external['accessText'] == 'Enable external agent', 'agent access toggle did not offer enable in disabled mode')
+        check(disabled_external['modeButtonsDisabled'] is True, 'agent permission buttons were not disabled while access was off')
         check(disabled_external['buttonDisabled'] is True, 'external token button stayed enabled in disabled mode')
-        check('Select Observe' in disabled_external['hint'], 'external token hint did not explain disabled prerequisite')
+        check('Enable external agent' in disabled_external['hint'], 'external token hint did not explain disabled prerequisite')
         check(disabled_external['commandTag'] == 'TEXTAREA', 'external token command output is not a textarea')
+        check(disabled_external['commandOutputOpen'] is False, 'external token command output was not collapsed by default')
 
-        set_agent_mode(page, 'observe', 'observe')
+        page.click('#agent-access-toggle-btn')
+        wait_for_agent(page, "state.mode === 'observe'")
         enabled_external = page.evaluate(
             """() => ({
                 buttonDisabled: document.getElementById('agent-external-token-btn').disabled,
-                hint: document.getElementById('agent-external-hint').innerText
+                hint: document.getElementById('agent-external-hint').innerText,
+                accessText: document.getElementById('agent-access-toggle-btn').innerText,
+                modeLabels: Array.from(document.querySelectorAll('[data-agent-mode]')).map(button => button.innerText)
             })"""
         )
+        check(enabled_external['accessText'] == 'Disable external agent', 'agent access toggle did not offer disable after enabling')
+        check(enabled_external['modeLabels'] == ['Observer', 'Approval', 'Full'], 'agent permission buttons did not use user-facing labels')
         check(enabled_external['buttonDisabled'] is False, 'external token button did not enable in observe mode')
-        check('available' in enabled_external['hint'], 'external token hint did not show available state')
+        check('Mint' in enabled_external['hint'], 'external token hint did not show available state')
     finally:
         close_context(context)
 

@@ -2145,12 +2145,18 @@ def test_external_agent_privacy_and_disabled_state_block_visibility_and_send():
         'terminal_id': standterm.TERMINAL_ID_MAIN,
         'mode': 'approval',
     })
+    client.get_received()
     token, record, error_code = standterm.mint_external_agent_attach_token(
         session_token,
         standterm.TERMINAL_ID_MAIN,
         sid,
     )
     assert error_code is None
+    token_state = last_payload(client, standterm.AGENT_EVENT_EXTERNAL_TOKEN_STATE)
+    assert token_state['terminal_id'] == standterm.TERMINAL_ID_MAIN
+    assert token_state['token_status'] == 'active'
+    assert token_state['external_agent_id'] == record['external_agent_id']
+    assert token_state['external_agent_token']['remaining_idle_ms'] > 0
 
     stored = standterm.external_agent_attach_store._tokens[record['token_hash']]
     client.emit(standterm.AGENT_EVENT_PRIVACY_SET, {
@@ -2158,6 +2164,7 @@ def test_external_agent_privacy_and_disabled_state_block_visibility_and_send():
         'privacy_state': standterm.AGENT_PRIVACY_PRIVATE_INPUT,
     })
     stored['expires_at'] = standterm.time.time() + 1
+    client.get_received()
     heartbeat = standterm.process_external_agent_command({
         'op': 'heartbeat',
         'token': token,
@@ -2166,6 +2173,9 @@ def test_external_agent_privacy_and_disabled_state_block_visibility_and_send():
     assert heartbeat['status'] == 'ok'
     assert heartbeat['external_agent_token']['remaining_idle_ms'] > 0
     assert heartbeat['external_agent_token']['expires_at'] == stored['expires_at']
+    token_state = last_payload(client, standterm.AGENT_EVENT_EXTERNAL_TOKEN_STATE)
+    assert token_state['token_status'] == 'active'
+    assert token_state['external_agent_token']['expires_at'] == stored['expires_at']
     assert 'screen' not in heartbeat
     assert 'events' not in heartbeat
     assert 'render' not in heartbeat
@@ -2231,6 +2241,7 @@ def test_external_agent_token_revoke_and_terminal_close_invalidate_access():
         sid,
     )
     assert error_code is None
+    client.get_received()
 
     revoked = standterm.process_external_agent_command({
         'op': 'revoke',
@@ -2238,6 +2249,9 @@ def test_external_agent_token_revoke_and_terminal_close_invalidate_access():
         'terminal_id': standterm.TERMINAL_ID_MAIN,
     })
     assert revoked['status'] == 'ok'
+    token_state = last_payload(client, standterm.AGENT_EVENT_EXTERNAL_TOKEN_STATE)
+    assert token_state['token_status'] == 'revoked'
+    assert token_state['revoked'] is True
     result = standterm.process_external_agent_command({
         'op': 'state',
         'token': token,
