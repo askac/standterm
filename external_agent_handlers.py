@@ -201,3 +201,44 @@ class ExternalAgentTailCommandHandler:
             payload['strip_ansi'] = True
             payload['data_format'] = tail['data_format']
         return payload
+
+
+class ExternalAgentWaitCommandHandler:
+    def __init__(
+        self,
+        *,
+        build_wait_payload,
+        record_audit,
+        build_error,
+        audit_event_type,
+    ):
+        self.build_wait_payload = build_wait_payload
+        self.record_audit = record_audit
+        self.build_error = build_error
+        self.audit_event_type = audit_event_type
+
+    def process_wait_command(self, _op, command, record, state, terminal_id, bridge):
+        wait_payload, error_code = self.build_wait_payload(bridge, state, command)
+        if error_code:
+            return self.build_error(error_code, terminal_id=terminal_id)
+        self.record_audit(
+            state,
+            self.audit_event_type,
+            external_agent_id=record.get('external_agent_id'),
+            condition=wait_payload['condition'],
+            status=wait_payload['status'],
+            timed_out=wait_payload['timed_out'],
+            output_seq=wait_payload.get('output_seq'),
+            wait_ms=wait_payload.get('wait_ms'),
+            quiet_ms=wait_payload.get('quiet_ms'),
+            event_count=wait_payload.get('event_count'),
+            gap=wait_payload.get('gap'),
+        )
+        return {
+            'status': 'ok',
+            'terminal_id': terminal_id,
+            'external_agent_id': record.get('external_agent_id'),
+            'output_seq': wait_payload.get('output_seq'),
+            'state': state.public_state(),
+            'wait': wait_payload,
+        }

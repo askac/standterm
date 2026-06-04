@@ -9,6 +9,7 @@ from external_agent_handlers import (
     ExternalAgentLifecycleCommandHandlers,
     ExternalAgentReadCommandRouter,
     ExternalAgentTailCommandHandler,
+    ExternalAgentWaitCommandHandler,
 )
 
 
@@ -756,6 +757,128 @@ def test_tail_handler_reports_plain_tail_format_when_requested():
     assert payload['events'] == [{'seq': 8, 'text': 'plain'}]
 
 
+class PublicState:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def public_state(self):
+        return self.payload
+
+
+def make_wait_handler(*, build_wait_payload=None):
+    calls = []
+
+    if build_wait_payload is None:
+        def build_wait_payload(bridge, state, command):
+            calls.append(('wait', bridge, state, command))
+            return {
+                'condition': 'output',
+                'status': 'settled',
+                'timed_out': False,
+                'output_seq': 12,
+                'wait_ms': 250,
+                'quiet_ms': None,
+                'event_count': 2,
+                'gap': False,
+            }, None
+
+    def record_audit(state, event_type, **metadata):
+        calls.append(('audit', state, event_type, metadata))
+
+    def build_error(error_code, terminal_id=None):
+        calls.append(('error', error_code, terminal_id))
+        return {'status': 'failed', 'error_code': error_code, 'terminal_id': terminal_id}
+
+    handler = ExternalAgentWaitCommandHandler(
+        build_wait_payload=build_wait_payload,
+        record_audit=record_audit,
+        build_error=build_error,
+        audit_event_type='wait_audit',
+    )
+    return handler, calls
+
+
+def test_wait_handler_maps_wait_builder_error_without_audit():
+    calls = []
+
+    def build_wait_payload(bridge, state, command):
+        calls.append(('wait', bridge, state, command))
+        return None, 'bad_wait'
+
+    handler, handler_calls = make_wait_handler(build_wait_payload=build_wait_payload)
+    state = PublicState({'mode': 'observe'})
+    command = {'op': 'wait', 'condition': 'output'}
+
+    assert handler.process_wait_command(
+        'wait',
+        command,
+        {'external_agent_id': 'agent-1'},
+        state,
+        'term-1',
+        {'bridge': True},
+    ) == {
+        'status': 'failed',
+        'error_code': 'bad_wait',
+        'terminal_id': 'term-1',
+    }
+    assert calls == [
+        ('wait', {'bridge': True}, state, command),
+    ]
+    assert handler_calls == [
+        ('error', 'bad_wait', 'term-1'),
+    ]
+
+
+def test_wait_handler_builds_payload_and_records_audit():
+    handler, calls = make_wait_handler()
+    state = PublicState({'mode': 'observe'})
+    command = {'op': 'wait', 'condition': 'output'}
+
+    assert handler.process_wait_command(
+        'wait',
+        command,
+        {'external_agent_id': 'agent-1'},
+        state,
+        'term-1',
+        {'bridge': True},
+    ) == {
+        'status': 'ok',
+        'terminal_id': 'term-1',
+        'external_agent_id': 'agent-1',
+        'output_seq': 12,
+        'state': {'mode': 'observe'},
+        'wait': {
+            'condition': 'output',
+            'status': 'settled',
+            'timed_out': False,
+            'output_seq': 12,
+            'wait_ms': 250,
+            'quiet_ms': None,
+            'event_count': 2,
+            'gap': False,
+        },
+    }
+    assert calls == [
+        ('wait', {'bridge': True}, state, command),
+        (
+            'audit',
+            state,
+            'wait_audit',
+            {
+                'external_agent_id': 'agent-1',
+                'condition': 'output',
+                'status': 'settled',
+                'timed_out': False,
+                'output_seq': 12,
+                'wait_ms': 250,
+                'quiet_ms': None,
+                'event_count': 2,
+                'gap': False,
+            },
+        ),
+    ]
+
+
 def test_app_command_registry_keeps_command_specific_auth_handlers():
     import app as standterm
 
@@ -777,6 +900,10 @@ def test_app_command_registry_keeps_command_specific_auth_handlers():
     assert (
         standterm.EXTERNAL_AGENT_READ_COMMAND_HANDLERS['tail']
         == standterm.external_agent_tail_command_handler.process_tail_command
+    )
+    assert (
+        standterm.EXTERNAL_AGENT_READ_COMMAND_HANDLERS['wait']
+        == standterm.external_agent_wait_command_handler.process_wait_command
     )
 
 
@@ -802,6 +929,8 @@ def main():
         test_tail_handler_maps_tail_builder_error_without_format_or_audit,
         test_tail_handler_builds_payload_and_records_audit,
         test_tail_handler_reports_plain_tail_format_when_requested,
+        test_wait_handler_maps_wait_builder_error_without_audit,
+        test_wait_handler_builds_payload_and_records_audit,
         test_app_command_registry_keeps_command_specific_auth_handlers,
     ]
     for test in tests:

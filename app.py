@@ -26,6 +26,7 @@ from external_agent_handlers import (
     ExternalAgentLifecycleCommandHandlers,
     ExternalAgentReadCommandRouter,
     ExternalAgentTailCommandHandler,
+    ExternalAgentWaitCommandHandler,
 )
 from external_agent_protocol import (
     EXTERNAL_AGENT_CAPABILITIES,
@@ -6524,33 +6525,6 @@ def process_external_agent_render_command(_op, command, record, state, terminal_
     }
 
 
-def process_external_agent_wait_command(_op, command, record, state, terminal_id, bridge):
-    wait_payload, error_code = build_external_agent_wait_payload(bridge, state, command)
-    if error_code:
-        return external_agent_error(error_code, terminal_id=terminal_id)
-    record_agent_audit_event(
-        state,
-        AGENT_AUDIT_EXTERNAL_AGENT_WAIT,
-        external_agent_id=record.get('external_agent_id'),
-        condition=wait_payload['condition'],
-        status=wait_payload['status'],
-        timed_out=wait_payload['timed_out'],
-        output_seq=wait_payload.get('output_seq'),
-        wait_ms=wait_payload.get('wait_ms'),
-        quiet_ms=wait_payload.get('quiet_ms'),
-        event_count=wait_payload.get('event_count'),
-        gap=wait_payload.get('gap'),
-    )
-    return {
-        'status': 'ok',
-        'terminal_id': terminal_id,
-        'external_agent_id': record.get('external_agent_id'),
-        'output_seq': wait_payload.get('output_seq'),
-        'state': state.public_state(),
-        'wait': wait_payload,
-    }
-
-
 def process_external_agent_send_command(op, command, record, state, terminal_id):
     data, input_metadata, input_error = parse_external_agent_send_input(command)
     if input_error:
@@ -6716,6 +6690,14 @@ external_agent_tail_command_handler = ExternalAgentTailCommandHandler(
 )
 
 
+external_agent_wait_command_handler = ExternalAgentWaitCommandHandler(
+    build_wait_payload=build_external_agent_wait_payload,
+    record_audit=record_agent_audit_event,
+    build_error=external_agent_error,
+    audit_event_type=AGENT_AUDIT_EXTERNAL_AGENT_WAIT,
+)
+
+
 EXTERNAL_AGENT_COMMAND_AUTH_HANDLERS = {
     'hello': external_agent_basic_command_handlers.process_hello_command,
     'attach': external_agent_lifecycle_command_handlers.process_attach_command,
@@ -6727,7 +6709,7 @@ EXTERNAL_AGENT_READ_COMMAND_HANDLERS = {
     'screen': process_external_agent_screen_command,
     'render': process_external_agent_render_command,
     'tail': external_agent_tail_command_handler.process_tail_command,
-    'wait': process_external_agent_wait_command,
+    'wait': external_agent_wait_command_handler.process_wait_command,
 }
 
 
