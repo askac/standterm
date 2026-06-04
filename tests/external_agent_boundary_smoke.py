@@ -4,7 +4,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from external_agent_dispatch import ExternalAgentCommandDispatcher
-from external_agent_handlers import ExternalAgentBasicCommandHandlers
+from external_agent_handlers import (
+    ExternalAgentBasicCommandHandlers,
+    ExternalAgentLifecycleCommandHandlers,
+)
 
 
 def make_dispatcher(command_auth_handlers=None, authenticated_handlers=None, validate_token=None):
@@ -198,6 +201,73 @@ def test_basic_handlers_state_returns_state_payload():
     }
 
 
+def test_lifecycle_handlers_heartbeat_renews_without_token_validation_side_effect():
+    calls = []
+
+    def validate_token(command, renew_token=True):
+        calls.append(('validate', command, renew_token))
+        return {'token_hash': 'hash-1'}, {'state': True}, 'term-1', None
+
+    def build_error(error_code, terminal_id=None):
+        calls.append(('error', error_code, terminal_id))
+        return {'status': 'failed', 'error_code': error_code}
+
+    def renew_record(record):
+        calls.append(('renew', record))
+        return {'token_hash': 'hash-1', 'renewed': True}
+
+    def build_heartbeat_payload(record, terminal_id):
+        calls.append(('heartbeat', record, terminal_id))
+        return {'status': 'ok', 'record': record, 'terminal_id': terminal_id}
+
+    handlers = ExternalAgentLifecycleCommandHandlers(
+        validate_token=validate_token,
+        build_error=build_error,
+        renew_record=renew_record,
+        build_heartbeat_payload=build_heartbeat_payload,
+    )
+
+    assert handlers.process_heartbeat_command('heartbeat', {'op': 'heartbeat', 'token': 'abc'}) == {
+        'status': 'ok',
+        'record': {'token_hash': 'hash-1', 'renewed': True},
+        'terminal_id': 'term-1',
+    }
+    assert calls == [
+        ('validate', {'op': 'heartbeat', 'token': 'abc'}, False),
+        ('renew', {'token_hash': 'hash-1'}),
+        ('heartbeat', {'token_hash': 'hash-1', 'renewed': True}, 'term-1'),
+    ]
+
+
+def test_lifecycle_handlers_heartbeat_maps_validation_error_without_renew():
+    calls = []
+
+    def validate_token(_command, renew_token=True):
+        calls.append(('validate', renew_token))
+        return None, None, 'term-1', 'expired'
+
+    def build_error(error_code, terminal_id=None):
+        calls.append(('error', error_code, terminal_id))
+        return {'status': 'failed', 'error_code': error_code, 'terminal_id': terminal_id}
+
+    handlers = ExternalAgentLifecycleCommandHandlers(
+        validate_token=validate_token,
+        build_error=build_error,
+        renew_record=lambda _record: calls.append('renew'),
+        build_heartbeat_payload=lambda _record, _terminal_id: None,
+    )
+
+    assert handlers.process_heartbeat_command('heartbeat', {'op': 'heartbeat'}) == {
+        'status': 'failed',
+        'error_code': 'expired',
+        'terminal_id': 'term-1',
+    }
+    assert calls == [
+        ('validate', False),
+        ('error', 'expired', 'term-1'),
+    ]
+
+
 def test_app_command_registry_keeps_command_specific_auth_handlers():
     import app as standterm
 
@@ -205,7 +275,7 @@ def test_app_command_registry_keeps_command_specific_auth_handlers():
         'hello': standterm.external_agent_basic_command_handlers.process_hello_command,
         'attach': standterm.process_external_agent_attach_command,
         'revoke': standterm.process_external_agent_revoke_command,
-        'heartbeat': standterm.process_external_agent_heartbeat_command,
+        'heartbeat': standterm.external_agent_lifecycle_command_handlers.process_heartbeat_command,
     }
     assert (
         standterm.EXTERNAL_AGENT_AUTHENTICATED_COMMAND_HANDLERS['state']
@@ -222,6 +292,8 @@ def main():
         test_basic_handlers_hello_uses_command_specific_validation,
         test_basic_handlers_hello_maps_validation_error,
         test_basic_handlers_state_returns_state_payload,
+        test_lifecycle_handlers_heartbeat_renews_without_token_validation_side_effect,
+        test_lifecycle_handlers_heartbeat_maps_validation_error_without_renew,
         test_app_command_registry_keeps_command_specific_auth_handlers,
     ]
     for test in tests:

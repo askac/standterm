@@ -36,3 +36,28 @@ class ExternalAgentBasicCommandHandlers:
 
     def process_state_command(self, _op, _command, record, state, _terminal_id):
         return self.build_state_payload(record, state)
+
+
+class ExternalAgentLifecycleCommandHandlers:
+    def __init__(
+        self,
+        *,
+        validate_token,
+        build_error,
+        renew_record,
+        build_heartbeat_payload,
+    ):
+        self.validate_token = validate_token
+        self.build_error = build_error
+        self.renew_record = renew_record
+        self.build_heartbeat_payload = build_heartbeat_payload
+
+    def process_heartbeat_command(self, _op, command):
+        record, _state, terminal_id, error_code = self.validate_token(
+            command,
+            renew_token=False,
+        )
+        if error_code:
+            return self.build_error(error_code, terminal_id=terminal_id)
+        record = self.renew_record(record)
+        return self.build_heartbeat_payload(record, terminal_id)

@@ -21,7 +21,10 @@ from pathlib import Path
 from flask import Flask, render_template, request, abort, make_response, redirect, send_file, jsonify
 from flask_socketio import SocketIO
 from external_agent_dispatch import ExternalAgentCommandDispatcher
-from external_agent_handlers import ExternalAgentBasicCommandHandlers
+from external_agent_handlers import (
+    ExternalAgentBasicCommandHandlers,
+    ExternalAgentLifecycleCommandHandlers,
+)
 from external_agent_protocol import (
     EXTERNAL_AGENT_CAPABILITIES,
     EXTERNAL_AGENT_PROTOCOL_VERSION,
@@ -6410,18 +6413,6 @@ def process_external_agent_revoke_command(_op, command):
     }
 
 
-def process_external_agent_heartbeat_command(_op, command):
-    record, _state, terminal_id, error_code = validate_external_agent_command_token(
-        command,
-        renew_token=False,
-    )
-    if error_code:
-        return external_agent_error(error_code, terminal_id=terminal_id)
-    with external_agent_lock:
-        record = external_agent_attach_store.renew_record(record.get('token_hash')) or record
-    return build_external_agent_heartbeat_payload(record, terminal_id)
-
-
 def process_external_agent_sequence_command(_op, command, record, state, terminal_id):
     payload, error_code = build_external_agent_sequence_payload(record, state, terminal_id, command)
     if error_code:
@@ -6723,11 +6714,24 @@ external_agent_basic_command_handlers = ExternalAgentBasicCommandHandlers(
 )
 
 
+def renew_external_agent_record(record):
+    with external_agent_lock:
+        return external_agent_attach_store.renew_record(record.get('token_hash')) or record
+
+
+external_agent_lifecycle_command_handlers = ExternalAgentLifecycleCommandHandlers(
+    validate_token=validate_external_agent_command_token,
+    build_error=external_agent_error,
+    renew_record=renew_external_agent_record,
+    build_heartbeat_payload=build_external_agent_heartbeat_payload,
+)
+
+
 EXTERNAL_AGENT_COMMAND_AUTH_HANDLERS = {
     'hello': external_agent_basic_command_handlers.process_hello_command,
     'attach': process_external_agent_attach_command,
     'revoke': process_external_agent_revoke_command,
-    'heartbeat': process_external_agent_heartbeat_command,
+    'heartbeat': external_agent_lifecycle_command_handlers.process_heartbeat_command,
 }
 
 EXTERNAL_AGENT_READ_COMMAND_HANDLERS = {
