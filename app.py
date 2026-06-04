@@ -6376,22 +6376,6 @@ def process_agent_terminal_input_proposal(data, proposal_builder,
             emit_agent_state(request.sid, state)
 
 
-def process_external_agent_attach_command(_op, command):
-    record, state, terminal_id, error_code = validate_external_agent_command_token(command)
-    if error_code:
-        return external_agent_error(error_code, terminal_id=terminal_id)
-    with external_agent_lock:
-        record, error_code = external_agent_attach_store.mark_attached(command.get('token'))
-    if error_code:
-        return external_agent_error(error_code, terminal_id=terminal_id)
-    record_agent_audit_event(
-        state,
-        AGENT_AUDIT_EXTERNAL_AGENT_ATTACHED,
-        external_agent_id=record.get('external_agent_id'),
-    )
-    return build_external_agent_state_payload(record, state)
-
-
 def process_external_agent_revoke_command(_op, command):
     record, state, terminal_id, error_code = validate_external_agent_command_token(command)
     if error_code:
@@ -6719,17 +6703,33 @@ def renew_external_agent_record(record):
         return external_agent_attach_store.renew_record(record.get('token_hash')) or record
 
 
+def attach_external_agent_record(token):
+    with external_agent_lock:
+        return external_agent_attach_store.mark_attached(token)
+
+
+def record_external_agent_attached(state, record):
+    record_agent_audit_event(
+        state,
+        AGENT_AUDIT_EXTERNAL_AGENT_ATTACHED,
+        external_agent_id=record.get('external_agent_id'),
+    )
+
+
 external_agent_lifecycle_command_handlers = ExternalAgentLifecycleCommandHandlers(
     validate_token=validate_external_agent_command_token,
     build_error=external_agent_error,
     renew_record=renew_external_agent_record,
     build_heartbeat_payload=build_external_agent_heartbeat_payload,
+    attach_record=attach_external_agent_record,
+    record_attached=record_external_agent_attached,
+    build_state_payload=build_external_agent_state_payload,
 )
 
 
 EXTERNAL_AGENT_COMMAND_AUTH_HANDLERS = {
     'hello': external_agent_basic_command_handlers.process_hello_command,
-    'attach': process_external_agent_attach_command,
+    'attach': external_agent_lifecycle_command_handlers.process_attach_command,
     'revoke': process_external_agent_revoke_command,
     'heartbeat': external_agent_lifecycle_command_handlers.process_heartbeat_command,
 }

@@ -225,6 +225,9 @@ def test_lifecycle_handlers_heartbeat_renews_without_token_validation_side_effec
         build_error=build_error,
         renew_record=renew_record,
         build_heartbeat_payload=build_heartbeat_payload,
+        attach_record=lambda _token: None,
+        record_attached=lambda _state, _record: None,
+        build_state_payload=lambda _record, _state: None,
     )
 
     assert handlers.process_heartbeat_command('heartbeat', {'op': 'heartbeat', 'token': 'abc'}) == {
@@ -255,6 +258,9 @@ def test_lifecycle_handlers_heartbeat_maps_validation_error_without_renew():
         build_error=build_error,
         renew_record=lambda _record: calls.append('renew'),
         build_heartbeat_payload=lambda _record, _terminal_id: None,
+        attach_record=lambda _token: calls.append('attach'),
+        record_attached=lambda _state, _record: calls.append('audit'),
+        build_state_payload=lambda _record, _state: None,
     )
 
     assert handlers.process_heartbeat_command('heartbeat', {'op': 'heartbeat'}) == {
@@ -268,12 +274,93 @@ def test_lifecycle_handlers_heartbeat_maps_validation_error_without_renew():
     ]
 
 
+def test_lifecycle_handlers_attach_marks_record_and_audits():
+    calls = []
+
+    def validate_token(command):
+        calls.append(('validate', command))
+        return {'pre_attach': True}, {'mode': 'direct'}, 'term-1', None
+
+    def build_error(error_code, terminal_id=None):
+        calls.append(('error', error_code, terminal_id))
+        return {'status': 'failed', 'error_code': error_code}
+
+    def attach_record(token):
+        calls.append(('attach', token))
+        return {'external_agent_id': 'agent-1'}, None
+
+    def record_attached(state, record):
+        calls.append(('audit', state, record))
+
+    def build_state_payload(record, state):
+        calls.append(('state', record, state))
+        return {'status': 'attached', 'external_agent_id': record['external_agent_id']}
+
+    handlers = ExternalAgentLifecycleCommandHandlers(
+        validate_token=validate_token,
+        build_error=build_error,
+        renew_record=lambda _record: None,
+        build_heartbeat_payload=lambda _record, _terminal_id: None,
+        attach_record=attach_record,
+        record_attached=record_attached,
+        build_state_payload=build_state_payload,
+    )
+
+    assert handlers.process_attach_command('attach', {'op': 'attach', 'token': 'abc'}) == {
+        'status': 'attached',
+        'external_agent_id': 'agent-1',
+    }
+    assert calls == [
+        ('validate', {'op': 'attach', 'token': 'abc'}),
+        ('attach', 'abc'),
+        ('audit', {'mode': 'direct'}, {'external_agent_id': 'agent-1'}),
+        ('state', {'external_agent_id': 'agent-1'}, {'mode': 'direct'}),
+    ]
+
+
+def test_lifecycle_handlers_attach_maps_store_error_without_audit():
+    calls = []
+
+    def validate_token(_command):
+        calls.append('validate')
+        return {'pre_attach': True}, {'mode': 'direct'}, 'term-1', None
+
+    def build_error(error_code, terminal_id=None):
+        calls.append(('error', error_code, terminal_id))
+        return {'status': 'failed', 'error_code': error_code, 'terminal_id': terminal_id}
+
+    def attach_record(token):
+        calls.append(('attach', token))
+        return None, 'revoked'
+
+    handlers = ExternalAgentLifecycleCommandHandlers(
+        validate_token=validate_token,
+        build_error=build_error,
+        renew_record=lambda _record: None,
+        build_heartbeat_payload=lambda _record, _terminal_id: None,
+        attach_record=attach_record,
+        record_attached=lambda _state, _record: calls.append('audit'),
+        build_state_payload=lambda _record, _state: calls.append('state'),
+    )
+
+    assert handlers.process_attach_command('attach', {'op': 'attach', 'token': 'abc'}) == {
+        'status': 'failed',
+        'error_code': 'revoked',
+        'terminal_id': 'term-1',
+    }
+    assert calls == [
+        'validate',
+        ('attach', 'abc'),
+        ('error', 'revoked', 'term-1'),
+    ]
+
+
 def test_app_command_registry_keeps_command_specific_auth_handlers():
     import app as standterm
 
     assert standterm.EXTERNAL_AGENT_COMMAND_AUTH_HANDLERS == {
         'hello': standterm.external_agent_basic_command_handlers.process_hello_command,
-        'attach': standterm.process_external_agent_attach_command,
+        'attach': standterm.external_agent_lifecycle_command_handlers.process_attach_command,
         'revoke': standterm.process_external_agent_revoke_command,
         'heartbeat': standterm.external_agent_lifecycle_command_handlers.process_heartbeat_command,
     }
@@ -294,6 +381,8 @@ def main():
         test_basic_handlers_state_returns_state_payload,
         test_lifecycle_handlers_heartbeat_renews_without_token_validation_side_effect,
         test_lifecycle_handlers_heartbeat_maps_validation_error_without_renew,
+        test_lifecycle_handlers_attach_marks_record_and_audits,
+        test_lifecycle_handlers_attach_maps_store_error_without_audit,
         test_app_command_registry_keeps_command_specific_auth_handlers,
     ]
     for test in tests:
