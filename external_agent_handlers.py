@@ -1,0 +1,38 @@
+from external_agent_protocol import (
+    EXTERNAL_AGENT_CAPABILITIES,
+    EXTERNAL_AGENT_PROTOCOL_VERSION,
+)
+
+
+class ExternalAgentBasicCommandHandlers:
+    def __init__(
+        self,
+        *,
+        validate_token,
+        build_error,
+        build_state_payload,
+    ):
+        self.validate_token = validate_token
+        self.build_error = build_error
+        self.build_state_payload = build_state_payload
+
+    def process_hello_command(self, _op, command):
+        record, state, terminal_id, error_code = self.validate_token(
+            command,
+            require_terminal=False,
+        )
+        if error_code:
+            return self.build_error(error_code, terminal_id=terminal_id)
+        state_payload = self.build_state_payload(record, state)
+        state_payload.pop('status', None)
+        return {
+            'status': 'ok',
+            'version': EXTERNAL_AGENT_PROTOCOL_VERSION,
+            'external_agent_id': record.get('external_agent_id'),
+            'terminal_id': record.get('terminal_id'),
+            'capabilities': list(EXTERNAL_AGENT_CAPABILITIES),
+            'state': state_payload,
+        }
+
+    def process_state_command(self, _op, _command, record, state, _terminal_id):
+        return self.build_state_payload(record, state)

@@ -21,6 +21,7 @@ from pathlib import Path
 from flask import Flask, render_template, request, abort, make_response, redirect, send_file, jsonify
 from flask_socketio import SocketIO
 from external_agent_dispatch import ExternalAgentCommandDispatcher
+from external_agent_handlers import ExternalAgentBasicCommandHandlers
 from external_agent_protocol import (
     EXTERNAL_AGENT_CAPABILITIES,
     EXTERNAL_AGENT_PROTOCOL_VERSION,
@@ -6372,25 +6373,6 @@ def process_agent_terminal_input_proposal(data, proposal_builder,
             emit_agent_state(request.sid, state)
 
 
-def process_external_agent_hello_command(_op, command):
-    record, state, terminal_id, error_code = validate_external_agent_command_token(
-        command,
-        require_terminal=False,
-    )
-    if error_code:
-        return external_agent_error(error_code, terminal_id=terminal_id)
-    state_payload = build_external_agent_state_payload(record, state)
-    state_payload.pop('status', None)
-    return {
-        'status': 'ok',
-        'version': EXTERNAL_AGENT_PROTOCOL_VERSION,
-        'external_agent_id': record.get('external_agent_id'),
-        'terminal_id': record.get('terminal_id'),
-        'capabilities': list(EXTERNAL_AGENT_CAPABILITIES),
-        'state': state_payload,
-    }
-
-
 def process_external_agent_attach_command(_op, command):
     record, state, terminal_id, error_code = validate_external_agent_command_token(command)
     if error_code:
@@ -6438,10 +6420,6 @@ def process_external_agent_heartbeat_command(_op, command):
     with external_agent_lock:
         record = external_agent_attach_store.renew_record(record.get('token_hash')) or record
     return build_external_agent_heartbeat_payload(record, terminal_id)
-
-
-def process_external_agent_state_command(_op, _command, record, state, _terminal_id):
-    return build_external_agent_state_payload(record, state)
 
 
 def process_external_agent_sequence_command(_op, command, record, state, terminal_id):
@@ -6738,8 +6716,15 @@ def process_external_agent_send_command(op, command, record, state, terminal_id)
     return payload
 
 
+external_agent_basic_command_handlers = ExternalAgentBasicCommandHandlers(
+    validate_token=validate_external_agent_command_token,
+    build_error=external_agent_error,
+    build_state_payload=build_external_agent_state_payload,
+)
+
+
 EXTERNAL_AGENT_PREAUTH_COMMAND_HANDLERS = {
-    'hello': process_external_agent_hello_command,
+    'hello': external_agent_basic_command_handlers.process_hello_command,
     'attach': process_external_agent_attach_command,
     'revoke': process_external_agent_revoke_command,
     'heartbeat': process_external_agent_heartbeat_command,
@@ -6753,7 +6738,7 @@ EXTERNAL_AGENT_READ_COMMAND_HANDLERS = {
 }
 
 EXTERNAL_AGENT_AUTHENTICATED_COMMAND_HANDLERS = {
-    'state': process_external_agent_state_command,
+    'state': external_agent_basic_command_handlers.process_state_command,
     'sequence': process_external_agent_sequence_command,
     'screen': process_external_agent_read_command,
     'render': process_external_agent_read_command,
