@@ -6723,7 +6723,7 @@ external_agent_basic_command_handlers = ExternalAgentBasicCommandHandlers(
 )
 
 
-EXTERNAL_AGENT_PREAUTH_COMMAND_HANDLERS = {
+EXTERNAL_AGENT_COMMAND_AUTH_HANDLERS = {
     'hello': external_agent_basic_command_handlers.process_hello_command,
     'attach': process_external_agent_attach_command,
     'revoke': process_external_agent_revoke_command,
@@ -6750,7 +6750,7 @@ EXTERNAL_AGENT_AUTHENTICATED_COMMAND_HANDLERS = {
 
 
 external_agent_command_dispatcher = ExternalAgentCommandDispatcher(
-    preauth_handlers=EXTERNAL_AGENT_PREAUTH_COMMAND_HANDLERS,
+    command_auth_handlers=EXTERNAL_AGENT_COMMAND_AUTH_HANDLERS,
     authenticated_handlers=EXTERNAL_AGENT_AUTHENTICATED_COMMAND_HANDLERS,
     validate_token=validate_external_agent_command_token,
     build_error=external_agent_error,

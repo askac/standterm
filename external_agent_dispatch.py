@@ -2,14 +2,14 @@ class ExternalAgentCommandDispatcher:
     def __init__(
         self,
         *,
-        preauth_handlers,
+        command_auth_handlers,
         authenticated_handlers,
         validate_token,
         build_error,
         invalid_data_error_code,
         action_not_allowed_error_code,
     ):
-        self.preauth_handlers = dict(preauth_handlers)
+        self.command_auth_handlers = dict(command_auth_handlers)
         self.authenticated_handlers = dict(authenticated_handlers)
         self.validate_token = validate_token
         self.build_error = build_error
@@ -22,16 +22,19 @@ class ExternalAgentCommandDispatcher:
         op = command.get('op')
         if not isinstance(op, str):
             return None, self.invalid_data_error_code
-        return op.strip().lower(), None
+        op = op.strip().lower()
+        if not op:
+            return None, self.invalid_data_error_code
+        return op, None
 
     def dispatch(self, command):
         op, error_code = self.normalize_op(command)
         if error_code:
             return self.build_error(error_code)
 
-        preauth_handler = self.preauth_handlers.get(op)
-        if preauth_handler:
-            return preauth_handler(op, command)
+        command_auth_handler = self.command_auth_handlers.get(op)
+        if command_auth_handler:
+            return command_auth_handler(op, command)
 
         record, state, terminal_id, error_code = self.validate_token(command)
         if error_code:

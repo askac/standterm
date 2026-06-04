@@ -14,11 +14,13 @@ COMPILE_TARGETS = [
     'scripts/agent_rsfile.py',
     'scripts/agent_type.py',
     'tests/agent_backend_smoke.py',
+    'tests/external_agent_boundary_smoke.py',
     'tests/agent_repl_smoke.py',
     'tests/agent_rsfile_smoke.py',
 ]
 
 HEADLESS_SMOKE_TESTS = [
+    'tests/external_agent_boundary_smoke.py',
     'tests/agent_repl_smoke.py',
     'tests/agent_backend_smoke.py',
     'tests/agent_rsfile_smoke.py',
