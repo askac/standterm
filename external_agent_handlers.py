@@ -137,3 +137,67 @@ class ExternalAgentReadCommandRouter:
                 terminal_id=terminal_id,
             )
         return handler(op, command, record, state, terminal_id, bridge)
+
+
+class ExternalAgentTailCommandHandler:
+    def __init__(
+        self,
+        *,
+        build_tail_waiting,
+        format_tail,
+        should_strip_ansi,
+        parse_tail_wait_ms,
+        record_audit,
+        build_error,
+        audit_event_type,
+        default_limit,
+    ):
+        self.build_tail_waiting = build_tail_waiting
+        self.format_tail = format_tail
+        self.should_strip_ansi = should_strip_ansi
+        self.parse_tail_wait_ms = parse_tail_wait_ms
+        self.record_audit = record_audit
+        self.build_error = build_error
+        self.audit_event_type = audit_event_type
+        self.default_limit = default_limit
+
+    def process_tail_command(self, _op, command, record, state, terminal_id, bridge):
+        tail, error_code = self.build_tail_waiting(
+            bridge,
+            state,
+            since_output_seq=command.get('since_output_seq'),
+            limit=command.get('limit', self.default_limit),
+            wait_ms=command.get('wait_ms'),
+        )
+        if error_code:
+            return self.build_error(error_code, terminal_id=terminal_id)
+        strip_ansi = self.should_strip_ansi(command)
+        tail = self.format_tail(tail, strip_ansi=strip_ansi)
+        wait_ms = self.parse_tail_wait_ms(command.get('wait_ms'))
+        self.record_audit(
+            state,
+            self.audit_event_type,
+            external_agent_id=record.get('external_agent_id'),
+            event_count=len(tail['events']),
+            output_seq=tail['output_seq'],
+            wait_ms=wait_ms,
+            gap=tail['gap'],
+            strip_ansi=strip_ansi,
+        )
+        payload = {
+            'status': 'ok',
+            'terminal_id': terminal_id,
+            'external_agent_id': record.get('external_agent_id'),
+            'output_seq': tail['output_seq'],
+            'since_output_seq': tail['since_output_seq'],
+            'limit': tail['limit'],
+            'wait_ms': wait_ms,
+            'first_available_output_seq': tail['first_available_output_seq'],
+            'dropped_before_output_seq': tail['dropped_before_output_seq'],
+            'gap': tail['gap'],
+            'events': tail['events'],
+        }
+        if strip_ansi:
+            payload['strip_ansi'] = True
+            payload['data_format'] = tail['data_format']
+        return payload

@@ -25,6 +25,7 @@ from external_agent_handlers import (
     ExternalAgentBasicCommandHandlers,
     ExternalAgentLifecycleCommandHandlers,
     ExternalAgentReadCommandRouter,
+    ExternalAgentTailCommandHandler,
 )
 from external_agent_protocol import (
     EXTERNAL_AGENT_CAPABILITIES,
@@ -6523,47 +6524,6 @@ def process_external_agent_render_command(_op, command, record, state, terminal_
     }
 
 
-def process_external_agent_tail_command(_op, command, record, state, terminal_id, bridge):
-    tail, error_code = build_external_agent_tail_payload_waiting(
-        bridge,
-        state,
-        since_output_seq=command.get('since_output_seq'),
-        limit=command.get('limit', AGENT_EXTERNAL_TAIL_MAX_EVENTS),
-        wait_ms=command.get('wait_ms'),
-    )
-    if error_code:
-        return external_agent_error(error_code, terminal_id=terminal_id)
-    strip_ansi = should_external_agent_strip_ansi(command)
-    tail = format_external_agent_tail_payload(tail, strip_ansi=strip_ansi)
-    record_agent_audit_event(
-        state,
-        AGENT_AUDIT_EXTERNAL_AGENT_TAIL,
-        external_agent_id=record.get('external_agent_id'),
-        event_count=len(tail['events']),
-        output_seq=tail['output_seq'],
-        wait_ms=parse_external_agent_tail_wait_ms(command.get('wait_ms')),
-        gap=tail['gap'],
-        strip_ansi=strip_ansi,
-    )
-    payload = {
-        'status': 'ok',
-        'terminal_id': terminal_id,
-        'external_agent_id': record.get('external_agent_id'),
-        'output_seq': tail['output_seq'],
-        'since_output_seq': tail['since_output_seq'],
-        'limit': tail['limit'],
-        'wait_ms': parse_external_agent_tail_wait_ms(command.get('wait_ms')),
-        'first_available_output_seq': tail['first_available_output_seq'],
-        'dropped_before_output_seq': tail['dropped_before_output_seq'],
-        'gap': tail['gap'],
-        'events': tail['events'],
-    }
-    if strip_ansi:
-        payload['strip_ansi'] = True
-        payload['data_format'] = tail['data_format']
-    return payload
-
-
 def process_external_agent_wait_command(_op, command, record, state, terminal_id, bridge):
     wait_payload, error_code = build_external_agent_wait_payload(bridge, state, command)
     if error_code:
@@ -6744,6 +6704,18 @@ external_agent_lifecycle_command_handlers = ExternalAgentLifecycleCommandHandler
 )
 
 
+external_agent_tail_command_handler = ExternalAgentTailCommandHandler(
+    build_tail_waiting=build_external_agent_tail_payload_waiting,
+    format_tail=format_external_agent_tail_payload,
+    should_strip_ansi=should_external_agent_strip_ansi,
+    parse_tail_wait_ms=parse_external_agent_tail_wait_ms,
+    record_audit=record_agent_audit_event,
+    build_error=external_agent_error,
+    audit_event_type=AGENT_AUDIT_EXTERNAL_AGENT_TAIL,
+    default_limit=AGENT_EXTERNAL_TAIL_MAX_EVENTS,
+)
+
+
 EXTERNAL_AGENT_COMMAND_AUTH_HANDLERS = {
     'hello': external_agent_basic_command_handlers.process_hello_command,
     'attach': external_agent_lifecycle_command_handlers.process_attach_command,
@@ -6754,7 +6726,7 @@ EXTERNAL_AGENT_COMMAND_AUTH_HANDLERS = {
 EXTERNAL_AGENT_READ_COMMAND_HANDLERS = {
     'screen': process_external_agent_screen_command,
     'render': process_external_agent_render_command,
-    'tail': process_external_agent_tail_command,
+    'tail': external_agent_tail_command_handler.process_tail_command,
     'wait': process_external_agent_wait_command,
 }
 

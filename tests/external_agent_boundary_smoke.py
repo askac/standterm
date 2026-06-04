@@ -8,6 +8,7 @@ from external_agent_handlers import (
     ExternalAgentBasicCommandHandlers,
     ExternalAgentLifecycleCommandHandlers,
     ExternalAgentReadCommandRouter,
+    ExternalAgentTailCommandHandler,
 )
 
 
@@ -584,6 +585,177 @@ def test_read_router_delegates_to_concrete_handler_with_bridge():
     ]
 
 
+def make_tail_handler(
+    *,
+    build_tail_waiting=None,
+    should_strip_ansi=None,
+    format_tail=None,
+):
+    calls = []
+
+    if build_tail_waiting is None:
+        def build_tail_waiting(bridge, state, since_output_seq=None, limit=None, wait_ms=None):
+            calls.append(('tail', bridge, state, since_output_seq, limit, wait_ms))
+            return {
+                'output_seq': 10,
+                'since_output_seq': 7,
+                'limit': limit,
+                'first_available_output_seq': 3,
+                'dropped_before_output_seq': None,
+                'gap': False,
+                'events': [{'seq': 8, 'text': 'hello'}],
+            }, None
+
+    if should_strip_ansi is None:
+        def should_strip_ansi(command):
+            calls.append(('strip', command))
+            return False
+
+    if format_tail is None:
+        def format_tail(tail, strip_ansi=False):
+            calls.append(('format', tail, strip_ansi))
+            return dict(tail)
+
+    def parse_tail_wait_ms(value):
+        calls.append(('wait_ms', value))
+        return 250 if value == 'fast' else value
+
+    def record_audit(state, event_type, **metadata):
+        calls.append(('audit', state, event_type, metadata))
+
+    def build_error(error_code, terminal_id=None):
+        calls.append(('error', error_code, terminal_id))
+        return {'status': 'failed', 'error_code': error_code, 'terminal_id': terminal_id}
+
+    handler = ExternalAgentTailCommandHandler(
+        build_tail_waiting=build_tail_waiting,
+        format_tail=format_tail,
+        should_strip_ansi=should_strip_ansi,
+        parse_tail_wait_ms=parse_tail_wait_ms,
+        record_audit=record_audit,
+        build_error=build_error,
+        audit_event_type='tail_audit',
+        default_limit=99,
+    )
+    return handler, calls
+
+
+def test_tail_handler_maps_tail_builder_error_without_format_or_audit():
+    calls = []
+
+    def build_tail_waiting(bridge, state, since_output_seq=None, limit=None, wait_ms=None):
+        calls.append(('tail', bridge, state, since_output_seq, limit, wait_ms))
+        return None, 'bad_tail'
+
+    handler, handler_calls = make_tail_handler(build_tail_waiting=build_tail_waiting)
+
+    assert handler.process_tail_command(
+        'tail',
+        {'op': 'tail', 'since_output_seq': 4, 'wait_ms': 'fast'},
+        {'external_agent_id': 'agent-1'},
+        {'state': True},
+        'term-1',
+        {'bridge': True},
+    ) == {
+        'status': 'failed',
+        'error_code': 'bad_tail',
+        'terminal_id': 'term-1',
+    }
+    assert calls == [
+        ('tail', {'bridge': True}, {'state': True}, 4, 99, 'fast'),
+    ]
+    assert handler_calls == [
+        ('error', 'bad_tail', 'term-1'),
+    ]
+
+
+def test_tail_handler_builds_payload_and_records_audit():
+    handler, calls = make_tail_handler()
+    command = {'op': 'tail', 'since_output_seq': 7, 'limit': 5, 'wait_ms': 'fast'}
+
+    assert handler.process_tail_command(
+        'tail',
+        command,
+        {'external_agent_id': 'agent-1'},
+        {'state': True},
+        'term-1',
+        {'bridge': True},
+    ) == {
+        'status': 'ok',
+        'terminal_id': 'term-1',
+        'external_agent_id': 'agent-1',
+        'output_seq': 10,
+        'since_output_seq': 7,
+        'limit': 5,
+        'wait_ms': 250,
+        'first_available_output_seq': 3,
+        'dropped_before_output_seq': None,
+        'gap': False,
+        'events': [{'seq': 8, 'text': 'hello'}],
+    }
+    assert calls == [
+        ('tail', {'bridge': True}, {'state': True}, 7, 5, 'fast'),
+        ('strip', command),
+        (
+            'format',
+            {
+                'output_seq': 10,
+                'since_output_seq': 7,
+                'limit': 5,
+                'first_available_output_seq': 3,
+                'dropped_before_output_seq': None,
+                'gap': False,
+                'events': [{'seq': 8, 'text': 'hello'}],
+            },
+            False,
+        ),
+        ('wait_ms', 'fast'),
+        (
+            'audit',
+            {'state': True},
+            'tail_audit',
+            {
+                'external_agent_id': 'agent-1',
+                'event_count': 1,
+                'output_seq': 10,
+                'wait_ms': 250,
+                'gap': False,
+                'strip_ansi': False,
+            },
+        ),
+    ]
+
+
+def test_tail_handler_reports_plain_tail_format_when_requested():
+    def should_strip_ansi(_command):
+        return True
+
+    def format_tail(tail, strip_ansi=False):
+        tail = dict(tail)
+        tail['events'] = [{'seq': 8, 'text': 'plain'}]
+        if strip_ansi:
+            tail['data_format'] = 'plain'
+        return tail
+
+    handler, _calls = make_tail_handler(
+        should_strip_ansi=should_strip_ansi,
+        format_tail=format_tail,
+    )
+
+    payload = handler.process_tail_command(
+        'tail',
+        {'op': 'tail'},
+        {'external_agent_id': 'agent-1'},
+        {'state': True},
+        'term-1',
+        {'bridge': True},
+    )
+
+    assert payload['strip_ansi'] is True
+    assert payload['data_format'] == 'plain'
+    assert payload['events'] == [{'seq': 8, 'text': 'plain'}]
+
+
 def test_app_command_registry_keeps_command_specific_auth_handlers():
     import app as standterm
 
@@ -602,6 +774,10 @@ def test_app_command_registry_keeps_command_specific_auth_handlers():
             standterm.EXTERNAL_AGENT_AUTHENTICATED_COMMAND_HANDLERS[op]
             == standterm.external_agent_read_command_router.process_read_command
         )
+    assert (
+        standterm.EXTERNAL_AGENT_READ_COMMAND_HANDLERS['tail']
+        == standterm.external_agent_tail_command_handler.process_tail_command
+    )
 
 
 def main():
@@ -623,6 +799,9 @@ def main():
         test_read_router_maps_missing_bridge,
         test_read_router_maps_unknown_read_op_after_bridge_lookup,
         test_read_router_delegates_to_concrete_handler_with_bridge,
+        test_tail_handler_maps_tail_builder_error_without_format_or_audit,
+        test_tail_handler_builds_payload_and_records_audit,
+        test_tail_handler_reports_plain_tail_format_when_requested,
         test_app_command_registry_keeps_command_specific_auth_handlers,
     ]
     for test in tests:
