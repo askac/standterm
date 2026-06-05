@@ -28,6 +28,7 @@ from external_agent_handlers import (
     ExternalAgentReadCommandRouter,
     ExternalAgentRenderCommandHandler,
     ExternalAgentScreenCommandHandler,
+    ExternalAgentSendActionExecutor,
     ExternalAgentTailCommandHandler,
     ExternalAgentWaitCommandHandler,
 )
@@ -6595,66 +6596,33 @@ def process_external_agent_send_command(op, command, record, state, terminal_id)
         return external_agent_error(AGENT_ERROR_TERMINAL_NOT_FOUND, terminal_id=terminal_id)
     capture_requested = op == 'send-wait' or should_external_agent_capture_send(command)
     strip_ansi = should_external_agent_strip_ansi(command)
-    before_output_seq = None
-    with bridge.input_lock:
-        with agent_lock:
-            if state.paused or state.mode == AGENT_MODE_PAUSED:
-                return external_agent_error(AGENT_ERROR_PAUSED, terminal_id=terminal_id)
-            if not is_agent_context_allowed(state):
-                return external_agent_error(AGENT_ERROR_PRIVACY_BLOCKED, terminal_id=terminal_id)
-            if is_agent_human_input_lease_active(state):
-                return external_agent_error(AGENT_ERROR_HUMAN_INPUT_ACTIVE, terminal_id=terminal_id)
-            if state.mode not in {AGENT_MODE_APPROVAL_PENDING, AGENT_MODE_DIRECT_ACTIVE}:
-                return external_agent_error(AGENT_ERROR_MODE_NOT_WRITABLE, terminal_id=terminal_id)
-            proposal = external_agent_build_terminal_input_action(
-                state,
-                data,
-                submit_after=should_external_agent_submit_after(command),
-                input_metadata=input_metadata,
-            )
-            requires_approval = state.mode != AGENT_MODE_DIRECT_ACTIVE
-            action, error_code = build_agent_action(state, proposal, requires_approval)
-            if error_code:
-                return external_agent_error(error_code, terminal_id=terminal_id)
-            record_agent_audit_event(
-                state,
-                AGENT_AUDIT_EXTERNAL_AGENT_SEND,
-                action=action,
-                external_agent_id=record.get('external_agent_id'),
-                input_kind=input_metadata.get('input_kind') if input_metadata else None,
-                key_count=input_metadata.get('key_count') if input_metadata else None,
-                capture_requested=capture_requested,
-                strip_ansi=strip_ansi if capture_requested else False,
-            )
-            socketio.emit(AGENT_EVENT_ACTION_REQUEST, public_agent_action(action), room=state.sid)
-            emit_agent_state(state.sid, state)
-        if requires_approval:
-            payload = public_agent_action(action)
-            payload['status'] = AGENT_STATUS_PENDING_APPROVAL
-            if capture_requested:
-                payload['capture'] = {
-                    'status': 'skipped',
-                    'reason': 'pending_approval',
-                    'requested': True,
-                }
-            return payload
-        with bridge.output_condition:
-            before_output_seq = bridge.output_seq
-        ok, result = write_agent_terminal_input(
-            record.get('session_token'),
-            terminal_id,
-            state.sid,
-            action['action_id'],
-            action['control_epoch'],
-            mode_version=action['mode_version'],
-            proposal_id=action['proposal_id'],
-        )
-    status = AGENT_STATUS_COMPLETED if ok else AGENT_STATUS_FAILED
-    emit_agent_action_result(state.sid, action, status, error_code=result.get('error_code'))
-    with agent_lock:
-        current_state = get_agent_state(record.get('session_token'), terminal_id, state.sid)
-        if current_state:
-            emit_agent_state(state.sid, current_state)
+    send_result, send_error = external_agent_send_action_executor.execute_send_action(
+        command,
+        record,
+        state,
+        terminal_id,
+        bridge,
+        data,
+        input_metadata,
+        capture_requested=capture_requested,
+        strip_ansi=strip_ansi,
+    )
+    if send_error:
+        return external_agent_error(send_error, terminal_id=terminal_id)
+    action = send_result['action']
+    if send_result.get('requires_approval'):
+        payload = public_agent_action(action)
+        payload['status'] = AGENT_STATUS_PENDING_APPROVAL
+        if capture_requested:
+            payload['capture'] = {
+                'status': 'skipped',
+                'reason': 'pending_approval',
+                'requested': True,
+            }
+        return payload
+    status = send_result['status']
+    result = send_result.get('write_result') or {}
+    ok = status == AGENT_STATUS_COMPLETED
     payload = public_agent_action(action)
     payload['status'] = status
     if result.get('error_code'):
@@ -6664,7 +6632,11 @@ def process_external_agent_send_command(op, command, record, state, terminal_id)
         capture, capture_error = build_external_agent_send_capture_payload(
             bridge,
             state,
-            before_output_seq if isinstance(before_output_seq, int) else 0,
+            (
+                send_result['before_output_seq']
+                if isinstance(send_result['before_output_seq'], int)
+                else 0
+            ),
             limit=command.get('limit', AGENT_EXTERNAL_TAIL_MAX_EVENTS),
             wait_ms=command.get('wait_ms'),
             settle_ms=command.get('settle_ms'),
@@ -6682,6 +6654,18 @@ def process_external_agent_send_command(op, command, record, state, terminal_id)
             payload['before_output_seq'] = capture['before_output_seq']
             payload['after_output_seq'] = capture['output_seq']
     return payload
+
+
+def emit_external_agent_send_action_request(sid, action):
+    socketio.emit(AGENT_EVENT_ACTION_REQUEST, public_agent_action(action), room=sid)
+
+
+def emit_external_agent_send_state(sid, state):
+    emit_agent_state(sid, state)
+
+
+def emit_external_agent_send_action_result(sid, action, status, error_code=None):
+    emit_agent_action_result(sid, action, status, error_code=error_code)
 
 
 external_agent_basic_command_handlers = ExternalAgentBasicCommandHandlers(
@@ -6787,6 +6771,33 @@ external_agent_wait_command_handler = ExternalAgentWaitCommandHandler(
     record_audit=record_agent_audit_event,
     build_error=external_agent_error,
     audit_event_type=AGENT_AUDIT_EXTERNAL_AGENT_WAIT,
+)
+
+
+external_agent_send_action_executor = ExternalAgentSendActionExecutor(
+    agent_lock=agent_lock,
+    is_context_allowed=is_agent_context_allowed,
+    is_human_input_lease_active=is_agent_human_input_lease_active,
+    build_terminal_input_action=external_agent_build_terminal_input_action,
+    should_submit_after=should_external_agent_submit_after,
+    build_action=build_agent_action,
+    record_audit=record_agent_audit_event,
+    emit_action_request=emit_external_agent_send_action_request,
+    emit_state=emit_external_agent_send_state,
+    write_terminal_input=write_agent_terminal_input,
+    emit_action_result=emit_external_agent_send_action_result,
+    get_agent_state=get_agent_state,
+    audit_event_type=AGENT_AUDIT_EXTERNAL_AGENT_SEND,
+    status_pending_approval=AGENT_STATUS_PENDING_APPROVAL,
+    status_completed=AGENT_STATUS_COMPLETED,
+    status_failed=AGENT_STATUS_FAILED,
+    mode_paused=AGENT_MODE_PAUSED,
+    mode_approval_pending=AGENT_MODE_APPROVAL_PENDING,
+    mode_direct_active=AGENT_MODE_DIRECT_ACTIVE,
+    error_paused=AGENT_ERROR_PAUSED,
+    error_privacy_blocked=AGENT_ERROR_PRIVACY_BLOCKED,
+    error_human_input_active=AGENT_ERROR_HUMAN_INPUT_ACTIVE,
+    error_mode_not_writable=AGENT_ERROR_MODE_NOT_WRITABLE,
 )
 
 

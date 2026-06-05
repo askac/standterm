@@ -305,6 +305,147 @@ class ExternalAgentRenderCommandHandler:
         )
 
 
+class ExternalAgentSendActionExecutor:
+    def __init__(
+        self,
+        *,
+        agent_lock,
+        is_context_allowed,
+        is_human_input_lease_active,
+        build_terminal_input_action,
+        should_submit_after,
+        build_action,
+        record_audit,
+        emit_action_request,
+        emit_state,
+        write_terminal_input,
+        emit_action_result,
+        get_agent_state,
+        audit_event_type,
+        status_pending_approval,
+        status_completed,
+        status_failed,
+        mode_paused,
+        mode_approval_pending,
+        mode_direct_active,
+        error_paused,
+        error_privacy_blocked,
+        error_human_input_active,
+        error_mode_not_writable,
+    ):
+        self.agent_lock = agent_lock
+        self.is_context_allowed = is_context_allowed
+        self.is_human_input_lease_active = is_human_input_lease_active
+        self.build_terminal_input_action = build_terminal_input_action
+        self.should_submit_after = should_submit_after
+        self.build_action = build_action
+        self.record_audit = record_audit
+        self.emit_action_request = emit_action_request
+        self.emit_state = emit_state
+        self.write_terminal_input = write_terminal_input
+        self.emit_action_result = emit_action_result
+        self.get_agent_state = get_agent_state
+        self.audit_event_type = audit_event_type
+        self.status_pending_approval = status_pending_approval
+        self.status_completed = status_completed
+        self.status_failed = status_failed
+        self.mode_paused = mode_paused
+        self.mode_approval_pending = mode_approval_pending
+        self.mode_direct_active = mode_direct_active
+        self.error_paused = error_paused
+        self.error_privacy_blocked = error_privacy_blocked
+        self.error_human_input_active = error_human_input_active
+        self.error_mode_not_writable = error_mode_not_writable
+
+    def execute_send_action(
+        self,
+        command,
+        record,
+        state,
+        terminal_id,
+        bridge,
+        data,
+        input_metadata,
+        *,
+        capture_requested,
+        strip_ansi,
+    ):
+        before_output_seq = None
+        with bridge.input_lock:
+            with self.agent_lock:
+                if state.paused or state.mode == self.mode_paused:
+                    return None, self.error_paused
+                if not self.is_context_allowed(state):
+                    return None, self.error_privacy_blocked
+                if self.is_human_input_lease_active(state):
+                    return None, self.error_human_input_active
+                if state.mode not in {self.mode_approval_pending, self.mode_direct_active}:
+                    return None, self.error_mode_not_writable
+                proposal = self.build_terminal_input_action(
+                    state,
+                    data,
+                    submit_after=self.should_submit_after(command),
+                    input_metadata=input_metadata,
+                )
+                requires_approval = state.mode != self.mode_direct_active
+                action, error_code = self.build_action(state, proposal, requires_approval)
+                if error_code:
+                    return None, error_code
+                self.record_audit(
+                    state,
+                    self.audit_event_type,
+                    action=action,
+                    external_agent_id=record.get('external_agent_id'),
+                    input_kind=input_metadata.get('input_kind') if input_metadata else None,
+                    key_count=input_metadata.get('key_count') if input_metadata else None,
+                    capture_requested=capture_requested,
+                    strip_ansi=strip_ansi if capture_requested else False,
+                )
+                self.emit_action_request(state.sid, action)
+                self.emit_state(state.sid, state)
+            if requires_approval:
+                return {
+                    'status': self.status_pending_approval,
+                    'requires_approval': True,
+                    'action': action,
+                    'before_output_seq': None,
+                    'write_result': None,
+                }, None
+            with bridge.output_condition:
+                before_output_seq = bridge.output_seq
+            ok, result = self.write_terminal_input(
+                record.get('session_token'),
+                terminal_id,
+                state.sid,
+                action['action_id'],
+                action['control_epoch'],
+                mode_version=action['mode_version'],
+                proposal_id=action['proposal_id'],
+            )
+        status = self.status_completed if ok else self.status_failed
+        self.emit_action_result(
+            state.sid,
+            action,
+            status,
+            error_code=result.get('error_code'),
+        )
+        with self.agent_lock:
+            current_state = self.get_agent_state(
+                record.get('session_token'),
+                terminal_id,
+                state.sid,
+            )
+            if current_state:
+                self.emit_state(state.sid, current_state)
+        return {
+            'status': status,
+            'requires_approval': False,
+            'action': action,
+            'before_output_seq': before_output_seq,
+            'write_result': result,
+        }, None
+
+
 class ExternalAgentTailCommandHandler:
     def __init__(
         self,

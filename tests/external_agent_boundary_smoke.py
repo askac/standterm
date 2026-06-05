@@ -11,6 +11,7 @@ from external_agent_handlers import (
     ExternalAgentReadCommandRouter,
     ExternalAgentRenderCommandHandler,
     ExternalAgentScreenCommandHandler,
+    ExternalAgentSendActionExecutor,
     ExternalAgentTailCommandHandler,
     ExternalAgentWaitCommandHandler,
 )
@@ -1050,6 +1051,287 @@ def test_render_handler_leaves_viewport_png_path_in_callback():
     ]
 
 
+class NoopLock:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc, _traceback):
+        return False
+
+
+class SendBridge:
+    def __init__(self, output_seq=0):
+        self.input_lock = NoopLock()
+        self.output_condition = NoopLock()
+        self.output_seq = output_seq
+
+
+class SendState:
+    def __init__(self, *, mode='direct', paused=False, sid='sid-1'):
+        self.mode = mode
+        self.paused = paused
+        self.sid = sid
+
+
+def make_send_action_executor(
+    *,
+    context_allowed=True,
+    human_input_active=False,
+    build_action_error=None,
+    write_ok=True,
+    write_result=None,
+    current_state=None,
+):
+    calls = []
+
+    def is_context_allowed(state):
+        calls.append(('context', state))
+        return context_allowed
+
+    def is_human_input_lease_active(state):
+        calls.append(('human_input', state))
+        return human_input_active
+
+    def build_terminal_input_action(state, data, submit_after=False, input_metadata=None):
+        calls.append(('proposal', state, data, submit_after, input_metadata))
+        return {
+            'kind': 'terminal_input',
+            'data': data,
+            'submit_after': submit_after,
+            'input_metadata': input_metadata,
+        }
+
+    def should_submit_after(command):
+        calls.append(('submit_after', command))
+        return command.get('submit_after') is True
+
+    def build_action(state, proposal, requires_approval):
+        calls.append(('action', state, proposal, requires_approval))
+        if build_action_error:
+            return None, build_action_error
+        return {
+            'action_id': 'action-1',
+            'control_epoch': 7,
+            'mode_version': 8,
+            'proposal_id': 'proposal-1',
+            'requires_approval': requires_approval,
+        }, None
+
+    def record_audit(state, event_type, **metadata):
+        calls.append(('audit', state, event_type, metadata))
+
+    def emit_action_request(sid, action):
+        calls.append(('emit_request', sid, action))
+
+    def emit_state(sid, state):
+        calls.append(('emit_state', sid, state))
+
+    def write_terminal_input(
+        session_token,
+        terminal_id,
+        sid,
+        action_id,
+        control_epoch,
+        *,
+        mode_version,
+        proposal_id,
+    ):
+        calls.append((
+            'write',
+            session_token,
+            terminal_id,
+            sid,
+            action_id,
+            control_epoch,
+            mode_version,
+            proposal_id,
+        ))
+        return write_ok, (write_result if write_result is not None else {'bytes_written': 3})
+
+    def emit_action_result(sid, action, status, error_code=None):
+        calls.append(('emit_result', sid, action, status, error_code))
+
+    def get_agent_state(session_token, terminal_id, sid):
+        calls.append(('get_state', session_token, terminal_id, sid))
+        return current_state
+
+    executor = ExternalAgentSendActionExecutor(
+        agent_lock=NoopLock(),
+        is_context_allowed=is_context_allowed,
+        is_human_input_lease_active=is_human_input_lease_active,
+        build_terminal_input_action=build_terminal_input_action,
+        should_submit_after=should_submit_after,
+        build_action=build_action,
+        record_audit=record_audit,
+        emit_action_request=emit_action_request,
+        emit_state=emit_state,
+        write_terminal_input=write_terminal_input,
+        emit_action_result=emit_action_result,
+        get_agent_state=get_agent_state,
+        audit_event_type='send_audit',
+        status_pending_approval='pending_approval',
+        status_completed='completed',
+        status_failed='failed',
+        mode_paused='paused',
+        mode_approval_pending='approval',
+        mode_direct_active='direct',
+        error_paused='paused_error',
+        error_privacy_blocked='privacy_error',
+        error_human_input_active='human_input_error',
+        error_mode_not_writable='not_writable',
+    )
+    return executor, calls
+
+
+def test_send_action_executor_maps_paused_state_before_context_checks():
+    executor, calls = make_send_action_executor()
+
+    result, error_code = executor.execute_send_action(
+        {'op': 'send'},
+        {'external_agent_id': 'agent-1', 'session_token': 'session-1'},
+        SendState(mode='direct', paused=True),
+        'term-1',
+        SendBridge(output_seq=11),
+        'pwd\n',
+        {'input_kind': 'text'},
+        capture_requested=False,
+        strip_ansi=False,
+    )
+
+    assert result is None
+    assert error_code == 'paused_error'
+    assert calls == []
+
+
+def test_send_action_executor_returns_pending_action_without_write():
+    executor, calls = make_send_action_executor()
+    state = SendState(mode='approval')
+    record = {'external_agent_id': 'agent-1', 'session_token': 'session-1'}
+
+    result, error_code = executor.execute_send_action(
+        {'op': 'send', 'submit_after': True},
+        record,
+        state,
+        'term-1',
+        SendBridge(output_seq=11),
+        'pwd\n',
+        {'input_kind': 'text', 'key_count': None},
+        capture_requested=True,
+        strip_ansi=True,
+    )
+
+    assert error_code is None
+    assert result == {
+        'status': 'pending_approval',
+        'requires_approval': True,
+        'action': {
+            'action_id': 'action-1',
+            'control_epoch': 7,
+            'mode_version': 8,
+            'proposal_id': 'proposal-1',
+            'requires_approval': True,
+        },
+        'before_output_seq': None,
+        'write_result': None,
+    }
+    assert calls == [
+        ('context', state),
+        ('human_input', state),
+        ('submit_after', {'op': 'send', 'submit_after': True}),
+        (
+            'proposal',
+            state,
+            'pwd\n',
+            True,
+            {'input_kind': 'text', 'key_count': None},
+        ),
+        (
+            'action',
+            state,
+            {
+                'kind': 'terminal_input',
+                'data': 'pwd\n',
+                'submit_after': True,
+                'input_metadata': {'input_kind': 'text', 'key_count': None},
+            },
+            True,
+        ),
+        (
+            'audit',
+            state,
+            'send_audit',
+            {
+                'action': result['action'],
+                'external_agent_id': 'agent-1',
+                'input_kind': 'text',
+                'key_count': None,
+                'capture_requested': True,
+                'strip_ansi': True,
+            },
+        ),
+        ('emit_request', 'sid-1', result['action']),
+        ('emit_state', 'sid-1', state),
+    ]
+
+
+def test_send_action_executor_writes_direct_action_and_emits_result_state():
+    current_state = SendState(mode='direct', sid='sid-1')
+    executor, calls = make_send_action_executor(current_state=current_state)
+    state = SendState(mode='direct')
+    record = {'external_agent_id': 'agent-1', 'session_token': 'session-1'}
+
+    result, error_code = executor.execute_send_action(
+        {'op': 'send'},
+        record,
+        state,
+        'term-1',
+        SendBridge(output_seq=11),
+        'pwd\n',
+        {'input_kind': 'text'},
+        capture_requested=False,
+        strip_ansi=True,
+    )
+
+    assert error_code is None
+    assert result == {
+        'status': 'completed',
+        'requires_approval': False,
+        'action': {
+            'action_id': 'action-1',
+            'control_epoch': 7,
+            'mode_version': 8,
+            'proposal_id': 'proposal-1',
+            'requires_approval': False,
+        },
+        'before_output_seq': 11,
+        'write_result': {'bytes_written': 3},
+    }
+    assert calls[-3:] == [
+        (
+            'emit_result',
+            'sid-1',
+            result['action'],
+            'completed',
+            None,
+        ),
+        ('get_state', 'session-1', 'term-1', 'sid-1'),
+        ('emit_state', 'sid-1', current_state),
+    ]
+    assert (
+        'write',
+        'session-1',
+        'term-1',
+        'sid-1',
+        'action-1',
+        7,
+        8,
+        'proposal-1',
+    ) in calls
+    audit_call = next(call for call in calls if call[0] == 'audit')
+    assert audit_call[3]['capture_requested'] is False
+    assert audit_call[3]['strip_ansi'] is False
+
+
 def make_tail_handler(
     *,
     build_tail_waiting=None,
@@ -1377,6 +1659,10 @@ def test_app_command_registry_keeps_command_specific_auth_handlers():
         standterm.EXTERNAL_AGENT_READ_COMMAND_HANDLERS['wait']
         == standterm.external_agent_wait_command_handler.process_wait_command
     )
+    assert isinstance(
+        standterm.external_agent_send_action_executor,
+        ExternalAgentSendActionExecutor,
+    )
 
 
 def main():
@@ -1406,6 +1692,9 @@ def main():
         test_render_handler_maps_invalid_mode_without_resolve_or_render,
         test_render_handler_dispatches_mirror_screen_branch,
         test_render_handler_leaves_viewport_png_path_in_callback,
+        test_send_action_executor_maps_paused_state_before_context_checks,
+        test_send_action_executor_returns_pending_action_without_write,
+        test_send_action_executor_writes_direct_action_and_emits_result_state,
         test_tail_handler_maps_tail_builder_error_without_format_or_audit,
         test_tail_handler_builds_payload_and_records_audit,
         test_tail_handler_reports_plain_tail_format_when_requested,
