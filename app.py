@@ -26,6 +26,7 @@ from external_agent_handlers import (
     ExternalAgentLifecycleCommandHandlers,
     ExternalAgentMirrorScreenRenderHandler,
     ExternalAgentReadCommandRouter,
+    ExternalAgentRenderCommandHandler,
     ExternalAgentScreenCommandHandler,
     ExternalAgentTailCommandHandler,
     ExternalAgentWaitCommandHandler,
@@ -6535,22 +6536,17 @@ def process_external_agent_sequence_command(_op, command, record, state, termina
     return payload
 
 
-def process_external_agent_render_command(_op, command, record, state, terminal_id, bridge):
-    requested_render_mode = parse_agent_render_mode(command.get('render_mode'))
-    if requested_render_mode is None:
-        return external_agent_error(AGENT_ERROR_ACTION_INVALID_DATA, terminal_id=terminal_id)
-    render_mode = resolve_agent_render_mode(requested_render_mode)
-    if render_mode == AGENT_RENDER_MODE_MIRROR_SCREEN:
-        return external_agent_mirror_screen_render_handler.process_mirror_screen_render_command(
-            _op,
-            command,
-            record,
-            state,
-            terminal_id,
-            bridge,
-            requested_render_mode=requested_render_mode,
-            render_mode=render_mode,
-        )
+def process_external_agent_viewport_render_command(
+    _op,
+    command,
+    record,
+    state,
+    terminal_id,
+    bridge,
+    *,
+    requested_render_mode,
+    render_mode,
+):
     render, render_error, request_payload, wait_ms = build_external_agent_viewport_render_payload(
         record,
         state,
@@ -6763,6 +6759,17 @@ external_agent_mirror_screen_render_handler = ExternalAgentMirrorScreenRenderHan
 )
 
 
+external_agent_render_command_handler = ExternalAgentRenderCommandHandler(
+    parse_render_mode=parse_agent_render_mode,
+    resolve_render_mode=resolve_agent_render_mode,
+    mirror_screen_render_handler=external_agent_mirror_screen_render_handler,
+    process_viewport_render=process_external_agent_viewport_render_command,
+    build_error=external_agent_error,
+    invalid_data_error_code=AGENT_ERROR_ACTION_INVALID_DATA,
+    mirror_screen_render_mode=AGENT_RENDER_MODE_MIRROR_SCREEN,
+)
+
+
 external_agent_tail_command_handler = ExternalAgentTailCommandHandler(
     build_tail_waiting=build_external_agent_tail_payload_waiting,
     format_tail=format_external_agent_tail_payload,
@@ -6792,7 +6799,7 @@ EXTERNAL_AGENT_COMMAND_AUTH_HANDLERS = {
 
 EXTERNAL_AGENT_READ_COMMAND_HANDLERS = {
     'screen': external_agent_screen_command_handler.process_screen_command,
-    'render': process_external_agent_render_command,
+    'render': external_agent_render_command_handler.process_render_command,
     'tail': external_agent_tail_command_handler.process_tail_command,
     'wait': external_agent_wait_command_handler.process_wait_command,
 }

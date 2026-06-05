@@ -9,6 +9,7 @@ from external_agent_handlers import (
     ExternalAgentLifecycleCommandHandlers,
     ExternalAgentMirrorScreenRenderHandler,
     ExternalAgentReadCommandRouter,
+    ExternalAgentRenderCommandHandler,
     ExternalAgentScreenCommandHandler,
     ExternalAgentTailCommandHandler,
     ExternalAgentWaitCommandHandler,
@@ -873,6 +874,182 @@ def test_mirror_screen_render_handler_builds_payload_and_records_audit():
     ]
 
 
+class StubMirrorScreenRenderHandler:
+    def __init__(self, calls):
+        self.calls = calls
+
+    def process_mirror_screen_render_command(
+        self,
+        op,
+        command,
+        record,
+        state,
+        terminal_id,
+        bridge,
+        *,
+        requested_render_mode,
+        render_mode,
+    ):
+        self.calls.append((
+            'mirror',
+            op,
+            command,
+            record,
+            state,
+            terminal_id,
+            bridge,
+            requested_render_mode,
+            render_mode,
+        ))
+        return {'status': 'ok', 'render': {'render_mode': render_mode}}
+
+
+def make_render_handler(parse_render_mode=None, resolve_render_mode=None):
+    calls = []
+
+    if parse_render_mode is None:
+        def parse_render_mode(value):
+            calls.append(('parse', value))
+            if value == 'bad':
+                return None
+            return value or 'auto'
+
+    if resolve_render_mode is None:
+        def resolve_render_mode(value):
+            calls.append(('resolve', value))
+            return 'mirror_screen' if value == 'auto' else value
+
+    def process_viewport_render(
+        op,
+        command,
+        record,
+        state,
+        terminal_id,
+        bridge,
+        *,
+        requested_render_mode,
+        render_mode,
+    ):
+        calls.append((
+            'viewport',
+            op,
+            command,
+            record,
+            state,
+            terminal_id,
+            bridge,
+            requested_render_mode,
+            render_mode,
+        ))
+        return {'status': 'ok', 'render': {'render_mode': render_mode}}
+
+    def build_error(error_code, terminal_id=None):
+        calls.append(('error', error_code, terminal_id))
+        return {'status': 'failed', 'error_code': error_code, 'terminal_id': terminal_id}
+
+    handler = ExternalAgentRenderCommandHandler(
+        parse_render_mode=parse_render_mode,
+        resolve_render_mode=resolve_render_mode,
+        mirror_screen_render_handler=StubMirrorScreenRenderHandler(calls),
+        process_viewport_render=process_viewport_render,
+        build_error=build_error,
+        invalid_data_error_code='invalid_data',
+        mirror_screen_render_mode='mirror_screen',
+    )
+    return handler, calls
+
+
+def test_render_handler_maps_invalid_mode_without_resolve_or_render():
+    handler, calls = make_render_handler()
+
+    assert handler.process_render_command(
+        'render',
+        {'op': 'render', 'render_mode': 'bad'},
+        {'external_agent_id': 'agent-1'},
+        PublicState({'mode': 'observe'}),
+        'term-1',
+        OutputSeqBridge(42),
+    ) == {
+        'status': 'failed',
+        'error_code': 'invalid_data',
+        'terminal_id': 'term-1',
+    }
+    assert calls == [
+        ('parse', 'bad'),
+        ('error', 'invalid_data', 'term-1'),
+    ]
+
+
+def test_render_handler_dispatches_mirror_screen_branch():
+    handler, calls = make_render_handler()
+    command = {'op': 'render'}
+    record = {'external_agent_id': 'agent-1'}
+    state = PublicState({'mode': 'observe'})
+    bridge = OutputSeqBridge(42)
+
+    assert handler.process_render_command(
+        'render',
+        command,
+        record,
+        state,
+        'term-1',
+        bridge,
+    ) == {
+        'status': 'ok',
+        'render': {'render_mode': 'mirror_screen'},
+    }
+    assert calls == [
+        ('parse', None),
+        ('resolve', 'auto'),
+        (
+            'mirror',
+            'render',
+            command,
+            record,
+            state,
+            'term-1',
+            bridge,
+            'auto',
+            'mirror_screen',
+        ),
+    ]
+
+
+def test_render_handler_leaves_viewport_png_path_in_callback():
+    handler, calls = make_render_handler()
+    command = {'op': 'render', 'render_mode': 'visible_xterm_png'}
+    record = {'external_agent_id': 'agent-1'}
+    state = PublicState({'mode': 'observe'})
+    bridge = OutputSeqBridge(42)
+
+    assert handler.process_render_command(
+        'render',
+        command,
+        record,
+        state,
+        'term-1',
+        bridge,
+    ) == {
+        'status': 'ok',
+        'render': {'render_mode': 'visible_xterm_png'},
+    }
+    assert calls == [
+        ('parse', 'visible_xterm_png'),
+        ('resolve', 'visible_xterm_png'),
+        (
+            'viewport',
+            'render',
+            command,
+            record,
+            state,
+            'term-1',
+            bridge,
+            'visible_xterm_png',
+            'visible_xterm_png',
+        ),
+    ]
+
+
 def make_tail_handler(
     *,
     build_tail_waiting=None,
@@ -1184,9 +1361,13 @@ def test_app_command_registry_keeps_command_specific_auth_handlers():
         standterm.external_agent_mirror_screen_render_handler,
         ExternalAgentMirrorScreenRenderHandler,
     )
+    assert isinstance(
+        standterm.external_agent_render_command_handler,
+        ExternalAgentRenderCommandHandler,
+    )
     assert (
         standterm.EXTERNAL_AGENT_READ_COMMAND_HANDLERS['render']
-        == standterm.process_external_agent_render_command
+        == standterm.external_agent_render_command_handler.process_render_command
     )
     assert (
         standterm.EXTERNAL_AGENT_READ_COMMAND_HANDLERS['tail']
@@ -1222,6 +1403,9 @@ def main():
         test_screen_handler_builds_payload_and_records_audit,
         test_screen_handler_omits_empty_screen_wait_payload,
         test_mirror_screen_render_handler_builds_payload_and_records_audit,
+        test_render_handler_maps_invalid_mode_without_resolve_or_render,
+        test_render_handler_dispatches_mirror_screen_branch,
+        test_render_handler_leaves_viewport_png_path_in_callback,
         test_tail_handler_maps_tail_builder_error_without_format_or_audit,
         test_tail_handler_builds_payload_and_records_audit,
         test_tail_handler_reports_plain_tail_format_when_requested,

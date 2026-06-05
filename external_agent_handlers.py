@@ -257,6 +257,54 @@ class ExternalAgentMirrorScreenRenderHandler:
         }
 
 
+class ExternalAgentRenderCommandHandler:
+    def __init__(
+        self,
+        *,
+        parse_render_mode,
+        resolve_render_mode,
+        mirror_screen_render_handler,
+        process_viewport_render,
+        build_error,
+        invalid_data_error_code,
+        mirror_screen_render_mode,
+    ):
+        self.parse_render_mode = parse_render_mode
+        self.resolve_render_mode = resolve_render_mode
+        self.mirror_screen_render_handler = mirror_screen_render_handler
+        self.process_viewport_render = process_viewport_render
+        self.build_error = build_error
+        self.invalid_data_error_code = invalid_data_error_code
+        self.mirror_screen_render_mode = mirror_screen_render_mode
+
+    def process_render_command(self, op, command, record, state, terminal_id, bridge):
+        requested_render_mode = self.parse_render_mode(command.get('render_mode'))
+        if requested_render_mode is None:
+            return self.build_error(self.invalid_data_error_code, terminal_id=terminal_id)
+        render_mode = self.resolve_render_mode(requested_render_mode)
+        if render_mode == self.mirror_screen_render_mode:
+            return self.mirror_screen_render_handler.process_mirror_screen_render_command(
+                op,
+                command,
+                record,
+                state,
+                terminal_id,
+                bridge,
+                requested_render_mode=requested_render_mode,
+                render_mode=render_mode,
+            )
+        return self.process_viewport_render(
+            op,
+            command,
+            record,
+            state,
+            terminal_id,
+            bridge,
+            requested_render_mode=requested_render_mode,
+            render_mode=render_mode,
+        )
+
+
 class ExternalAgentTailCommandHandler:
     def __init__(
         self,
