@@ -19,7 +19,7 @@ import urllib.parse
 from collections import deque
 from pathlib import Path
 from flask import Flask, render_template, request, abort, make_response, redirect, send_file, jsonify
-from flask_socketio import SocketIO
+from flask_socketio import SocketIO, ConnectionRefusedError
 from external_agent_dispatch import ExternalAgentCommandDispatcher
 from external_agent_handlers import (
     ExternalAgentBasicCommandHandlers,
@@ -135,6 +135,7 @@ MAX_HOST_LENGTH = 255
 MAX_USERNAME_LENGTH = 128
 SESSION_COOKIE_NAME = 'standterm_session'
 SESSION_COOKIE_MAX_AGE = 12 * 60 * 60
+SESSION_RENEW_INTERVAL_SECONDS = 5 * 60
 SESSION_CLEANUP_INTERVAL_SECONDS = 60
 LOCALHOST_KEY_SETUP_TTL_SECONDS = 120
 MIN_TERMINAL_COLS = 2
@@ -998,7 +999,7 @@ def build_terminal_policy(browser_authorized=False, client_ip=None):
         'ca_download_url': '/download_ca' if HTTPS_ENABLED and not (CLI_ARGS.certfile and CLI_ARGS.keyfile) else None,
         'authorized_dir': str(AUTHORIZED_DIR),
         'authorized_dir_ready': authorized_dir_ready,
-        'localhost_access_url': get_localhost_access_url(DEFAULT_PORT) if is_wsl() else None,
+        'localhost_access_url': None,
         'browser_authorization': {
             'available': bool(browser_authorization_required_for),
             'authorized': bool(browser_authorized),
@@ -4487,19 +4488,72 @@ def build_access_required_response():
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>StandTerm Access Required</title>
   <style>
-    body { font-family: system-ui, sans-serif; margin: 3rem; line-height: 1.5; color: #1f2937; }
-    code { background: #f3f4f6; padding: 0.1rem 0.3rem; border-radius: 4px; }
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #0b0b0c;
+      color: #f2f2f2;
+      line-height: 1.45;
+    }
+    main {
+      width: min(420px, calc(100vw - 32px));
+      border: 1px solid #303033;
+      background: #171719;
+      padding: 24px;
+      border-radius: 8px;
+      box-sizing: border-box;
+    }
+    h1 { margin: 0 0 14px; color: #64a9ff; font-size: 1.25rem; }
+    p { margin: 0 0 16px; color: #b8b8bd; }
+    label { display: block; margin-bottom: 8px; color: #ddd; font-size: 0.9rem; }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      margin-bottom: 14px;
+      padding: 10px 12px;
+      background: #242427;
+      border: 1px solid #4a4a4f;
+      border-radius: 5px;
+      color: #fff;
+      font: 14px/1.3 ui-monospace, SFMono-Regular, Consolas, monospace;
+      outline: none;
+    }
+    button {
+      width: 100%;
+      padding: 10px 12px;
+      background: #0a84ff;
+      color: #fff;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-weight: 700;
+    }
+    .hint { margin-top: 14px; font-size: 0.85rem; color: #8e8e93; }
   </style>
 </head>
 <body>
-  <h1>StandTerm access required</h1>
-  <p>Open the full Access URL printed by the launcher, including <code>?token=...</code>.</p>
-  <p>If you copied the URL from another browser after it loaded, copy the launcher URL again instead.</p>
-  <p>For Windows browsers connecting to a WSL IP over HTTPS, the browser may also require trusting the StandTerm local CA.</p>
+  <main>
+    <h1>StandTerm access required</h1>
+    <p>Enter the access token printed by the launcher, or open the full Access URL.</p>
+    <form method="post" action="/login" autocomplete="off">
+      <label for="access-token">Access token</label>
+      <input id="access-token" name="token" type="password" autofocus required>
+      <button type="submit">Unlock</button>
+    </form>
+    <p class="hint">For Windows browsers connecting to a WSL IP over HTTPS, the browser may also require trusting the StandTerm local CA.</p>
+  </main>
 </body>
 </html>
-''', 403)
+''', 401)
     return add_common_headers(response)
+
+def build_access_login_failed_response():
+    response = build_access_required_response()
+    response.status_code = 401
+    return response
 
 def close_bridge(bridge):
     if not bridge:
@@ -4762,15 +4816,7 @@ def parse_terminal_size(data):
         return None
     return cols, rows
 
-def build_session_response():
-    ensure_session_cleanup_task()
-    session_token = secrets.token_urlsafe(32)
-    active_sessions[session_token] = time.time() + SESSION_COOKIE_MAX_AGE
-    response = make_response(render_template(
-        'index.html',
-        ssh_term=SSH_TERM,
-        terminal_policy=build_terminal_policy(),
-    ))
+def set_session_cookie(response, session_token):
     response.set_cookie(
         SESSION_COOKIE_NAME,
         session_token,
@@ -4779,6 +4825,43 @@ def build_session_response():
         samesite='Strict',
         secure=HTTPS_ENABLED,
     )
+    return response
+
+def build_index_response():
+    return make_response(render_template(
+        'index.html',
+        ssh_term=SSH_TERM,
+        terminal_policy=build_terminal_policy(),
+    ))
+
+def build_session_response():
+    ensure_session_cleanup_task()
+    session_token = secrets.token_urlsafe(32)
+    active_sessions[session_token] = time.time() + SESSION_COOKIE_MAX_AGE
+    response = set_session_cookie(build_index_response(), session_token)
+    return add_common_headers(response)
+
+def build_session_redirect_response():
+    ensure_session_cleanup_task()
+    session_token = secrets.token_urlsafe(32)
+    active_sessions[session_token] = time.time() + SESSION_COOKIE_MAX_AGE
+    response = set_session_cookie(redirect('/'), session_token)
+    return add_common_headers(response)
+
+def build_existing_session_response(session_token):
+    active_sessions[session_token] = time.time() + SESSION_COOKIE_MAX_AGE
+    response = set_session_cookie(build_index_response(), session_token)
+    return add_common_headers(response)
+
+def renew_session_response(session_token):
+    active_sessions[session_token] = time.time() + SESSION_COOKIE_MAX_AGE
+    response = jsonify({
+        'status': 'ok',
+        'session_expires_at': active_sessions[session_token],
+        'session_max_age_seconds': SESSION_COOKIE_MAX_AGE,
+        'renew_interval_seconds': SESSION_RENEW_INTERVAL_SECONDS,
+    })
+    set_session_cookie(response, session_token)
     return add_common_headers(response)
 
 def get_pending_backend_action(sid, action_id, expected_action_type=None):
@@ -4797,15 +4880,46 @@ def index():
     if is_valid_access_token(token):
         return build_session_response()
 
-    if not is_valid_session(request.cookies.get(SESSION_COOKIE_NAME)):
+    session_token = request.cookies.get(SESSION_COOKIE_NAME)
+    if not is_valid_session(session_token):
         return build_access_required_response()
 
-    response = make_response(render_template(
-        'index.html',
-        ssh_term=SSH_TERM,
-        terminal_policy=build_terminal_policy(),
-    ))
-    return add_common_headers(response)
+    return build_existing_session_response(session_token)
+
+@app.route('/login', methods=['POST'])
+def login():
+    token = request.form.get('token')
+    if not is_valid_access_token(token):
+        return build_access_login_failed_response()
+    return build_session_redirect_response()
+
+@app.route('/session/renew', methods=['POST'])
+def renew_session():
+    session_token = request.cookies.get(SESSION_COOKIE_NAME)
+    if not is_valid_session(session_token):
+        return external_agent_json_response({
+            'status': 'failed',
+            'error_code': 'session_required',
+            'message': 'Session expired. Enter the access token again.',
+        }, status_code=403)
+    return renew_session_response(session_token)
+
+def build_current_access_url():
+    return urllib.parse.urljoin(request.url_root, f'?token={ACCESS_TOKEN}')
+
+@app.route('/access-url')
+def access_url():
+    if not is_valid_session(request.cookies.get(SESSION_COOKIE_NAME)):
+        return external_agent_json_response({
+            'status': 'failed',
+            'error_code': 'session_required',
+            'message': 'Session expired. Enter the access token again.',
+        }, status_code=403)
+    return external_agent_json_response({
+        'status': 'ok',
+        'access_url': build_current_access_url(),
+        'localhost_access_url': get_localhost_access_url(DEFAULT_PORT) if is_wsl() else None,
+    })
 
 def is_loopback_client_request():
     client_ip = get_request_client_ip()
@@ -5482,7 +5596,10 @@ def on_connect():
     client_ip = get_request_client_ip()
     if not session_token:
         print(f"[!] Unauthorized WebSocket attempt: {request.sid} from {client_ip}")
-        return False 
+        raise ConnectionRefusedError({
+            'error_code': 'session_required',
+            'message': 'Session expired. Enter the access token again.',
+        })
     socket_session_tokens[request.sid] = session_token
     socket_client_ips[request.sid] = client_ip
     socket_browser_authorized[request.sid] = False
@@ -7463,6 +7580,112 @@ def get_runtime_name():
         return "Windows"
     return "Linux"
 
+def get_clipboard_command(platform_name=None, wsl_runtime=None, which=None):
+    platform_name = sys.platform if platform_name is None else platform_name
+    wsl_runtime = is_wsl() if wsl_runtime is None else wsl_runtime
+    which = shutil.which if which is None else which
+    if wsl_runtime and which('clip.exe'):
+        return ['clip.exe']
+    if platform_name.startswith('win'):
+        return ['clip.exe']
+    if platform_name == 'darwin':
+        return ['pbcopy']
+    if which('wl-copy'):
+        return ['wl-copy']
+    if which('xclip'):
+        return ['xclip', '-selection', 'clipboard']
+    if which('xsel'):
+        return ['xsel', '--clipboard', '--input']
+    return None
+
+def copy_text_to_clipboard(text, command=None, run=None):
+    if not isinstance(text, str) or not text:
+        return False, 'Nothing to copy.'
+    command = get_clipboard_command() if command is None else command
+    if not command:
+        return False, 'No clipboard command is available.'
+    run = subprocess.run if run is None else run
+    try:
+        result = run(
+            command,
+            input=text,
+            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=5,
+            check=False,
+        )
+    except Exception as exc:
+        return False, str(exc)
+    if result.returncode != 0:
+        message = (result.stderr or '').strip() or f'clipboard command exited with {result.returncode}'
+        return False, message
+    return True, 'copied'
+
+def read_console_key(stdin=None):
+    stdin = sys.stdin if stdin is None else stdin
+    if sys.platform.startswith('win'):
+        try:
+            import msvcrt
+            return msvcrt.getwch()
+        except Exception:
+            return None
+    try:
+        import termios
+        import tty
+        fd = stdin.fileno()
+        previous = termios.tcgetattr(fd)
+        try:
+            tty.setcbreak(fd)
+            return stdin.read(1)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, previous)
+    except Exception:
+        return None
+
+def handle_console_copy_shortcut(key, access_url, access_token, copy_func=None):
+    if not isinstance(key, str) or not key:
+        return False
+    key = key.lower()
+    if key == 't':
+        label = 'Access Token'
+        text = access_token
+    elif key == 'u':
+        label = 'Access URL'
+        text = access_url
+    else:
+        return False
+    copy_func = copy_text_to_clipboard if copy_func is None else copy_func
+    ok, message = copy_func(text)
+    if ok:
+        print(f"[clipboard] Copied {label}.", flush=True)
+    else:
+        print(f"[clipboard] Failed to copy {label}: {message}", flush=True)
+    return True
+
+def console_copy_shortcuts_available(stdin=None):
+    stdin = sys.stdin if stdin is None else stdin
+    return bool(getattr(stdin, 'isatty', lambda: False)() and get_clipboard_command())
+
+def console_copy_shortcut_loop(access_url, access_token, stdin=None):
+    while True:
+        key = read_console_key(stdin=stdin)
+        if key is None:
+            return
+        handle_console_copy_shortcut(key, access_url, access_token)
+
+def start_console_copy_shortcuts(access_url, access_token, stdin=None):
+    stdin = sys.stdin if stdin is None else stdin
+    if not console_copy_shortcuts_available(stdin=stdin):
+        return False
+    thread = threading.Thread(
+        target=console_copy_shortcut_loop,
+        args=(access_url, access_token, stdin),
+        daemon=True,
+    )
+    thread.start()
+    return True
+
 if __name__ == '__main__':
     print("[*] Python imports completed; resolving bind host...", flush=True)
     bind_host = get_bind_host()
@@ -7483,7 +7706,7 @@ if __name__ == '__main__':
     print(f"Default Connection: {DEFAULT_CONNECTION_TYPE}")
     if FORCE_CONNECTION_TYPE:
         print(f"Forced Connection: {FORCE_CONNECTION_TYPE}")
-    print(f"Access URL: {scheme}://{access_host}:{port}/?token={ACCESS_TOKEN}")
+    access_url = f"{scheme}://{access_host}:{port}/?token={ACCESS_TOKEN}"
     print(f"Listening on: {bind_host}:{port}")
     write_external_agentinfo_files(base_url=f'{scheme}://{access_host}:{port}')
     for line in build_external_agent_startup_lines():
@@ -7506,6 +7729,12 @@ if __name__ == '__main__':
         print(f"[!] Set {get_prefixed_env_name('ALLOW_REMOTE_UART')}=1 only if remote clients should bypass browser authorization.")
     if sys.platform == 'darwin':
         print("Tip: Enable Remote Login in macOS if you want localhost SSH access.")
+    console_shortcuts_available = console_copy_shortcuts_available()
+    url_hint = " (Press u to copy)" if console_shortcuts_available else ""
+    token_hint = " (Press t to copy)" if console_shortcuts_available else ""
+    print(f"Access URL: {access_url}{url_hint}")
+    print(f"Access Token: {ACCESS_TOKEN}{token_hint}")
+    start_console_copy_shortcuts(access_url, ACCESS_TOKEN)
     print("="*60 + "\n")
     
     sys.stdout.flush()

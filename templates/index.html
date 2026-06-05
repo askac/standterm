@@ -146,6 +146,10 @@
         .settings-control input[type="checkbox"] { width: auto; }
         .settings-inline-action { width: auto; margin-left: 8px; padding: 5px 10px; background: #3a3a3c; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
         .settings-inline-action:disabled { color: #777; cursor: default; opacity: 0.7; }
+        .settings-secret-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; max-width: 58%; }
+        .settings-secret-actions button { width: auto; margin: 0; padding: 5px 10px; background: #3a3a3c; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+        .settings-secret-actions button:disabled { color: #777; cursor: default; opacity: 0.7; }
+        .settings-secret-value { margin-top: 8px; padding: 8px; background: #0d0d0d; border: 1px solid #333; border-radius: 5px; color: #ddd; font: 11px/1.4 Consolas, "Courier New", monospace; overflow-wrap: anywhere; display: none; }
         .settings-footer { display: flex; justify-content: space-between; padding: 12px 20px; border-top: 1px solid #3a3a3c; }
         .settings-btn { padding: 7px 18px; border: none; border-radius: 5px; cursor: pointer; font-size: 13px; }
 
@@ -450,6 +454,28 @@
             white-space: pre-wrap;
             word-break: break-word;
         }
+        #session-recovery-modal {
+            display: none; position: fixed; inset: 0; z-index: 9000;
+            background: rgba(0, 0, 0, 0.82); align-items: center; justify-content: center;
+        }
+        #session-recovery-modal.open { display: flex; }
+        .session-recovery-box {
+            width: min(420px, calc(100vw - 32px)); box-sizing: border-box;
+            background: #171719; border: 1px solid #3a3a3c; border-radius: 8px;
+            color: #ddd; padding: 22px; box-shadow: 0 20px 60px rgba(0,0,0,0.9);
+        }
+        .session-recovery-box h3 { margin: 0 0 12px; color: #64a9ff; font-size: 1.1rem; }
+        .session-recovery-box p { margin: 0 0 14px; color: #aaa; line-height: 1.45; }
+        #session-recovery-form input {
+            width: 100%; box-sizing: border-box; margin-bottom: 12px; padding: 10px 12px;
+            background: #242427; border: 1px solid #4a4a4f; border-radius: 5px;
+            color: #fff; font: 14px/1.3 ui-monospace, SFMono-Regular, Consolas, monospace;
+        }
+        #session-recovery-form button {
+            width: 100%; padding: 10px 12px; background: #0a84ff; color: #fff;
+            border: none; border-radius: 5px; cursor: pointer; font-weight: 700;
+        }
+        #session-recovery-message { min-height: 18px; margin-top: 10px; color: #ff9f0a; font-size: 12px; }
     </style>
 </head>
 <body>
@@ -554,6 +580,18 @@
                             <div class="settings-row"><label>Default connection</label><span class="settings-value" id="server-settings-default-connection">--</span></div>
                             <div class="settings-row"><label>Forced connection</label><span class="settings-value" id="server-settings-forced-connection">--</span></div>
                             <div class="settings-row"><label>HTTPS</label><span class="settings-value" id="server-settings-https">--</span></div>
+                        </fieldset>
+                        <fieldset class="settings-fieldset">
+                            <legend>Access recovery</legend>
+                            <div class="settings-row">
+                                <label>Access URL</label>
+                                <span class="settings-secret-actions">
+                                    <button type="button" id="server-access-copy-btn">Copy URL</button>
+                                    <button type="button" id="server-access-show-btn">Show URL</button>
+                                </span>
+                            </div>
+                            <div class="settings-status" id="server-access-status">Access URL is fetched only when requested.</div>
+                            <div class="settings-secret-value" id="server-access-url"></div>
                         </fieldset>
                         <fieldset class="settings-fieldset">
                             <legend>Low-risk runtime settings</legend>
@@ -739,6 +777,18 @@
                     <button type="button" id="agent-action-pause-btn">Pause</button>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <div id="session-recovery-modal">
+        <div class="session-recovery-box">
+            <h3>Session expired</h3>
+            <p>Enter the access token printed by the launcher to continue.</p>
+            <form id="session-recovery-form" autocomplete="off">
+                <input id="session-recovery-token" name="token" type="password" required>
+                <button type="submit">Unlock</button>
+            </form>
+            <div id="session-recovery-message"></div>
         </div>
     </div>
 
@@ -1154,6 +1204,14 @@
             const agentToggleBtn = document.getElementById('agent-toggle-btn');
             const newTabBtn = document.getElementById('new-tab-btn');
             const closeTabsBtn = document.getElementById('close-tabs-btn');
+            const sessionRecoveryModal = document.getElementById('session-recovery-modal');
+            const sessionRecoveryForm = document.getElementById('session-recovery-form');
+            const sessionRecoveryToken = document.getElementById('session-recovery-token');
+            const sessionRecoveryMessage = document.getElementById('session-recovery-message');
+            const serverAccessCopyBtn = document.getElementById('server-access-copy-btn');
+            const serverAccessShowBtn = document.getElementById('server-access-show-btn');
+            const serverAccessStatus = document.getElementById('server-access-status');
+            const serverAccessUrl = document.getElementById('server-access-url');
             const debugEnabled = (new URLSearchParams(window.location.search)).get('debug') === '1';
             const INITIAL_TERMINAL_ID = 'main';
             let activeTerminalId = INITIAL_TERMINAL_ID;
@@ -1185,6 +1243,8 @@
             let pendingPasteReview = null;
             let serverSettingsSnapshot = null;
             let currentSettingsAdminGrant = null;
+            let sessionRenewTimer = null;
+            let accessUrlRevealTimer = null;
 
             function normalizeConnectionType(value) {
                 return String(value || '').trim().toLowerCase().replace('-', '_');
@@ -3082,11 +3142,25 @@
             socket.on('connect', () => {
                 socketStatusEl.innerText = "Connected";
                 socketStatusEl.style.color = "#34c759";
+                hideSessionRecovery();
+                scheduleSessionRenew();
                 updateDebugHud('socket.connect', 'connected');
                 updatePolicyDebugPanel('socket.connect');
                 registerBrowserIdentity()
                     .catch(err => updateBrowserAuthUi(err.message));
                 socket.emit('list_terminals');
+            });
+            socket.on('connect_error', (err) => {
+                if (isSessionRequiredConnectError(err)) {
+                    socketStatusEl.innerText = "Session expired";
+                    socketStatusEl.style.color = "#ff453a";
+                    showSessionRecovery('Session expired. Enter the access token again.');
+                } else {
+                    socketStatusEl.innerText = "Reconnecting...";
+                    socketStatusEl.style.color = "#ff9f0a";
+                }
+                updateDebugHud('socket.connect_error', err && err.message ? err.message : 'connect_error');
+                updatePolicyDebugPanel('socket.connect_error', { message: err && err.message ? err.message : null });
             });
             socket.on('terminal_policy', data => {
                 applyTerminalPolicy(data);
@@ -3210,6 +3284,7 @@
             socket.on('disconnect', (r) => {
                 clearBrowserPairingResponseTimer();
                 setBrowserAuthBusy(false);
+                clearSessionRenewTimer();
                 socketStatusEl.innerText = "Disconnected (" + r + ")";
                 socketStatusEl.style.color = "#ff9f0a";
                 terminals.forEach(state => {
@@ -3237,6 +3312,128 @@
             function hideError() {
                 errorEl.style.display = 'none';
                 errorEl.innerText = '';
+            }
+
+            function isSessionRequiredConnectError(err) {
+                if (!err) return false;
+                const fields = [
+                    err.message,
+                    err.description,
+                    err.context && err.context.error_code,
+                    err.data && err.data.error_code,
+                    err.data && err.data.message,
+                ];
+                return fields.some(value => String(value || '').includes('session_required'));
+            }
+
+            function clearSessionRenewTimer() {
+                if (!sessionRenewTimer) return;
+                clearTimeout(sessionRenewTimer);
+                sessionRenewTimer = null;
+            }
+
+            function showSessionRecovery(message) {
+                clearSessionRenewTimer();
+                if (sessionRecoveryMessage) sessionRecoveryMessage.textContent = message || '';
+                if (sessionRecoveryModal) sessionRecoveryModal.classList.add('open');
+                if (sessionRecoveryToken) sessionRecoveryToken.focus();
+            }
+
+            function hideSessionRecovery() {
+                if (sessionRecoveryModal) sessionRecoveryModal.classList.remove('open');
+                if (sessionRecoveryMessage) sessionRecoveryMessage.textContent = '';
+                if (sessionRecoveryToken) sessionRecoveryToken.value = '';
+            }
+
+            async function renewSession() {
+                try {
+                    const response = await fetch('/session/renew', {
+                        method: 'POST',
+                        headers: { 'Accept': 'application/json' },
+                    });
+                    if (!response.ok) {
+                        showSessionRecovery('Session expired. Enter the access token again.');
+                        return;
+                    }
+                    const result = await response.json().catch(() => ({}));
+                    const intervalSeconds = Number(result.renew_interval_seconds) || 300;
+                    clearSessionRenewTimer();
+                    sessionRenewTimer = setTimeout(renewSession, Math.max(30, intervalSeconds) * 1000);
+                } catch (err) {
+                    clearSessionRenewTimer();
+                    sessionRenewTimer = setTimeout(renewSession, 30000);
+                }
+            }
+
+            function scheduleSessionRenew() {
+                clearSessionRenewTimer();
+                sessionRenewTimer = setTimeout(renewSession, 300000);
+            }
+
+            async function submitSessionRecoveryToken(token) {
+                const body = new URLSearchParams();
+                body.set('token', token || '');
+                const response = await fetch('/login', {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'text/html',
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body,
+                });
+                if (!response.ok) {
+                    throw new Error('Access token was not accepted.');
+                }
+                window.location.assign('/');
+            }
+
+            async function fetchAccessUrl() {
+                const response = await fetch('/access-url', {
+                    method: 'GET',
+                    headers: { 'Accept': 'application/json' },
+                });
+                if (!response.ok) {
+                    showSessionRecovery('Session expired. Enter the access token again.');
+                    throw new Error('Session expired.');
+                }
+                const result = await response.json();
+                if (!result || result.status !== 'ok' || typeof result.access_url !== 'string') {
+                    throw new Error('Access URL is unavailable.');
+                }
+                return result;
+            }
+
+            function hideAccessUrlValueLater() {
+                if (accessUrlRevealTimer) clearTimeout(accessUrlRevealTimer);
+                accessUrlRevealTimer = setTimeout(() => {
+                    if (serverAccessUrl) {
+                        serverAccessUrl.textContent = '';
+                        serverAccessUrl.style.display = 'none';
+                    }
+                    accessUrlRevealTimer = null;
+                }, 30000);
+            }
+
+            async function showAccessUrl() {
+                if (serverAccessStatus) serverAccessStatus.textContent = 'Fetching access URL...';
+                const result = await fetchAccessUrl();
+                if (serverAccessUrl) {
+                    const lines = [result.access_url];
+                    if (result.localhost_access_url) lines.push(result.localhost_access_url);
+                    serverAccessUrl.textContent = lines.join('\n');
+                    serverAccessUrl.style.display = 'block';
+                }
+                if (serverAccessStatus) serverAccessStatus.textContent = 'Access URL shown for 30 seconds.';
+                hideAccessUrlValueLater();
+                return result;
+            }
+
+            async function copyAccessUrl() {
+                if (serverAccessStatus) serverAccessStatus.textContent = 'Fetching access URL...';
+                const result = await fetchAccessUrl();
+                copyToClipboard(result.access_url);
+                if (serverAccessStatus) serverAccessStatus.textContent = 'Access URL copied.';
+                return result;
             }
 
             function hideActionPrompt() {
@@ -4396,6 +4593,37 @@
             document.getElementById('settings-option').onclick = openSettings;
             document.getElementById('quick-settings').onclick = openSettings;
             document.getElementById('settings-close').onclick = () => settingsModal.classList.remove('open');
+            if (sessionRecoveryForm) {
+                sessionRecoveryForm.onsubmit = event => {
+                    event.preventDefault();
+                    if (sessionRecoveryMessage) sessionRecoveryMessage.textContent = 'Unlocking...';
+                    submitSessionRecoveryToken(sessionRecoveryToken ? sessionRecoveryToken.value : '')
+                        .catch(err => {
+                            if (sessionRecoveryMessage) sessionRecoveryMessage.textContent = err.message || 'Access token was not accepted.';
+                        });
+                };
+            }
+            if (serverAccessCopyBtn) {
+                serverAccessCopyBtn.onclick = () => {
+                    serverAccessCopyBtn.disabled = true;
+                    copyAccessUrl()
+                        .catch(err => {
+                            if (serverAccessStatus) serverAccessStatus.textContent = err.message || 'Access URL is unavailable.';
+                        })
+                        .finally(() => { serverAccessCopyBtn.disabled = false; });
+                };
+            }
+            if (serverAccessShowBtn) {
+                serverAccessShowBtn.onclick = () => {
+                    if (!window.confirm('Show the full Access URL for 30 seconds?')) return;
+                    serverAccessShowBtn.disabled = true;
+                    showAccessUrl()
+                        .catch(err => {
+                            if (serverAccessStatus) serverAccessStatus.textContent = err.message || 'Access URL is unavailable.';
+                        })
+                        .finally(() => { serverAccessShowBtn.disabled = false; });
+                };
+            }
             document.querySelectorAll('.settings-nav-item').forEach(item => {
                 item.onclick = () => {
                     document.querySelectorAll('.settings-nav-item').forEach(i => i.classList.remove('active'));

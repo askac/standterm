@@ -7,6 +7,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -150,6 +151,27 @@ def new_page(browser, access_url):
         timeout=10000,
     )
     return context, page
+
+
+def test_access_required_page_accepts_token_login(browser, access_url):
+    parsed = urllib.parse.urlparse(access_url)
+    token = urllib.parse.parse_qs(parsed.query)['token'][0]
+    base_url = urllib.parse.urlunparse(parsed._replace(query='', fragment=''))
+    context = browser.new_context(viewport={'width': 1280, 'height': 800})
+    page = context.new_page()
+    try:
+        page.goto(base_url, wait_until='domcontentloaded')
+        page.wait_for_selector('#access-token', timeout=5000)
+        page.fill('#access-token', token)
+        page.click('button[type="submit"]')
+        page.wait_for_function(
+            "() => document.getElementById('socketStatus')?.innerText === 'Connected'",
+            timeout=10000,
+        )
+        check('token=' not in page.url, 'token login left the access token in the URL')
+        check(page.locator('#connectBtn').count() == 1, 'token login did not render the app controls')
+    finally:
+        close_context(context)
 
 
 def close_context(context):
@@ -750,6 +772,54 @@ def test_settings_server_tab_loads_readonly_snapshot(browser, access_url):
         close_context(context)
 
 
+def test_settings_access_recovery_fetches_access_url_on_demand(browser, access_url):
+    parsed = urllib.parse.urlparse(access_url)
+    token = urllib.parse.parse_qs(parsed.query)['token'][0]
+    context, page = new_page(browser, access_url)
+    try:
+        page.click('#quick-settings')
+        page.wait_for_selector('#settings-modal.open', timeout=5000)
+        page.click('.settings-nav-item[data-tab="server"]')
+        page.wait_for_selector('#server-access-show-btn', timeout=5000)
+        initial_state = page.evaluate(
+            """() => ({
+                status: document.getElementById('server-access-status').textContent,
+                display: getComputedStyle(document.getElementById('server-access-url')).display,
+                text: document.getElementById('server-access-url').textContent,
+                location: window.location.href
+            })"""
+        )
+        check('token=' not in initial_state['location'], 'access token remained in app URL before recovery action')
+        check(initial_state['display'] == 'none', 'access URL was visible before explicit reveal')
+        check(token not in initial_state['text'], 'access URL was rendered before explicit reveal')
+
+        page.once('dialog', lambda dialog: dialog.accept())
+        page.click('#server-access-show-btn')
+        page.wait_for_function(
+            "token => document.getElementById('server-access-url')?.textContent.includes(token)",
+            arg=token,
+            timeout=5000,
+        )
+        revealed = page.evaluate(
+            """() => ({
+                status: document.getElementById('server-access-status').textContent,
+                text: document.getElementById('server-access-url').textContent,
+                location: window.location.href
+            })"""
+        )
+        check('shown for 30 seconds' in revealed['status'], 'access URL reveal did not update status')
+        check(access_url in revealed['text'], 'revealed access URL did not match server access URL')
+        check('token=' not in revealed['location'], 'access URL reveal modified browser location')
+
+        page.click('#server-access-copy-btn')
+        page.wait_for_function(
+            "() => document.getElementById('server-access-status')?.textContent === 'Access URL copied.'",
+            timeout=5000,
+        )
+    finally:
+        close_context(context)
+
+
 def test_connection_controls_follow_start_fields_without_legacy_payload(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
@@ -917,6 +987,7 @@ def test_terminal_payload_text_is_not_control(browser, access_url):
 def main():
     sync_playwright, PlaywrightError, _ = load_playwright()
     tests = [
+        test_access_required_page_accepts_token_login,
         test_agent_panel_can_be_dragged,
         test_terminal_pip_hides_selected_tab_and_keeps_background_tab,
         test_operator_observation_warning_ui,
@@ -927,6 +998,7 @@ def main():
         test_paste_review_approve_and_cancel,
         test_approval_payload_and_stale_rejections,
         test_settings_server_tab_loads_readonly_snapshot,
+        test_settings_access_recovery_fetches_access_url_on_demand,
         test_connection_controls_follow_start_fields_without_legacy_payload,
         test_terminal_payload_text_is_not_control,
     ]

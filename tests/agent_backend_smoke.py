@@ -114,6 +114,88 @@ def make_socket_client(flask_client):
     return socket_client
 
 
+def flask_session_cookie_value(flask_client):
+    cookie = flask_client.get_cookie(standterm.SESSION_COOKIE_NAME)
+    if cookie is None:
+        return None
+    return getattr(cookie, 'value', cookie)
+
+
+def test_access_required_page_accepts_login_token():
+    flask_client = standterm.app.test_client()
+    response = flask_client.get('/')
+    assert response.status_code == 401
+    assert b'Access token' in response.data
+    assert standterm.active_sessions == {}
+
+    response = flask_client.post('/login', data={'token': standterm.ACCESS_TOKEN})
+    assert response.status_code == 302
+    assert response.headers['Location'] == '/'
+    session_token = flask_session_cookie_value(flask_client)
+    assert session_token in standterm.active_sessions
+
+    socket_client = standterm.socketio.test_client(standterm.app, flask_test_client=flask_client)
+    assert socket_client.is_connected()
+    socket_client.disconnect()
+
+
+def test_access_required_page_rejects_invalid_login_token():
+    flask_client = standterm.app.test_client()
+    response = flask_client.post('/login', data={'token': 'wrong'})
+    assert response.status_code == 401
+    assert flask_session_cookie_value(flask_client) is None
+    assert standterm.active_sessions == {}
+
+
+def test_session_renew_extends_existing_cookie_session():
+    flask_client = make_flask_client()
+    session_token = flask_session_cookie_value(flask_client)
+    old_expires_at = standterm.time.time() + 1
+    standterm.active_sessions[session_token] = old_expires_at
+
+    response = flask_client.post('/session/renew')
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload['status'] == 'ok'
+    assert payload['session_max_age_seconds'] == standterm.SESSION_COOKIE_MAX_AGE
+    assert payload['renew_interval_seconds'] == standterm.SESSION_RENEW_INTERVAL_SECONDS
+    assert standterm.active_sessions[session_token] > old_expires_at
+    assert 'Set-Cookie' in response.headers
+
+
+def test_session_renew_rejects_missing_or_expired_session():
+    flask_client = standterm.app.test_client()
+    response = flask_client.post('/session/renew')
+    assert response.status_code == 403
+    assert response.get_json()['error_code'] == 'session_required'
+
+    flask_client = make_flask_client()
+    session_token = flask_session_cookie_value(flask_client)
+    standterm.active_sessions[session_token] = standterm.time.time() - 1
+    response = flask_client.post('/session/renew')
+    assert response.status_code == 403
+    assert response.get_json()['error_code'] == 'session_required'
+    assert session_token not in standterm.active_sessions
+
+
+def test_access_url_endpoint_requires_session_and_is_no_store():
+    flask_client = standterm.app.test_client()
+    response = flask_client.get('/access-url')
+    assert response.status_code == 403
+    assert response.get_json()['error_code'] == 'session_required'
+
+    flask_client = make_flask_client()
+    response = flask_client.get('/access-url')
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload['status'] == 'ok'
+    assert payload['access_url'].endswith('/?token=' + standterm.ACCESS_TOKEN)
+    assert payload['localhost_access_url'] is None or payload['localhost_access_url'].endswith('/?token=' + standterm.ACCESS_TOKEN)
+    assert 'no-store' in response.headers['Cache-Control']
+    assert response.headers['Referrer-Policy'] == 'no-referrer'
+    assert response.headers['X-Content-Type-Options'] == 'nosniff'
+
+
 def current_session_token():
     assert standterm.socket_session_tokens
     return next(reversed(standterm.socket_session_tokens.values()))
@@ -2648,6 +2730,101 @@ def test_external_agent_startup_lines_point_to_launch_handoff():
         assert str(standterm.LOCAL_CA_CERT_PATH) in tls_joined
 
 
+def test_console_clipboard_helpers_select_copy_commands():
+    def no_command(_name):
+        return None
+
+    def has_command(name):
+        return f'/usr/bin/{name}' if name in {'clip.exe', 'wl-copy'} else None
+
+    assert standterm.get_clipboard_command(
+        platform_name='linux',
+        wsl_runtime=True,
+        which=has_command,
+    ) == ['clip.exe']
+    assert standterm.get_clipboard_command(
+        platform_name='linux',
+        wsl_runtime=False,
+        which=has_command,
+    ) == ['wl-copy']
+    assert standterm.get_clipboard_command(
+        platform_name='darwin',
+        wsl_runtime=False,
+        which=no_command,
+    ) == ['pbcopy']
+    assert standterm.get_clipboard_command(
+        platform_name='win32',
+        wsl_runtime=False,
+        which=no_command,
+    ) == ['clip.exe']
+    assert standterm.get_clipboard_command(
+        platform_name='linux',
+        wsl_runtime=False,
+        which=no_command,
+    ) is None
+
+
+def test_console_clipboard_copy_passes_text_to_command():
+    calls = []
+
+    class Result:
+        returncode = 0
+        stderr = ''
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return Result()
+
+    ok, message = standterm.copy_text_to_clipboard(
+        'secret-token',
+        command=['copy-tool'],
+        run=run,
+    )
+    assert ok is True
+    assert message == 'copied'
+    assert calls == [
+        (
+            ['copy-tool'],
+            {
+                'input': 'secret-token',
+                'text': True,
+                'stdout': standterm.subprocess.DEVNULL,
+                'stderr': standterm.subprocess.PIPE,
+                'timeout': 5,
+                'check': False,
+            },
+        ),
+    ]
+
+
+def test_console_copy_shortcuts_map_token_and_url():
+    copied = []
+
+    def copy_func(text):
+        copied.append(text)
+        return True, 'copied'
+
+    assert standterm.handle_console_copy_shortcut(
+        't',
+        'http://127.0.0.1:5000/?token=abc',
+        'abc',
+        copy_func=copy_func,
+    ) is True
+    assert standterm.handle_console_copy_shortcut(
+        'u',
+        'http://127.0.0.1:5000/?token=abc',
+        'abc',
+        copy_func=copy_func,
+    ) is True
+    assert standterm.handle_console_copy_shortcut(
+        'x',
+        'http://127.0.0.1:5000/?token=abc',
+        'abc',
+        copy_func=copy_func,
+    ) is False
+    assert copied == ['abc', 'http://127.0.0.1:5000/?token=abc']
+
+
 def test_wsl_local_shell_choice_is_structured_and_wsl_only():
     original_is_wsl = standterm.is_wsl
     plugin = standterm.TERMINAL_BACKEND_REGISTRY.get(standterm.CONNECTION_TYPE_LOCAL_SHELL)
@@ -2723,6 +2900,7 @@ def test_terminal_policy_creates_authorized_dir_for_fresh_checkout():
             assert authorized_dir.is_dir()
             assert policy['authorized_dir'] == str(authorized_dir)
             assert policy['authorized_dir_ready'] is True
+            assert policy['localhost_access_url'] is None
     finally:
         standterm.AUTHORIZED_DIR = original_authorized_dir
         standterm.AUTHORIZED_BROWSERS_PATH = original_authorized_browsers_path
@@ -4516,6 +4694,11 @@ def test_viewport_snapshot_context_clears_on_terminal_close_and_disconnect():
 
 def main():
     tests = [
+        test_access_required_page_accepts_login_token,
+        test_access_required_page_rejects_invalid_login_token,
+        test_session_renew_extends_existing_cookie_session,
+        test_session_renew_rejects_missing_or_expired_session,
+        test_access_url_endpoint_requires_session_and_is_no_store,
         test_pause_blocks_pending_approval,
         test_operator_observation_logs_metadata_without_input_preview,
         test_operator_observation_state_syncs_across_viewers,
@@ -4563,6 +4746,9 @@ def main():
         test_external_agent_handoff_uses_loopback_command_url_for_non_loopback_browser_url,
         test_external_agentinfo_payload_route_and_pointer_are_tokenless,
         test_external_agent_startup_lines_point_to_launch_handoff,
+        test_console_clipboard_helpers_select_copy_commands,
+        test_console_clipboard_copy_passes_text_to_command,
+        test_console_copy_shortcuts_map_token_and_url,
         test_wsl_local_shell_choice_is_structured_and_wsl_only,
         test_terminal_policy_creates_authorized_dir_for_fresh_checkout,
         test_wsl_client_ips_require_explicit_trust_for_local_resources,
