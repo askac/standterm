@@ -8,6 +8,7 @@ from external_agent_handlers import (
     ExternalAgentBasicCommandHandlers,
     ExternalAgentLifecycleCommandHandlers,
     ExternalAgentReadCommandRouter,
+    ExternalAgentScreenCommandHandler,
     ExternalAgentTailCommandHandler,
     ExternalAgentWaitCommandHandler,
 )
@@ -586,6 +587,193 @@ def test_read_router_delegates_to_concrete_handler_with_bridge():
     ]
 
 
+class OutputSeqBridge:
+    def __init__(self, output_seq):
+        self.output_seq = output_seq
+
+
+class PublicState:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def public_state(self):
+        return self.payload
+
+
+def make_screen_handler(
+    *,
+    parse_screen_options=None,
+    build_screen_wait=None,
+):
+    calls = []
+
+    if parse_screen_options is None:
+        def parse_screen_options(command):
+            calls.append(('parse', command))
+            return {'tail_lines': 5}, None
+
+    if build_screen_wait is None:
+        def build_screen_wait(bridge, state, wait_ms=None, quiet_ms=None):
+            calls.append(('wait', bridge, state, wait_ms, quiet_ms))
+            return {'wait_ms': wait_ms, 'quiet_ms': quiet_ms}, None
+
+    def build_context(session_token, terminal_id, sid):
+        calls.append(('context', session_token, terminal_id, sid))
+        return {'active_screen': {'lines': ['one', 'two']}, 'sid': sid}
+
+    def apply_screen_options(active_screen, screen_options):
+        calls.append(('apply', active_screen, screen_options))
+        return {'active_screen': active_screen, 'options': screen_options}
+
+    def summarize_context(context):
+        calls.append(('summary', context))
+        return {'sid': context.get('sid'), 'line_count': len(context['active_screen']['lines'])}
+
+    def record_audit(state, event_type, **metadata):
+        calls.append(('audit', state, event_type, metadata))
+
+    def build_error(error_code, terminal_id=None):
+        calls.append(('error', error_code, terminal_id))
+        return {'status': 'failed', 'error_code': error_code, 'terminal_id': terminal_id}
+
+    handler = ExternalAgentScreenCommandHandler(
+        parse_screen_options=parse_screen_options,
+        build_screen_wait=build_screen_wait,
+        build_context=build_context,
+        apply_screen_options=apply_screen_options,
+        summarize_context=summarize_context,
+        record_audit=record_audit,
+        build_error=build_error,
+        audit_event_type='screen_audit',
+    )
+    return handler, calls
+
+
+def test_screen_handler_maps_parse_error_without_wait_or_audit():
+    calls = []
+
+    def parse_screen_options(command):
+        calls.append(('parse', command))
+        return None, 'bad_screen'
+
+    handler, handler_calls = make_screen_handler(parse_screen_options=parse_screen_options)
+    state = PublicState({'mode': 'observe'})
+    command = {'op': 'screen', 'tail_lines': 'bad'}
+
+    assert handler.process_screen_command(
+        'screen',
+        command,
+        {'external_agent_id': 'agent-1', 'session_token': 'session-1', 'sid': 'sid-1'},
+        state,
+        'term-1',
+        OutputSeqBridge(42),
+    ) == {
+        'status': 'failed',
+        'error_code': 'bad_screen',
+        'terminal_id': 'term-1',
+    }
+    assert calls == [('parse', command)]
+    assert handler_calls == [('error', 'bad_screen', 'term-1')]
+
+
+def test_screen_handler_maps_wait_error_without_context_or_audit():
+    calls = []
+
+    def build_screen_wait(bridge, state, wait_ms=None, quiet_ms=None):
+        calls.append(('wait', bridge, state, wait_ms, quiet_ms))
+        return None, 'bad_wait'
+
+    handler, handler_calls = make_screen_handler(build_screen_wait=build_screen_wait)
+    state = PublicState({'mode': 'observe'})
+    command = {'op': 'screen', 'wait_ms': 100}
+    bridge = OutputSeqBridge(42)
+
+    assert handler.process_screen_command(
+        'screen',
+        command,
+        {'external_agent_id': 'agent-1', 'session_token': 'session-1', 'sid': 'sid-1'},
+        state,
+        'term-1',
+        bridge,
+    ) == {
+        'status': 'failed',
+        'error_code': 'bad_wait',
+        'terminal_id': 'term-1',
+    }
+    assert calls == [('wait', bridge, state, 100, None)]
+    assert handler_calls == [
+        ('parse', command),
+        ('error', 'bad_wait', 'term-1'),
+    ]
+
+
+def test_screen_handler_builds_payload_and_records_audit():
+    handler, calls = make_screen_handler()
+    state = PublicState({'mode': 'observe'})
+    command = {'op': 'screen', 'wait_ms': 100}
+    record = {
+        'external_agent_id': 'agent-1',
+        'session_token': 'session-1',
+        'sid': 'sid-1',
+    }
+    bridge = OutputSeqBridge(42)
+
+    assert handler.process_screen_command(
+        'screen',
+        command,
+        record,
+        state,
+        'term-1',
+        bridge,
+    ) == {
+        'status': 'ok',
+        'terminal_id': 'term-1',
+        'external_agent_id': 'agent-1',
+        'output_seq': 42,
+        'state': {'mode': 'observe'},
+        'screen': {
+            'active_screen': {'lines': ['one', 'two']},
+            'options': {'tail_lines': 5},
+        },
+        'screen_wait': {'wait_ms': 100, 'quiet_ms': None},
+    }
+    assert calls == [
+        ('parse', command),
+        ('wait', bridge, state, 100, None),
+        ('context', 'session-1', 'term-1', 'sid-1'),
+        ('apply', {'lines': ['one', 'two']}, {'tail_lines': 5}),
+        ('summary', {'active_screen': {'lines': ['one', 'two']}, 'sid': 'sid-1'}),
+        (
+            'audit',
+            state,
+            'screen_audit',
+            {
+                'external_agent_id': 'agent-1',
+                'context': {'sid': 'sid-1', 'line_count': 2},
+                'screen_options': {'tail_lines': 5},
+                'screen_wait': {'wait_ms': 100, 'quiet_ms': None},
+            },
+        ),
+    ]
+
+
+def test_screen_handler_omits_empty_screen_wait_payload():
+    def build_screen_wait(_bridge, _state, wait_ms=None, quiet_ms=None):
+        return {'wait_ms': wait_ms, 'quiet_ms': quiet_ms}, None
+
+    handler, _calls = make_screen_handler(build_screen_wait=build_screen_wait)
+    payload = handler.process_screen_command(
+        'screen',
+        {'op': 'screen'},
+        {'external_agent_id': 'agent-1', 'session_token': 'session-1', 'sid': 'sid-1'},
+        PublicState({'mode': 'observe'}),
+        'term-1',
+        OutputSeqBridge(42),
+    )
+
+    assert 'screen_wait' not in payload
+
+
 def make_tail_handler(
     *,
     build_tail_waiting=None,
@@ -757,14 +945,6 @@ def test_tail_handler_reports_plain_tail_format_when_requested():
     assert payload['events'] == [{'seq': 8, 'text': 'plain'}]
 
 
-class PublicState:
-    def __init__(self, payload):
-        self.payload = payload
-
-    def public_state(self):
-        return self.payload
-
-
 def make_wait_handler(*, build_wait_payload=None):
     calls = []
 
@@ -898,6 +1078,10 @@ def test_app_command_registry_keeps_command_specific_auth_handlers():
             == standterm.external_agent_read_command_router.process_read_command
         )
     assert (
+        standterm.EXTERNAL_AGENT_READ_COMMAND_HANDLERS['screen']
+        == standterm.external_agent_screen_command_handler.process_screen_command
+    )
+    assert (
         standterm.EXTERNAL_AGENT_READ_COMMAND_HANDLERS['tail']
         == standterm.external_agent_tail_command_handler.process_tail_command
     )
@@ -926,6 +1110,10 @@ def main():
         test_read_router_maps_missing_bridge,
         test_read_router_maps_unknown_read_op_after_bridge_lookup,
         test_read_router_delegates_to_concrete_handler_with_bridge,
+        test_screen_handler_maps_parse_error_without_wait_or_audit,
+        test_screen_handler_maps_wait_error_without_context_or_audit,
+        test_screen_handler_builds_payload_and_records_audit,
+        test_screen_handler_omits_empty_screen_wait_payload,
         test_tail_handler_maps_tail_builder_error_without_format_or_audit,
         test_tail_handler_builds_payload_and_records_audit,
         test_tail_handler_reports_plain_tail_format_when_requested,

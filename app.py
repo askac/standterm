@@ -25,6 +25,7 @@ from external_agent_handlers import (
     ExternalAgentBasicCommandHandlers,
     ExternalAgentLifecycleCommandHandlers,
     ExternalAgentReadCommandRouter,
+    ExternalAgentScreenCommandHandler,
     ExternalAgentTailCommandHandler,
     ExternalAgentWaitCommandHandler,
 )
@@ -6416,44 +6417,6 @@ def process_external_agent_sequence_command(_op, command, record, state, termina
     return payload
 
 
-def process_external_agent_screen_command(_op, command, record, state, terminal_id, bridge):
-    screen_options, screen_options_error = parse_external_agent_screen_options(command)
-    if screen_options_error:
-        return external_agent_error(screen_options_error, terminal_id=terminal_id)
-    screen_wait, screen_wait_error = build_external_agent_screen_wait_payload(
-        bridge,
-        state,
-        wait_ms=command.get('wait_ms'),
-        quiet_ms=command.get('quiet_ms'),
-    )
-    if screen_wait_error:
-        return external_agent_error(screen_wait_error, terminal_id=terminal_id)
-    context = build_agent_context(record.get('session_token'), terminal_id, record.get('sid'))
-    active_screen = apply_external_agent_screen_options(
-        context.get('active_screen'),
-        screen_options,
-    )
-    record_agent_audit_event(
-        state,
-        AGENT_AUDIT_EXTERNAL_AGENT_SCREEN,
-        external_agent_id=record.get('external_agent_id'),
-        context=summarize_agent_context_for_audit(context),
-        screen_options=screen_options,
-        screen_wait=screen_wait,
-    )
-    payload = {
-        'status': 'ok',
-        'terminal_id': terminal_id,
-        'external_agent_id': record.get('external_agent_id'),
-        'output_seq': bridge.output_seq,
-        'state': state.public_state(),
-        'screen': active_screen,
-    }
-    if screen_wait and (screen_wait.get('wait_ms') or screen_wait.get('quiet_ms')):
-        payload['screen_wait'] = screen_wait
-    return payload
-
-
 def process_external_agent_render_command(_op, command, record, state, terminal_id, bridge):
     requested_render_mode = parse_agent_render_mode(command.get('render_mode'))
     if requested_render_mode is None:
@@ -6678,6 +6641,18 @@ external_agent_lifecycle_command_handlers = ExternalAgentLifecycleCommandHandler
 )
 
 
+external_agent_screen_command_handler = ExternalAgentScreenCommandHandler(
+    parse_screen_options=parse_external_agent_screen_options,
+    build_screen_wait=build_external_agent_screen_wait_payload,
+    build_context=build_agent_context,
+    apply_screen_options=apply_external_agent_screen_options,
+    summarize_context=summarize_agent_context_for_audit,
+    record_audit=record_agent_audit_event,
+    build_error=external_agent_error,
+    audit_event_type=AGENT_AUDIT_EXTERNAL_AGENT_SCREEN,
+)
+
+
 external_agent_tail_command_handler = ExternalAgentTailCommandHandler(
     build_tail_waiting=build_external_agent_tail_payload_waiting,
     format_tail=format_external_agent_tail_payload,
@@ -6706,7 +6681,7 @@ EXTERNAL_AGENT_COMMAND_AUTH_HANDLERS = {
 }
 
 EXTERNAL_AGENT_READ_COMMAND_HANDLERS = {
-    'screen': process_external_agent_screen_command,
+    'screen': external_agent_screen_command_handler.process_screen_command,
     'render': process_external_agent_render_command,
     'tail': external_agent_tail_command_handler.process_tail_command,
     'wait': external_agent_wait_command_handler.process_wait_command,

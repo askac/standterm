@@ -139,6 +139,70 @@ class ExternalAgentReadCommandRouter:
         return handler(op, command, record, state, terminal_id, bridge)
 
 
+class ExternalAgentScreenCommandHandler:
+    def __init__(
+        self,
+        *,
+        parse_screen_options,
+        build_screen_wait,
+        build_context,
+        apply_screen_options,
+        summarize_context,
+        record_audit,
+        build_error,
+        audit_event_type,
+    ):
+        self.parse_screen_options = parse_screen_options
+        self.build_screen_wait = build_screen_wait
+        self.build_context = build_context
+        self.apply_screen_options = apply_screen_options
+        self.summarize_context = summarize_context
+        self.record_audit = record_audit
+        self.build_error = build_error
+        self.audit_event_type = audit_event_type
+
+    def process_screen_command(self, _op, command, record, state, terminal_id, bridge):
+        screen_options, screen_options_error = self.parse_screen_options(command)
+        if screen_options_error:
+            return self.build_error(screen_options_error, terminal_id=terminal_id)
+        screen_wait, screen_wait_error = self.build_screen_wait(
+            bridge,
+            state,
+            wait_ms=command.get('wait_ms'),
+            quiet_ms=command.get('quiet_ms'),
+        )
+        if screen_wait_error:
+            return self.build_error(screen_wait_error, terminal_id=terminal_id)
+        context = self.build_context(
+            record.get('session_token'),
+            terminal_id,
+            record.get('sid'),
+        )
+        active_screen = self.apply_screen_options(
+            context.get('active_screen'),
+            screen_options,
+        )
+        self.record_audit(
+            state,
+            self.audit_event_type,
+            external_agent_id=record.get('external_agent_id'),
+            context=self.summarize_context(context),
+            screen_options=screen_options,
+            screen_wait=screen_wait,
+        )
+        payload = {
+            'status': 'ok',
+            'terminal_id': terminal_id,
+            'external_agent_id': record.get('external_agent_id'),
+            'output_seq': bridge.output_seq,
+            'state': state.public_state(),
+            'screen': active_screen,
+        }
+        if screen_wait and (screen_wait.get('wait_ms') or screen_wait.get('quiet_ms')):
+            payload['screen_wait'] = screen_wait
+        return payload
+
+
 class ExternalAgentTailCommandHandler:
     def __init__(
         self,
