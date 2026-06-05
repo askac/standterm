@@ -7,6 +7,7 @@ from external_agent_dispatch import ExternalAgentCommandDispatcher
 from external_agent_handlers import (
     ExternalAgentBasicCommandHandlers,
     ExternalAgentLifecycleCommandHandlers,
+    ExternalAgentMirrorScreenRenderHandler,
     ExternalAgentReadCommandRouter,
     ExternalAgentScreenCommandHandler,
     ExternalAgentTailCommandHandler,
@@ -774,6 +775,104 @@ def test_screen_handler_omits_empty_screen_wait_payload():
     assert 'screen_wait' not in payload
 
 
+def make_mirror_screen_render_handler():
+    calls = []
+
+    def build_render_payload(record, terminal_id):
+        calls.append(('render', record, terminal_id))
+        return {
+            'render_mode': 'mirror_screen',
+            'render_type': 'terminal_screen',
+            'mime_type': 'application/vnd.standterm.screen+json',
+            'source': 'headless_screen',
+            'line_count': 2,
+            'byte_length': 24,
+            'cols': 80,
+            'rows': 24,
+            'output_seq': 17,
+            'lines': ['one', 'two'],
+        }, {'active_screen': {'lines': ['one', 'two']}, 'sid': record.get('sid')}
+
+    def summarize_context(context):
+        calls.append(('summary', context))
+        return {'line_count': len(context['active_screen']['lines'])}
+
+    def record_audit(state, event_type, **metadata):
+        calls.append(('audit', state, event_type, metadata))
+
+    handler = ExternalAgentMirrorScreenRenderHandler(
+        build_render_payload=build_render_payload,
+        summarize_context=summarize_context,
+        record_audit=record_audit,
+        audit_event_type='render_audit',
+    )
+    return handler, calls
+
+
+def test_mirror_screen_render_handler_builds_payload_and_records_audit():
+    handler, calls = make_mirror_screen_render_handler()
+    state = PublicState({'mode': 'observe'})
+    record = {
+        'external_agent_id': 'agent-1',
+        'session_token': 'session-1',
+        'sid': 'sid-1',
+    }
+    command = {'op': 'render', 'render_mode': 'mirror_screen'}
+
+    assert handler.process_mirror_screen_render_command(
+        'render',
+        command,
+        record,
+        state,
+        'term-1',
+        OutputSeqBridge(42),
+        requested_render_mode='mirror_screen',
+        render_mode='mirror_screen',
+    ) == {
+        'status': 'ok',
+        'terminal_id': 'term-1',
+        'external_agent_id': 'agent-1',
+        'output_seq': 17,
+        'state': {'mode': 'observe'},
+        'render': {
+            'render_mode': 'mirror_screen',
+            'render_type': 'terminal_screen',
+            'mime_type': 'application/vnd.standterm.screen+json',
+            'source': 'headless_screen',
+            'line_count': 2,
+            'byte_length': 24,
+            'cols': 80,
+            'rows': 24,
+            'output_seq': 17,
+            'lines': ['one', 'two'],
+        },
+    }
+    assert calls == [
+        ('render', record, 'term-1'),
+        ('summary', {'active_screen': {'lines': ['one', 'two']}, 'sid': 'sid-1'}),
+        (
+            'audit',
+            state,
+            'render_audit',
+            {
+                'external_agent_id': 'agent-1',
+                'status': 'ok',
+                'requested_render_mode': 'mirror_screen',
+                'render_mode': 'mirror_screen',
+                'render_type': 'terminal_screen',
+                'mime_type': 'application/vnd.standterm.screen+json',
+                'source': 'headless_screen',
+                'line_count': 2,
+                'byte_length': 24,
+                'cols': 80,
+                'rows': 24,
+                'output_seq': 17,
+                'context': {'line_count': 2},
+            },
+        ),
+    ]
+
+
 def make_tail_handler(
     *,
     build_tail_waiting=None,
@@ -1081,6 +1180,14 @@ def test_app_command_registry_keeps_command_specific_auth_handlers():
         standterm.EXTERNAL_AGENT_READ_COMMAND_HANDLERS['screen']
         == standterm.external_agent_screen_command_handler.process_screen_command
     )
+    assert isinstance(
+        standterm.external_agent_mirror_screen_render_handler,
+        ExternalAgentMirrorScreenRenderHandler,
+    )
+    assert (
+        standterm.EXTERNAL_AGENT_READ_COMMAND_HANDLERS['render']
+        == standterm.process_external_agent_render_command
+    )
     assert (
         standterm.EXTERNAL_AGENT_READ_COMMAND_HANDLERS['tail']
         == standterm.external_agent_tail_command_handler.process_tail_command
@@ -1114,6 +1221,7 @@ def main():
         test_screen_handler_maps_wait_error_without_context_or_audit,
         test_screen_handler_builds_payload_and_records_audit,
         test_screen_handler_omits_empty_screen_wait_payload,
+        test_mirror_screen_render_handler_builds_payload_and_records_audit,
         test_tail_handler_maps_tail_builder_error_without_format_or_audit,
         test_tail_handler_builds_payload_and_records_audit,
         test_tail_handler_reports_plain_tail_format_when_requested,

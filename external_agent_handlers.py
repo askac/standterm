@@ -203,6 +203,60 @@ class ExternalAgentScreenCommandHandler:
         return payload
 
 
+class ExternalAgentMirrorScreenRenderHandler:
+    def __init__(
+        self,
+        *,
+        build_render_payload,
+        summarize_context,
+        record_audit,
+        audit_event_type,
+    ):
+        self.build_render_payload = build_render_payload
+        self.summarize_context = summarize_context
+        self.record_audit = record_audit
+        self.audit_event_type = audit_event_type
+
+    def process_mirror_screen_render_command(
+        self,
+        _op,
+        _command,
+        record,
+        state,
+        terminal_id,
+        bridge,
+        *,
+        requested_render_mode,
+        render_mode,
+    ):
+        render, context = self.build_render_payload(record, terminal_id)
+        self.record_audit(
+            state,
+            self.audit_event_type,
+            external_agent_id=record.get('external_agent_id'),
+            status='ok',
+            requested_render_mode=requested_render_mode,
+            render_mode=render_mode,
+            render_type=render.get('render_type'),
+            mime_type=render.get('mime_type'),
+            source=render.get('source'),
+            line_count=render.get('line_count'),
+            byte_length=render.get('byte_length'),
+            cols=render.get('cols'),
+            rows=render.get('rows'),
+            output_seq=render.get('output_seq', bridge.output_seq),
+            context=self.summarize_context(context),
+        )
+        return {
+            'status': 'ok',
+            'terminal_id': terminal_id,
+            'external_agent_id': record.get('external_agent_id'),
+            'output_seq': render.get('output_seq', bridge.output_seq),
+            'state': state.public_state(),
+            'render': render,
+        }
+
+
 class ExternalAgentTailCommandHandler:
     def __init__(
         self,

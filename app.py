@@ -24,6 +24,7 @@ from external_agent_dispatch import ExternalAgentCommandDispatcher
 from external_agent_handlers import (
     ExternalAgentBasicCommandHandlers,
     ExternalAgentLifecycleCommandHandlers,
+    ExternalAgentMirrorScreenRenderHandler,
     ExternalAgentReadCommandRouter,
     ExternalAgentScreenCommandHandler,
     ExternalAgentTailCommandHandler,
@@ -6423,32 +6424,16 @@ def process_external_agent_render_command(_op, command, record, state, terminal_
         return external_agent_error(AGENT_ERROR_ACTION_INVALID_DATA, terminal_id=terminal_id)
     render_mode = resolve_agent_render_mode(requested_render_mode)
     if render_mode == AGENT_RENDER_MODE_MIRROR_SCREEN:
-        render, context = build_external_agent_mirror_screen_render_payload(record, terminal_id)
-        record_agent_audit_event(
+        return external_agent_mirror_screen_render_handler.process_mirror_screen_render_command(
+            _op,
+            command,
+            record,
             state,
-            AGENT_AUDIT_EXTERNAL_AGENT_RENDER,
-            external_agent_id=record.get('external_agent_id'),
-            status='ok',
+            terminal_id,
+            bridge,
             requested_render_mode=requested_render_mode,
             render_mode=render_mode,
-            render_type=render.get('render_type'),
-            mime_type=render.get('mime_type'),
-            source=render.get('source'),
-            line_count=render.get('line_count'),
-            byte_length=render.get('byte_length'),
-            cols=render.get('cols'),
-            rows=render.get('rows'),
-            output_seq=render.get('output_seq', bridge.output_seq),
-            context=summarize_agent_context_for_audit(context),
         )
-        return {
-            'status': 'ok',
-            'terminal_id': terminal_id,
-            'external_agent_id': record.get('external_agent_id'),
-            'output_seq': render.get('output_seq', bridge.output_seq),
-            'state': state.public_state(),
-            'render': render,
-        }
     render, render_error, request_payload, wait_ms = build_external_agent_viewport_render_payload(
         record,
         state,
@@ -6650,6 +6635,14 @@ external_agent_screen_command_handler = ExternalAgentScreenCommandHandler(
     record_audit=record_agent_audit_event,
     build_error=external_agent_error,
     audit_event_type=AGENT_AUDIT_EXTERNAL_AGENT_SCREEN,
+)
+
+
+external_agent_mirror_screen_render_handler = ExternalAgentMirrorScreenRenderHandler(
+    build_render_payload=build_external_agent_mirror_screen_render_payload,
+    summarize_context=summarize_agent_context_for_audit,
+    record_audit=record_agent_audit_event,
+    audit_event_type=AGENT_AUDIT_EXTERNAL_AGENT_RENDER,
 )
 
 
