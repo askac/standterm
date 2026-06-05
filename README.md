@@ -7,115 +7,6 @@ to the StandTerm server process across page reloads.
 
 ![StandTerm Demo](standterm_demo.gif)
 
-## What It Does
-
-- Runs SSH, Local Shell, and UART sessions inside browser terminal tabs.
-- Supports multiple persistent terminal tabs while the server process is alive.
-- Opens URLs and image links in an in-page overlay, and can pop a terminal into
-  system Picture-in-Picture when the browser supports it.
-- Provides Windows Terminal-inspired themes, IBM 5153 colors, 256-color, and
-  true-color terminal output through vendored xterm.js assets.
-- Uses browser authorization for non-loopback WSL access to host-local resources
-  such as Local Shell and UART.
-- Includes an Agent panel that gates agent writes through explicit typed state,
-  privacy modes, and human-input leases.
-- Exposes a loopback-only External Agent Mirror for local CLI agents through
-  typed JSON commands, browser viewport render requests, tail polling, and a
-  short-lived bearer-token handoff file.
-
-## Why AI Agents Use StandTerm
-
-StandTerm is an agent-ready terminal for human-in-the-loop automation: a human
-operator keeps the real browser terminal, while a local AI agent can observe,
-wait, type, and recover through typed control APIs. It is useful when a target
-machine is a locked-down server, bastion host, NAS, router, lab instrument,
-serial console, BBS, or legacy Unix box where installing an AI agent, daemon, or
-extra runtime is not allowed.
-
-Common agent workflows include:
-
-- supervised SSH automation with explicit operator control;
-- zero-install target-host automation through an existing shell, TUI, or REPL;
-- sudo and privilege-escalation workflows where the human approves sensitive
-  steps in the real terminal instead of giving an agent unrestricted credentials;
-- long-running build, deploy, package-manager, or firmware tasks that need
-  structured observation and keepalive without screen-scraping loops;
-- remote debugging on systems that only expose SSH, serial/UART, or a terminal
-  menu, including FreeBSD, Linux, macOS, Windows shells, QNX, embedded consoles,
-  and other non-containerized environments.
-
-Example niche: update packages on a FreeBSD host through `sudo pkg upgrade` from
-an existing SSH terminal. The target host does not need a model runtime, API key,
-Python package, browser extension, or agent daemon; StandTerm keeps the AI
-control plane local, typed, audited, and revocable.
-
-StandTerm is not a hosted remote access service. Treat it as a local operator tool:
-bind to loopback unless you understand the Local Shell, UART, HTTPS, browser
-authorization, and bearer-token implications.
-
-## Platform Support
-
-| Platform | Launcher | Python venv | Notes |
-| --- | --- | --- | --- |
-| WSL2 | `./run.sh` | `tools/.venv_wsl` | Opens the WSL IP URL in Windows; non-loopback access auto-enables HTTPS. |
-| macOS | `./run.sh` | `tools/.venv_macos` | Enable Remote Login only if you want localhost SSH access. |
-| Linux | `./run.sh` | `tools/.venv_linux` | Uses `xdg-open` when available. |
-| Windows | `run.bat` | `tools\.venv` | Uses native Python, pywinpty for Local Shell, and pyserial for UART. |
-
-WSL UART access to Windows `COMx` ports uses a Windows Python helper venv at
-`tools/.venv_win` when `python.exe` is available from WSL.
-
-## Requirements
-
-- Python 3.10+
-- Git for the one-line installer
-- OpenSSH server only when you want SSH access to localhost
-- A modern browser with WebCrypto for WSL browser authorization
-
-The launchers create and maintain their own repo-local virtual environments.
-If you use an AI agent or coding assistant in this repository, ask it to create
-or follow a local repo rule from `docs/venv_prompt.txt` so Python commands use
-the launcher-managed venv instead of system Python.
-
-On Ubuntu 24.04 LTS and similar Debian/Ubuntu/WSL systems, minimal Python
-installs may not include venv support. If the installer or launcher reports
-missing system packages, install them with apt:
-
-```bash
-sudo apt update
-sudo apt install -y git python3 python3-venv python3-pip
-```
-
-The launchers create a repo-local venv, install `requirements.txt`, and verify
-that the active Python can import the required packages before starting.
-
-On native Windows, install Git and Python first if they are not already on PATH:
-
-```powershell
-winget install --id Git.Git -e
-winget install --id Python.Python.3.12 -e
-```
-
-Reopen PowerShell after installing them so `git` and `python` are available.
-
-## Tests
-
-After the launcher has created the repo-local venv, run the headless smoke suite
-with that venv Python:
-
-```bash
-tools/.venv_wsl/bin/python scripts/run_smoke_tests.py
-```
-
-On native Linux, use `tools/.venv_linux/bin/python` instead. The smoke runner
-compiles the main Python entry points and runs the backend, REPL/CLI, and rsfile
-smoke tests. Browser smoke tests require Playwright browser setup and remain a
-separate manual check:
-
-```bash
-tools/.venv_wsl/bin/python tests/agent_browser_smoke.py
-```
-
 ## Quick Start
 
 Install and run on macOS, Linux, or WSL:
@@ -165,6 +56,102 @@ redirects to `/`.
 Use `./run.sh --force` or `run.bat --force` to rebuild dependency checks after
 pulling large changes.
 
+## What It Does
+
+- Runs SSH, Local Shell, and UART sessions inside browser terminal tabs.
+- Supports multiple persistent terminal tabs while the server process is alive.
+- Opens URLs and image links in an in-page overlay, and can pop a terminal into
+  system Picture-in-Picture when the browser supports it.
+- Provides Windows Terminal-inspired themes, IBM 5153 colors, 256-color, and
+  true-color terminal output through vendored xterm.js assets.
+- Uses browser authorization for non-loopback WSL access to host-local resources
+  such as Local Shell and UART.
+- Includes an Agent panel that gates agent writes through explicit typed state,
+  privacy modes, and human-input leases.
+- Exposes a loopback-only External Agent Mirror for local CLI agents through
+  typed JSON commands, structured screen renders, optional browser viewport PNG
+  renders, tail polling, and a short-lived bearer-token handoff file.
+
+## Why AI Agents Use StandTerm
+
+StandTerm is an agent-ready terminal for human-in-the-loop automation. A human
+operator keeps the real browser terminal, while a local AI agent can observe,
+wait, type, and recover through typed control APIs.
+
+Common agent workflows include:
+
+- supervised SSH and sudo workflows where the operator keeps credential prompts
+  in the real terminal;
+- automation with no agent or runtime installed on the target, using an existing
+  shell, TUI, REPL, UART/serial console, BBS, or legacy Unix session;
+- long-running build, deploy, package-manager, or firmware tasks that use
+  structured observation and typed waits instead of brittle screenshot polling
+  as the primary control loop.
+
+See [Agent Workflow Stories](#agent-workflow-stories) for concrete examples.
+
+## Platform Support
+
+| Platform | Launcher | Python venv | Notes |
+| --- | --- | --- | --- |
+| WSL2 | `./run.sh` | `tools/.venv_wsl` | Opens the WSL IP URL in Windows; non-loopback access auto-enables HTTPS. |
+| macOS | `./run.sh` | `tools/.venv_macos` | Enable Remote Login only if you want localhost SSH access. |
+| Linux | `./run.sh` | `tools/.venv_linux` | Uses `xdg-open` when available. |
+| Windows | `run.bat` | `tools\.venv` | Uses native Python, pywinpty for Local Shell, and pyserial for UART. |
+
+WSL UART access to Windows `COMx` ports uses a Windows Python helper venv at
+`tools/.venv_win` when `python.exe` is available from WSL.
+
+## Requirements
+
+- Python 3.10+
+- Git for the one-line installer
+- OpenSSH server only when you want SSH access to localhost
+- A modern browser with WebCrypto for WSL browser authorization
+
+The launchers create and maintain their own repo-local virtual environments.
+Agent and coding-assistant Python guidance is in `docs/venv_prompt.txt`.
+
+On Ubuntu 24.04 LTS and similar Debian/Ubuntu/WSL systems, minimal Python
+installs may not include venv support. If the installer or launcher reports
+missing system packages, install them with apt:
+
+```bash
+sudo apt update
+sudo apt install -y git python3 python3-venv python3-pip
+```
+
+The launchers install `requirements.txt` into the repo-local venv and verify
+that the active Python can import the required packages before starting.
+
+On native Windows, install Git and Python first if they are not already on PATH:
+
+```powershell
+winget install --id Git.Git -e
+winget install --id Python.Python.3.12 -e
+```
+
+Reopen PowerShell after installing them so `git` and `python` are available.
+
+## Tests
+
+After the launcher has created the repo-local venv, run the headless smoke suite
+with that venv Python:
+
+```bash
+tools/.venv_wsl/bin/python scripts/run_smoke_tests.py
+```
+
+On native Linux, use `tools/.venv_linux/bin/python` instead. The smoke runner
+compiles the main Python entry points and runs the backend, REPL/CLI, and rsfile
+smoke tests. On macOS, use `tools/.venv_macos/bin/python`; on native Windows,
+use `tools\.venv\Scripts\python.exe`. Browser smoke tests require Playwright
+browser setup and remain a separate manual check:
+
+```bash
+tools/.venv_wsl/bin/python tests/agent_browser_smoke.py
+```
+
 ## Terminal Backends
 
 StandTerm has three terminal backends:
@@ -180,14 +167,8 @@ Local Shell is selected by default when the browser is allowed to access
 host-local resources, but no shell starts automatically. Use the UI's connect
 button for the selected backend.
 
-Backend plugins publish their start form metadata through
-`terminal_policy.connection_options[*].start_fields`. The built-in SSH, Local
-Shell, and UART controls read defaults and option lists from that typed schema
-while retaining legacy policy keys for compatibility. Runtime defaults such as
-`default_connection_type`, `ssh.default_host`, `ssh.default_port`,
-`ssh.default_user`, `local_shell.default_kind`, and `uart.default_baud_rate` are
-in-memory settings that apply to new connections and to refreshed start field
-defaults.
+Backend plugin policy, start form metadata, and runtime defaults are documented
+in `docs/backend_plugin_contract.md`.
 
 The WSL Local Shell selector is WSL-only. Native Windows keeps using the native
 launcher shell selection, and native Linux/macOS use the process `SHELL` value or
@@ -251,13 +232,14 @@ Shell unless `STANDTERM_ALLOW_REMOTE_UART=1` is set.
 
 The browser Agent panel is an operator gate around typed terminal actions. It
 tracks mode, privacy state, viewer binding, terminal binding, human-input
-leases, and an audit trail. Agent writes go through the same backend input gate
-as human-approved actions.
+leases, and a runtime event trail. Agent writes go through the same backend input
+gate as human-approved actions.
 
 The External Agent Mirror lets local tools such as Codex CLI control an attached
 terminal through loopback HTTP JSON. The external agent cannot create terminal
-connections, read SSH passwords, read Flask/browser access tokens, approve its
-own proposals, or bypass Agent mode and privacy gates.
+connections, receive operator-entered password prompts, read Flask/browser
+access tokens, approve its own proposals, or bypass Agent mode and privacy
+gates.
 
 Typical local flow:
 
@@ -293,6 +275,7 @@ valid external-agent command extends access for another five idle minutes; the
 token is still invalidated by terminal close, browser Agent detach/disconnect,
 server restart, or explicit revoke. Do not commit it, paste it into logs, or
 expose it outside the StandTerm host.
+
 For long passive monitoring, such as watching a remote build or compile, prefer
 `agent_repl.py`; it keeps one long-poll tail session alive and sends a hidden
 `heartbeat` by default. One-shot clients can call `heartbeat` directly. Display
@@ -306,181 +289,54 @@ for local loopback testing). The handoff file is a convenience for the latest
 minted token. For multi-terminal checks, pass explicit `--url`, `--token`, and
 `--terminal` values from the token payload instead of relying on the single
 latest handoff file.
+
 External-agent commands are loopback-only: even when the browser uses a WSL or
 LAN URL, the handoff `url`, `transport.command_endpoint`, and generated CLI
 commands use loopback for the command endpoint. The browser-facing address is
 recorded separately as `browser_url`.
 
-CLI examples:
+Start here with the active Python path printed by the StandTerm startup banner:
 
 ```bash
-python scripts/agent_cli.py --agentinfo standterm_agentinfo.json discover
-python scripts/agent_cli.py --url https://127.0.0.1:5000 --token agt_... --terminal main --insecure hello
-python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json hello
-python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json heartbeat
-python scripts/agent_cli.py --agentinfo standterm_agentinfo.json hello --discover
-python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json render
-python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json render --mode mirror-screen
-python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json render --mode visible-xterm-png --save viewport.png
-python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json screen --tail-lines 12
-python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json screen --region 0:12
-python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json screen --wait-ms 3000 --quiet-ms 500
-python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json tail --since 0 --limit 50
-python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json tail --since 0 --wait-ms 25000
-python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json tail --since 0 --limit 50 --strip-ansi
-python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json wait-output --since 0 --wait-ms 25000
-python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json wait-quiet --wait-ms 3000 --quiet-ms 500
-python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send --text $'pwd\r'
-python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send --text 'codex prompt' --submit
-python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send --key Down --key Enter
-python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json key --key Down --key Enter
-python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send-wait --text $'pwd\r'
-python scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send-wait --text $'pwd\r' --strip-ansi
-python scripts/agent_jsonl.py --handoff standterm_external_agent_handoff.json
-python scripts/agent_jsonl.py --agentinfo standterm_agentinfo.json
-python scripts/agent_repl.py --handoff standterm_external_agent_handoff.json --enter cr
-python scripts/agent_repl.py --agentinfo standterm_agentinfo.json --enter cr
-python scripts/agent_repl.py --handoff standterm_external_agent_handoff.json --type-file body.txt --type-cps 3 --type-wait-quiet-ms 500
-python scripts/agent_type.py --handoff standterm_external_agent_handoff.json --from-file body.txt --cps 3 --newline cr
-python scripts/agent_type.py --agentinfo standterm_agentinfo.json --from-file body.txt --cps 3 --newline cr
+<python-from-startup-banner> scripts/agent_cli.py --agentinfo standterm_agentinfo.json discover
+<python-from-startup-banner> scripts/agent_cli.py --handoff standterm_external_agent_handoff.json hello
+<python-from-startup-banner> scripts/agent_cli.py --handoff standterm_external_agent_handoff.json render --mode mirror-screen
+<python-from-startup-banner> scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send --text $'pwd\r'
+<python-from-startup-banner> scripts/agent_repl.py --handoff standterm_external_agent_handoff.json --enter cr
 ```
 
 `--agentinfo` is tokenless bootstrap data. Helpers use it for launch paths,
 loopback URL, terminal id, TLS CA, and the current handoff path when present.
 Commands that read or write terminal state still need a minted external-agent
 token from `standterm_external_agent_handoff.json` or explicit `--token`.
-
-CLI `--text` is sent verbatim; normal quoted strings do not decode backslash
-escapes. In bash, use `$'...'` to send a real carriage return, as shown above.
-On Windows shells, prefer `--stdin` or `agent_jsonl.py` for portable line
-breaks. JSONL `data` fields are JSON-decoded, so `\r` and `\n` become real
-control bytes before sending.
-The CLI posts structured input for new sends: text uses `kind=text`, and named
-navigation keys use `kind=keys` with backend-validated key names. Legacy JSONL
-commands that send a string `data` field remain supported.
-For full-screen TUIs that treat glued text plus `\r` as paste content,
-`send --text '...' --submit` sends a separate structured Enter keypress after
-the text payload. For navigation-only input, `send --key Enter` remains the
-explicit key path.
-The generic aliases `key`, `wait-output`, and `wait-quiet` map to existing
-`send`, long-poll `tail`, and quiet `screen` payloads. They are naming
-conveniences for terminal automation primitives and do not inspect terminal
-display text as a control signal.
-For structured synchronization without display payloads, use
-`wait --for output --since <output_seq> --wait-ms <ms>` or
-`wait --for quiet --wait-ms <ms> --quiet-ms <ms>`. These call backend
-`op: "wait"` and return a typed `wait` object with condition, status,
-timeout, and sequence metadata.
-For bounded multi-step automation, clients may post `op: "sequence"` with a
-fixed `steps` array. Each step inherits the outer token and terminal, may use
-the existing `state`, `screen`, `render`, `tail`, `wait`, `send`, or
-`send-wait` operations, and returns its full typed result. The server stops
-deterministically on a failed step, pending human approval, a typed wait
-timeout, a quiet-screen timeout, or a timed-out capture. Sequence control never
-branches on terminal display text.
-
-Use `send-wait` or `send --capture` when the `hello` capabilities include
-`send_capture`. It writes only through the normal Agent gate, then returns typed
-tail observation metadata based on `output_seq`. In approval mode, capture is
-skipped until the human approves because no terminal bytes have been written.
-Use `--strip-ansi` only when a plain display-data view is easier to inspect;
-raw terminal events remain the default, and stripped text is still not a control
-signal. For full-screen TUIs, stripped output can make redraws readable but may
-remove cursor or highlight cues, so inspect raw `screen`, raw tail/capture, or
-`render` when selection position matters.
-`render --mode mirror-screen` returns structured terminal screen data from the
-Agent mirror path and does not include PNG bytes. `render --mode
-visible-xterm-png` captures the operator browser's visible xterm viewport as a
-PNG and is the only mode supported by `--save`. The default `auto` mode resolves
-to `mirror-screen`; clients that need pixel-level viewport fidelity should
-request `visible-xterm-png` explicitly.
-
-Use `agent_type.py` for paced input into full-screen editors or TUIs. It
-sends one text unit per normal `send` request with configurable rate and newline
-translation. The default cadence profile is generic; use
-`--cadence-profile ptt` only when a target application needs that optional
-whole-second cadence guard. StandTerm terminal input is a single shared stream:
-while a paced typer is running, do not send cursor-moving keys from another CLI,
-REPL, browser, or helper. For progress checks, prefer `tail`; `screen` returns
-the latest browser snapshot when available and otherwise falls back to a
-provisional server-side headless terminal grid. Use `render` when xterm/browser
-visual fidelity matters.
-For animated full-screen TUIs, `screen --wait-ms 3000 --quiet-ms 500` returns
-after the terminal has been quiet for the requested interval or reports a typed
-timeout.
-`agent_repl.py` also runs a hidden `heartbeat` by default to keep the
-external-agent token alive during long passive monitoring or local reasoning
-gaps. It does not write terminal input or read terminal display; use
-`--keepalive-ms` or `--no-keepalive` to tune it. Older servers that do not
-support `heartbeat` fall back to `state` keepalive.
-The REPL attach banner prints local-only controls, currently
-`detach=Ctrl-] help=Ctrl-^`. Press `Ctrl-^` when an agent or operator needs to
-rediscover REPL controls; the help text is printed locally and is not sent to
-the remote terminal. `Ctrl-]` detaches/quits the local REPL without sending a
-terminal byte. In non-interactive pipe/batch stdin mode, a single line
-containing `/quit`, `/exit`, `:quit`, or `:q` exits locally without sending that
-line to the terminal.
-For workflows that need one paced paste before interactive follow-up, REPL can
-type `--type-text` or `--type-file` through the same shared pacing helpers and
-then continue the live session. `--type-wait-quiet-ms` asks for a typed quiet
-screen wait after the paced input. Regular keyboard interaction remains raw and
-coalesced; REPL does not pace normal interactive keys.
-
-For repeated machine-driven operations, prefer `agent_jsonl.py`: it
-starts one persistent local process, reads the handoff once, accepts one JSON
-command per stdin line, and writes one JSON response per stdout line while still
-using the same loopback HTTP command endpoint.
-
-For agents that support the Model Context Protocol, `agent_mcp.py` exposes an
-optional stdio MCP adapter over the same External Agent Mirror command
-boundary:
-
-```bash
-python scripts/agent_mcp.py --handoff standterm_external_agent_handoff.json
-python scripts/agent_mcp.py --agentinfo standterm_agentinfo.json
-```
-
-The MCP adapter does not mint tokens, write handoff files, or add a second
-terminal-control protocol. It reads the existing handoff or agentinfo metadata,
-redacts bearer tokens from discovery output, and forwards tools such as
-`standterm_hello`, `standterm_heartbeat`, `standterm_observe`,
-`standterm_wait`, `standterm_send`, `standterm_render`, and
-`standterm_sequence` through `/agent/external/command`. `standterm_observe`
-defaults to incremental `since_cursor` observation using `output_seq`; use
-viewport, full screen, or render modes only when terminal visual state is
-needed. Tool results keep terminal display payloads marked as display data, not
-control signals.
+The `send --text $'pwd\r'` example uses Bash quoting; on Windows shells, use
+`--stdin` or `agent_jsonl.py` for portable line breaks.
 
 Prefer the exact absolute commands printed by the StandTerm startup banner. They
 use the active runtime Python, platform-appropriate quoting, and the generated
 local CA path when StandTerm is serving HTTPS with its local development
 certificate.
 
-Full protocol details are in `docs/agent_socket_contract.md`.
-
-Backend plugin policy and start form details are in
-`docs/backend_plugin_contract.md`.
+Full CLI, REPL, JSONL, MCP, render, wait, send-capture, and sequence details are
+in `docs/agent_socket_contract.md`. See
+[Local Agent Skill Example](#local-agent-skill-example) for a reusable skill.
 
 ## Agent Workflow Stories
 
 StandTerm is useful when an AI agent should help with terminal work but should
-not receive the operator's credentials, own the session, or install anything on
-the target.
+not own the session, receive credential prompts or browser/session tokens, or
+install anything on the target. Terminal output should still be treated as
+sensitive display data.
 
-**Remote sudo with the operator keeping the password boundary.** The operator
-handles SSH keys, password prompts, 2FA, and `sudo` authentication in the real
-browser terminal. When local policy allows timestamp reuse, the operator can
-authenticate sudo in the same session with a harmless command such as
-`sudo -v`. The agent can then run operator-reviewed diagnostics, log collection,
-service checks, or narrowly approved maintenance commands while the session
-stays visible and interruptible.
-
-**Production shells with no agent install.** On bastion hosts, customer
-machines, FreeBSD boxes, NAS devices, network appliances, and legacy Unix
-systems, installing a model runtime, Python package, background daemon, or
-remote automation agent may be unacceptable. StandTerm keeps the AI control
-plane on the local workstation. The target sees ordinary SSH, serial, shell,
-pager, or TUI input over the same kind of terminal session the human would use.
+**Credential-bound production SSH and sudo.** Example: update packages on a
+FreeBSD host through `sudo pkg upgrade` from an existing SSH terminal. The
+operator handles SSH keys, password prompts, 2FA, and `sudo` authentication in
+the real browser terminal. When local policy allows timestamp reuse, the
+operator can authenticate sudo in the same session with a harmless command such
+as `sudo -v`. The agent can then run operator-reviewed diagnostics, log
+collection, service checks, or narrowly approved maintenance commands while the
+target sees ordinary terminal input and the session stays visible and
+interruptible.
 
 **Serial consoles and recovery menus.** Routers, switches, development boards,
 lab devices, and firmware recovery environments often expose only a UART/COM
@@ -490,15 +346,15 @@ bootloader variables, diagnostics, or recovery commands. Resets, flashing,
 factory defaults, and bootloader writes remain human-approved steps because
 serial consoles often provide little or no safety boundary.
 
-**Interactive terminal jobs without screen-scraping loops.** Package managers,
-firmware tools, database consoles, editors, pagers, BBS sessions, and remote
-builds mix progress output, prompts, redraws, and quiet periods. StandTerm lets
-agents observe structured terminal events and wait states instead of polling
-screenshots or relying on blind timing loops.
+**Interactive TUIs and long-running jobs.** Package managers, firmware tools,
+database consoles, editors, pagers, BBS sessions, and remote builds mix progress
+output, prompts, redraws, and quiet periods. Agents can use typed events and
+wait states first, while `screen` and `render` remain inspection tools for
+visual terminal state.
 
-In all of these workflows, terminal text remains display data. Agents should
-branch on typed API fields, keep local handoff tokens private, and let the
-operator approve privileged or irreversible steps in the real terminal.
+Across these workflows, agents should branch on typed API fields, keep local
+handoff tokens private, and let the operator approve privileged or irreversible
+steps in the real terminal.
 
 ## Operator Observation
 
@@ -628,7 +484,8 @@ publishing releases that include the vendored files.
 
 ## Security Notes
 
-- Keep StandTerm bound to loopback unless remote browser access is intentional.
+- StandTerm is not a hosted remote access service. Keep it bound to loopback
+  unless remote browser access is intentional.
 - Do not expose `/agent/external/command` or an `agt_...` token on a network
   interface.
 - `standterm_external_agent_handoff.json`, `authorized/`, local certs, and venvs
