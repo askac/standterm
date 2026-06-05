@@ -29,6 +29,7 @@ from external_agent_handlers import (
     ExternalAgentRenderCommandHandler,
     ExternalAgentScreenCommandHandler,
     ExternalAgentSendActionExecutor,
+    ExternalAgentSendResponseBuilder,
     ExternalAgentTailCommandHandler,
     ExternalAgentWaitCommandHandler,
 )
@@ -6609,26 +6610,16 @@ def process_external_agent_send_command(op, command, record, state, terminal_id)
     )
     if send_error:
         return external_agent_error(send_error, terminal_id=terminal_id)
-    action = send_result['action']
     if send_result.get('requires_approval'):
-        payload = public_agent_action(action)
-        payload['status'] = AGENT_STATUS_PENDING_APPROVAL
-        if capture_requested:
-            payload['capture'] = {
-                'status': 'skipped',
-                'reason': 'pending_approval',
-                'requested': True,
-            }
-        return payload
-    status = send_result['status']
-    result = send_result.get('write_result') or {}
-    ok = status == AGENT_STATUS_COMPLETED
-    payload = public_agent_action(action)
-    payload['status'] = status
-    if result.get('error_code'):
-        payload['error_code'] = result.get('error_code')
-    payload['bytes_written'] = result.get('bytes_written', 0)
-    if capture_requested and ok:
+        return external_agent_send_response_builder.build_pending_payload(
+            send_result['action'],
+            capture_requested=capture_requested,
+        )
+    payload = external_agent_send_response_builder.build_write_payload(send_result)
+    if external_agent_send_response_builder.should_capture_after_write(
+        send_result,
+        capture_requested=capture_requested,
+    ):
         capture, capture_error = build_external_agent_send_capture_payload(
             bridge,
             state,
@@ -6643,16 +6634,11 @@ def process_external_agent_send_command(op, command, record, state, terminal_id)
             strip_ansi=strip_ansi,
         )
         if capture_error:
-            payload['capture'] = {
-                'status': AGENT_STATUS_FAILED,
-                'error_code': capture_error,
-                'requested': True,
-            }
+            payload['capture'] = external_agent_send_response_builder.build_failed_capture_payload(
+                capture_error,
+            )
         else:
-            capture['requested'] = True
-            payload['capture'] = capture
-            payload['before_output_seq'] = capture['before_output_seq']
-            payload['after_output_seq'] = capture['output_seq']
+            external_agent_send_response_builder.attach_capture_payload(payload, capture)
     return payload
 
 
@@ -6798,6 +6784,14 @@ external_agent_send_action_executor = ExternalAgentSendActionExecutor(
     error_privacy_blocked=AGENT_ERROR_PRIVACY_BLOCKED,
     error_human_input_active=AGENT_ERROR_HUMAN_INPUT_ACTIVE,
     error_mode_not_writable=AGENT_ERROR_MODE_NOT_WRITABLE,
+)
+
+
+external_agent_send_response_builder = ExternalAgentSendResponseBuilder(
+    public_action=public_agent_action,
+    status_pending_approval=AGENT_STATUS_PENDING_APPROVAL,
+    status_completed=AGENT_STATUS_COMPLETED,
+    status_failed=AGENT_STATUS_FAILED,
 )
 
 

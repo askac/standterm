@@ -12,6 +12,7 @@ from external_agent_handlers import (
     ExternalAgentRenderCommandHandler,
     ExternalAgentScreenCommandHandler,
     ExternalAgentSendActionExecutor,
+    ExternalAgentSendResponseBuilder,
     ExternalAgentTailCommandHandler,
     ExternalAgentWaitCommandHandler,
 )
@@ -1332,6 +1333,102 @@ def test_send_action_executor_writes_direct_action_and_emits_result_state():
     assert audit_call[3]['strip_ansi'] is False
 
 
+def make_send_response_builder():
+    def public_action(action):
+        return {
+            'action_id': action.get('action_id'),
+            'requires_approval': action.get('requires_approval'),
+        }
+
+    return ExternalAgentSendResponseBuilder(
+        public_action=public_action,
+        status_pending_approval='pending_approval',
+        status_completed='completed',
+        status_failed='failed',
+    )
+
+
+def test_send_response_builder_marks_pending_capture_as_skipped():
+    builder = make_send_response_builder()
+    action = {'action_id': 'action-1', 'requires_approval': True}
+
+    assert builder.build_pending_payload(action, capture_requested=True) == {
+        'action_id': 'action-1',
+        'requires_approval': True,
+        'status': 'pending_approval',
+        'capture': {
+            'status': 'skipped',
+            'reason': 'pending_approval',
+            'requested': True,
+        },
+    }
+    assert builder.build_pending_payload(action, capture_requested=False) == {
+        'action_id': 'action-1',
+        'requires_approval': True,
+        'status': 'pending_approval',
+    }
+
+
+def test_send_response_builder_builds_write_payload_and_capture_gate():
+    builder = make_send_response_builder()
+    action = {'action_id': 'action-1', 'requires_approval': False}
+
+    completed = {
+        'status': 'completed',
+        'action': action,
+        'write_result': {'bytes_written': 4},
+    }
+    failed = {
+        'status': 'failed',
+        'action': action,
+        'write_result': {'bytes_written': 0, 'error_code': 'write_failed'},
+    }
+
+    assert builder.build_write_payload(completed) == {
+        'action_id': 'action-1',
+        'requires_approval': False,
+        'status': 'completed',
+        'bytes_written': 4,
+    }
+    assert builder.build_write_payload(failed) == {
+        'action_id': 'action-1',
+        'requires_approval': False,
+        'status': 'failed',
+        'error_code': 'write_failed',
+        'bytes_written': 0,
+    }
+    assert builder.should_capture_after_write(completed, capture_requested=True) is True
+    assert builder.should_capture_after_write(completed, capture_requested=False) is False
+    assert builder.should_capture_after_write(failed, capture_requested=True) is False
+
+
+def test_send_response_builder_attaches_capture_payloads():
+    builder = make_send_response_builder()
+    payload = {'status': 'completed'}
+    capture = {
+        'status': 'ok',
+        'before_output_seq': 10,
+        'output_seq': 12,
+    }
+
+    assert builder.build_failed_capture_payload('paused') == {
+        'status': 'failed',
+        'error_code': 'paused',
+        'requested': True,
+    }
+    assert builder.attach_capture_payload(payload, capture) == {
+        'status': 'completed',
+        'capture': {
+            'status': 'ok',
+            'before_output_seq': 10,
+            'output_seq': 12,
+            'requested': True,
+        },
+        'before_output_seq': 10,
+        'after_output_seq': 12,
+    }
+
+
 def make_tail_handler(
     *,
     build_tail_waiting=None,
@@ -1663,6 +1760,10 @@ def test_app_command_registry_keeps_command_specific_auth_handlers():
         standterm.external_agent_send_action_executor,
         ExternalAgentSendActionExecutor,
     )
+    assert isinstance(
+        standterm.external_agent_send_response_builder,
+        ExternalAgentSendResponseBuilder,
+    )
 
 
 def main():
@@ -1695,6 +1796,9 @@ def main():
         test_send_action_executor_maps_paused_state_before_context_checks,
         test_send_action_executor_returns_pending_action_without_write,
         test_send_action_executor_writes_direct_action_and_emits_result_state,
+        test_send_response_builder_marks_pending_capture_as_skipped,
+        test_send_response_builder_builds_write_payload_and_capture_gate,
+        test_send_response_builder_attaches_capture_payloads,
         test_tail_handler_maps_tail_builder_error_without_format_or_audit,
         test_tail_handler_builds_payload_and_records_audit,
         test_tail_handler_reports_plain_tail_format_when_requested,

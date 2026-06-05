@@ -446,6 +446,59 @@ class ExternalAgentSendActionExecutor:
         }, None
 
 
+class ExternalAgentSendResponseBuilder:
+    def __init__(
+        self,
+        *,
+        public_action,
+        status_pending_approval,
+        status_completed,
+        status_failed,
+    ):
+        self.public_action = public_action
+        self.status_pending_approval = status_pending_approval
+        self.status_completed = status_completed
+        self.status_failed = status_failed
+
+    def build_pending_payload(self, action, *, capture_requested):
+        payload = self.public_action(action)
+        payload['status'] = self.status_pending_approval
+        if capture_requested:
+            payload['capture'] = {
+                'status': 'skipped',
+                'reason': 'pending_approval',
+                'requested': True,
+            }
+        return payload
+
+    def build_write_payload(self, send_result):
+        action = send_result['action']
+        write_result = send_result.get('write_result') or {}
+        payload = self.public_action(action)
+        payload['status'] = send_result['status']
+        if write_result.get('error_code'):
+            payload['error_code'] = write_result.get('error_code')
+        payload['bytes_written'] = write_result.get('bytes_written', 0)
+        return payload
+
+    def should_capture_after_write(self, send_result, *, capture_requested):
+        return capture_requested and send_result.get('status') == self.status_completed
+
+    def build_failed_capture_payload(self, error_code):
+        return {
+            'status': self.status_failed,
+            'error_code': error_code,
+            'requested': True,
+        }
+
+    def attach_capture_payload(self, payload, capture):
+        capture['requested'] = True
+        payload['capture'] = capture
+        payload['before_output_seq'] = capture['before_output_seq']
+        payload['after_output_seq'] = capture['output_seq']
+        return payload
+
+
 class ExternalAgentTailCommandHandler:
     def __init__(
         self,
