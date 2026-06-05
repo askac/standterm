@@ -1120,6 +1120,11 @@ def test_external_agent_tail_reports_gap_metadata():
     assert tail['status'] == 'ok'
     assert tail['output_seq'] == 5
     assert tail['since_output_seq'] == 1
+    assert tail['available_event_count'] == 1
+    assert tail['returned_event_count'] == 1
+    assert tail['last_returned_output_seq'] == 5
+    assert tail['next_since_output_seq'] == 5
+    assert tail['more_available'] is False
     assert tail['first_available_output_seq'] == 5
     assert tail['dropped_before_output_seq'] == 4
     assert tail['gap'] == {
@@ -1218,17 +1223,28 @@ def test_external_agent_tail_limit_preserves_cursor_order():
     assert first_page['status'] == 'ok'
     assert first_page['gap']['detected'] is False
     assert [event['output_seq'] for event in first_page['events']] == [1, 2]
+    assert first_page['output_seq'] == 4
+    assert first_page['available_event_count'] == 4
+    assert first_page['returned_event_count'] == 2
+    assert first_page['last_returned_output_seq'] == 2
+    assert first_page['next_since_output_seq'] == 2
+    assert first_page['more_available'] is True
 
     second_page = standterm.process_external_agent_command({
         'op': 'tail',
         'token': token,
         'terminal_id': standterm.TERMINAL_ID_MAIN,
-        'since_output_seq': first_page['events'][-1]['output_seq'],
+        'since_output_seq': first_page['next_since_output_seq'],
         'limit': 2,
     })
     assert second_page['status'] == 'ok'
     assert second_page['gap']['detected'] is False
     assert [event['output_seq'] for event in second_page['events']] == [3, 4]
+    assert second_page['available_event_count'] == 2
+    assert second_page['returned_event_count'] == 2
+    assert second_page['last_returned_output_seq'] == 4
+    assert second_page['next_since_output_seq'] == 4
+    assert second_page['more_available'] is False
 
     client.disconnect()
 

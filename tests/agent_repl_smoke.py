@@ -66,6 +66,59 @@ def test_normalize_key_modes():
     assert repl.normalize_key('x', 'cr', 'del') == 'x'
 
 
+def test_pipe_input_loop_supports_local_quit_command():
+    input_queue = queue.Queue()
+    old_stdin = sys.stdin
+    old_stderr = sys.stderr
+    stderr = io.StringIO()
+    try:
+        sys.stdin = io.StringIO('/quit\n')
+        sys.stderr = stderr
+
+        repl.pipe_input_loop(
+            input_queue,
+            enter_mode='cr',
+            backspace_mode='del',
+            escape='ctrl-]',
+            help_key='ctrl-^',
+            args=SimpleNamespace(escape='ctrl-]', help_key='ctrl-^'),
+        )
+    finally:
+        sys.stdin = old_stdin
+        sys.stderr = old_stderr
+
+    assert input_queue.empty()
+    assert '[external-agent] detached' in stderr.getvalue()
+
+
+def test_pipe_input_loop_supports_local_help_key():
+    input_queue = queue.Queue()
+    old_stdin = sys.stdin
+    old_stderr = sys.stderr
+    stderr = io.StringIO()
+    try:
+        sys.stdin = io.StringIO('a\x1eb\n')
+        sys.stderr = stderr
+
+        repl.pipe_input_loop(
+            input_queue,
+            enter_mode='cr',
+            backspace_mode='del',
+            escape='ctrl-]',
+            help_key='ctrl-^',
+            args=SimpleNamespace(escape='ctrl-]', help_key='ctrl-^'),
+        )
+    finally:
+        sys.stdin = old_stdin
+        sys.stderr = old_stderr
+
+    assert [input_queue.get_nowait() for _ in range(input_queue.qsize())] == ['a', 'b', '\r']
+    stderr_text = stderr.getvalue()
+    assert '[external-agent] local help:' in stderr_text
+    assert 'Ctrl-] detach/quits agent_repl locally' in stderr_text
+    assert 'Ctrl-^ prints this help locally' in stderr_text
+
+
 def test_send_worker_coalesces_pending_input_on_stop():
     client, stop_event = run_send_worker(['p', 'w', 'd', '\r'])
     assert stop_event.is_set() is False
@@ -1079,6 +1132,8 @@ def test_type_helper_stops_on_failed_send_without_replaying_remaining_units():
 def main():
     tests = [
         test_normalize_key_modes,
+        test_pipe_input_loop_supports_local_quit_command,
+        test_pipe_input_loop_supports_local_help_key,
         test_send_worker_coalesces_pending_input_on_stop,
         test_send_worker_stops_on_fatal_error,
         test_send_worker_stops_on_not_attached_error,

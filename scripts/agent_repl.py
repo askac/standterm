@@ -28,6 +28,7 @@ except ImportError:
 
 
 STOP = object()
+PIPE_LOCAL_QUIT_COMMANDS = {'/quit', '/exit', ':quit', ':q'}
 FATAL_AGENT_ERRORS = {
     'agent_not_attached',
     'agent_paused',
@@ -143,6 +144,7 @@ def parse_args():
     parser.add_argument('--allow-non-direct', action='store_true', help='Allow running when Agent mode is not direct_active')
     parser.add_argument('--debug', action='store_true', help='Print command acknowledgements to stderr')
     parser.add_argument('--escape', default='ctrl-]', help='Local detach key. Only ctrl-] is supported for now.')
+    parser.add_argument('--help-key', default='ctrl-^', help='Local help key. Only ctrl-^ is supported for now.')
     args = parser.parse_args()
     cli.apply_agentinfo(args)
     apply_handoff(args)
@@ -209,6 +211,35 @@ def normalize_key(data, enter_mode, backspace_mode):
     if data in ('\x7f', '\b'):
         return '\x7f' if backspace_mode == 'del' else '\b'
     return data
+
+
+def format_local_key(name):
+    if name == 'ctrl-]':
+        return 'Ctrl-]'
+    if name == 'ctrl-^':
+        return 'Ctrl-^'
+    return name
+
+
+def is_local_help(ch, help_key):
+    return help_key == 'ctrl-^' and ch == '\x1e'
+
+
+def print_local_help(args):
+    stderr_line('[external-agent] local help:')
+    stderr_line(
+        f"  {format_local_key(args.escape)} detach/quits agent_repl locally "
+        '(not sent to terminal)'
+    )
+    stderr_line(
+        f"  {format_local_key(args.help_key)} prints this help locally "
+        '(not sent to terminal)'
+    )
+    stderr_line(
+        '  pipe/batch stdin: a single line containing /quit, /exit, :quit, '
+        'or :q exits without sending input'
+    )
+    stderr_line('  terminal text is display data; inspect prompts before irreversible sends')
 
 
 def print_initial_screen(client):
@@ -510,7 +541,7 @@ def is_local_escape(ch, escape):
     return escape == 'ctrl-]' and ch == '\x1d'
 
 
-def posix_input_loop(input_queue, stop_event, enter_mode, backspace_mode, escape):
+def posix_input_loop(input_queue, stop_event, enter_mode, backspace_mode, escape, help_key, args):
     fd = sys.stdin.fileno()
     old_attrs = termios.tcgetattr(fd)
     try:
@@ -527,12 +558,15 @@ def posix_input_loop(input_queue, stop_event, enter_mode, backspace_mode, escape
                     stderr_line('[external-agent] detached')
                     stop_event.set()
                     return
+                if is_local_help(ch, help_key):
+                    print_local_help(args)
+                    continue
                 input_queue.put(normalize_key(ch, enter_mode, backspace_mode))
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
 
 
-def windows_input_loop(input_queue, stop_event, enter_mode, backspace_mode, escape):
+def windows_input_loop(input_queue, stop_event, enter_mode, backspace_mode, escape, help_key, args):
     while not stop_event.is_set():
         if not msvcrt.kbhit():
             time.sleep(0.05)
@@ -544,15 +578,27 @@ def windows_input_loop(input_queue, stop_event, enter_mode, backspace_mode, esca
             stderr_line('[external-agent] detached')
             stop_event.set()
             return
+        if is_local_help(data, help_key):
+            print_local_help(args)
+            continue
         input_queue.put(normalize_key(data, enter_mode, backspace_mode))
 
 
-def pipe_input_loop(input_queue, enter_mode, backspace_mode):
+def pipe_input_loop(input_queue, enter_mode, backspace_mode, escape, help_key, args):
     while True:
         data = sys.stdin.read(4096)
         if not data:
             break
+        if data.strip() in PIPE_LOCAL_QUIT_COMMANDS:
+            stderr_line('[external-agent] detached')
+            break
         for ch in data:
+            if is_local_escape(ch, escape):
+                stderr_line('[external-agent] detached')
+                return
+            if is_local_help(ch, help_key):
+                print_local_help(args)
+                continue
             input_queue.put(normalize_key(ch, enter_mode, backspace_mode))
 
 
@@ -568,7 +614,8 @@ def run_repl(args):
     state = assert_repl_ready(client, args.allow_non_direct)
     stderr_line(
         f"[external-agent] attached to {args.terminal} "
-        f"mode={state.get('mode')}{format_token_status(state)}"
+        f"mode={state.get('mode')}{format_token_status(state)} "
+        f"detach={format_local_key(args.escape)} help={format_local_key(args.help_key)}"
     )
     last_seq = current_output_seq(client) if args.no_initial_screen else print_initial_screen(client)
 
@@ -611,11 +658,11 @@ def run_repl(args):
         if stop_event.is_set():
             return
         if sys.stdin.isatty() and termios and tty:
-            posix_input_loop(input_queue, stop_event, args.enter, args.backspace, args.escape)
+            posix_input_loop(input_queue, stop_event, args.enter, args.backspace, args.escape, args.help_key, args)
         elif sys.stdin.isatty() and msvcrt:
-            windows_input_loop(input_queue, stop_event, args.enter, args.backspace, args.escape)
+            windows_input_loop(input_queue, stop_event, args.enter, args.backspace, args.escape, args.help_key, args)
         else:
-            pipe_input_loop(input_queue, args.enter, args.backspace)
+            pipe_input_loop(input_queue, args.enter, args.backspace, args.escape, args.help_key, args)
     except KeyboardInterrupt:
         input_queue.put('\x03')
     finally:

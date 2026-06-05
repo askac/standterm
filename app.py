@@ -3589,6 +3589,15 @@ def build_external_agent_tail_payload(bridge, since_output_seq=None, limit=AGENT
         payload for payload in replay_events
         if payload.get('output_seq') > since_output_seq
     ]
+    returned_events = events[:limit]
+    last_returned_output_seq = None
+    if returned_events:
+        last_seq = returned_events[-1].get('output_seq')
+        if isinstance(last_seq, int):
+            last_returned_output_seq = last_seq
+    next_since_output_seq = last_returned_output_seq
+    if next_since_output_seq is None:
+        next_since_output_seq = output_seq
     first_available_output_seq = None
     if replay_events:
         first_available_output_seq = replay_events[0].get('output_seq')
@@ -3610,10 +3619,15 @@ def build_external_agent_tail_payload(bridge, since_output_seq=None, limit=AGENT
         'output_seq': output_seq,
         'since_output_seq': since_output_seq,
         'limit': limit,
+        'available_event_count': len(events),
+        'returned_event_count': len(returned_events),
+        'last_returned_output_seq': last_returned_output_seq,
+        'next_since_output_seq': next_since_output_seq,
+        'more_available': len(returned_events) < len(events),
         'first_available_output_seq': first_available_output_seq,
         'dropped_before_output_seq': dropped_before_output_seq,
         'gap': gap,
-        'events': events[:limit],
+        'events': returned_events,
     }
 
 def format_external_agent_tail_payload(tail, strip_ansi=False):
@@ -3756,6 +3770,11 @@ def build_external_agent_send_capture_payload(bridge, state, before_output_seq,
         'settle_ms': settle_ms,
         'settled': settled,
         'timed_out': timed_out,
+        'available_event_count': tail.get('available_event_count'),
+        'returned_event_count': tail.get('returned_event_count', len(tail['events'])),
+        'last_returned_output_seq': tail.get('last_returned_output_seq'),
+        'next_since_output_seq': tail.get('next_since_output_seq'),
+        'more_available': bool(tail.get('more_available')),
         'first_available_output_seq': tail['first_available_output_seq'],
         'dropped_before_output_seq': tail['dropped_before_output_seq'],
         'gap': tail['gap'],
@@ -3786,6 +3805,11 @@ def build_external_agent_wait_output_payload(bridge, state, command):
         'since_output_seq': tail['since_output_seq'],
         'output_seq': tail['output_seq'],
         'event_count': event_count,
+        'available_event_count': tail.get('available_event_count'),
+        'returned_event_count': tail.get('returned_event_count', event_count),
+        'last_returned_output_seq': tail.get('last_returned_output_seq'),
+        'next_since_output_seq': tail.get('next_since_output_seq'),
+        'more_available': bool(tail.get('more_available')),
         'first_available_output_seq': tail['first_available_output_seq'],
         'dropped_before_output_seq': tail['dropped_before_output_seq'],
         'gap': tail['gap'],

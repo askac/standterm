@@ -206,13 +206,18 @@ tools/.venv_wsl/bin/python scripts/agent_repl.py \
 The REPL keeps one local process alive, coalesces local keyboard input before
 calling `send`, and renders remote output from long-poll `tail` using
 `output_seq` as its cursor. Its attach banner includes typed token lifetime
-metadata when the server provides it, such as remaining idle seconds. It also
-runs a hidden `heartbeat` by default to renew the external-agent token during
-passive monitoring without writing terminal input or reading terminal display;
-use `--keepalive-ms` or `--no-keepalive` to tune it. Older servers that do not
-support `heartbeat` fall back to `state` keepalive. `screen` is only a provisional initial
-viewport/debug source; it is not the authoritative terminal stream. The local
-detach key is `Ctrl-]`. In dev
+metadata when the server provides it, such as remaining idle seconds, plus the
+local-only controls, currently `detach=Ctrl-] help=Ctrl-^`. Press `Ctrl-^` to
+print REPL help locally without sending bytes to the remote terminal; press
+`Ctrl-]` to detach/quit locally without sending bytes to the remote terminal.
+In non-interactive pipe/batch stdin mode, a single line containing `/quit`,
+`/exit`, `:quit`, or `:q` exits locally without sending that line to the
+terminal. The REPL also runs a hidden `heartbeat` by default to renew the
+external-agent token during passive monitoring without writing terminal input
+or reading terminal display; use `--keepalive-ms` or `--no-keepalive` to tune
+it. Older servers that do not support `heartbeat` fall back to `state`
+keepalive. `screen` is only a provisional initial viewport/debug source; it is
+not the authoritative terminal stream. In dev
 servers started with `STANDTERM_AGENT_DEV_TOKEN=1`, the REPL may omit `--token` and
 use the loopback-only dev command endpoint. `--enter cr` is the default because
 PTY-style interactive programs generally expect carriage return for Enter; use
@@ -582,6 +587,11 @@ Tail returns a structured cursor and retention contract:
   "since_output_seq": 123,
   "limit": 50,
   "wait_ms": 25000,
+  "available_event_count": 7,
+  "returned_event_count": 7,
+  "last_returned_output_seq": 130,
+  "next_since_output_seq": 130,
+  "more_available": false,
   "first_available_output_seq": 81,
   "dropped_before_output_seq": 80,
   "gap": {
@@ -596,10 +606,18 @@ Tail returns a structured cursor and retention contract:
 
 If `since_output_seq` is older than the retained replay buffer, `gap.detected`
 is `true` and the `from_output_seq` / `to_output_seq` range describes terminal
-events that are no longer available. When more than `limit` events are available,
-tail returns the earliest page after `since_output_seq`, so clients can advance
-from the last returned event and call `tail` again without skipping retained
-events. `wait_ms` is optional. When it is positive and no retained events are
+events that are no longer available. `output_seq` is the terminal's latest known
+sequence number, not necessarily the last event included in the response. When
+more than `limit` events are available, tail returns the earliest page after
+`since_output_seq`; `more_available` is true, `available_event_count` reports
+the retained events matching the cursor, and `returned_event_count` reports the
+page size returned. Clients that need lossless paging should continue with
+`next_since_output_seq` (equivalent to `last_returned_output_seq` when events
+are returned) rather than `output_seq`, then call `tail` again without skipping
+retained events. When no event is returned, `last_returned_output_seq` is null
+and `next_since_output_seq` is the latest `output_seq`, so a passive poller can
+advance to the observed quiet point if it wants to ignore already-known
+silence. `wait_ms` is optional. When it is positive and no retained events are
 available yet, the server may hold the request until new terminal output arrives
 or the wait expires. The response payload shape is identical for immediate and
 long-poll tail calls. When `strip_ansi` is requested, the response includes

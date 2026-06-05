@@ -327,6 +327,14 @@ Prefer the REPL for watching long-running remote builds or compiles. It uses
 long-poll `tail` for output and a hidden heartbeat for token renewal, so quiet
 build phases do not require re-minting a token.
 
+When using the REPL, read its attach banner. It lists local-only controls such
+as `detach=Ctrl-] help=Ctrl-^`. If you forget how to exit or need the special
+local commands, press the help key first; this prints local help and is not sent
+to the remote terminal. Use the detach key to quit the local REPL without
+sending bytes to the terminal. In non-interactive pipe/batch stdin mode, send a
+single line containing `/quit`, `/exit`, `:quit`, or `:q` to exit locally
+without sending that line to the terminal.
+
 Use REPL startup paced typing when a workflow needs long text entry followed by
 interactive prompt handling in the same session:
 

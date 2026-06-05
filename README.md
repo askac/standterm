@@ -387,6 +387,13 @@ external-agent token alive during long passive monitoring or local reasoning
 gaps. It does not write terminal input or read terminal display; use
 `--keepalive-ms` or `--no-keepalive` to tune it. Older servers that do not
 support `heartbeat` fall back to `state` keepalive.
+The REPL attach banner prints local-only controls, currently
+`detach=Ctrl-] help=Ctrl-^`. Press `Ctrl-^` when an agent or operator needs to
+rediscover REPL controls; the help text is printed locally and is not sent to
+the remote terminal. `Ctrl-]` detaches/quits the local REPL without sending a
+terminal byte. In non-interactive pipe/batch stdin mode, a single line
+containing `/quit`, `/exit`, `:quit`, or `:q` exits locally without sending that
+line to the terminal.
 For workflows that need one paced paste before interactive follow-up, REPL can
 type `--type-text` or `--type-file` through the same shared pacing helpers and
 then continue the live session. `--type-wait-quiet-ms` asks for a typed quiet
