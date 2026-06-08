@@ -27,10 +27,7 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
 }
 
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-    Write-Host "[!] ERROR: python is required but not found."
-    Write-Host "    Install with: winget install --id Python.Python.3.12 -e"
-    Write-Host "    Then reopen PowerShell so python is on PATH."
-    exit 1
+    Write-Host "[*] python was not found; run.bat will try the embedded Python fallback after install."
 }
 
 if (Test-Path (Join-Path $InstallDir ".git")) {

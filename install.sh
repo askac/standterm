@@ -31,10 +31,7 @@ if ! command -v git &>/dev/null; then
 fi
 
 if ! command -v python3 &>/dev/null; then
-    echo "[!] ERROR: python3 is required but not found."
-    echo "    Install with: sudo apt install python3 python3-venv python3-pip   (Debian/Ubuntu/WSL)"
-    echo "                  brew install python3                      (macOS)"
-    exit 1
+    echo "[*] python3 was not found; run.sh will try to guide or recover after install."
 fi
 
 # Clone or update

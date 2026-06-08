@@ -111,6 +111,13 @@ WSL UART access to Windows `COMx` ports uses a Windows Python helper venv at
 
 The launchers create and maintain their own repo-local virtual environments.
 Agent and coding-assistant Python guidance is in `docs/venv_prompt.txt`.
+On macOS/Linux/WSL, if `run.sh` cannot find a suitable `python3`, either create
+the expected launcher venv manually (`tools/.venv_macos`, `tools/.venv_linux`,
+or `tools/.venv_wsl`) or rerun with:
+
+```bash
+STANDTERM_PYTHON=/path/to/python3 ./run.sh --force
+```
 
 On Ubuntu 24.04 LTS and similar Debian/Ubuntu/WSL systems, minimal Python
 installs may not include venv support. If the installer or launcher reports

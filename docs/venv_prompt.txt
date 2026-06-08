@@ -20,6 +20,18 @@ After apt installs venv support, return to the repository root and run:
 ./run.sh --force
 ```
 
+If system `python3` is unavailable but a separate Python 3.10+ runtime was
+prepared manually, keep StandTerm dependencies in the launcher-managed venv:
+
+```bash
+STANDTERM_PYTHON=/path/to/python3 ./run.sh --force
+```
+
+Alternatively, manually create the platform venv expected by the launcher
+(`tools/.venv_wsl`, `tools/.venv_linux`, or `tools/.venv_macos`) with a valid
+`bin/python` and `bin/activate`, then rerun `./run.sh`. Do not install
+StandTerm packages into the system Python.
+
 For tests or maintenance commands, use the existing repo-local venv Python after it has been created, for example `tools/.venv_wsl/bin/python scripts/run_smoke_tests.py` on WSL. If the needed venv does not exist yet, run the launcher first instead of falling back to system Python.
 
 If you intentionally use a non-venv Python, first confirm it can import the required StandTerm packages from `requirements.txt`. The launcher-managed venv path is still preferred for automation because it is reproducible across machines.

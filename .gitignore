@@ -1,5 +1,6 @@
 # Virtual Environments
 tools/.venv*/
+tools/python-embed/
 tools/.ms-playwright/
 .venv/
 .venv_wsl/
