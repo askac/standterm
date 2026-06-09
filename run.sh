@@ -190,6 +190,12 @@ ensure_venv_pip() {
     }
 }
 
+venv_activation_is_current() {
+    local active_prefix
+    active_prefix="$(python -c 'import sys; print(sys.prefix)' 2>/dev/null)" || return 1
+    [ "$active_prefix" = "$VENV_DIR" ]
+}
+
 verify_dependencies() {
     python -c "import flask, flask_socketio, simple_websocket, paramiko, eventlet, cryptography, serial" >/dev/null 2>&1
 }
@@ -263,6 +269,16 @@ if ! source "$VENV_DIR/bin/activate"; then
     create_venv
     FORCE_RECHECK=true
     source "$VENV_DIR/bin/activate" || exit 1
+fi
+if ! venv_activation_is_current; then
+    echo "[!] Virtual environment activation points to a stale or unexpected Python prefix."
+    ensure_bootstrap_python || exit 1
+    echo "[*] Recreating virtual environment automatically..."
+    remove_venv_dir
+    create_venv
+    FORCE_RECHECK=true
+    source "$VENV_DIR/bin/activate" || exit 1
+    venv_activation_is_current || exit 1
 fi
 
 echo "[*] Checking Python dependencies..."

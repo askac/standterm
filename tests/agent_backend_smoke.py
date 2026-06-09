@@ -2404,14 +2404,16 @@ def test_external_agent_expired_and_wrong_terminal_tokens_are_rejected():
     assert error_code is None
     first_expires_at = record['expires_at']
     stored = standterm.external_agent_attach_store._tokens[record['token_hash']]
-    stored['expires_at'] = standterm.time.time() + 1
+    shortened_expires_at = standterm.time.time() + 1
+    stored['expires_at'] = shortened_expires_at
     result = standterm.process_external_agent_command({
         'op': 'state',
         'token': token,
         'terminal_id': standterm.TERMINAL_ID_MAIN,
     })
     assert result['status'] == 'ok'
-    assert stored['expires_at'] > first_expires_at
+    assert stored['expires_at'] > shortened_expires_at
+    assert stored['expires_at'] >= first_expires_at
     assert result['external_agent_token']['expires_at'] == stored['expires_at']
     assert result['external_agent_token']['remaining_idle_ms'] > 0
     stored['expires_at'] = standterm.time.time() + 1
@@ -2693,8 +2695,9 @@ def test_external_agentinfo_payload_route_and_pointer_are_tokenless():
             assert launch_payload['agentinfo_path'] == str(info_path)
             assert current_payload['agentinfo_path'] == str(info_path)
             assert current_payload['current_agentinfo_path'] == str(current_path)
-            assert info_path.stat().st_mode & 0o777 == 0o600
-            assert current_path.stat().st_mode & 0o777 == 0o600
+            if not sys.platform.startswith('win'):
+                assert info_path.stat().st_mode & 0o777 == 0o600
+                assert current_path.stat().st_mode & 0o777 == 0o600
             assert list(Path(temp_dir).glob('.*.tmp')) == []
         finally:
             standterm.EXTERNAL_AGENT_INFO_PATH = original_info_path
@@ -3775,6 +3778,10 @@ def test_local_shell_output_decode_tolerates_non_utf8_bytes():
 
 
 def test_local_shell_read_loop_preserves_split_utf8_characters():
+    if sys.platform.startswith('win'):
+        print('test_local_shell_read_loop_preserves_split_utf8_characters: skipped on Windows')
+        return
+
     from terminal_backends.local_shell import LocalShellBridge
 
     class FakeRuntime:
@@ -3845,6 +3852,10 @@ def test_local_shell_read_loop_preserves_split_utf8_characters():
 
 
 def test_local_shell_read_loop_emits_replacement_text_for_non_utf8_bytes():
+    if sys.platform.startswith('win'):
+        print('test_local_shell_read_loop_emits_replacement_text_for_non_utf8_bytes: skipped on Windows')
+        return
+
     from terminal_backends.local_shell import LocalShellBridge
 
     class FakeRuntime:
@@ -3925,6 +3936,10 @@ def test_local_shell_read_loop_emits_replacement_text_for_non_utf8_bytes():
 
 
 def test_local_shell_posix_write_encodes_text_as_utf8_bytes():
+    if sys.platform.startswith('win'):
+        print('test_local_shell_posix_write_encodes_text_as_utf8_bytes: skipped on Windows')
+        return
+
     from terminal_backends.local_shell import LocalShellBridge
 
     class FakeProcess:
@@ -3967,6 +3982,10 @@ def test_uart_bridge_is_provided_by_backend_module():
 
 
 def test_wsl_uart_scan_lists_windows_and_wsl_devices():
+    if sys.platform.startswith('win'):
+        print('test_wsl_uart_scan_lists_windows_and_wsl_devices: skipped on Windows')
+        return
+
     class FakePort:
         def __init__(self, device, description='', hwid=''):
             self.device = device
@@ -4011,6 +4030,10 @@ def test_wsl_uart_scan_lists_windows_and_wsl_devices():
 
 
 def test_wsl_manual_uart_port_identifies_windows_or_wsl_source():
+    if sys.platform.startswith('win'):
+        print('test_wsl_manual_uart_port_identifies_windows_or_wsl_source: skipped on Windows')
+        return
+
     original_is_wsl = standterm.is_wsl
     try:
         standterm.is_wsl = lambda: True

@@ -1,5 +1,5 @@
 @echo off
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 
 set "PROJECT_DIR=%~dp0"
 set "TOOLS_DIR=%PROJECT_DIR%tools"
@@ -12,14 +12,20 @@ set "APP_FILE=%PROJECT_DIR%app.py"
 set "REQ_FILE=%PROJECT_DIR%requirements.txt"
 set "EMBED_HELPER=%PROJECT_DIR%scripts\ensure_windows_python.ps1"
 set "FORCE_RECHECK=false"
+set "APP_ARGS="
 
 echo ========================================
 echo    StandTerm Automated Starter (Windows)
 echo ========================================
 
 for %%A in (%*) do (
-    if "%%~A"=="--force" set "FORCE_RECHECK=true"
-    if "%%~A"=="-f" set "FORCE_RECHECK=true"
+    if "%%~A"=="--force" (
+        set "FORCE_RECHECK=true"
+    ) else if "%%~A"=="-f" (
+        set "FORCE_RECHECK=true"
+    ) else (
+        set "APP_ARGS=!APP_ARGS! "%%~A""
+    )
 )
 
 call :choose_python_runtime
@@ -233,7 +239,7 @@ exit /b 0
 echo [*] Starting StandTerm server...
 :: Run python with unbuffered output, then watch the first "Access URL:" line and
 :: open it in the default browser on the first launch.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$o=$false; & '%RUNTIME_PYTHON%' -u '%APP_FILE%' @args 2>&1 | ForEach-Object { Write-Host $_; if (-not $o -and $_ -match 'Access URL:\s*(\S+)') { Start-Process $matches[1]; $o=$true } }" %*
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$o=$false; & '%RUNTIME_PYTHON%' -u '%APP_FILE%' %APP_ARGS% 2>&1 | ForEach-Object { Write-Host $_; if (-not $o -and $_ -match 'Access URL:\s*(\S+)') { Start-Process $matches[1]; $o=$true } }"
 
 pause
 exit /b 0
