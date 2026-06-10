@@ -5,5 +5,5 @@ paramiko
 eventlet
 cryptography
 ptyprocess; sys_platform != "win32"
-pywinpty; sys_platform == "win32"
+pywinpty<3; sys_platform == "win32"
 pyserial

@@ -11,6 +11,7 @@ set "EMBED_PYTHON=%EMBED_PYTHON_DIR%\python.exe"
 set "APP_FILE=%PROJECT_DIR%app.py"
 set "REQ_FILE=%PROJECT_DIR%requirements.txt"
 set "EMBED_HELPER=%PROJECT_DIR%scripts\ensure_windows_python.ps1"
+set "DEP_CHECKER=%PROJECT_DIR%scripts\check_python_dependencies.py"
 set "FORCE_RECHECK=false"
 set "APP_ARGS="
 
@@ -207,7 +208,9 @@ echo [+] Dependencies verified and flag created.
 exit /b 0
 
 :dependencies_available
-"%RUNTIME_PYTHON%" -c "import flask, flask_socketio, simple_websocket, paramiko, eventlet, cryptography, serial, winpty" >nul 2>nul
+"%RUNTIME_PYTHON%" "%DEP_CHECKER%" --quiet >nul 2>nul
+if not errorlevel 1 exit /b 0
+"%RUNTIME_PYTHON%" "%DEP_CHECKER%"
 exit /b %errorlevel%
 
 :stamp_matches
