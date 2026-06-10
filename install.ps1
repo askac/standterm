@@ -10,7 +10,11 @@ if ([string]::IsNullOrWhiteSpace($Dir)) {
     if ($env:STANDTERM_DIR) {
         $InstallDir = $env:STANDTERM_DIR
     } else {
-        $InstallDir = Join-Path $HOME "standterm"
+        $CurrentDir = (Get-Location).ProviderPath
+        if ([string]::IsNullOrWhiteSpace($CurrentDir)) {
+            $CurrentDir = (Get-Location).Path
+        }
+        $InstallDir = Join-Path $CurrentDir "standterm"
     }
 } else {
     $InstallDir = $Dir

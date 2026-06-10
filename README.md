@@ -27,6 +27,9 @@ Install and run on native Windows PowerShell:
 irm https://raw.githubusercontent.com/askac/standterm/main/install.ps1 | iex
 ```
 
+By default this installs into `.\standterm` under the current PowerShell
+directory.
+
 Install into a specific Windows directory:
 
 ```powershell
