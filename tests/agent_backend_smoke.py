@@ -3,6 +3,7 @@ import tempfile
 import threading
 import time
 import json
+import stat
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -2917,6 +2918,7 @@ def test_terminal_policy_creates_authorized_dir_for_fresh_checkout():
                 policy = standterm.build_terminal_policy(browser_authorized=False)
 
             assert authorized_dir.is_dir()
+            assert stat.S_IMODE(authorized_dir.stat().st_mode) == 0o700
             assert policy['authorized_dir'] == str(authorized_dir)
             assert policy['authorized_dir_ready'] is True
             assert policy['localhost_access_url'] is None

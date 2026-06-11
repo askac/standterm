@@ -516,6 +516,7 @@ EXTERNAL_AGENT_CURRENT_INFO_PATH = resolve_external_agent_current_info_path()
 def ensure_authorized_dir():
     try:
         AUTHORIZED_DIR.mkdir(parents=True, exist_ok=True)
+        os.chmod(AUTHORIZED_DIR, 0o700)
         return True
     except OSError as exc:
         print(f"[!] Failed to create browser authorization directory {AUTHORIZED_DIR}: {exc}", file=sys.stderr)
