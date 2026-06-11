@@ -514,7 +514,10 @@
                 <div style="font-size:36px;">&#x26A0;</div>
                 <div style="font-size:14px; color:#aaa;">Site blocked embedding or refused to connect.</div>
                 <div id="overlay-fallback-url" style="font-size:11px; color:#555; word-break:break-all; max-width:90%;"></div>
-                <button id="overlay-fallback-open" style="background:#0a84ff; color:white; border:none; border-radius:6px; padding:10px 24px; cursor:pointer; font-size:13px; font-weight:bold;">Open in New Tab &#x2197;</button>
+                <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:center;">
+                    <button id="overlay-fallback-popup" style="background:#0a84ff; color:white; border:none; border-radius:6px; padding:10px 24px; cursor:pointer; font-size:13px; font-weight:bold;">Open as Popup &#x29C9;</button>
+                    <button id="overlay-fallback-open" style="background:#444; color:white; border:none; border-radius:6px; padding:10px 24px; cursor:pointer; font-size:13px; font-weight:bold;">Open in New Tab &#x2197;</button>
+                </div>
             </div>
         </div>
         <div class="resizer n"></div><div class="resizer s"></div><div class="resizer e"></div><div class="resizer w"></div>
@@ -543,7 +546,7 @@
                             <div class="settings-row"><label for="pref-detectUrls">Detect & linkify URLs</label><input type="checkbox" id="pref-detectUrls"></div>
                             <div class="settings-row"><label for="pref-cjkWideAmbiguous" title="Render ambiguous-width characters (box drawing, symbols) as wide cells. Needed for PTT/BBS with CJK fonts; disable if modern CLI prompts look broken.">CJK wide ambiguous width (BBS compatibility)</label><input type="checkbox" id="pref-cjkWideAmbiguous"></div>
                             <div class="settings-row"><label for="pref-urlClickAction">URL click opens in</label>
-                                <select id="pref-urlClickAction"><option value="overlay">Overlay</option><option value="newtab">New Tab</option></select>
+                                <select id="pref-urlClickAction"><option value="overlay">Overlay</option><option value="popup">Popup Window</option><option value="newtab">New Tab</option></select>
                             </div>
                         </fieldset>
                     </div>
@@ -2724,6 +2727,19 @@
                 if (opened) opened.opener = null;
             }
 
+            function openUrlPopup(url) {
+                // A popup is a top-level browsing context, so sites that
+                // refuse to be framed (X-Frame-Options / CSP frame-ancestors)
+                // still load here. Sized and placed like the side overlay.
+                const width = Math.min(520, Math.floor(window.screen.availWidth * 0.4));
+                const height = Math.floor(window.screen.availHeight * 0.85);
+                const left = Math.max(0, window.screen.availWidth - width - 16);
+                const top = Math.max(0, Math.floor((window.screen.availHeight - height) / 2));
+                const features = `popup,noopener,noreferrer,width=${width},height=${height},left=${left},top=${top}`;
+                const opened = window.open(url, '_blank', features);
+                if (opened) opened.opener = null;
+            }
+
             function formatUptime(secs) {
                 const d = Math.floor(secs / 86400), h = Math.floor((secs % 86400) / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
                 const hms = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
@@ -2772,7 +2788,13 @@
                 if (prefs.detectUrls && typeof WebLinksAddon !== 'undefined') {
                     state.webLinksAddon = new WebLinksAddon.WebLinksAddon((e, uri) => {
                         const ctrl = e.ctrlKey || e.metaKey;
-                        if ((prefs.urlClickAction === 'overlay') !== ctrl) openUrlInOverlay(uri);
+                        // Ctrl/Cmd-click flips between the configured action
+                        // and a new tab (or back to overlay when set to newtab).
+                        const action = ctrl
+                            ? (prefs.urlClickAction === 'newtab' ? 'overlay' : 'newtab')
+                            : prefs.urlClickAction;
+                        if (action === 'overlay') openUrlInOverlay(uri);
+                        else if (action === 'popup') openUrlPopup(uri);
                         else openExternalUrl(uri);
                     });
                     state.term.loadAddon(state.webLinksAddon);
@@ -3955,6 +3977,7 @@
             const overlayFallback = document.getElementById('overlay-fallback');
             const overlayFallbackUrl = document.getElementById('overlay-fallback-url');
             const overlayFallbackOpen = document.getElementById('overlay-fallback-open');
+            const overlayFallbackPopup = document.getElementById('overlay-fallback-popup');
             const OVERLAY_MIN_WIDTH = 200;
             const OVERLAY_MIN_HEIGHT = 150;
             const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp'];
@@ -4007,6 +4030,7 @@
                 overlayFallback.style.display = 'none';
                 overlayFallbackUrl.innerText = url;
                 overlayFallbackOpen.onclick = () => openExternalUrl(url);
+                overlayFallbackPopup.onclick = () => openUrlPopup(url);
                 const isImg = IMAGE_EXTENSIONS.some(ext => url.toLowerCase().includes(ext));
                 if (isImg && !prefs.enablePicPreview) { openExternalUrl(url); return; }
                 overlayIframe.style.display = isImg ? 'none' : 'block';
