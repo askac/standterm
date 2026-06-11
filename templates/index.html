@@ -570,6 +570,9 @@
                             </div>
                             <div class="settings-row"><label for="pref-fontFace">Font face</label><input type="text" id="pref-fontFace"></div>
                             <div class="settings-row"><label for="pref-fontSize">Font size</label><input type="number" id="pref-fontSize" min="8" max="32"></div>
+                            <div class="settings-row"><label for="pref-fontWeight" title="Heavier weights can improve perceived brightness of thin glyphs, especially with macOS grayscale antialiasing.">Font weight</label>
+                                <select id="pref-fontWeight"><option value="normal">Normal (400)</option><option value="500">Medium (500)</option><option value="600">Semibold (600)</option><option value="bold">Bold (700)</option></select>
+                            </div>
                         </fieldset>
                     </div>
                     <div class="settings-tab" id="tab-server">
@@ -853,6 +856,10 @@
             urlClickAction: 'overlay',
             fontFace: getDefaultTerminalFontFace(),
             fontSize: 14,
+            // macOS grayscale antialiasing renders thin bright glyphs dimmer
+            // than Windows ClearType, so default to a slightly heavier weight
+            // on Apple platforms.
+            fontWeight: isApplePlatform() ? '500' : 'normal',
             colorScheme: 'vintage',
             // Render East Asian Ambiguous characters (box drawing, symbols)
             // as wide cells. Needed for PTT/BBS layouts with CJK fonts on
@@ -884,8 +891,14 @@
             if (!Number.isFinite(parsed)) return fallback;
             return Math.min(32, Math.max(8, parsed));
         }
+        const FONT_WEIGHT_OPTIONS = ['normal', '500', '600', 'bold'];
+        function normalizeFontWeight(value, fallback = PREF_DEFAULTS.fontWeight) {
+            const text = String(value).trim();
+            return FONT_WEIGHT_OPTIONS.includes(text) ? text : fallback;
+        }
         let prefs = loadPrefs();
         prefs.fontSize = normalizeFontSize(prefs.fontSize);
+        prefs.fontWeight = normalizeFontWeight(prefs.fontWeight);
 
         const CJK_WIDTH_PROVIDER_VERSION = 'ptt-cjk';
         const EAST_ASIAN_AMBIGUOUS_WIDTH_RANGES = [
@@ -1932,6 +1945,7 @@
                     disableStdin: true,
                     fontFamily: prefs.fontFace,
                     fontSize: prefs.fontSize,
+                    fontWeight: prefs.fontWeight,
                     scrollback: 1000,
                     theme: SCHEMES[prefs.colorScheme] || SCHEMES.vintage
                 });
@@ -2887,6 +2901,7 @@
                     cursorBlink: true,
                     fontFamily: prefs.fontFace,
                     fontSize: prefs.fontSize,
+                    fontWeight: prefs.fontWeight,
                     theme: SCHEMES[prefs.colorScheme] || SCHEMES.vintage
                 });
                 applyCjkWidthPreference(term);
@@ -4602,6 +4617,7 @@
                 document.getElementById('pref-colorScheme').value = prefs.colorScheme;
                 document.getElementById('pref-fontFace').value = prefs.fontFace;
                 document.getElementById('pref-fontSize').value = prefs.fontSize;
+                document.getElementById('pref-fontWeight').value = prefs.fontWeight;
                 settingsModal.classList.add('open');
                 requestServerSettingsSnapshot();
             };
@@ -4657,15 +4673,18 @@
                 prefs.colorScheme = document.getElementById('pref-colorScheme').value;
                 prefs.fontFace = document.getElementById('pref-fontFace').value;
                 prefs.fontSize = normalizeFontSize(document.getElementById('pref-fontSize').value, prefs.fontSize);
+                prefs.fontWeight = normalizeFontWeight(document.getElementById('pref-fontWeight').value, prefs.fontWeight);
                 savePrefs(prefs);
                 terminals.forEach(state => {
                     state.term.options.fontFamily = prefs.fontFace;
                     state.term.options.fontSize = prefs.fontSize;
+                    state.term.options.fontWeight = prefs.fontWeight;
                     state.term.options.theme = SCHEMES[prefs.colorScheme] || SCHEMES.vintage;
                     applyCjkWidthPreference(state.term);
                     if (state.agentTerminalMirror) {
                         state.agentTerminalMirror.options.fontFamily = prefs.fontFace;
                         state.agentTerminalMirror.options.fontSize = prefs.fontSize;
+                        state.agentTerminalMirror.options.fontWeight = prefs.fontWeight;
                         state.agentTerminalMirror.options.theme = SCHEMES[prefs.colorScheme] || SCHEMES.vintage;
                         applyCjkWidthPreference(state.agentTerminalMirror);
                     }
