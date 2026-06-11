@@ -2,7 +2,10 @@
 
 # StandTerm Startup Script for macOS / Linux / WSL
 
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve to the physical path (pwd -P) so launching through a symlinked
+# checkout (e.g. ~/project -> /mnt/d/project) and launching from the real
+# path agree on one venv location instead of recreating it on every switch.
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 APP_FILE="$PROJECT_DIR/app.py"
 REQ_FILE="$PROJECT_DIR/requirements.txt"
 
@@ -211,9 +214,9 @@ ensure_venv_pip() {
 }
 
 venv_activation_is_current() {
-    local active_prefix
-    active_prefix="$(python -c 'import sys; print(sys.prefix)' 2>/dev/null)" || return 1
-    [ "$active_prefix" = "$VENV_DIR" ]
+    # Compare resolved paths: the activate script hardcodes the venv path that
+    # existed at creation time, which may be a symlink alias of $VENV_DIR.
+    python -c 'import os, sys; raise SystemExit(0 if os.path.realpath(sys.prefix) == os.path.realpath(sys.argv[1]) else 1)' "$VENV_DIR" 2>/dev/null
 }
 
 verify_dependencies() {
