@@ -108,6 +108,25 @@ python_is_usable() {
     "$1" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1
 }
 
+find_system_python3() {
+    # Resolve python3 from PATH while skipping launcher venv shims. A stale
+    # activated venv prepends its bin/ to PATH, so a bare "python3" lookup
+    # would resolve to the broken venv interpreter and hide the system one.
+    local candidate
+    while IFS= read -r candidate; do
+        case "$candidate" in
+            "$PROJECT_DIR"/tools/.venv_*)
+                continue
+                ;;
+        esac
+        if python_is_usable "$candidate"; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done < <(type -ap python3 2>/dev/null)
+    return 1
+}
+
 set_bootstrap_python() {
     if [[ -n "${STANDTERM_PYTHON:-}" ]]; then
         if python_is_usable "$STANDTERM_PYTHON"; then
@@ -120,8 +139,9 @@ set_bootstrap_python() {
         return 1
     fi
 
-    if command -v python3 >/dev/null 2>&1 && python_is_usable python3; then
-        PYTHON_BOOTSTRAP=(python3)
+    local system_python
+    if system_python="$(find_system_python3)"; then
+        PYTHON_BOOTSTRAP=("$system_python")
         return 0
     fi
 

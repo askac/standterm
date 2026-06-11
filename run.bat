@@ -68,6 +68,15 @@ if exist "%VENV_DIR%" if not exist "%VENV_PYTHON%" (
     rmdir /s /q "%VENV_DIR%" >nul 2>nul
 )
 
+if exist "%VENV_PYTHON%" (
+    "%VENV_PYTHON%" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>nul
+    if errorlevel 1 (
+        echo [!] Existing virtual environment Python is stale or broken: %VENV_DIR%
+        echo [*] Recreating it automatically...
+        rmdir /s /q "%VENV_DIR%" >nul 2>nul
+    )
+)
+
 if not exist "%VENV_DIR%" (
     echo [*] Creating virtual environment: %VENV_DIR%...
     python -m venv "%VENV_DIR%"
