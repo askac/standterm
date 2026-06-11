@@ -15,6 +15,8 @@ Install and run on macOS, Linux, or WSL:
 curl -fsSL https://raw.githubusercontent.com/askac/standterm/main/install.sh | bash
 ```
 
+By default this installs into `./standterm` under the current directory.
+
 Install into a specific directory:
 
 ```bash

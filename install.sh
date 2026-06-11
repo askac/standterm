@@ -8,12 +8,21 @@
 set -e
 
 REPO_URL="https://github.com/askac/standterm.git"
-INSTALL_DIR="${STANDTERM_DIR:-$HOME/standterm}"
+# Default to ./standterm under the current directory, matching the Windows
+# one-line installer; STANDTERM_DIR and --dir still override.
+INSTALL_DIR="${STANDTERM_DIR:-$(pwd)/standterm}"
 
 # Allow --dir override
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --dir|-d) INSTALL_DIR="$2"; shift 2 ;;
+        --dir|-d)
+            if [[ -z "${2:-}" ]]; then
+                echo "[!] ERROR: $1 requires a directory argument."
+                exit 1
+            fi
+            INSTALL_DIR="$2"
+            shift 2
+            ;;
         *) shift ;;
     esac
 done
@@ -48,4 +57,10 @@ chmod +x "$INSTALL_DIR/run.sh"
 
 echo "[+] Done. Launching StandTerm..."
 echo ""
+# Under `curl ... | bash` stdin is the pipe, so run.sh recovery prompts
+# (e.g. installing python3 with apt) would auto-decline. Reattach the
+# terminal when one is available so those prompts stay interactive.
+if [ -r /dev/tty ]; then
+    exec bash "$INSTALL_DIR/run.sh" </dev/tty
+fi
 exec bash "$INSTALL_DIR/run.sh"
