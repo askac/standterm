@@ -541,6 +541,7 @@
                             <div class="settings-row"><label for="pref-copyOnSelect">Copy on select</label><input type="checkbox" id="pref-copyOnSelect"></div>
                             <div class="settings-row"><label for="pref-enablePicPreview">Enable pic preview</label><input type="checkbox" id="pref-enablePicPreview"></div>
                             <div class="settings-row"><label for="pref-detectUrls">Detect & linkify URLs</label><input type="checkbox" id="pref-detectUrls"></div>
+                            <div class="settings-row"><label for="pref-cjkWideAmbiguous" title="Render ambiguous-width characters (box drawing, symbols) as wide cells. Needed for PTT/BBS with CJK fonts; disable if modern CLI prompts look broken.">CJK wide ambiguous width (BBS compatibility)</label><input type="checkbox" id="pref-cjkWideAmbiguous"></div>
                             <div class="settings-row"><label for="pref-urlClickAction">URL click opens in</label>
                                 <select id="pref-urlClickAction"><option value="overlay">Overlay</option><option value="newtab">New Tab</option></select>
                             </div>
@@ -841,15 +842,20 @@
             if (isApplePlatform()) return MAC_TERMINAL_FONT_FACE;
             return LEGACY_DEFAULT_FONT_FACE;
         }
-        const PREF_DEFAULTS = { 
+        const PREF_DEFAULTS = {
             useCustomMenu: true,
-            copyOnSelect: false, 
-            enablePicPreview: true, 
-            detectUrls: true, 
-            urlClickAction: 'overlay', 
+            copyOnSelect: false,
+            enablePicPreview: true,
+            detectUrls: true,
+            urlClickAction: 'overlay',
             fontFace: getDefaultTerminalFontFace(),
             fontSize: 14,
-            colorScheme: 'ibm5153'
+            colorScheme: 'ibm5153',
+            // Render East Asian Ambiguous characters (box drawing, symbols)
+            // as wide cells. Needed for PTT/BBS layouts with CJK fonts on
+            // macOS, but breaks modern CLIs (e.g. Claude Code) that expect
+            // narrow ambiguous width, so it is a saved compatibility toggle.
+            cjkWideAmbiguous: isApplePlatform()
         };
         function loadPrefs() {
             try {
@@ -935,29 +941,34 @@
             }
             return false;
         }
-        function activateCjkWidthProvider(term) {
-            if (!isApplePlatform() || !term) return;
+        function applyCjkWidthPreference(term) {
+            if (!term) return;
             try {
                 const unicode = term.unicode;
                 if (!unicode || !Array.isArray(unicode.versions)) return;
-                if (unicode.versions.includes(CJK_WIDTH_PROVIDER_VERSION)) {
-                    unicode.activeVersion = CJK_WIDTH_PROVIDER_VERSION;
+                if (!term.__baseUnicodeVersion) term.__baseUnicodeVersion = unicode.activeVersion;
+                if (!prefs.cjkWideAmbiguous) {
+                    if (unicode.activeVersion === CJK_WIDTH_PROVIDER_VERSION) {
+                        unicode.activeVersion = term.__baseUnicodeVersion;
+                    }
                     return;
                 }
-                const service = term._core && term._core.unicodeService;
-                const baseProvider = service && service._activeProvider;
-                if (!baseProvider || typeof baseProvider.wcwidth !== 'function' || typeof baseProvider.charProperties !== 'function') return;
-                unicode.register({
-                    version: CJK_WIDTH_PROVIDER_VERSION,
-                    wcwidth(codePoint) {
-                        return isEastAsianAmbiguousWidth(codePoint) ? 2 : baseProvider.wcwidth(codePoint);
-                    },
-                    charProperties(codePoint, preceding) {
-                        return isEastAsianAmbiguousWidth(codePoint)
-                            ? (2 << 1)
-                            : baseProvider.charProperties(codePoint, preceding);
-                    }
-                });
+                if (!unicode.versions.includes(CJK_WIDTH_PROVIDER_VERSION)) {
+                    const service = term._core && term._core.unicodeService;
+                    const baseProvider = service && service._activeProvider;
+                    if (!baseProvider || typeof baseProvider.wcwidth !== 'function' || typeof baseProvider.charProperties !== 'function') return;
+                    unicode.register({
+                        version: CJK_WIDTH_PROVIDER_VERSION,
+                        wcwidth(codePoint) {
+                            return isEastAsianAmbiguousWidth(codePoint) ? 2 : baseProvider.wcwidth(codePoint);
+                        },
+                        charProperties(codePoint, preceding) {
+                            return isEastAsianAmbiguousWidth(codePoint)
+                                ? (2 << 1)
+                                : baseProvider.charProperties(codePoint, preceding);
+                        }
+                    });
+                }
                 unicode.activeVersion = CJK_WIDTH_PROVIDER_VERSION;
             } catch (e) {}
         }
@@ -1921,7 +1932,7 @@
                     scrollback: 1000,
                     theme: SCHEMES[prefs.colorScheme] || SCHEMES.ibm5153
                 });
-                activateCjkWidthProvider(term);
+                applyCjkWidthPreference(term);
                 return term;
             }
 
@@ -2875,7 +2886,7 @@
                     fontSize: prefs.fontSize,
                     theme: SCHEMES[prefs.colorScheme] || SCHEMES.ibm5153
                 });
-                activateCjkWidthProvider(term);
+                applyCjkWidthPreference(term);
                 const fitAddon = (typeof FitAddon !== 'undefined') ? new FitAddon.FitAddon() : null;
                 if (fitAddon) term.loadAddon(fitAddon);
                 term.open(container);
@@ -4583,6 +4594,7 @@
                 document.getElementById('pref-copyOnSelect').checked = prefs.copyOnSelect;
                 document.getElementById('pref-enablePicPreview').checked = prefs.enablePicPreview;
                 document.getElementById('pref-detectUrls').checked = prefs.detectUrls;
+                document.getElementById('pref-cjkWideAmbiguous').checked = prefs.cjkWideAmbiguous;
                 document.getElementById('pref-urlClickAction').value = prefs.urlClickAction;
                 document.getElementById('pref-colorScheme').value = prefs.colorScheme;
                 document.getElementById('pref-fontFace').value = prefs.fontFace;
@@ -4637,6 +4649,7 @@
                 prefs.copyOnSelect = document.getElementById('pref-copyOnSelect').checked;
                 prefs.enablePicPreview = document.getElementById('pref-enablePicPreview').checked;
                 prefs.detectUrls = document.getElementById('pref-detectUrls').checked;
+                prefs.cjkWideAmbiguous = document.getElementById('pref-cjkWideAmbiguous').checked;
                 prefs.urlClickAction = document.getElementById('pref-urlClickAction').value;
                 prefs.colorScheme = document.getElementById('pref-colorScheme').value;
                 prefs.fontFace = document.getElementById('pref-fontFace').value;
@@ -4646,10 +4659,12 @@
                     state.term.options.fontFamily = prefs.fontFace;
                     state.term.options.fontSize = prefs.fontSize;
                     state.term.options.theme = SCHEMES[prefs.colorScheme] || SCHEMES.ibm5153;
+                    applyCjkWidthPreference(state.term);
                     if (state.agentTerminalMirror) {
                         state.agentTerminalMirror.options.fontFamily = prefs.fontFace;
                         state.agentTerminalMirror.options.fontSize = prefs.fontSize;
                         state.agentTerminalMirror.options.theme = SCHEMES[prefs.colorScheme] || SCHEMES.ibm5153;
+                        applyCjkWidthPreference(state.agentTerminalMirror);
                     }
                 });
                 fitAndNotifyResize(); applyDetectUrls(); settingsModal.classList.remove('open');
