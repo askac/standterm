@@ -660,6 +660,21 @@ def test_approval_payload_and_stale_rejections(browser, access_url):
         close_context(context)
 
 
+def test_cjk_width_compatibility_defaults_off(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        page.click('#quick-settings')
+        page.wait_for_selector('#settings-modal.open', timeout=5000)
+        state = page.evaluate(
+            """() => ({
+                checked: document.getElementById('pref-cjkWideAmbiguous').checked
+            })"""
+        )
+        check(state['checked'] is False, 'CJK width compatibility checkbox defaulted on')
+    finally:
+        close_context(context)
+
+
 def test_settings_server_tab_loads_readonly_snapshot(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
@@ -997,6 +1012,7 @@ def main():
         test_rendered_viewport_snapshot_returns_png,
         test_paste_review_approve_and_cancel,
         test_approval_payload_and_stale_rejections,
+        test_cjk_width_compatibility_defaults_off,
         test_settings_server_tab_loads_readonly_snapshot,
         test_settings_access_recovery_fetches_access_url_on_demand,
         test_connection_controls_follow_start_fields_without_legacy_payload,

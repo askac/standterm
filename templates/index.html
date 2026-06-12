@@ -544,7 +544,7 @@
                             <div class="settings-row"><label for="pref-copyOnSelect">Copy on select</label><input type="checkbox" id="pref-copyOnSelect"></div>
                             <div class="settings-row"><label for="pref-enablePicPreview">Enable pic preview</label><input type="checkbox" id="pref-enablePicPreview"></div>
                             <div class="settings-row"><label for="pref-detectUrls">Detect & linkify URLs</label><input type="checkbox" id="pref-detectUrls"></div>
-                            <div class="settings-row"><label for="pref-cjkWideAmbiguous" title="Render ambiguous-width characters (box drawing, symbols) as wide cells. Needed for PTT/BBS with CJK fonts; disable if modern CLI prompts look broken.">CJK wide ambiguous width (BBS compatibility)</label><input type="checkbox" id="pref-cjkWideAmbiguous"></div>
+                            <div class="settings-row"><label for="pref-cjkWideAmbiguous" title="Render ambiguous-width characters (box drawing, symbols) as wide cells. Enable only for legacy BBS/screen setups that require wide ambiguous width.">CJK wide ambiguous width (BBS compatibility)</label><input type="checkbox" id="pref-cjkWideAmbiguous"></div>
                             <div class="settings-row"><label for="pref-urlClickAction">URL click opens in</label>
                                 <select id="pref-urlClickAction"><option value="overlay">Overlay</option><option value="popup">Popup Window</option><option value="newtab">New Tab</option></select>
                             </div>
@@ -865,10 +865,9 @@
             fontWeight: isApplePlatform() ? '500' : 'normal',
             colorScheme: 'vintage',
             // Render East Asian Ambiguous characters (box drawing, symbols)
-            // as wide cells. Needed for PTT/BBS layouts with CJK fonts on
-            // macOS, but breaks modern CLIs (e.g. Claude Code) that expect
-            // narrow ambiguous width, so it is a saved compatibility toggle.
-            cjkWideAmbiguous: isApplePlatform()
+            // as wide cells. Keep this off by default; enable it only for
+            // legacy BBS/screen setups that require wide ambiguous width.
+            cjkWideAmbiguous: false
         };
         function loadPrefs() {
             try {
