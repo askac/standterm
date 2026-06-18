@@ -4560,19 +4560,69 @@ def build_access_required_response():
       font-weight: 700;
     }
     .hint { margin-top: 14px; font-size: 0.85rem; color: #8e8e93; }
+    #access-login-status { min-height: 18px; color: #ff9f0a; }
   </style>
 </head>
 <body>
   <main>
     <h1>StandTerm access required</h1>
     <p>Enter the access token printed by the launcher, or open the full Access URL.</p>
-    <form method="post" action="/login" autocomplete="off">
+    <form id="access-login-form" method="post" action="/login" autocomplete="off">
       <label for="access-token">Access token</label>
       <input id="access-token" name="token" type="password" autofocus required>
       <button type="submit">Unlock</button>
     </form>
+    <p id="access-login-status" class="hint" role="status"></p>
     <p class="hint">For Windows browsers connecting to a WSL IP over HTTPS, the browser may also require trusting the StandTerm local CA.</p>
   </main>
+  <script>
+    (() => {
+      const form = document.getElementById('access-login-form');
+      const tokenInput = document.getElementById('access-token');
+      const statusEl = document.getElementById('access-login-status');
+      if (!form || !tokenInput) return;
+
+      form.addEventListener('submit', async event => {
+        event.preventDefault();
+        const token = tokenInput.value || '';
+        const body = new URLSearchParams();
+        body.set('token', token);
+        if (statusEl) statusEl.textContent = 'Unlocking...';
+        try {
+          const response = await fetch('/login', {
+            method: 'POST',
+            headers: {
+              'Accept': 'text/html',
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body,
+          });
+          if (!response.ok) {
+            if (statusEl) statusEl.textContent = 'Access token was not accepted.';
+            return;
+          }
+          const appUrl = new URL(window.location.href);
+          appUrl.searchParams.delete('token');
+          const appPath = `${appUrl.pathname}${appUrl.search}${appUrl.hash}` || '/';
+          const appResponse = await fetch(appPath, {
+            method: 'GET',
+            headers: { 'Accept': 'text/html' },
+          });
+          if (!appResponse.ok) {
+            throw new Error('Unable to load StandTerm.');
+          }
+          const html = await appResponse.text();
+          window.standtermPendingAccessToken = token;
+          history.replaceState(null, document.title, appPath);
+          document.open();
+          document.write(html);
+          document.close();
+        } catch (exc) {
+          if (statusEl) statusEl.textContent = 'Unable to unlock. Check the connection and try again.';
+        }
+      });
+    })();
+  </script>
 </body>
 </html>
 ''', 401)

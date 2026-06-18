@@ -435,6 +435,7 @@
             white-space: pre-wrap;
             word-break: break-word;
             box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+            pointer-events: none;
         }
         #payload-log {
             position: fixed;
@@ -474,6 +475,11 @@
         #session-recovery-form button {
             width: 100%; padding: 10px 12px; background: #0a84ff; color: #fff;
             border: none; border-radius: 5px; cursor: pointer; font-weight: 700;
+        }
+        #session-recovery-remembered-token {
+            display: none; width: 100%; margin-top: 10px; padding: 10px 12px;
+            background: #2c2c2e; color: #fff; border: 1px solid #4a4a4f;
+            border-radius: 5px; cursor: pointer; font-weight: 700;
         }
         #session-recovery-message { min-height: 18px; margin-top: 10px; color: #ff9f0a; font-size: 12px; }
     </style>
@@ -795,6 +801,7 @@
                 <input id="session-recovery-token" name="token" type="password" required>
                 <button type="submit">Unlock</button>
             </form>
+            <button id="session-recovery-remembered-token" type="button">Use remembered token</button>
             <div id="session-recovery-message"></div>
         </div>
     </div>
@@ -803,6 +810,17 @@
         // --- Official Windows Terminal Color Schemes Replicated ---
         const INITIAL_TERMINAL_POLICY = {{ terminal_policy|tojson }};
         const initialUrl = new URL(window.location.href);
+        const pendingAccessToken = typeof window.standtermPendingAccessToken === 'string'
+            ? window.standtermPendingAccessToken
+            : '';
+        let volatileAccessToken = initialUrl.searchParams.get('token') || pendingAccessToken;
+        if (pendingAccessToken) {
+            try {
+                delete window.standtermPendingAccessToken;
+            } catch (e) {
+                window.standtermPendingAccessToken = '';
+            }
+        }
         if (initialUrl.searchParams.has('token')) {
             initialUrl.searchParams.delete('token');
             history.replaceState(null, document.title, `${initialUrl.pathname}${initialUrl.search}${initialUrl.hash}`);
@@ -1236,6 +1254,7 @@
             const sessionRecoveryModal = document.getElementById('session-recovery-modal');
             const sessionRecoveryForm = document.getElementById('session-recovery-form');
             const sessionRecoveryToken = document.getElementById('session-recovery-token');
+            const sessionRecoveryRememberedTokenBtn = document.getElementById('session-recovery-remembered-token');
             const sessionRecoveryMessage = document.getElementById('session-recovery-message');
             const serverAccessCopyBtn = document.getElementById('server-access-copy-btn');
             const serverAccessShowBtn = document.getElementById('server-access-show-btn');
@@ -1274,6 +1293,150 @@
             let currentSettingsAdminGrant = null;
             let sessionRenewTimer = null;
             let accessUrlRevealTimer = null;
+            const accessTokenVault = createVolatileAccessTokenVault(volatileAccessToken);
+            volatileAccessToken = '';
+
+            function createVolatileAccessTokenVault(initialToken) {
+                let encodedParts = [];
+                let padParts = [];
+                let recipe = [];
+                const encoder = new TextEncoder();
+                const formPrefix = encoder.encode('token=');
+
+                function randomBytes(length) {
+                    const bytes = new Uint8Array(length);
+                    if (window.crypto && crypto.getRandomValues) {
+                        crypto.getRandomValues(bytes);
+                    } else {
+                        for (let i = 0; i < length; i += 1) {
+                            bytes[i] = Math.floor(Math.random() * 256) & 0xff;
+                        }
+                    }
+                    return bytes;
+                }
+
+                function byteAdd(left, right) {
+                    return (left + right) & 0xff;
+                }
+
+                function byteSub(left, right) {
+                    return (left - right + 256) & 0xff;
+                }
+
+                function transformByte(byte, pad, index, decode) {
+                    const a = recipe[index % recipe.length];
+                    const b = recipe[(index + 1) % recipe.length];
+                    const mode = a & 0x03;
+                    const mix = (pad ^ b ^ ((index * ((a | 1) & 0xff)) & 0xff)) & 0xff;
+                    if (mode === 0) return byte ^ mix;
+                    if (mode === 1) return decode ? byteSub(byte, mix) : byteAdd(byte, mix);
+                    if (mode === 2) {
+                        return decode
+                            ? byteSub(byte ^ b, mix)
+                            : byteAdd(byte, mix) ^ b;
+                    }
+                    return decode
+                        ? (byteSub(byte, b) ^ mix)
+                        : byteAdd(byte ^ mix, b);
+                }
+
+                function splitBytes(bytes, partCount) {
+                    const parts = Array.from({ length: partCount }, () => []);
+                    bytes.forEach((byte, index) => {
+                        parts[index % partCount].push(byte);
+                    });
+                    return parts;
+                }
+
+                function joinParts(parts, length) {
+                    const offsets = Array(parts.length).fill(0);
+                    const bytes = new Uint8Array(length);
+                    for (let index = 0; index < length; index += 1) {
+                        const partIndex = index % parts.length;
+                        bytes[index] = parts[partIndex][offsets[partIndex]];
+                        offsets[partIndex] += 1;
+                    }
+                    return bytes;
+                }
+
+                function clear() {
+                    encodedParts = [];
+                    padParts = [];
+                    recipe = [];
+                }
+
+                function setBytes(tokenBytes) {
+                    if (!tokenBytes || !tokenBytes.length) {
+                        clear();
+                        return;
+                    }
+                    const bytes = Uint8Array.from(tokenBytes);
+                    const pads = randomBytes(bytes.length);
+                    recipe = Array.from(randomBytes(8), byte => byte || 1);
+                    const encoded = Array.from(bytes, (byte, index) => (
+                        transformByte(byte, pads[index], index, false)
+                    ));
+                    bytes.fill(0);
+                    const partCount = 2 + (recipe[0] % 3);
+                    encodedParts = splitBytes(encoded, partCount);
+                    padParts = splitBytes(Array.from(pads), partCount);
+                    pads.fill(0);
+                }
+
+                function set(token) {
+                    const value = typeof token === 'string' ? token : '';
+                    if (!value) {
+                        clear();
+                        return;
+                    }
+                    const bytes = encoder.encode(value);
+                    setBytes(bytes);
+                    bytes.fill(0);
+                }
+
+                function readBytes() {
+                    if (!encodedParts.length || !padParts.length || !recipe.length) {
+                        encodedParts = [];
+                        padParts = [];
+                        recipe = [];
+                        return new Uint8Array(0);
+                    }
+                    const length = encodedParts.reduce((total, part) => total + part.length, 0);
+                    const encoded = joinParts(encodedParts, length);
+                    const pads = joinParts(padParts, length);
+                    const bytes = Uint8Array.from(encoded, (byte, index) => (
+                        transformByte(byte, pads[index], index, true)
+                    ));
+                    encoded.fill(0);
+                    pads.fill(0);
+                    return bytes;
+                }
+
+                function buildLoginBodyBytes(tokenBytes) {
+                    const body = new Uint8Array(formPrefix.length + tokenBytes.length);
+                    body.set(formPrefix, 0);
+                    body.set(tokenBytes, formPrefix.length);
+                    return body;
+                }
+
+                set(initialToken);
+                return {
+                    has() {
+                        return encodedParts.some(part => part.length > 0);
+                    },
+                    set,
+                    withLoginBody(callback) {
+                        const tokenBytes = readBytes();
+                        setBytes(tokenBytes);
+                        const bodyBytes = buildLoginBodyBytes(tokenBytes);
+                        tokenBytes.fill(0);
+                        const result = callback(bodyBytes);
+                        return Promise.resolve(result).finally(() => {
+                            bodyBytes.fill(0);
+                        });
+                    }
+                };
+            }
 
             function normalizeConnectionType(value) {
                 return String(value || '').trim().toLowerCase().replace('-', '_');
@@ -3131,6 +3294,12 @@
                     getTerminalPolicy() {
                         return cloneForTest(terminalPolicy);
                     },
+                    hasRememberedAccessToken() {
+                        return isAccessTokenRemembered();
+                    },
+                    showSessionRecoveryForTest(message) {
+                        showSessionRecovery(message || 'Session expired. Enter the access token again.');
+                    },
                     applyTerminalPolicy(policy) {
                         applyTerminalPolicy(cloneForTest(policy));
                     },
@@ -3382,9 +3551,19 @@
                 sessionRenewTimer = null;
             }
 
+            function isAccessTokenRemembered() {
+                return accessTokenVault.has();
+            }
+
+            function updateSessionRecoveryRememberedTokenButton() {
+                if (!sessionRecoveryRememberedTokenBtn) return;
+                sessionRecoveryRememberedTokenBtn.style.display = isAccessTokenRemembered() ? 'block' : 'none';
+            }
+
             function showSessionRecovery(message) {
                 clearSessionRenewTimer();
                 if (sessionRecoveryMessage) sessionRecoveryMessage.textContent = message || '';
+                updateSessionRecoveryRememberedTokenButton();
                 if (sessionRecoveryModal) sessionRecoveryModal.classList.add('open');
                 if (sessionRecoveryToken) sessionRecoveryToken.focus();
             }
@@ -3393,6 +3572,7 @@
                 if (sessionRecoveryModal) sessionRecoveryModal.classList.remove('open');
                 if (sessionRecoveryMessage) sessionRecoveryMessage.textContent = '';
                 if (sessionRecoveryToken) sessionRecoveryToken.value = '';
+                updateSessionRecoveryRememberedTokenButton();
             }
 
             async function renewSession() {
@@ -3420,9 +3600,19 @@
                 sessionRenewTimer = setTimeout(renewSession, 300000);
             }
 
-            async function submitSessionRecoveryToken(token) {
-                const body = new URLSearchParams();
-                body.set('token', token || '');
+            function reconnectAfterSessionRecovery() {
+                if (!socket) {
+                    window.location.assign('/');
+                    return;
+                }
+                hideSessionRecovery();
+                if (socket.connected) {
+                    socket.disconnect();
+                }
+                socket.connect();
+            }
+
+            async function submitSessionRecoveryBody(body) {
                 const response = await fetch('/login', {
                     method: 'POST',
                     headers: {
@@ -3434,7 +3624,19 @@
                 if (!response.ok) {
                     throw new Error('Access token was not accepted.');
                 }
-                window.location.assign('/');
+            }
+
+            async function submitSessionRecoveryToken(token) {
+                const body = new URLSearchParams();
+                body.set('token', token || '');
+                await submitSessionRecoveryBody(body);
+                accessTokenVault.set(token || '');
+                reconnectAfterSessionRecovery();
+            }
+
+            async function submitRememberedSessionRecoveryToken() {
+                await accessTokenVault.withLoginBody(submitSessionRecoveryBody);
+                reconnectAfterSessionRecovery();
             }
 
             async function fetchAccessUrl() {
@@ -4654,6 +4856,21 @@
                     submitSessionRecoveryToken(sessionRecoveryToken ? sessionRecoveryToken.value : '')
                         .catch(err => {
                             if (sessionRecoveryMessage) sessionRecoveryMessage.textContent = err.message || 'Access token was not accepted.';
+                        });
+                };
+            }
+            if (sessionRecoveryRememberedTokenBtn) {
+                sessionRecoveryRememberedTokenBtn.onclick = () => {
+                    if (!isAccessTokenRemembered()) return;
+                    sessionRecoveryRememberedTokenBtn.disabled = true;
+                    if (sessionRecoveryMessage) sessionRecoveryMessage.textContent = 'Unlocking with remembered token...';
+                    submitRememberedSessionRecoveryToken()
+                        .catch(err => {
+                            if (sessionRecoveryMessage) sessionRecoveryMessage.textContent = err.message || 'Access token was not accepted.';
+                        })
+                        .finally(() => {
+                            sessionRecoveryRememberedTokenBtn.disabled = false;
+                            updateSessionRecoveryRememberedTokenButton();
                         });
                 };
             }

@@ -157,10 +157,11 @@ def test_access_required_page_accepts_token_login(browser, access_url):
     parsed = urllib.parse.urlparse(access_url)
     token = urllib.parse.parse_qs(parsed.query)['token'][0]
     base_url = urllib.parse.urlunparse(parsed._replace(query='', fragment=''))
+    login_url = debug_url(base_url)
     context = browser.new_context(viewport={'width': 1280, 'height': 800})
     page = context.new_page()
     try:
-        page.goto(base_url, wait_until='domcontentloaded')
+        page.goto(login_url, wait_until='domcontentloaded')
         page.wait_for_selector('#access-token', timeout=5000)
         page.fill('#access-token', token)
         page.click('button[type="submit"]')
@@ -170,6 +171,10 @@ def test_access_required_page_accepts_token_login(browser, access_url):
         )
         check('token=' not in page.url, 'token login left the access token in the URL')
         check(page.locator('#connectBtn').count() == 1, 'token login did not render the app controls')
+        check(
+            page.evaluate("() => window.terminalTest.hasRememberedAccessToken()") is True,
+            'manually entered token was not remembered for recovery',
+        )
     finally:
         close_context(context)
 
@@ -835,6 +840,28 @@ def test_settings_access_recovery_fetches_access_url_on_demand(browser, access_u
         close_context(context)
 
 
+def test_access_url_token_is_remembered_only_for_recovery(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        state = page.evaluate(
+            """() => ({
+                location: window.location.href,
+                remembered: window.terminalTest.hasRememberedAccessToken()
+            })"""
+        )
+        check('token=' not in state['location'], 'access token remained in app URL')
+        check(state['remembered'] is True, 'access URL token was not remembered for recovery')
+
+        page.evaluate("() => window.terminalTest.showSessionRecoveryForTest('Session expired.')")
+        page.wait_for_selector('#session-recovery-modal.open', timeout=5000)
+        display = page.evaluate(
+            "() => getComputedStyle(document.getElementById('session-recovery-remembered-token')).display"
+        )
+        check(display != 'none', 'remembered-token recovery button was not shown')
+    finally:
+        close_context(context)
+
+
 def test_connection_controls_follow_start_fields_without_legacy_payload(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
@@ -1015,6 +1042,7 @@ def main():
         test_cjk_width_compatibility_defaults_off,
         test_settings_server_tab_loads_readonly_snapshot,
         test_settings_access_recovery_fetches_access_url_on_demand,
+        test_access_url_token_is_remembered_only_for_recovery,
         test_connection_controls_follow_start_fields_without_legacy_payload,
         test_terminal_payload_text_is_not_control,
     ]
