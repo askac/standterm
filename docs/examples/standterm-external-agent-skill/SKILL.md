@@ -20,6 +20,17 @@ minting, the handoff file, or the browser Agent gates.
 
 If the user only provides this skill prompt and asks you to operate StandTerm:
 
+> **Resolve the LIVE instance through the URL, never by scanning for handoff
+> files.** The authoritative connection details for the currently running
+> StandTerm are tokenless `/agentinfo` data: use the Linux current-instance
+> pointer `/run/user/<uid>/standterm/current_agentinfo.json`, a known base URL's
+> `/agentinfo`, or the startup banner's `standterm_agentinfo.json` first. Do
+> not search the filesystem for `standterm_external_agent_handoff.json`; stale
+> files from older launches can carry expired tokens or old CA paths and cause
+> slow, misleading retries. After resolving fresh agentinfo, use its
+> `handoff_path`, `tls_ca_cert_path`, `python_path`, `scripts`, and
+> `recommended_commands`.
+
 1. If the user provides explicit connection fields, prefer them first:
    `--url`, `--token`, `--terminal`, and either `--ca-file` or, for loopback
    testing only, `--insecure`. This is the cross-platform path when the agent is
@@ -27,7 +38,7 @@ If the user only provides this skill prompt and asks you to operate StandTerm:
 2. Otherwise, use the StandTerm startup banner as the source of truth for the active Python,
    `scripts/agent_cli.py`, `scripts/agent_jsonl.py`,
    `scripts/agent_mcp.py`,
-   `scripts/agent_repl.py`, `scripts/agent_type.py`,
+   `scripts/agent_repl.py`, `scripts/agent_shcmd.py`, `scripts/agent_type.py`,
    `standterm_agentinfo.json`, and
    `standterm_external_agent_handoff.json` absolute paths. Do not guess the port,
    URL, token, or working directory. Direct `scripts/*.py` execution may work on
@@ -35,9 +46,10 @@ If the user only provides this skill prompt and asks you to operate StandTerm:
    the active Python path from the banner or handoff metadata.
 3. If the banner is not available, read tokenless `standterm_agentinfo.json`,
    call the tokenless `/agentinfo` URL when the StandTerm base URL is known, or
-   use the local current-instance pointer as a Linux convenience. Then run
-   `discover` before doing anything else. After a token has been minted, run
-   `hello` through the handoff or explicit connection fields.
+   use the local current-instance pointer as a Linux convenience. Prefer this
+   tokenless URL/pointer path over local handoff discovery. Then run `discover`
+   before doing anything else. After a token has been minted, run `hello`
+   through the handoff or explicit connection fields.
 4. Do not run backend smoke tests to create a handoff. Smoke tests may mint
    test-only tokens that are not recognized by the live StandTerm server.
 5. For HTTPS, prefer `--handoff`; it can carry the local CA path. If the
@@ -58,7 +70,8 @@ If the user only provides this skill prompt and asks you to operate StandTerm:
    terminal display content, or session IDs. The HTTP `/agentinfo` endpoint is
    the platform-neutral tokenless discovery surface when the base URL is known;
    local current-instance pointer files are host conveniences and may be
-   platform-specific.
+   platform-specific. Prefer fresh tokenless `/agentinfo` data over scanning for
+   handoff files, because stale handoff files commonly remain after old launches.
 3. Inspect `standterm_external_agent_handoff.json` only as a local
    secret-bearing access file. Do not commit it, paste the token, or print the
    full file.
@@ -243,6 +256,21 @@ strings are literal bytes. In bash, use `$'...'` when you need a real control
 byte such as carriage return. On Windows shells, prefer `--stdin` or the JSONL
 client for portable line breaks. PTY-style interactive programs usually expect
 carriage return (`\r`) for Enter.
+
+For one-line checks in a terminal that is already known to be a shell, prefer
+`agent_shcmd.py --json` over hand-building `send-wait` payloads:
+
+```text
+<python-from-startup-banner> <standterm-dir>/scripts/agent_shcmd.py --handoff <standterm-dir>/standterm_external_agent_handoff.json --json "pwd"
+<python-from-startup-banner> <standterm-dir>/scripts/agent_shcmd.py --agentinfo <standterm-dir>/standterm_agentinfo.json --json git status --short
+```
+
+`agent_shcmd.py` sends the command to the same browser-visible terminal and
+returns a compact `{status, stdout, capture}` JSON object. It is a terminal
+helper, not a subprocess exec API: it has no reliable exit code or stderr split.
+For long-running builds, pair it with an explicit shell marker and observe
+completion with `agent_cli.py tail --wait-ms` or use `agent_repl.py` for passive
+monitoring.
 
 `--strip-ansi` removes ANSI/control sequences for readability, but the resulting
 plain text is still display data, not a control signal. In full-screen TUIs,

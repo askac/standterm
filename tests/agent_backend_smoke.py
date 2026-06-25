@@ -2585,6 +2585,8 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
             assert token_payload['cli_commands']['send_submit'].endswith("send --text 'codex prompt' --submit")
             assert token_payload['cli_commands']['send_wait_plain_pwd'].endswith("send-wait --text 'pwd\n' --strip-ansi")
             assert 'scripts/agent_repl.py' in token_payload['cli_commands']['repl']
+            assert token_payload['cli_commands']['shcmd_pwd'].endswith("scripts/agent_shcmd.py --url http://localhost --token " + token_payload['token'] + " --terminal main pwd")
+            assert token_payload['cli_commands']['shcmd_json_pwd'].endswith("scripts/agent_shcmd.py --url http://localhost --token " + token_payload['token'] + " --terminal main --json pwd")
             assert 'scripts/agent_jsonl.py' in token_payload['cli_commands']['jsonl']
             handoff = Path(token_payload['handoff_path'])
             assert handoff == standterm.EXTERNAL_AGENT_HANDOFF_PATH
@@ -2639,6 +2641,7 @@ def test_external_agent_handoff_uses_loopback_command_url_for_non_loopback_brows
     assert payload['transport']['command_endpoint'] == 'https://127.0.0.1:5000/agent/external/command'
     assert "--url https://127.0.0.1:5000" in payload['cli_commands']['hello']
     assert "--url https://127.0.0.1:5000" in payload['cli_commands']['jsonl']
+    assert "--url https://127.0.0.1:5000" in payload['cli_commands']['shcmd_json_pwd']
 
 
 def assert_agentinfo_is_tokenless(payload):
@@ -2673,6 +2676,8 @@ def test_external_agentinfo_payload_route_and_pointer_are_tokenless():
     assert '--agentinfo' in payload['recommended_commands']['discover']
     assert '--handoff' in payload['recommended_commands']['hello_after_token_mint']
     assert '--handoff' in payload['recommended_commands']['render_after_token_mint']
+    assert '--handoff' in payload['recommended_commands']['shcmd_after_token_mint']
+    assert 'scripts/agent_shcmd.py' in payload['scripts']['agent_shcmd']
 
     blocked = flask_client.get('/agentinfo', environ_overrides={'REMOTE_ADDR': '203.0.113.10'})
     assert blocked.status_code == 403

@@ -11,6 +11,7 @@ COMPILE_TARGETS = [
     'scripts/agent_cli.py',
     'scripts/agent_jsonl.py',
     'scripts/agent_repl.py',
+    'scripts/agent_shcmd.py',
     'scripts/agent_rsfile.py',
     'scripts/agent_type.py',
     'tests/agent_backend_smoke.py',

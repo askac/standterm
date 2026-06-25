@@ -314,6 +314,7 @@ Start here with the active Python path printed by the StandTerm startup banner:
 <python-from-startup-banner> scripts/agent_cli.py --handoff standterm_external_agent_handoff.json hello
 <python-from-startup-banner> scripts/agent_cli.py --handoff standterm_external_agent_handoff.json render --mode mirror-screen
 <python-from-startup-banner> scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send --text $'pwd\r'
+<python-from-startup-banner> scripts/agent_shcmd.py --handoff standterm_external_agent_handoff.json "pwd"
 <python-from-startup-banner> scripts/agent_repl.py --handoff standterm_external_agent_handoff.json --enter cr
 ```
 
@@ -323,6 +324,13 @@ Commands that read or write terminal state still need a minted external-agent
 token from `standterm_external_agent_handoff.json` or explicit `--token`.
 The `send --text $'pwd\r'` example uses Bash quoting; on Windows shells, use
 `--stdin` or `agent_jsonl.py` for portable line breaks.
+For one-line shell checks in an already-attached shell terminal,
+`agent_shcmd.py` wraps `send-wait`: the command and output remain visible in the
+browser terminal for a human operator, while the helper returns captured
+terminal output as stdout. Use `--json` when an agent needs a structured
+`status`, `stdout`, and capture state. This is a terminal helper, not a
+subprocess exec API; it does not provide a reliable shell exit code or separate
+stderr.
 
 Prefer the exact absolute commands printed by the StandTerm startup banner. They
 use the active runtime Python, platform-appropriate quoting, and the generated

@@ -5086,6 +5086,23 @@ def build_external_agent_repl_command(base_url, token, terminal_id):
     args.extend(get_external_agent_cli_tls_args())
     return ' '.join(shlex.quote(arg) for arg in args)
 
+def build_external_agent_shcmd_command(base_url, token, terminal_id, command='pwd', extra_args=None):
+    args = [
+        'tools/.venv_wsl/bin/python',
+        'scripts/agent_shcmd.py',
+        '--url',
+        base_url,
+        '--token',
+        token,
+        '--terminal',
+        terminal_id,
+    ]
+    args.extend(get_external_agent_cli_tls_args())
+    if extra_args:
+        args.extend(extra_args)
+    args.append(command)
+    return ' '.join(shlex.quote(arg) for arg in args)
+
 def build_external_agent_jsonl_command(base_url, token, terminal_id):
     args = [
         'tools/.venv_wsl/bin/python',
@@ -5176,6 +5193,13 @@ def build_external_agent_cli_commands(base_url, token, terminal_id):
             extra_args=['--strip-ansi'],
         ),
         'repl': build_external_agent_repl_command(base_url, token, terminal_id),
+        'shcmd_pwd': build_external_agent_shcmd_command(base_url, token, terminal_id),
+        'shcmd_json_pwd': build_external_agent_shcmd_command(
+            base_url,
+            token,
+            terminal_id,
+            extra_args=['--json'],
+        ),
         'jsonl': build_external_agent_jsonl_command(base_url, token, terminal_id),
     }
 
@@ -5321,6 +5345,7 @@ def build_external_agent_discovery_payload(base_url, token, terminal_id):
 def build_external_agentinfo_recommended_commands(agentinfo_path=None):
     python_arg = sys.executable
     cli_arg = str(APP_DIR / 'scripts' / 'agent_cli.py')
+    shcmd_arg = str(APP_DIR / 'scripts' / 'agent_shcmd.py')
     handoff_arg = str(EXTERNAL_AGENT_HANDOFF_PATH)
     agentinfo_arg = str(agentinfo_path or EXTERNAL_AGENT_INFO_PATH)
     tls_args = get_external_agent_cli_tls_args()
@@ -5333,6 +5358,9 @@ def build_external_agentinfo_recommended_commands(agentinfo_path=None):
         ]),
         'render_after_token_mint': quote_local_command([
             python_arg, cli_arg, '--handoff', handoff_arg, *tls_args, 'render',
+        ]),
+        'shcmd_after_token_mint': quote_local_command([
+            python_arg, shcmd_arg, '--handoff', handoff_arg, *tls_args, '--json', 'pwd',
         ]),
     }
 
@@ -5399,6 +5427,7 @@ def build_external_agentinfo_payload(base_url=None, agentinfo_path=None):
             'agent_cli': str(APP_DIR / 'scripts' / 'agent_cli.py'),
             'agent_jsonl': str(APP_DIR / 'scripts' / 'agent_jsonl.py'),
             'agent_repl': str(APP_DIR / 'scripts' / 'agent_repl.py'),
+            'agent_shcmd': str(APP_DIR / 'scripts' / 'agent_shcmd.py'),
             'agent_type': str(APP_DIR / 'scripts' / 'agent_type.py'),
         },
         'skill': {

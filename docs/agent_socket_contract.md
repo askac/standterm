@@ -230,6 +230,24 @@ Rejected input is not retried automatically, because replaying stale keystrokes
 after the human lease expires can put bytes into the wrong prompt or editor
 state.
 
+For one-line checks in a terminal that is already known to be a shell,
+`scripts/agent_shcmd.py` wraps `send-wait` with shell-command defaults:
+
+```bash
+tools/.venv_wsl/bin/python scripts/agent_shcmd.py \
+  --handoff standterm_external_agent_handoff.json \
+  --json \
+  "pwd"
+```
+
+The command is still written into the attached terminal, so the browser
+operator sees the same command and output. The helper returns captured terminal
+output as stdout by default, or a compact `{status, stdout, capture}` JSON
+object with `--json`. Use `--full-json` for the raw backend response. This is a
+terminal helper rather than a subprocess exec API: it does not provide a
+reliable shell exit code or separate stderr, and captured text remains display
+data rather than StandTerm control state.
+
 For workflows that need one paced text entry before interactive follow-up, the
 REPL can run `--type-text` or `--type-file` after attaching and then continue
 the same live session. It uses the shared `scripts/agent_input.py` pacing

@@ -13,6 +13,7 @@ import agent_cli as cli
 import agent_jsonl as jsonl
 import agent_mcp as mcp
 import agent_repl as repl
+import agent_shcmd as shcmd
 import agent_type as typer
 
 
@@ -717,6 +718,203 @@ def test_cli_send_wait_strip_ansi_payload_requests_plain_capture():
         'strip_ansi': True,
     }
 
+
+def test_shcmd_payload_sends_command_line_with_plain_capture_defaults():
+    args = SimpleNamespace(
+        url='https://127.0.0.1:5010',
+        terminal='term-2',
+        token='agt_unit',
+        command=['git', 'status', '--short'],
+        stdin=False,
+        newline='cr',
+        wait_ms=4000,
+        settle_ms=250,
+        limit=25,
+        raw_ansi=False,
+    )
+    assert shcmd.command_payload(args) == {
+        'op': 'send-wait',
+        'terminal_id': 'term-2',
+        'token': 'agt_unit',
+        'kind': 'text',
+        'text': 'git status --short\r',
+        'capture': True,
+        'wait_ms': 4000,
+        'settle_ms': 250,
+        'limit': 25,
+        'strip_ansi': True,
+    }
+
+
+def test_shcmd_parse_keeps_command_options_as_terminal_command_words():
+    args = shcmd.parse_args([
+        '--url',
+        'http://127.0.0.1:5010',
+        '--token',
+        'agt_unit',
+        '--json',
+        'git',
+        'status',
+        '--short',
+    ])
+    assert args.command == ['git', 'status', '--short']
+    assert args.json is True
+
+
+def test_shcmd_stdin_preserves_existing_newline_and_raw_ansi_choice():
+    args = SimpleNamespace(
+        url='https://127.0.0.1:5010',
+        terminal='main',
+        token=None,
+        command=[],
+        stdin=True,
+        newline='lf',
+        wait_ms=3000,
+        settle_ms=300,
+        limit=None,
+        raw_ansi=True,
+    )
+    assert shcmd.command_payload(args, stdin_text='printf test\n') == {
+        'op': 'send-wait',
+        'terminal_id': 'main',
+        'kind': 'text',
+        'text': 'printf test\n',
+        'capture': True,
+        'wait_ms': 3000,
+        'settle_ms': 300,
+    }
+
+
+def test_shcmd_capture_text_joins_event_data_only():
+    assert shcmd.capture_text({
+        'status': 'ok',
+        'capture': {
+            'events': [
+                {'data': 'pwd\r\n'},
+                {'data': '/tmp/project\n'},
+                {'message_type': 'terminal'},
+            ],
+        },
+    }) == 'pwd\r\n/tmp/project\n'
+
+
+def test_shcmd_compact_result_reports_status_stdout_and_capture_state():
+    assert shcmd.compact_result({
+        'status': 'ok',
+        'terminal_id': 'term-2',
+        'bytes_written': 4,
+        'capture': {
+            'status': 'ok',
+            'timed_out': False,
+            'settled': True,
+            'wait_ms': 3000,
+            'settle_ms': 300,
+            'events': [{'data': '/tmp/project\n'}],
+        },
+    }) == {
+        'status': 'ok',
+        'stdout': '/tmp/project\n',
+        'bytes_written': 4,
+        'terminal_id': 'term-2',
+        'capture': {
+            'status': 'ok',
+            'timed_out': False,
+            'settled': True,
+            'wait_ms': 3000,
+            'settle_ms': 300,
+        },
+    }
+
+
+def test_shcmd_run_prints_capture_text_and_posts_send_wait():
+    fake_post = FakePostJson(responses=[
+        (200, {
+            'status': 'ok',
+            'capture': {'events': [{'data': '/tmp/project\n'}]},
+        }),
+    ])
+    output = io.StringIO()
+    error = io.StringIO()
+    args = SimpleNamespace(
+        url='https://127.0.0.1:5010',
+        terminal='term-2',
+        token='agt_secret',
+        ca_file='/tmp/ca.crt',
+        insecure=False,
+        command=['pwd'],
+        stdin=False,
+        newline='cr',
+        wait_ms=3000,
+        settle_ms=300,
+        limit=None,
+        raw_ansi=False,
+        json=False,
+        full_json=False,
+    )
+    assert shcmd.run(args, post_json=fake_post, stdout=output, stderr=error) == 0
+    assert output.getvalue() == '/tmp/project\n'
+    assert error.getvalue() == ''
+    assert fake_post.calls == [
+        {
+            'base_url': 'https://127.0.0.1:5010',
+            'payload': {
+                'op': 'send-wait',
+                'terminal_id': 'term-2',
+                'token': 'agt_secret',
+                'kind': 'text',
+                'text': 'pwd\r',
+                'capture': True,
+                'wait_ms': 3000,
+                'settle_ms': 300,
+                'strip_ansi': True,
+            },
+            'dev_mode': False,
+            'ca_file': '/tmp/ca.crt',
+            'insecure': False,
+        },
+    ]
+
+
+def test_shcmd_run_json_prints_compact_status_and_stdout():
+    fake_post = FakePostJson(responses=[
+        (200, {
+            'status': 'ok',
+            'capture': {
+                'status': 'ok',
+                'timed_out': False,
+                'events': [{'data': 'done\n'}],
+            },
+        }),
+    ])
+    output = io.StringIO()
+    args = SimpleNamespace(
+        url='http://127.0.0.1:5010',
+        terminal='main',
+        token=None,
+        ca_file=None,
+        insecure=False,
+        command=['echo', 'done'],
+        stdin=False,
+        newline='cr',
+        wait_ms=3000,
+        settle_ms=300,
+        limit=None,
+        raw_ansi=False,
+        json=True,
+        full_json=False,
+    )
+    assert shcmd.run(args, post_json=fake_post, stdout=output) == 0
+    payload = json.loads(output.getvalue())
+    assert payload == {
+        'status': 'ok',
+        'stdout': 'done\n',
+        'capture': {
+            'status': 'ok',
+            'timed_out': False,
+        },
+    }
+
+
 def test_cli_send_submit_after_payload_is_structured():
     args = SimpleNamespace(
         command='send',
@@ -1162,6 +1360,13 @@ def main():
         test_cli_send_capture_payload,
         test_cli_send_wait_payload_requests_capture,
         test_cli_send_wait_strip_ansi_payload_requests_plain_capture,
+        test_shcmd_payload_sends_command_line_with_plain_capture_defaults,
+        test_shcmd_parse_keeps_command_options_as_terminal_command_words,
+        test_shcmd_stdin_preserves_existing_newline_and_raw_ansi_choice,
+        test_shcmd_capture_text_joins_event_data_only,
+        test_shcmd_compact_result_reports_status_stdout_and_capture_state,
+        test_shcmd_run_prints_capture_text_and_posts_send_wait,
+        test_shcmd_run_json_prints_compact_status_and_stdout,
         test_cli_send_submit_after_payload_is_structured,
         test_cli_send_named_keys_payload_uses_structured_keys,
         test_cli_key_alias_maps_to_send_payload,
