@@ -1278,6 +1278,8 @@
             let userSelectedConnectionType = null;
             const userEditedConnectionFields = new Set();
             const UART_MANUAL_PORT_VALUE = '__manual__';
+            const UART_PORT_REFRESH_MIN_INTERVAL_MS = 3000;
+            let lastUartPortRefreshAt = 0;
             let browserIdentityPromise = null;
             let browserIdentityRegistered = false;
             let browserPairingResponseTimer = null;
@@ -1527,6 +1529,15 @@
 
             function setUartManualPortVisible(visible) {
                 uartPortInput.style.display = visible ? '' : 'none';
+            }
+
+            function requestFreshUartPorts(reason, minIntervalMs = UART_PORT_REFRESH_MIN_INTERVAL_MS) {
+                if (!socket || !socket.connected || getSelectedConnectionType() !== 'uart') return;
+                const now = Date.now();
+                if (minIntervalMs > 0 && now - lastUartPortRefreshAt < minIntervalMs) return;
+                lastUartPortRefreshAt = now;
+                socket.emit('refresh_terminal_policy', { refresh_serial_ports: true });
+                updatePolicyDebugPanel('uart.port_refresh', { reason });
             }
 
             function getLocalShellKindOptions() {
@@ -2665,6 +2676,7 @@
                     normalized === 'local_shell' && localShellKindSelect.options.length > 0
                 ) ? 'block' : 'none';
                 uartFields.style.display = normalized === 'uart' ? 'block' : 'none';
+                if (normalized === 'uart') requestFreshUartPorts('select_uart');
                 updateBrowserAuthUi();
                 connectBtn.innerText = getConnectButtonText();
                 hideActionPrompt();
@@ -4038,6 +4050,12 @@
                     setUartManualPortVisible(false);
                 }
             });
+            uartPortSelect.addEventListener('focus', () => requestFreshUartPorts('port_select_focus'));
+            uartPortInput.addEventListener('focus', () => requestFreshUartPorts('port_input_focus'));
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden) requestFreshUartPorts('page_visible');
+            });
+            window.addEventListener('focus', () => requestFreshUartPorts('window_focus'));
 
             actionYesBtn.onclick = () => {
                 if (pendingAction !== 'offer_localhost_key_setup' || !pendingActionId) return;

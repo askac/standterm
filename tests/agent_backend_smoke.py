@@ -90,6 +90,8 @@ def reset_state():
     standterm.agent_viewport_render_request_store.clear()
     standterm.external_agent_attach_store.clear()
     standterm.operator_observations.clear()
+    standterm.serial_port_cache['expires_at'] = 0
+    standterm.serial_port_cache['ports'] = []
     standterm.set_agent_provider_for_test(standterm.MockAgentProvider())
 
 
@@ -3095,6 +3097,15 @@ def get_start_field(option, field_name):
     return matches[0]
 
 
+def get_policy_option(policy, connection_type):
+    matches = [
+        option for option in policy['connection_options']
+        if option['connection_type'] == connection_type
+    ]
+    assert len(matches) == 1, connection_type
+    return matches[0]
+
+
 def test_backend_start_form_schema_is_declared_and_typed():
     original_is_wsl = standterm.is_wsl
     try:
@@ -3454,6 +3465,56 @@ def test_uart_default_baud_rate_runtime_update_uses_plugin_validation():
     )
 
     client.disconnect()
+
+
+def test_refresh_terminal_policy_can_force_uart_port_rescan():
+    original_scan_serial_ports = standterm.scan_serial_ports
+    scan_results = [
+        [{
+            'device': 'COM3',
+            'label': 'COM3 (Windows)',
+            'description': 'Windows serial port',
+            'hwid': '',
+            'backend': 'windows',
+        }],
+        [{
+            'device': 'COM4',
+            'label': 'COM4 (Windows)',
+            'description': 'Windows serial port',
+            'hwid': '',
+            'backend': 'windows',
+        }],
+    ]
+    scan_calls = []
+
+    def fake_scan_serial_ports():
+        index = min(len(scan_calls), len(scan_results) - 1)
+        scan_calls.append(index)
+        return [dict(port) for port in scan_results[index]]
+
+    try:
+        standterm.scan_serial_ports = fake_scan_serial_ports
+        standterm.serial_port_cache['expires_at'] = 0
+        standterm.serial_port_cache['ports'] = []
+
+        client = make_client()
+        client.get_received()
+
+        client.emit('refresh_terminal_policy')
+        cached_policy = last_payload(client, 'terminal_policy')
+        cached_uart = get_policy_option(cached_policy, standterm.CONNECTION_TYPE_UART)
+        assert [port['device'] for port in cached_uart['available_ports']] == ['COM3']
+        assert len(scan_calls) == 1
+
+        client.emit('refresh_terminal_policy', {'refresh_serial_ports': True})
+        fresh_policy = last_payload(client, 'terminal_policy')
+        fresh_uart = get_policy_option(fresh_policy, standterm.CONNECTION_TYPE_UART)
+        assert [port['device'] for port in fresh_uart['available_ports']] == ['COM4']
+        assert len(scan_calls) == 2
+
+        client.disconnect()
+    finally:
+        standterm.scan_serial_ports = original_scan_serial_ports
 
 
 def test_local_shell_default_kind_runtime_update_uses_policy_context():
@@ -4809,6 +4870,7 @@ def main():
         test_low_risk_settings_update_is_versioned_and_audited,
         test_ssh_defaults_runtime_update_uses_plugin_validation_and_policy_context,
         test_uart_default_baud_rate_runtime_update_uses_plugin_validation,
+        test_refresh_terminal_policy_can_force_uart_port_rescan,
         test_local_shell_default_kind_runtime_update_uses_policy_context,
         test_local_shell_default_kind_is_readonly_outside_wsl,
         test_restart_and_high_risk_settings_are_not_low_risk_mutable,

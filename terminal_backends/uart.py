@@ -311,13 +311,14 @@ class UARTBackendPlugin(TerminalBackendPlugin):
         browser_authorized = context.browser_authorized if context else browser_authorized
         default_baud_rate = self._get_default_baud_rate(context=context)
         allowed = self._is_allowed_for_client(client_ip, browser_authorized=browser_authorized)
+        refresh_serial_ports = bool(context and context.refresh_serial_ports)
         return {
             'connection_type': self.connection_type,
             'label': self.label,
             'allowed': allowed,
             'authorization_available': not allowed,
             'browser_authorized': bool(browser_authorized),
-            'available_ports': self._detect_serial_ports() if allowed else [],
+            'available_ports': self._detect_serial_ports(force_refresh=refresh_serial_ports) if allowed else [],
             'default_baud_rate': default_baud_rate,
             'baud_rates': self._baud_rates,
         }

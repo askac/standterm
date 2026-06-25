@@ -972,12 +972,13 @@ def apply_runtime_setting_update(setting_key, value, expected_version):
             'settings_version': runtime_settings_version,
         }, None
 
-def build_terminal_policy(browser_authorized=False, client_ip=None):
+def build_terminal_policy(browser_authorized=False, client_ip=None, refresh_serial_ports=False):
     authorized_dir_ready = ensure_authorized_dir()
     context = BackendPolicyContext(
         client_ip=client_ip if client_ip is not None else get_request_client_ip(),
         browser_authorized=bool(browser_authorized),
         settings_snapshot=build_effective_runtime_settings(),
+        refresh_serial_ports=bool(refresh_serial_ports),
     )
     connection_options = TERMINAL_BACKEND_REGISTRY.build_policy_options(context=context)
     allowed_connections = {
@@ -1486,9 +1487,9 @@ def _get_manual_serial_description():
 def _get_manual_serial_label(selected_device):
     return f'{selected_device} (WSL)' if is_wsl() else selected_device
 
-def detect_serial_ports():
+def detect_serial_ports(force_refresh=False):
     now = time.time()
-    if serial_port_cache['expires_at'] > now:
+    if not force_refresh and serial_port_cache['expires_at'] > now:
         return [dict(port) for port in serial_port_cache['ports']]
 
     ports = scan_serial_ports()
@@ -4737,12 +4738,13 @@ def build_terminal_list(session_token):
         terminals.append(terminal_info)
     return terminals
 
-def emit_terminal_policy(sid):
+def emit_terminal_policy(sid, refresh_serial_ports=False):
     browser_authorized = socket_browser_authorized.get(sid, False)
     client_ip = socket_client_ips.get(sid, 'unknown')
     policy = build_terminal_policy(
         browser_authorized=browser_authorized,
         client_ip=client_ip,
+        refresh_serial_ports=refresh_serial_ports,
     )
     local_shell_option = next(
         (
@@ -5922,11 +5924,12 @@ def on_list_terminals():
     )
 
 @socketio.on('refresh_terminal_policy')
-def on_refresh_terminal_policy():
+def on_refresh_terminal_policy(data=None):
     session_token = socket_session_tokens.get(request.sid)
     if not session_token:
         return
-    emit_terminal_policy(request.sid)
+    refresh_serial_ports = isinstance(data, dict) and data.get('refresh_serial_ports') is True
+    emit_terminal_policy(request.sid, refresh_serial_ports=refresh_serial_ports)
 
 @socketio.on(SETTINGS_EVENT_SNAPSHOT_REQUEST)
 def on_settings_snapshot_request():

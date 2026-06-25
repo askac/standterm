@@ -11,6 +11,7 @@ class BackendPolicyContext:
     client_ip: str
     browser_authorized: bool = False
     settings_snapshot: Optional[dict] = None
+    refresh_serial_ports: bool = False
 
 
 @dataclass(frozen=True)
