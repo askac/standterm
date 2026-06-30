@@ -3,12 +3,14 @@ import tempfile
 import threading
 import time
 import json
+import io
 import stat
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import app as standterm
+import scripts.access_window as access_window
 
 
 class DummyBridge(standterm.TerminalBridge):
@@ -2852,6 +2854,208 @@ def test_console_copy_shortcuts_map_token_and_url():
     assert copied == ['abc', 'http://127.0.0.1:5000/?token=abc']
 
 
+def test_access_window_missing_gui_helper_is_nonfatal():
+    original_access_window_enabled = standterm.access_window_enabled
+    original_get_access_window_python_command = standterm.get_access_window_python_command
+    try:
+        standterm.access_window_enabled = lambda: True
+        standterm.get_access_window_python_command = lambda: []
+        assert standterm.start_access_window('https://example.test/?token=abc', 'abc') is False
+    finally:
+        standterm.access_window_enabled = original_access_window_enabled
+        standterm.get_access_window_python_command = original_get_access_window_python_command
+
+
+def test_access_window_handoff_uses_stdin_not_args_or_env():
+    original_access_window_enabled = standterm.access_window_enabled
+    original_get_access_window_python_command = standterm.get_access_window_python_command
+    original_popen = standterm.subprocess.Popen
+    calls = []
+
+    class FakeStdin:
+        def __init__(self):
+            self.text = ''
+            self.closed = False
+
+        def write(self, text):
+            self.text += text
+
+        def close(self):
+            self.closed = True
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdin = FakeStdin()
+
+    def fake_popen(command, **kwargs):
+        process = FakeProcess()
+        calls.append((command, kwargs, process))
+        return process
+
+    try:
+        standterm.access_window_enabled = lambda: True
+        standterm.get_access_window_python_command = lambda: ['pythonw.exe', 'access_window.py']
+        standterm.subprocess.Popen = fake_popen
+        assert standterm.start_access_window('https://example.test/?token=abc', 'abc') is True
+    finally:
+        standterm.access_window_enabled = original_access_window_enabled
+        standterm.get_access_window_python_command = original_get_access_window_python_command
+        standterm.subprocess.Popen = original_popen
+
+    assert len(calls) == 1
+    command, kwargs, process = calls[0]
+    assert command == ['pythonw.exe', 'access_window.py', '--stdin']
+    assert kwargs.get('env') is None
+    assert 'abc' not in ' '.join(command)
+    assert '"token":"abc"' in process.stdin.text
+    assert '"control":' in process.stdin.text
+    assert '"instance_id":' in process.stdin.text
+    assert '"status_url":' in process.stdin.text
+    assert '"status_urls":' in process.stdin.text
+    assert '"shutdown_token":' in process.stdin.text
+    assert process.stdin.closed is True
+
+
+def test_access_window_stdin_handoff_loads_status_url():
+    original_stdin = access_window.sys.stdin
+    try:
+        access_window.sys.stdin = io.StringIO(json.dumps({
+            'url': 'https://example.test/?token=abc',
+            'token': 'abc',
+            'control': {
+                'instance_id': 'instance-1',
+                'status_urls': [
+                    'https://127.0.0.1:5000/launcher/status',
+                    'https://172.20.1.2:5000/launcher/status',
+                ],
+                'shutdown_urls': [
+                    'https://127.0.0.1:5000/launcher/shutdown',
+                    'https://172.20.1.2:5000/launcher/shutdown',
+                ],
+                'token': 'shutdown-token',
+            },
+            'title': 'Test Access',
+        }))
+        args = access_window.parse_args(['--stdin'])
+    finally:
+        access_window.sys.stdin = original_stdin
+
+    assert args.url == 'https://example.test/?token=abc'
+    assert args.token == 'abc'
+    assert args.instance_id == 'instance-1'
+    assert args.status_url == 'https://127.0.0.1:5000/launcher/status'
+    assert args.status_urls == [
+        'https://127.0.0.1:5000/launcher/status',
+        'https://172.20.1.2:5000/launcher/status',
+    ]
+    assert args.shutdown_url == 'https://127.0.0.1:5000/launcher/shutdown'
+    assert args.shutdown_urls == [
+        'https://127.0.0.1:5000/launcher/shutdown',
+        'https://172.20.1.2:5000/launcher/shutdown',
+    ]
+    assert args.shutdown_token == 'shutdown-token'
+
+
+def test_access_window_fetch_status_falls_back_and_detects_instance_mismatch():
+    original_fetch = access_window.fetch_launcher_json
+    calls = []
+    try:
+        def fake_fetch(url, token):
+            calls.append((url, token))
+            if url.endswith('/first'):
+                return None, 'connection refused'
+            return {'status': 'ok', 'instance_id': 'new-instance'}, None
+
+        access_window.fetch_launcher_json = fake_fetch
+        data, error = access_window.fetch_launcher_json_any(
+            ['https://127.0.0.1/first', 'https://127.0.0.1/second'],
+            'launcher-token',
+            'expected-instance',
+        )
+    finally:
+        access_window.fetch_launcher_json = original_fetch
+
+    assert data is None
+    assert access_window.launcher_error_kind(error) == access_window.ERROR_INSTANCE_MISMATCH
+    assert access_window.launcher_error_message(error) == 'https://127.0.0.1/second: instance mismatch'
+    assert calls == [
+        ('https://127.0.0.1/first', 'launcher-token'),
+        ('https://127.0.0.1/second', 'launcher-token'),
+    ]
+
+
+def test_access_window_unauthorized_status_is_stale():
+    error = access_window.make_launcher_error(
+        access_window.ERROR_UNAUTHORIZED,
+        'HTTP 403 launcher_status_unauthorized',
+        url='https://127.0.0.1/launcher/status',
+    )
+    assert access_window.launcher_poll_state(error) == access_window.UI_STATE_STALE
+
+
+def test_access_window_copy_token_requires_current_status():
+    class FakeRoot:
+        def __init__(self):
+            self.copied = ''
+
+        def clipboard_clear(self):
+            self.copied = ''
+
+        def clipboard_append(self, text):
+            self.copied += text
+
+        def update_idletasks(self):
+            pass
+
+    class FakeStatus:
+        def __init__(self):
+            self.value = ''
+
+        def set(self, value):
+            self.value = value
+
+    root = FakeRoot()
+    status = FakeStatus()
+    access_window.copy_to_clipboard(root, 'old-token', status, 'Access Token', lambda: False)
+
+    assert root.copied == ''
+    assert status.value == 'Access Token is unavailable until StandTerm status is current.'
+
+
+def test_launcher_shutdown_requires_local_token():
+    original_schedule_launcher_shutdown = standterm.schedule_launcher_shutdown
+    calls = []
+    try:
+        standterm.schedule_launcher_shutdown = lambda: calls.append('shutdown')
+        client = standterm.app.test_client()
+
+        denied = client.post('/launcher/shutdown')
+        assert denied.status_code == 403
+        assert denied.get_json()['error_code'] == 'launcher_shutdown_unauthorized'
+        assert calls == []
+
+        status_denied = client.get('/launcher/status')
+        assert status_denied.status_code == 403
+        assert status_denied.get_json()['error_code'] == 'launcher_status_unauthorized'
+
+        status_ok = client.get(
+            '/launcher/status',
+            headers={'X-StandTerm-Launcher-Token': standterm.LAUNCHER_SHUTDOWN_TOKEN},
+        )
+        assert status_ok.status_code == 200
+        assert status_ok.get_json()['status'] == 'ok'
+
+        accepted = client.post(
+            '/launcher/shutdown',
+            headers={'X-StandTerm-Shutdown-Token': standterm.LAUNCHER_SHUTDOWN_TOKEN},
+        )
+        assert accepted.status_code == 200
+        assert accepted.get_json()['status'] == 'ok'
+        assert calls == ['shutdown']
+    finally:
+        standterm.schedule_launcher_shutdown = original_schedule_launcher_shutdown
+
+
 def test_wsl_local_shell_choice_is_structured_and_wsl_only():
     original_is_wsl = standterm.is_wsl
     plugin = standterm.TERMINAL_BACKEND_REGISTRY.get(standterm.CONNECTION_TYPE_LOCAL_SHELL)
@@ -4856,6 +5060,13 @@ def main():
         test_console_clipboard_helpers_select_copy_commands,
         test_console_clipboard_copy_passes_text_to_command,
         test_console_copy_shortcuts_map_token_and_url,
+        test_access_window_missing_gui_helper_is_nonfatal,
+        test_access_window_handoff_uses_stdin_not_args_or_env,
+        test_access_window_stdin_handoff_loads_status_url,
+        test_access_window_fetch_status_falls_back_and_detects_instance_mismatch,
+        test_access_window_unauthorized_status_is_stale,
+        test_access_window_copy_token_requires_current_status,
+        test_launcher_shutdown_requires_local_token,
         test_wsl_local_shell_choice_is_structured_and_wsl_only,
         test_terminal_policy_creates_authorized_dir_for_fresh_checkout,
         test_wsl_client_ips_require_explicit_trust_for_local_resources,

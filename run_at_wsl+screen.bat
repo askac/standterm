@@ -4,6 +4,8 @@ setlocal
 set "PROJECT_DIR=%~dp0"
 if "%PROJECT_DIR:~-1%"=="\" set "PROJECT_DIR=%PROJECT_DIR:~0,-1%"
 set "SCREEN_NAME=standterm"
+set "STANDTERM_RESTART_PATH=%~f0"
+set "STANDTERM_RESTART_PATH=%STANDTERM_RESTART_PATH:\=/%"
 
 echo ========================================
 echo    StandTerm WSL Screen Starter
@@ -30,7 +32,7 @@ echo [*] Reattach from Windows with:
 echo     wsl.exe screen -r standterm
 echo [*] Force reattach with:
 echo     wsl.exe screen -d -r standterm
-wsl.exe --cd "%PROJECT_DIR%" bash -lc "chmod +x ./run.sh; if screen -ls | grep -Eq '[[:space:]][0-9]+\.standterm[[:space:]]'; then exec screen -r standterm; fi; exec screen -S standterm bash -lc 'exec ./run.sh %*'"
+wsl.exe --cd "%PROJECT_DIR%" bash -lc "export STANDTERM_RESTART_PATH='%STANDTERM_RESTART_PATH%'; chmod +x ./run.sh; screen -wipe standterm >/dev/null 2>&1 || true; if screen -ls | grep -Eq '[[:space:]][0-9]+\.standterm[[:space:]].*\(Detached\)'; then exec screen -r standterm; fi; if screen -ls | grep -Eq '[[:space:]][0-9]+\.standterm[[:space:]].*\(Attached\)'; then exec screen -d -r standterm; fi; exec screen -S standterm bash -lc 'exec ./run.sh %*'"
 if errorlevel 1 (
     pause
     exit /b 1

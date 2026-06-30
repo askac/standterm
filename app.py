@@ -101,6 +101,9 @@ if ASYNC_MODE == 'eventlet':
 app = Flask(__name__, static_url_path='/static', static_folder='static')
 app.config['SECRET_KEY'] = secrets.token_hex(16)
 ACCESS_TOKEN = secrets.token_urlsafe(16)
+LAUNCHER_SHUTDOWN_TOKEN = secrets.token_urlsafe(32)
+LAUNCHER_INSTANCE_ID = secrets.token_urlsafe(12)
+SERVER_STARTED_AT = time.time()
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
 # Default to threading for consistent cross-platform behavior.
@@ -4447,6 +4450,11 @@ def is_valid_access_token(token):
         return False
     return secrets.compare_digest(token.strip(), ACCESS_TOKEN)
 
+def is_valid_launcher_shutdown_token(token):
+    if not isinstance(token, str):
+        return False
+    return secrets.compare_digest(token.strip(), LAUNCHER_SHUTDOWN_TOKEN)
+
 def is_valid_session(session_token):
     if not isinstance(session_token, str):
         return False
@@ -5000,6 +5008,76 @@ def access_url():
         'access_url': build_current_access_url(),
         'localhost_access_url': get_localhost_access_url(DEFAULT_PORT) if is_wsl() else None,
     })
+
+def schedule_launcher_shutdown():
+    def shutdown_after_response():
+        time.sleep(0.25)
+        os._exit(0)
+
+    for session_token in list(active_sessions):
+        close_all_terminal_bridges(session_token)
+    threading.Thread(target=shutdown_after_response, daemon=True).start()
+
+def build_launcher_status_payload():
+    terminal_count = sum(len(terminals) for terminals in bridges.values())
+    return {
+        'status': 'ok',
+        'app': APP_NAME,
+        'runtime': get_runtime_name(),
+        'instance_id': LAUNCHER_INSTANCE_ID,
+        'uptime_seconds': max(0, int(time.time() - SERVER_STARTED_AT)),
+        'sessions': len(active_sessions),
+        'sockets': len(socket_session_tokens),
+        'terminals': terminal_count,
+        'bind_host': get_bind_host(),
+        'port': DEFAULT_PORT,
+        'https': bool(HTTPS_ENABLED),
+    }
+
+def is_launcher_shutdown_client_allowed():
+    client_ip = get_request_client_ip()
+    address = normalize_ip_address(client_ip)
+    if address and address.is_loopback:
+        return True
+    if is_wsl() and address and address in get_wsl_host_addresses():
+        return True
+    return client_ip in {'localhost'}
+
+def get_launcher_token_from_request():
+    return request.headers.get('X-StandTerm-Launcher-Token') or request.headers.get('X-StandTerm-Shutdown-Token') or request.form.get('token')
+
+@app.route('/launcher/status', methods=['GET', 'POST'])
+def launcher_status():
+    if not is_launcher_shutdown_client_allowed():
+        return external_agent_json_response({
+            'status': 'failed',
+            'error_code': 'launcher_status_local_only',
+            'message': 'Launcher status is only available from the local host.',
+        }, status_code=403)
+    if not is_valid_launcher_shutdown_token(get_launcher_token_from_request()):
+        return external_agent_json_response({
+            'status': 'failed',
+            'error_code': 'launcher_status_unauthorized',
+            'message': 'Launcher token was not accepted.',
+        }, status_code=403)
+    return external_agent_json_response(build_launcher_status_payload())
+
+@app.route('/launcher/shutdown', methods=['POST'])
+def launcher_shutdown():
+    if not is_launcher_shutdown_client_allowed():
+        return external_agent_json_response({
+            'status': 'failed',
+            'error_code': 'launcher_shutdown_local_only',
+            'message': 'Launcher shutdown is only available from the local host.',
+        }, status_code=403)
+    if not is_valid_launcher_shutdown_token(get_launcher_token_from_request()):
+        return external_agent_json_response({
+            'status': 'failed',
+            'error_code': 'launcher_shutdown_unauthorized',
+            'message': 'Shutdown token was not accepted.',
+        }, status_code=403)
+    schedule_launcher_shutdown()
+    return external_agent_json_response({'status': 'ok'})
 
 def is_loopback_client_request():
     client_ip = get_request_client_ip()
@@ -7805,6 +7883,142 @@ def start_console_copy_shortcuts(access_url, access_token, stdin=None):
     thread.start()
     return True
 
+def access_window_mode():
+    return get_prefixed_env('ACCESS_UI', 'auto').strip().lower()
+
+def access_window_enabled():
+    mode = access_window_mode()
+    if mode in {'0', 'false', 'no', 'off', 'disabled'}:
+        return False
+    if mode in {'1', 'true', 'yes', 'on', 'enabled'}:
+        return True
+    if is_wsl():
+        return True
+    if sys.platform.startswith('win') or sys.platform == 'darwin':
+        return True
+    return bool(os.getenv('DISPLAY') or os.getenv('WAYLAND_DISPLAY'))
+
+def wslpath_to_windows(path):
+    try:
+        result = subprocess.run(
+            ['wslpath', '-w', str(path)],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except Exception:
+        return ''
+    if result.returncode != 0:
+        return ''
+    return result.stdout.strip()
+
+def get_access_window_script_path(for_windows=False):
+    script_path = APP_DIR / 'scripts' / 'access_window.py'
+    if for_windows:
+        return wslpath_to_windows(script_path)
+    return str(script_path)
+
+def find_wsl_windows_python_for_access_window():
+    candidates = [
+        APP_DIR / 'tools' / '.venv_win' / 'Scripts' / 'python.exe',
+        APP_DIR / 'tools' / '.venv_win' / 'Scripts' / 'pythonw.exe',
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    for executable in ('python.exe', 'pythonw.exe'):
+        path = shutil.which(executable)
+        if path:
+            return path
+    return ''
+
+def get_access_window_python_command():
+    if is_wsl():
+        helper_python = find_wsl_windows_python_for_access_window()
+        script_path = get_access_window_script_path(for_windows=True)
+        if helper_python and script_path:
+            return [helper_python, script_path]
+        return []
+    python_executable = sys.executable
+    if sys.platform.startswith('win') and python_executable:
+        pythonw_path = Path(python_executable).with_name('pythonw.exe')
+        if pythonw_path.exists():
+            python_executable = str(pythonw_path)
+    script_path = get_access_window_script_path()
+    if python_executable and script_path:
+        return [python_executable, script_path]
+    return []
+
+def append_access_url_path(url, path):
+    return url.split('?', 1)[0].rstrip('/') + path
+
+def unique_strings(values):
+    result = []
+    seen = set()
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+def build_access_window_handoff(access_url, access_token):
+    localhost_url = get_localhost_access_url(DEFAULT_PORT)
+    status_urls = unique_strings([
+        append_access_url_path(localhost_url, '/launcher/status'),
+        append_access_url_path(access_url, '/launcher/status'),
+    ])
+    shutdown_urls = unique_strings([
+        append_access_url_path(localhost_url, '/launcher/shutdown'),
+        append_access_url_path(access_url, '/launcher/shutdown'),
+    ])
+    control = {
+        'instance_id': LAUNCHER_INSTANCE_ID,
+        'status_urls': status_urls,
+        'shutdown_urls': shutdown_urls,
+        'token': LAUNCHER_SHUTDOWN_TOKEN,
+    }
+    return {
+        'url': access_url,
+        'token': access_token,
+        'instance_id': LAUNCHER_INSTANCE_ID,
+        'control': control,
+        'status_url': status_urls[0] if status_urls else '',
+        'status_urls': status_urls,
+        'shutdown_url': shutdown_urls[0] if shutdown_urls else '',
+        'shutdown_urls': shutdown_urls,
+        'shutdown_token': LAUNCHER_SHUTDOWN_TOKEN,
+        'title': f'{APP_NAME} Access ({get_runtime_name()})',
+    }
+
+def start_access_window(access_url, access_token):
+    if not access_window_enabled():
+        return False
+    command = get_access_window_python_command()
+    if not command:
+        print('[!] Access window unavailable: no suitable Python/Tk runtime found.', flush=True)
+        return False
+
+    handoff = build_access_window_handoff(access_url, access_token)
+
+    try:
+        process = subprocess.Popen(
+            command + ['--stdin'],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            close_fds=True,
+        )
+        process.stdin.write(json.dumps(handoff, separators=(',', ':')))
+        process.stdin.close()
+    except Exception as exc:
+        print(f'[!] Access window failed to start: {exc}', flush=True)
+        return False
+    print('[*] Access window started.', flush=True)
+    return True
+
 if __name__ == '__main__':
     print("[*] Python imports completed; resolving bind host...", flush=True)
     bind_host = get_bind_host()
@@ -7854,6 +8068,7 @@ if __name__ == '__main__':
     print(f"Access URL: {access_url}{url_hint}")
     print(f"Access Token: {ACCESS_TOKEN}{token_hint}")
     start_console_copy_shortcuts(access_url, ACCESS_TOKEN)
+    start_access_window(access_url, ACCESS_TOKEN)
     print("="*60 + "\n")
     
     sys.stdout.flush()
