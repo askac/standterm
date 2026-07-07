@@ -141,7 +141,7 @@ def new_page(browser, access_url):
     page.goto(debug_url(access_url), wait_until='domcontentloaded')
     page.wait_for_function('() => !!window.terminalTest', timeout=10000)
     page.wait_for_function(
-        "() => document.getElementById('socketStatus')?.innerText === 'Connected'",
+        "() => window.terminalTest.getSocketState().connected === true",
         timeout=10000,
     )
     page.wait_for_selector('#connectBtn:not([disabled])', timeout=10000)
@@ -165,8 +165,9 @@ def test_access_required_page_accepts_token_login(browser, access_url):
         page.wait_for_selector('#access-token', timeout=5000)
         page.fill('#access-token', token)
         page.click('button[type="submit"]')
+        page.wait_for_function('() => !!window.terminalTest', timeout=10000)
         page.wait_for_function(
-            "() => document.getElementById('socketStatus')?.innerText === 'Connected'",
+            "() => window.terminalTest.getSocketState().connected === true",
             timeout=10000,
         )
         check('token=' not in page.url, 'token login left the access token in the URL')
@@ -538,6 +539,80 @@ def test_agent_panel_status_gates_and_external_hint(browser, access_url):
         close_context(context)
 
 
+def test_session_recovery_new_tab_can_renew_external_agent_token(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        attach_agent(page)
+        page.click('#agent-toggle-btn')
+        page.wait_for_selector('#agent-panel.visible', timeout=5000)
+        page.evaluate("() => document.getElementById('agent-external-token-btn').click()")
+        page.wait_for_function(
+            "() => window.terminalTest.getActiveAgentState()?.external_token?.status === 'active'",
+            timeout=5000,
+        )
+        check(
+            '--token' in page.evaluate("() => document.getElementById('agent-external-command').value"),
+            'initial external token command did not render after structured token state became active',
+        )
+
+        page.evaluate("() => window.terminalTest.showSessionRecoveryForTest()")
+        page.click('#session-recovery-remembered-token')
+        page.wait_for_function(
+            "() => window.terminalTest.getSocketState().connected === true",
+            timeout=10000,
+        )
+        page.wait_for_function(
+            "() => window.terminalTest.getTerminalTabsState().tabs.length === 1",
+            timeout=5000,
+        )
+
+        page.evaluate("() => document.getElementById('new-tab-btn').click()")
+        page.evaluate("() => document.getElementById('connectBtn').click()")
+        page.wait_for_function(
+            "() => window.terminalTest.getActiveAgentState()?.connected === true",
+            timeout=10000,
+        )
+        page.click('#agent-toggle-btn')
+        page.wait_for_selector('#agent-panel.visible', timeout=5000)
+        page.click('#agent-access-toggle-btn')
+        wait_for_agent(page, "state.mode === 'observe'")
+        page.evaluate(
+            "() => { document.getElementById('agent-external-command').value = 'stale display command'; }"
+        )
+        page.evaluate(
+            """() => window.terminalTest.emitSocket('agent_mode_set', {
+                terminal_id: window.terminalTest.getActiveAgentState().terminal_id,
+                mode: 'approval_pending'
+            })"""
+        )
+        wait_for_agent(page, "state.mode === 'approval_pending' && state.external_token === null")
+        recovered_token_ui = page.evaluate(
+            """() => ({
+                buttonText: document.getElementById('agent-external-token-btn').innerText,
+                command: document.getElementById('agent-external-command').value
+            })"""
+        )
+        check(recovered_token_ui['buttonText'] == 'Mint token', 'new terminal reused stale external token command state')
+        check(recovered_token_ui['command'] == '', 'new terminal kept stale external token command text')
+        page.evaluate("() => document.getElementById('agent-external-token-btn').click()")
+        page.wait_for_function(
+            """() => {
+                const token = window.terminalTest.getActiveAgentState()?.external_token;
+                return token && (token.status === 'active' || token.status === 'error');
+            }""",
+            timeout=5000,
+        )
+        command = page.evaluate("() => document.getElementById('agent-external-command').value")
+        state_after_token = active_agent_state(page)
+        token_state = state_after_token['external_token']
+        check(not command.startswith('error:'), f'external token renew after session recovery failed: {command}')
+        check('--terminal' in command and '--token' in command, 'external token renew did not produce a CLI command')
+        check(token_state['terminalId'] == state_after_token['terminal_id'], 'external token state was not bound to the active terminal')
+        check(token_state['status'] == 'active', 'external token state did not record active status')
+    finally:
+        close_context(context)
+
+
 def test_rendered_viewport_snapshot_returns_png(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
@@ -602,17 +677,29 @@ def test_paste_review_approve_and_cancel(browser, access_url):
         attach_agent(page)
 
         clear_emitted(page)
+        page.evaluate("() => window.terminalTest.blurActiveTerminalForTest()")
+        page.evaluate("() => window.terminalTest.startPasteReview(':')")
+        page.wait_for_function("() => window.terminalTest.activeTerminalHasFocus()", timeout=5000)
+        short_paste_inputs = get_emitted(page, 'ssh_input')
+        check(len(short_paste_inputs) == 1, 'short paste did not emit exactly one ssh_input')
+        check(short_paste_inputs[0]['args'][0]['data'] == ':', 'short paste used the wrong payload')
+
+        clear_emitted(page)
+        page.evaluate("() => window.terminalTest.blurActiveTerminalForTest()")
         page.evaluate("() => window.terminalTest.startPasteReview(':\\n:\\n')")
         wait_for_agent(page, "state.privacy_state === 'paste_review'")
         page.evaluate("() => document.getElementById('paste-review-cancel').click()")
         wait_for_agent(page, "state.privacy_state === 'normal'")
+        page.wait_for_function("() => window.terminalTest.activeTerminalHasFocus()", timeout=5000)
         check(not get_emitted(page, 'ssh_input'), 'paste review cancel emitted ssh_input')
 
         clear_emitted(page)
+        page.evaluate("() => window.terminalTest.blurActiveTerminalForTest()")
         page.evaluate("() => window.terminalTest.startPasteReview(':\\n:\\n')")
         wait_for_agent(page, "state.privacy_state === 'paste_review'")
         page.evaluate("() => document.getElementById('paste-review-approve').click()")
         wait_for_agent(page, "state.privacy_state === 'normal'")
+        page.wait_for_function("() => window.terminalTest.activeTerminalHasFocus()", timeout=5000)
         ssh_inputs = get_emitted(page, 'ssh_input')
         check(len(ssh_inputs) == 1, 'paste review approve did not emit exactly one ssh_input')
         payload = ssh_inputs[0]['args'][0]
@@ -676,6 +763,49 @@ def test_cjk_width_compatibility_defaults_off(browser, access_url):
             })"""
         )
         check(state['checked'] is False, 'CJK width compatibility checkbox defaulted on')
+    finally:
+        close_context(context)
+
+
+def test_cursor_type_setting_updates_existing_and_new_terminals(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        initial = page.evaluate("() => window.terminalTest.getActiveTerminalOptions()")
+        check(initial['cursorStyle'] == 'block', 'terminal cursor type did not default to block')
+        check(initial['mirrorCursorStyle'] == 'block', 'mirror cursor type did not default to block')
+
+        page.click('#quick-settings')
+        page.wait_for_selector('#settings-modal.open', timeout=5000)
+        page.click('.settings-nav-item[data-tab="appearance"]')
+        settings_state = page.evaluate(
+            """() => ({
+                value: document.getElementById('pref-cursorStyle').value,
+                options: Array.from(document.getElementById('pref-cursorStyle').options).map(item => item.value)
+            })"""
+        )
+        check(settings_state['value'] == 'block', 'settings cursor type did not default to block')
+        check(settings_state['options'] == ['block', 'underline', 'bar'], 'settings cursor type options changed unexpectedly')
+
+        page.select_option('#pref-cursorStyle', 'underline')
+        page.click('#settings-save')
+        page.wait_for_function(
+            "() => window.terminalTest.getActiveTerminalOptions()?.cursorStyle === 'underline'",
+            timeout=5000,
+        )
+        updated = page.evaluate(
+            """() => ({
+                options: window.terminalTest.getActiveTerminalOptions(),
+                stored: JSON.parse(localStorage.getItem('terminal.pref.v1')).cursorStyle
+            })"""
+        )
+        check(updated['options']['mirrorCursorStyle'] == 'underline', 'mirror cursor type did not update')
+        check(updated['stored'] == 'underline', 'cursor type was not saved to preferences')
+
+        page.click('#new-tab-btn')
+        page.wait_for_function("() => window.terminalTest.getTerminalTabsState().tabs.length === 2", timeout=5000)
+        new_tab = page.evaluate("() => window.terminalTest.getActiveTerminalOptions()")
+        check(new_tab['cursorStyle'] == 'underline', 'new terminal did not use saved cursor type')
+        check(new_tab['mirrorCursorStyle'] == 'underline', 'new mirror terminal did not use saved cursor type')
     finally:
         close_context(context)
 
@@ -1036,10 +1166,12 @@ def main():
         test_hidden_mirror_ignores_visible_scroll,
         test_privacy_states_block_snapshots_and_agent_runs,
         test_agent_panel_status_gates_and_external_hint,
+        test_session_recovery_new_tab_can_renew_external_agent_token,
         test_rendered_viewport_snapshot_returns_png,
         test_paste_review_approve_and_cancel,
         test_approval_payload_and_stale_rejections,
         test_cjk_width_compatibility_defaults_off,
+        test_cursor_type_setting_updates_existing_and_new_terminals,
         test_settings_server_tab_loads_readonly_snapshot,
         test_settings_access_recovery_fetches_access_url_on_demand,
         test_access_url_token_is_remembered_only_for_recovery,

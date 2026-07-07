@@ -582,6 +582,9 @@
                             <div class="settings-row"><label for="pref-fontWeight" title="Heavier weights can improve perceived brightness of thin glyphs, especially with macOS grayscale antialiasing.">Font weight</label>
                                 <select id="pref-fontWeight"><option value="normal">Normal (400)</option><option value="500">Medium (500)</option><option value="600">Semibold (600)</option><option value="bold">Bold (700)</option></select>
                             </div>
+                            <div class="settings-row"><label for="pref-cursorStyle">Cursor type</label>
+                                <select id="pref-cursorStyle"><option value="block">Block</option><option value="underline">Underline</option><option value="bar">Bar</option></select>
+                            </div>
                         </fieldset>
                     </div>
                     <div class="settings-tab" id="tab-server">
@@ -882,6 +885,7 @@
             // on Apple platforms.
             fontWeight: isApplePlatform() ? '500' : 'normal',
             colorScheme: 'vintage',
+            cursorStyle: 'block',
             // Render East Asian Ambiguous characters (box drawing, symbols)
             // as wide cells. Keep this off by default; enable it only for
             // legacy BBS/screen setups that require wide ambiguous width.
@@ -916,9 +920,15 @@
             const text = String(value).trim();
             return FONT_WEIGHT_OPTIONS.includes(text) ? text : fallback;
         }
+        const CURSOR_STYLE_OPTIONS = ['block', 'underline', 'bar'];
+        function normalizeCursorStyle(value, fallback = PREF_DEFAULTS.cursorStyle) {
+            const text = String(value).trim();
+            return CURSOR_STYLE_OPTIONS.includes(text) ? text : fallback;
+        }
         let prefs = loadPrefs();
         prefs.fontSize = normalizeFontSize(prefs.fontSize);
         prefs.fontWeight = normalizeFontWeight(prefs.fontWeight);
+        prefs.cursorStyle = normalizeCursorStyle(prefs.cursorStyle);
 
         const CJK_WIDTH_PROVIDER_VERSION = 'ptt-cjk';
         const EAST_ASIAN_AMBIGUOUS_WIDTH_RANGES = [
@@ -1649,8 +1659,7 @@
                     snapshotTimer: null,
                     lastSnapshotResult: null,
                     lastRenderResult: null,
-                    externalTokenExpiresAt: null,
-                    externalTokenStatus: null,
+                    externalToken: null,
                     observation: {
                         active: false,
                         enabled: false,
@@ -1902,7 +1911,7 @@
             }
 
             function getAgentExternalTokenSecondsRemaining(agent) {
-                const expiresAt = Number(agent && agent.externalTokenExpiresAt);
+                const expiresAt = Number(agent && agent.externalToken && agent.externalToken.expiresAt);
                 if (!Number.isFinite(expiresAt)) return null;
                 return Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
             }
@@ -1974,30 +1983,97 @@
                 agentStatusDetail.innerText = parts.join(' · ');
             }
 
-            function hasMintedExternalAgentCommand() {
-                const value = agentExternalCommand.value.trim();
-                return !!value && !value.startsWith('error:') && !value.startsWith('minting ');
+            function buildAgentExternalTokenBinding(state) {
+                if (!state || !state.agent) return null;
+                return {
+                    terminalId: state.id,
+                    viewerId: state.agent.viewerId,
+                    agentBindingId: state.agent.agentBindingId,
+                    modeVersion: state.agent.modeVersion,
+                    privacyVersion: state.agent.privacyVersion
+                };
             }
 
-            function updateAgentExternalUi(usable, mode, agent) {
+            function isAgentExternalTokenCurrent(state, token) {
+                const binding = buildAgentExternalTokenBinding(state);
+                return !!(
+                    binding &&
+                    token &&
+                    token.terminalId === binding.terminalId &&
+                    token.viewerId === binding.viewerId &&
+                    token.agentBindingId === binding.agentBindingId &&
+                    token.modeVersion === binding.modeVersion &&
+                    token.privacyVersion === binding.privacyVersion
+                );
+            }
+
+            function getCurrentAgentExternalToken(state) {
+                const token = state && state.agent ? state.agent.externalToken : null;
+                return isAgentExternalTokenCurrent(state, token) ? token : null;
+            }
+
+            function hasRenewableAgentExternalToken(state) {
+                const token = getCurrentAgentExternalToken(state);
+                return !!(token && (token.status === 'active' || token.status === 'revoked'));
+            }
+
+            function setAgentExternalTokenState(state, fields = {}) {
+                const binding = buildAgentExternalTokenBinding(state);
+                if (!binding || !state.agent) return null;
+                state.agent.externalToken = {
+                    ...binding,
+                    status: typeof fields.status === 'string' ? fields.status : 'active',
+                    expiresAt: fields.expiresAt === null || fields.expiresAt === undefined
+                        ? null
+                        : (Number.isFinite(Number(fields.expiresAt)) ? Number(fields.expiresAt) : null),
+                    command: typeof fields.command === 'string' ? fields.command : '',
+                    errorCode: typeof fields.errorCode === 'string' ? fields.errorCode : null
+                };
+                return state.agent.externalToken;
+            }
+
+            function clearAgentExternalTokenState(state) {
+                if (state && state.agent) state.agent.externalToken = null;
+            }
+
+            function clearAllAgentExternalTokenStates() {
+                terminals.forEach(clearAgentExternalTokenState);
+                agentExternalCommand.value = '';
+                agentExternalOutput.open = false;
+            }
+
+            function renderAgentExternalCommand(state) {
+                const token = getCurrentAgentExternalToken(state);
+                if (token && token.status !== 'invalidated' && typeof token.command === 'string') {
+                    agentExternalCommand.value = token.command;
+                    return;
+                }
+                agentExternalCommand.value = '';
+                agentExternalOutput.open = false;
+            }
+
+            function updateAgentExternalUi(usable, mode, agent, state) {
                 clearAgentExternalTokenCountdownTimer();
+                renderAgentExternalCommand(state);
+                const token = getCurrentAgentExternalToken(state);
+                const minting = !!(token && token.status === 'minting');
                 const paused = !!(agent && (agent.paused || mode === AGENT_MODE_PAUSED));
-                const disabled = !usable || mode === AGENT_MODE_DISABLED || paused;
+                const disabled = !usable || mode === AGENT_MODE_DISABLED || paused || minting;
                 agentExternalTokenBtn.disabled = disabled;
-                agentExternalTokenBtn.innerText = hasMintedExternalAgentCommand() ? 'Renew token' : 'Mint token';
+                agentExternalTokenBtn.innerText = minting
+                    ? 'Minting...'
+                    : (hasRenewableAgentExternalToken(state) ? 'Renew token' : 'Mint token');
                 if (!usable) {
                     agentExternalHint.innerText = 'Connect a terminal before minting a token.';
+                } else if (minting) {
+                    agentExternalHint.innerText = 'Minting external agent token...';
                 } else if (paused) {
                     agentExternalHint.innerText = 'Resume Observer, Approval, or Full before minting a token.';
                 } else if (mode === AGENT_MODE_DISABLED) {
                     agentExternalHint.innerText = 'Enable external agent before minting a token.';
-                } else if (hasMintedExternalAgentCommand() && agent) {
-                    if (agent.externalTokenStatus === 'revoked') {
+                } else if (hasRenewableAgentExternalToken(state) && agent) {
+                    if (token.status === 'revoked') {
                         agentExternalHint.innerText = 'Permission revoked. Renew the token to continue.';
-                        return;
-                    }
-                    if (agent.externalTokenStatus === 'invalidated') {
-                        agentExternalHint.innerText = 'Permission invalidated. Mint a new token to continue.';
                         return;
                     }
                     const secondsRemaining = getAgentExternalTokenSecondsRemaining(agent);
@@ -2009,6 +2085,8 @@
                         agentExternalHint.innerText = `Permission expires in ${secondsRemaining}s without activity.`;
                     }
                     scheduleAgentExternalTokenCountdown(secondsRemaining);
+                } else if (token && token.status === 'invalidated') {
+                    agentExternalHint.innerText = 'Permission invalidated. Mint a new token to continue.';
                 } else {
                     agentExternalHint.innerText = 'Mint a local-only token for this terminal and permission.';
                 }
@@ -2018,8 +2096,10 @@
                 if (!data || typeof data.terminal_id !== 'string') return;
                 const state = terminals.get(data.terminal_id);
                 if (!state || !state.agent) return;
-                state.agent.externalTokenStatus = typeof data.token_status === 'string' ? data.token_status : 'active';
-                state.agent.externalTokenExpiresAt = getExternalAgentTokenExpiresAt(data.external_agent_token);
+                const token = getCurrentAgentExternalToken(state);
+                if (!token) return;
+                token.status = typeof data.token_status === 'string' ? data.token_status : 'active';
+                token.expiresAt = getExternalAgentTokenExpiresAt(data.external_agent_token);
                 updateAgentPanel();
                 updateAgentDebugState('agent.external_token_state', state);
             }
@@ -2088,7 +2168,7 @@
                 agentMockInput.disabled = !usable || (mode !== 'approval_pending' && mode !== AGENT_MODE_DIRECT_ACTIVE);
                 agentMockSendBtn.disabled = agentMockInput.disabled || !agentMockInput.value;
                 agentProviderRunBtn.disabled = agentMockInput.disabled;
-                updateAgentExternalUi(usable, mode, agent);
+                updateAgentExternalUi(usable, mode, agent, state);
                 renderAgentGateState(state);
                 renderAgentStatusPanel(state);
                 renderAgentActionPanel(state);
@@ -2119,6 +2199,7 @@
                     convertEol: false,
                     cursorBlink: false,
                     disableStdin: true,
+                    cursorStyle: prefs.cursorStyle,
                     fontFamily: prefs.fontFace,
                     fontSize: prefs.fontSize,
                     fontWeight: prefs.fontWeight,
@@ -2406,6 +2487,16 @@
                 socket.emit('ssh_input', { terminal_id: state.id, data });
             }
 
+            function focusTerminalAfterPaste(state) {
+                if (!state || state.id !== activeTerminalId || !state.term) return;
+                setTimeout(() => {
+                    const currentState = terminals.get(state.id);
+                    if (currentState && currentState.id === activeTerminalId && currentState.term) {
+                        currentState.term.focus();
+                    }
+                }, 0);
+            }
+
             function countPasteLines(text) {
                 if (!text) return 0;
                 return text.split(/\r\n|\r|\n/).length;
@@ -2428,12 +2519,14 @@
                 if (state && state.connected && state.agent && !state.agent.paused && state.agent.mode !== AGENT_MODE_PAUSED) {
                     emitAgentPrivacyState(state, 'normal');
                 }
+                focusTerminalAfterPaste(state);
             }
 
             function startPasteReview(state, text) {
                 if (!state || !state.connected || typeof text !== 'string' || !text) return false;
                 if (!requiresPasteReview(text)) {
                     sendTerminalInput(state, text);
+                    focusTerminalAfterPaste(state);
                     return true;
                 }
                 if (pendingPasteReview) endPasteReview(true);
@@ -3095,6 +3188,7 @@
                 const term = new Terminal({
                     allowProposedApi: true,
                     cursorBlink: true,
+                    cursorStyle: prefs.cursorStyle,
                     fontFamily: prefs.fontFace,
                     fontSize: prefs.fontSize,
                     fontWeight: prefs.fontWeight,
@@ -3237,7 +3331,8 @@
                     pending_action: cloneForTest(state.agent.pendingAction),
                     last_action: cloneForTest(state.agent.lastAction),
                     last_snapshot_result: cloneForTest(state.agent.lastSnapshotResult),
-                    last_render_result: cloneForTest(state.agent.lastRenderResult)
+                    last_render_result: cloneForTest(state.agent.lastRenderResult),
+                    external_token: cloneForTest(state.agent.externalToken)
                 };
             }
 
@@ -3261,8 +3356,38 @@
                     getEmitted() {
                         return cloneForTest(emitted);
                     },
+                    getSocketState() {
+                        return cloneForTest({
+                            connected: !!(socket && socket.connected),
+                            id: socket && socket.id ? socket.id : null
+                        });
+                    },
                     getActiveAgentState() {
                         return serializeAgentForTest(getActiveTerminalState());
+                    },
+                    activeTerminalHasFocus() {
+                        const state = getActiveTerminalState();
+                        return !!(state && state.term && state.term.textarea === document.activeElement);
+                    },
+                    blurActiveTerminalForTest() {
+                        const state = getActiveTerminalState();
+                        if (!state || !state.term || !state.term.textarea) return false;
+                        state.term.textarea.blur();
+                        return true;
+                    },
+                    getActiveTerminalOptions() {
+                        const state = getActiveTerminalState();
+                        if (!state || !state.term) return null;
+                        return cloneForTest({
+                            cursorStyle: state.term.options.cursorStyle,
+                            fontFamily: state.term.options.fontFamily,
+                            fontSize: state.term.options.fontSize,
+                            fontWeight: state.term.options.fontWeight,
+                            colorScheme: prefs.colorScheme,
+                            mirrorCursorStyle: state.agentTerminalMirror
+                                ? state.agentTerminalMirror.options.cursorStyle
+                                : null
+                        });
                     },
                     getTerminalTabsState() {
                         return {
@@ -3547,14 +3672,11 @@
 
             function isSessionRequiredConnectError(err) {
                 if (!err) return false;
-                const fields = [
-                    err.message,
-                    err.description,
-                    err.context && err.context.error_code,
-                    err.data && err.data.error_code,
-                    err.data && err.data.message,
-                ];
-                return fields.some(value => String(value || '').includes('session_required'));
+                return (
+                    (err.context && err.context.error_code === 'session_required') ||
+                    (err.data && err.data.error_code === 'session_required') ||
+                    err.error_code === 'session_required'
+                );
             }
 
             function clearSessionRenewTimer() {
@@ -3617,6 +3739,7 @@
                     window.location.assign('/');
                     return;
                 }
+                clearAllAgentExternalTokenStates();
                 hideSessionRecovery();
                 if (socket.connected) {
                     socket.disconnect();
@@ -3896,7 +4019,11 @@
                     mode_version: state.agent.modeVersion,
                     privacy_version: state.agent.privacyVersion
                 };
-                agentExternalCommand.value = 'minting external agent token...';
+                setAgentExternalTokenState(state, {
+                    status: 'minting',
+                    command: 'minting external agent token...'
+                });
+                updateAgentPanel();
                 try {
                     const response = await fetch('/agent/external/token', {
                         method: 'POST',
@@ -3905,28 +4032,35 @@
                     });
                     const result = await response.json();
                     if (!response.ok || result.status !== 'ok') {
-                        agentExternalCommand.value = `error: ${result.error_code || response.status}`;
-                        agentExternalOutput.open = true;
+                        setAgentExternalTokenState(state, {
+                            status: 'error',
+                            command: `error: ${result.error_code || response.status}`,
+                            errorCode: result.error_code || String(response.status)
+                        });
                         updateAgentPanel();
+                        agentExternalOutput.open = true;
                         return;
                     }
-                    const cli = result.cli_command || `tools/.venv_wsl/bin/python scripts/agent_cli.py --url ${shellQuote(result.url)} --token ${shellQuote(result.token)} --terminal ${shellQuote(result.terminal_id)} send --text ${shellQuote('pwd\n')}`;
-                    agentExternalCommand.value = cli;
+                    let cli = result.cli_command || `tools/.venv_wsl/bin/python scripts/agent_cli.py --url ${shellQuote(result.url)} --token ${shellQuote(result.token)} --terminal ${shellQuote(result.terminal_id)} send --text ${shellQuote('pwd\n')}`;
                     if (result.handoff_path) {
-                        agentExternalCommand.value += `\n# local handoff: ${result.handoff_path}`;
+                        cli += `\n# local handoff: ${result.handoff_path}`;
                     }
-                    applyAgentExternalTokenState({
-                        terminal_id: state.id,
-                        token_status: 'active',
-                        external_agent_token: result.external_agent_token,
+                    setAgentExternalTokenState(state, {
+                        status: 'active',
+                        expiresAt: getExternalAgentTokenExpiresAt(result.external_agent_token),
+                        command: cli
                     });
                     updateAgentPanel();
                     agentExternalOutput.open = true;
                     agentExternalCommand.select();
                 } catch (error) {
-                    agentExternalCommand.value = `error: ${error.message || error}`;
-                    agentExternalOutput.open = true;
+                    setAgentExternalTokenState(state, {
+                        status: 'error',
+                        command: `error: ${error.message || error}`,
+                        errorCode: error && error.message ? error.message : String(error)
+                    });
                     updateAgentPanel();
+                    agentExternalOutput.open = true;
                 }
             };
             function getPendingAgentAction(state) {
@@ -4861,6 +4995,7 @@
                 document.getElementById('pref-fontFace').value = prefs.fontFace;
                 document.getElementById('pref-fontSize').value = prefs.fontSize;
                 document.getElementById('pref-fontWeight').value = prefs.fontWeight;
+                document.getElementById('pref-cursorStyle').value = prefs.cursorStyle;
                 settingsModal.classList.add('open');
                 requestServerSettingsSnapshot();
             };
@@ -4932,14 +5067,17 @@
                 prefs.fontFace = document.getElementById('pref-fontFace').value;
                 prefs.fontSize = normalizeFontSize(document.getElementById('pref-fontSize').value, prefs.fontSize);
                 prefs.fontWeight = normalizeFontWeight(document.getElementById('pref-fontWeight').value, prefs.fontWeight);
+                prefs.cursorStyle = normalizeCursorStyle(document.getElementById('pref-cursorStyle').value, prefs.cursorStyle);
                 savePrefs(prefs);
                 terminals.forEach(state => {
+                    state.term.options.cursorStyle = prefs.cursorStyle;
                     state.term.options.fontFamily = prefs.fontFace;
                     state.term.options.fontSize = prefs.fontSize;
                     state.term.options.fontWeight = prefs.fontWeight;
                     state.term.options.theme = SCHEMES[prefs.colorScheme] || SCHEMES.vintage;
                     applyCjkWidthPreference(state.term);
                     if (state.agentTerminalMirror) {
+                        state.agentTerminalMirror.options.cursorStyle = prefs.cursorStyle;
                         state.agentTerminalMirror.options.fontFamily = prefs.fontFace;
                         state.agentTerminalMirror.options.fontSize = prefs.fontSize;
                         state.agentTerminalMirror.options.fontWeight = prefs.fontWeight;
