@@ -327,6 +327,78 @@ def test_terminal_pip_hides_selected_tab_and_keeps_background_tab(browser, acces
         close_context(context)
 
 
+def test_restored_terminal_list_allocates_next_new_tab_id(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        page.evaluate(
+            """() => window.terminalTest.applyTerminalListForTest({
+                terminals: [
+                    {
+                        terminal_id: 'main',
+                        connection_type: 'local_shell',
+                        terminal_label: 'bash',
+                        term: 'xterm-256color',
+                        connected: true
+                    },
+                    {
+                        terminal_id: 'term-2',
+                        connection_type: 'ssh',
+                        terminal_label: 'SSH',
+                        term: 'xterm-256color',
+                        connected: true
+                    }
+                ]
+            })"""
+        )
+        restored = page.evaluate("() => window.terminalTest.getTerminalTabsState()")
+        check(
+            [tab['id'] for tab in restored['tabs']] == ['main', 'term-2'],
+            'restored terminal list did not create the expected initial tab set',
+        )
+        check(restored['nextTerminalIndex'] >= 3, 'restored terminal list did not advance the tab allocator')
+
+        page.click('#new-tab-btn')
+        page.wait_for_function(
+            "() => window.terminalTest.getTerminalTabsState().tabs.some(tab => tab.id === 'term-3')",
+            timeout=5000,
+        )
+        state = page.evaluate("() => window.terminalTest.getTerminalTabsState()")
+        dom = page.evaluate("() => window.terminalTest.getTerminalDomStateForTest()")
+        state_ids = [tab['id'] for tab in state['tabs']]
+        dom_ids = [tab['id'] for tab in dom['tabDom']]
+        check(state_ids == ['main', 'term-2', 'term-3'], f'new tab allocator reused a restored id: {state_ids}')
+        check(dom_ids == ['main', 'term-2', 'term-3'], f'tab DOM diverged from terminal state: {dom_ids}')
+        check(len(set(dom_ids)) == len(dom_ids), f'tab DOM has duplicate terminal ids: {dom_ids}')
+        check(
+            sum(1 for pane in dom['panes'] if 'active' in pane['className'].split()) == 1,
+            f'terminal panes have inconsistent active state: {dom["panes"]}',
+        )
+
+        page.locator('.terminal-tab[data-terminal-id="term-2"] .tab-close').click()
+        page.wait_for_function(
+            "() => !window.terminalTest.getTerminalTabsState().tabs.some(tab => tab.id === 'term-2')",
+            timeout=5000,
+        )
+        page.click('#new-tab-btn')
+        page.wait_for_function(
+            "() => window.terminalTest.getTerminalTabsState().tabs.some(tab => tab.id === 'term-4')",
+            timeout=5000,
+        )
+        after_reopen = page.evaluate("() => window.terminalTest.getTerminalTabsState()")
+        after_reopen_dom = page.evaluate("() => window.terminalTest.getTerminalDomStateForTest()")
+        reopened_state_ids = [tab['id'] for tab in after_reopen['tabs']]
+        reopened_dom_ids = [tab['id'] for tab in after_reopen_dom['tabDom']]
+        check(reopened_state_ids == ['main', 'term-3', 'term-4'], f'reopened tab reused a closed id: {reopened_state_ids}')
+        check(reopened_dom_ids == ['main', 'term-3', 'term-4'], f'DOM diverged after close/reopen: {reopened_dom_ids}')
+        check(len(set(reopened_dom_ids)) == len(reopened_dom_ids), f'DOM has duplicate ids after close/reopen: {reopened_dom_ids}')
+        check(
+            sum(1 for pane in after_reopen_dom['panes'] if 'active' in pane['className'].split()) == 1,
+            f'terminal panes diverged after close/reopen: {after_reopen_dom["panes"]}',
+        )
+    finally:
+        close_context(context)
+
+
 def test_operator_observation_warning_ui(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
@@ -1162,6 +1234,7 @@ def main():
         test_access_required_page_accepts_token_login,
         test_agent_panel_can_be_dragged,
         test_terminal_pip_hides_selected_tab_and_keeps_background_tab,
+        test_restored_terminal_list_allocates_next_new_tab_id,
         test_operator_observation_warning_ui,
         test_hidden_mirror_ignores_visible_scroll,
         test_privacy_states_block_snapshots_and_agent_runs,
@@ -1179,7 +1252,9 @@ def main():
         test_terminal_payload_text_is_not_control,
     ]
     proc = None
+    browser = None
     try:
+        proc, access_url = start_server()
         with sync_playwright() as playwright:
             try:
                 browser = playwright.chromium.launch(headless=True)
@@ -1189,12 +1264,12 @@ def main():
                     raise RuntimeError(f'Playwright Chromium browser is not installed. {SETUP_HINT}') from exc
                 raise
             try:
-                proc, access_url = start_server()
                 for test in tests:
                     test(browser, access_url)
                     print(f'{test.__name__}: ok')
             finally:
-                browser.close()
+                if browser is not None:
+                    browser.close()
     finally:
         if proc is not None:
             stop_server(proc)
