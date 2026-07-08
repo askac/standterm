@@ -44,6 +44,9 @@ certs/
 handover_*.md
 handover_*_prompt.txt
 
+# Local feedback notes for the dev side
+FEEDBACK_*.md
+
 # Local agent tooling (not published)
 .claude/
 .codex
