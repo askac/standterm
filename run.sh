@@ -58,7 +58,9 @@ echo "========================================"
 print_python_install_help() {
     echo "[!] ERROR: python3 is required but not found."
     echo "    Install with: sudo apt install python3 python3-venv python3-pip   (Debian/Ubuntu/WSL)"
-    echo "                  brew install python3                      (macOS)"
+    echo "                  brew install python3 python-tk            (macOS Homebrew)"
+    echo "                  sudo port install python313 py313-tkinter tk +quartz   (macOS MacPorts)"
+    echo "    macOS note: the access window needs Tk 8.6+; Apple's bundled Python 3.9/Tk 8.5 is too old."
     echo "    Or point the launcher at a manually prepared Python 3.10+ runtime:"
     echo "                  STANDTERM_PYTHON=/path/to/python3 ./run.sh --force"
     echo "    Or manually create the launcher venv, then rerun ./run.sh:"
@@ -295,6 +297,16 @@ if ! source "$VENV_DIR/bin/activate"; then
 fi
 if ! venv_activation_is_current; then
     echo "[!] Virtual environment activation points to a stale or unexpected Python prefix."
+    ensure_bootstrap_python || exit 1
+    echo "[*] Recreating virtual environment automatically..."
+    remove_venv_dir
+    create_venv
+    FORCE_RECHECK=true
+    source "$VENV_DIR/bin/activate" || exit 1
+    venv_activation_is_current || exit 1
+fi
+if ! python_is_usable python; then
+    echo "[!] Virtual environment Python is older than 3.10 (likely created before the version requirement)."
     ensure_bootstrap_python || exit 1
     echo "[*] Recreating virtual environment automatically..."
     remove_venv_dir

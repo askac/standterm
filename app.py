@@ -7992,12 +7992,33 @@ def build_access_window_handoff(access_url, access_token):
         'title': f'{APP_NAME} Access ({get_runtime_name()})',
     }
 
+def access_window_python_supports_tk(command):
+    # Apple's bundled Tk 8.5 opens a window but renders no widgets, so a
+    # too-old Tk is worse than no window at all. The non-WSL launch command
+    # reuses this interpreter, so check tkinter in-process; helper Pythons
+    # (WSL python.exe) ship a modern Tk and are not probed.
+    if not command or command[0] != sys.executable:
+        return True
+    try:
+        import tkinter
+    except Exception:
+        return False
+    try:
+        return float(tkinter.TkVersion) >= 8.6
+    except (TypeError, ValueError):
+        return False
+
 def start_access_window(access_url, access_token):
     if not access_window_enabled():
         return False
     command = get_access_window_python_command()
     if not command:
         print('[!] Access window unavailable: no suitable Python/Tk runtime found.', flush=True)
+        return False
+    if not access_window_python_supports_tk(command):
+        print('[!] Access window skipped: tkinter with Tk 8.6+ is required.', flush=True)
+        print('    macOS: brew install python3 python-tk, or sudo port install python313 py313-tkinter tk +quartz,', flush=True)
+        print('    then delete tools/.venv_* and rerun the launcher. Use the Access URL/Token above meanwhile.', flush=True)
         return False
 
     handoff = build_access_window_handoff(access_url, access_token)

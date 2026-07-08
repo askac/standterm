@@ -452,11 +452,28 @@ def parse_args(argv):
     return args
 
 
+def tk_runtime_supported():
+    # Apple's bundled Tk 8.5 opens a window but renders no widgets on modern
+    # macOS, so refuse to show a broken blank window on anything below 8.6.
+    try:
+        return float(tk.TkVersion) >= 8.6
+    except (TypeError, ValueError):
+        return False
+
+
 def main(argv=None):
     args = parse_args(sys.argv[1:] if argv is None else argv)
+    if not tk_runtime_supported():
+        print(
+            f'StandTerm access window requires Tk 8.6+; found Tk {tk.TkVersion}. '
+            'Use the Access URL/Token from the launcher console instead.',
+            file=sys.stderr,
+        )
+        return 3
     root = build_window(args)
     root.mainloop()
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
