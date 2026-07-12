@@ -489,6 +489,7 @@ class SSHBackendPlugin(TerminalBackendPlugin):
         max_username_length,
         max_password_bytes,
         has_control_chars,
+        is_allowed_for_client,
         allowed_action_types,
         backend_action_store,
         bridge_kwargs,
@@ -506,6 +507,7 @@ class SSHBackendPlugin(TerminalBackendPlugin):
         self._max_username_length = max_username_length
         self._max_password_bytes = max_password_bytes
         self._has_control_chars = has_control_chars
+        self._is_allowed_for_client = is_allowed_for_client
         self._allowed_action_types = allowed_action_types
         self._backend_action_store = backend_action_store
         self._bridge_kwargs = bridge_kwargs
@@ -514,6 +516,18 @@ class SSHBackendPlugin(TerminalBackendPlugin):
         self._key_setup_ttl_seconds = key_setup_ttl_seconds
         self._token_urlsafe = token_urlsafe
         self._time_func = time_func
+
+    def build_policy_option(self, context=None, browser_authorized=False):
+        client_ip = context.client_ip if context else 'unknown'
+        browser_authorized = context.browser_authorized if context else browser_authorized
+        allowed = self._is_allowed_for_client(client_ip, browser_authorized=browser_authorized)
+        return {
+            'connection_type': self.connection_type,
+            'label': self.label,
+            'allowed': allowed,
+            'authorization_available': not allowed,
+            'browser_authorized': bool(browser_authorized),
+        }
 
     def get_settings_schema(self):
         return [
@@ -711,6 +725,12 @@ class SSHBackendPlugin(TerminalBackendPlugin):
         return super().validate_setting_update(setting_key, value, current_value=current_value)
 
     def validate_start_payload(self, data, terminal_id, client_ip, browser_authorized=False, context=None):
+        if not self._is_allowed_for_client(client_ip, browser_authorized=browser_authorized):
+            return None, {
+                'message': 'SSH access requires a local client or browser authorization.',
+                'error_code': 'ssh_remote_unauthorized',
+            }
+
         host = data.get('host', self._get_default_host(context=context))
         if not isinstance(host, str):
             return None, 'Host must be a string.'

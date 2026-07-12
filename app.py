@@ -103,6 +103,11 @@ app.config['SECRET_KEY'] = secrets.token_hex(16)
 ACCESS_TOKEN = secrets.token_urlsafe(16)
 LAUNCHER_SHUTDOWN_TOKEN = secrets.token_urlsafe(32)
 LAUNCHER_INSTANCE_ID = secrets.token_urlsafe(12)
+BROWSER_AUTH_GRANT_TOKEN = None
+BROWSER_AUTH_GRANT_EXPIRES_AT = 0
+BROWSER_AUTH_GRANT_TTL_SECONDS = 120
+BROWSER_AUTH_GRANT_USED = False
+BROWSER_AUTH_GRANT_LOCK = threading.Lock()
 SERVER_STARTED_AT = time.time()
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
@@ -1635,6 +1640,14 @@ def build_pairing_file(browser_id, public_key_b64):
     pairing['signature'] = sign_pairing_payload(pairing)
     return pairing
 
+def write_browser_pairing_file(pairing):
+    if not ensure_authorized_dir():
+        raise OSError(f'Browser authorization directory is unavailable: {AUTHORIZED_DIR}')
+    filename = f"browser-authorize_{pairing['pairing_id']}.json"
+    pairing_path = AUTHORIZED_DIR / filename
+    pairing_path.write_text(json.dumps(pairing, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+    return pairing_path
+
 def validate_pairing_file(data, browser_id, public_key_b64):
     if not isinstance(data, dict):
         return False
@@ -1853,6 +1866,10 @@ TERMINAL_BACKEND_REGISTRY = TerminalBackendRegistry([
         max_username_length=MAX_USERNAME_LENGTH,
         max_password_bytes=MAX_PASSWORD_BYTES,
         has_control_chars=lambda value: has_control_chars(value),
+        is_allowed_for_client=lambda client_ip, browser_authorized=False: is_ssh_allowed_for_client(
+            client_ip,
+            browser_authorized=browser_authorized,
+        ),
         allowed_action_types=ALLOWED_CONNECTION_ACTION_TYPES,
         backend_action_store=pending_backend_actions,
         bridge_kwargs={
@@ -4731,9 +4748,41 @@ def get_session_sids(session_token):
         if sid_session_token == session_token
     ]
 
-def build_terminal_list(session_token):
+def is_terminal_bridge_allowed_for_sid(bridge, sid):
+    client_ip = socket_client_ips.get(sid, 'unknown')
+    browser_authorized = socket_browser_authorized.get(sid, False)
+    if bridge.connection_type == CONNECTION_TYPE_SSH:
+        return is_ssh_allowed_for_client(client_ip, browser_authorized=browser_authorized)
+    if bridge.connection_type == CONNECTION_TYPE_LOCAL_SHELL:
+        return is_local_shell_allowed_for_client(client_ip, browser_authorized=browser_authorized)
+    if bridge.connection_type == CONNECTION_TYPE_UART:
+        return is_uart_allowed_for_client(client_ip, browser_authorized=browser_authorized)
+    return is_local_client_ip(client_ip) or browser_authorized
+
+def emit_terminal_access_denied(sid, terminal_id, connection_type=None):
+    error_code = f'{connection_type}_remote_unauthorized' if connection_type else 'terminal_remote_unauthorized'
+    emit_connection_error(
+        sid,
+        'Terminal access requires a local client or browser authorization.',
+        error_code=error_code,
+        terminal_id=terminal_id,
+    )
+
+def get_allowed_bridge(session_token, terminal_id, sid, *, emit_error=False):
+    bridge = get_bridge(session_token, terminal_id)
+    if not bridge:
+        return None
+    if is_terminal_bridge_allowed_for_sid(bridge, sid):
+        return bridge
+    if emit_error:
+        emit_terminal_access_denied(sid, terminal_id, bridge.connection_type)
+    return None
+
+def build_terminal_list(session_token, sid=None):
     terminals = []
     for terminal_id, bridge in sorted(bridges.get(session_token, {}).items()):
+        if sid is not None and not is_terminal_bridge_allowed_for_sid(bridge, sid):
+            continue
         terminal_info = {
             'terminal_id': terminal_id,
             'connection_type': bridge.connection_type,
@@ -4920,6 +4969,7 @@ def build_index_response():
         'index.html',
         ssh_term=SSH_TERM,
         terminal_policy=build_terminal_policy(),
+        launcher_instance_id=LAUNCHER_INSTANCE_ID,
     ))
 
 def build_session_response():
@@ -5061,6 +5111,28 @@ def launcher_status():
             'message': 'Launcher token was not accepted.',
         }, status_code=403)
     return external_agent_json_response(build_launcher_status_payload())
+
+@app.route('/launcher/browser_authorization_url', methods=['POST'])
+def launcher_browser_authorization_url():
+    if not is_launcher_shutdown_client_allowed():
+        return external_agent_json_response({
+            'status': 'failed',
+            'error_code': 'launcher_authorization_url_local_only',
+            'message': 'Browser authorization URL minting is only available from the local host.',
+        }, status_code=403)
+    if not is_valid_launcher_shutdown_token(get_launcher_token_from_request()):
+        return external_agent_json_response({
+            'status': 'failed',
+            'error_code': 'launcher_authorization_url_unauthorized',
+            'message': 'Launcher token was not accepted.',
+        }, status_code=403)
+    access_url = request.form.get('access_url') or build_current_access_url()
+    return external_agent_json_response({
+        'status': 'ok',
+        'authorization_url': mint_browser_authorization_url(access_url),
+        'expires_at': BROWSER_AUTH_GRANT_EXPIRES_AT,
+        'ttl_seconds': BROWSER_AUTH_GRANT_TTL_SECONDS,
+    })
 
 @app.route('/launcher/shutdown', methods=['POST'])
 def launcher_shutdown():
@@ -5868,6 +5940,83 @@ def on_browser_auth_signature(data):
         )
     emit_terminal_policy(request.sid)
 
+@socketio.on('browser_authorization_grant')
+def on_browser_authorization_grant(data):
+    global BROWSER_AUTH_GRANT_TOKEN, BROWSER_AUTH_GRANT_USED
+    session_token = socket_session_tokens.get(request.sid)
+    identity = socket_browser_identities.get(request.sid)
+    if not session_token:
+        return
+    if not identity:
+        socketio.emit(
+            'browser_authorization_status',
+            {
+                'status': 'failed',
+                'message': 'Browser identity is not registered yet. Refresh the page and try again.',
+                'error_code': 'browser_identity_missing',
+            },
+            room=request.sid,
+        )
+        return
+
+    data = data if isinstance(data, dict) else {}
+    grant_token = data.get('grant_token')
+    pairing_path = None
+    with BROWSER_AUTH_GRANT_LOCK:
+        if BROWSER_AUTH_GRANT_USED:
+            grant_error = 'browser_authorization_grant_used'
+        elif time.time() > BROWSER_AUTH_GRANT_EXPIRES_AT:
+            BROWSER_AUTH_GRANT_TOKEN = None
+            BROWSER_AUTH_GRANT_USED = True
+            grant_error = 'browser_authorization_grant_expired'
+        elif (
+            not isinstance(grant_token, str)
+            or not isinstance(BROWSER_AUTH_GRANT_TOKEN, str)
+            or not secrets.compare_digest(grant_token, BROWSER_AUTH_GRANT_TOKEN)
+        ):
+            grant_error = 'browser_authorization_grant_invalid'
+        else:
+            BROWSER_AUTH_GRANT_TOKEN = None
+            BROWSER_AUTH_GRANT_USED = True
+            grant_error = None
+            try:
+                pairing_path = write_browser_pairing_file(
+                    build_pairing_file(identity['browser_id'], identity['public_key'])
+                )
+                if not accept_browser_pairing_file(identity['browser_id'], identity['public_key']):
+                    grant_error = 'browser_authorization_pairing_not_accepted'
+            except OSError:
+                grant_error = 'browser_authorized_dir_unavailable'
+
+    if grant_error:
+        message = 'Browser authorization link is invalid or expired.'
+        if grant_error == 'browser_authorized_dir_unavailable':
+            message = f'Browser authorization directory is unavailable: {AUTHORIZED_DIR}'
+        elif grant_error == 'browser_authorization_pairing_not_accepted':
+            message = f'Browser authorization file was not accepted: {pairing_path}'
+        socketio.emit(
+            'browser_authorization_status',
+            {
+                'status': 'failed',
+                'message': message,
+                'error_code': grant_error,
+            },
+            room=request.sid,
+        )
+        emit_terminal_policy(request.sid)
+        return
+
+    nonce = secrets.token_urlsafe(32)
+    socket_browser_auth_challenges[request.sid] = nonce
+    socketio.emit(
+        'browser_auth_challenge',
+        {
+            'nonce': nonce,
+            'browser_id': identity['browser_id'],
+        },
+        room=request.sid,
+    )
+
 @socketio.on('request_browser_pairing')
 def on_request_browser_pairing():
     session_token = socket_session_tokens.get(request.sid)
@@ -5996,7 +6145,7 @@ def on_list_terminals():
     socketio.emit(
         'terminal_list',
         {
-            'terminals': build_terminal_list(session_token),
+            'terminals': build_terminal_list(session_token, sid=request.sid),
         },
         room=request.sid,
     )
@@ -6291,7 +6440,7 @@ def on_replay_terminal(data):
     terminal_id = validate_terminal_id_payload(data)
     if not session_token or not terminal_id:
         return
-    bridge = get_bridge(session_token, terminal_id)
+    bridge = get_allowed_bridge(session_token, terminal_id, request.sid, emit_error=True)
     if bridge:
         bridge.attach(request.sid)
         bridge.replay_to(request.sid)
@@ -6302,7 +6451,7 @@ def on_agent_attach(data):
     terminal_id = validate_terminal_id_payload(data)
     if not session_token or not terminal_id:
         return
-    bridge = get_bridge(session_token, terminal_id)
+    bridge = get_allowed_bridge(session_token, terminal_id, request.sid, emit_error=True)
     if not bridge:
         emit_agent_error(request.sid, terminal_id, AGENT_ERROR_TERMINAL_NOT_FOUND)
         return
@@ -6366,7 +6515,7 @@ def on_agent_mode_set(data):
     if not mode:
         emit_agent_error(request.sid, terminal_id, AGENT_ERROR_INVALID_MODE)
         return
-    bridge = get_bridge(session_token, terminal_id)
+    bridge = get_allowed_bridge(session_token, terminal_id, request.sid, emit_error=True)
     if not bridge:
         emit_agent_error(request.sid, terminal_id, AGENT_ERROR_TERMINAL_NOT_FOUND)
         return
@@ -6412,7 +6561,7 @@ def on_agent_pause(data):
     terminal_id = validate_terminal_id_payload(data)
     if not session_token or not terminal_id:
         return
-    if not get_bridge(session_token, terminal_id):
+    if not get_allowed_bridge(session_token, terminal_id, request.sid, emit_error=True):
         emit_agent_error(request.sid, terminal_id, AGENT_ERROR_TERMINAL_NOT_FOUND)
         return
     with agent_lock:
@@ -6442,7 +6591,7 @@ def on_agent_resume(data):
     terminal_id = validate_terminal_id_payload(data)
     if not session_token or not terminal_id:
         return
-    if not get_bridge(session_token, terminal_id):
+    if not get_allowed_bridge(session_token, terminal_id, request.sid, emit_error=True):
         emit_agent_error(request.sid, terminal_id, AGENT_ERROR_TERMINAL_NOT_FOUND)
         return
     target_mode = AGENT_MODE_OBSERVE
@@ -6480,7 +6629,7 @@ def on_agent_privacy_set(data):
     if not privacy_state:
         emit_agent_error(request.sid, terminal_id, AGENT_ERROR_ACTION_INVALID_DATA)
         return
-    if not get_bridge(session_token, terminal_id):
+    if not get_allowed_bridge(session_token, terminal_id, request.sid, emit_error=True):
         emit_agent_error(request.sid, terminal_id, AGENT_ERROR_TERMINAL_NOT_FOUND)
         return
     with agent_lock:
@@ -6551,7 +6700,7 @@ def on_operator_observation_start(data):
             room=request.sid,
         )
         return
-    if not get_bridge(session_token, terminal_id):
+    if not get_allowed_bridge(session_token, terminal_id, request.sid, emit_error=True):
         emit_agent_error(request.sid, terminal_id, AGENT_ERROR_TERMINAL_NOT_FOUND)
         return
     with operator_observation_lock:
@@ -6613,7 +6762,7 @@ def process_agent_terminal_input_proposal(data, proposal_builder,
     terminal_id = validate_terminal_id_payload(data)
     if not session_token or not terminal_id or not isinstance(data, dict):
         return
-    bridge = get_bridge(session_token, terminal_id)
+    bridge = get_allowed_bridge(session_token, terminal_id, request.sid, emit_error=True)
     if not bridge:
         emit_agent_error(request.sid, terminal_id, AGENT_ERROR_TERMINAL_NOT_FOUND)
         return
@@ -7205,7 +7354,7 @@ def on_agent_viewport_snapshot(data):
         socketio.emit(AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT, result_payload, room=request.sid)
         return
 
-    bridge = get_bridge(session_token, terminal_id)
+    bridge = get_allowed_bridge(session_token, terminal_id, request.sid, emit_error=True)
     if not bridge:
         result_payload['error_code'] = AGENT_ERROR_TERMINAL_NOT_FOUND
         socketio.emit(AGENT_EVENT_VIEWPORT_SNAPSHOT_RESULT, result_payload, room=request.sid)
@@ -7260,7 +7409,7 @@ def on_agent_viewport_render_result(data):
     request_id = data.get('request_id') if isinstance(data, dict) else None
     if not session_token or not terminal_id or not isinstance(request_id, str):
         return
-    bridge = get_bridge(session_token, terminal_id)
+    bridge = get_allowed_bridge(session_token, terminal_id, request.sid, emit_error=True)
     if not bridge or request.sid not in bridge.attached_sids:
         agent_viewport_render_request_store.fail(
             session_token,
@@ -7399,6 +7548,21 @@ def on_setup_localhost_key_access(data):
     if not session_token:
         return
     data = data if isinstance(data, dict) else {}
+    client_ip = socket_client_ips.get(request.sid, 'unknown')
+    browser_authorized = socket_browser_authorized.get(request.sid, False)
+    if not is_ssh_allowed_for_client(client_ip, browser_authorized=browser_authorized):
+        socketio.emit(
+            'ssh_output',
+            {
+                'message_type': 'setup_result',
+                'terminal_id': validate_terminal_id_payload(data, default=TERMINAL_ID_MAIN) or TERMINAL_ID_MAIN,
+                'message': 'SSH access requires a local client or browser authorization.',
+                'setup_status': 'failed',
+                'error_code': 'ssh_remote_unauthorized',
+            },
+            room=request.sid,
+        )
+        return
     action_id = data.get('action_id')
     action, pending_error_code = get_pending_backend_action(
         request.sid,
@@ -7435,7 +7599,7 @@ def on_ssh_input(data):
     terminal_id = validate_terminal_id_payload(data)
     if not session_token or not terminal_id:
         return
-    bridge = get_bridge(session_token, terminal_id)
+    bridge = get_allowed_bridge(session_token, terminal_id, request.sid, emit_error=True)
     if not bridge:
         return
     bridge.attach(request.sid)
@@ -7468,7 +7632,7 @@ def on_resize(data):
     terminal_id = validate_terminal_id_payload(data)
     if not session_token or not terminal_id:
         return
-    bridge = get_bridge(session_token, terminal_id)
+    bridge = get_allowed_bridge(session_token, terminal_id, request.sid)
     size = parse_terminal_size(data)
     if bridge and size:
         cols, rows = size
@@ -7481,13 +7645,13 @@ def on_close_terminal(data):
     terminal_id = validate_terminal_id_payload(data)
     if not session_token or not terminal_id:
         return
-    bridge = get_bridge(session_token, terminal_id)
+    bridge = get_allowed_bridge(session_token, terminal_id, request.sid, emit_error=True)
     if bridge:
         bridge.emit_output({
             'message_type': 'ssh_closed',
             'message': 'Terminal session closed.',
         })
-    close_terminal_bridge(session_token, terminal_id)
+        close_terminal_bridge(session_token, terminal_id)
 
 @socketio.on('close_all_terminals')
 def on_close_all_terminals():
@@ -7495,12 +7659,14 @@ def on_close_all_terminals():
     if not session_token:
         return
     session_sids = get_session_sids(session_token)
-    close_all_terminal_bridges(session_token)
+    for terminal_id, bridge in list(bridges.get(session_token, {}).items()):
+        if is_terminal_bridge_allowed_for_sid(bridge, request.sid):
+            close_terminal_bridge(session_token, terminal_id)
     for sid in session_sids:
         socketio.emit(
             'terminal_list',
             {
-                'terminals': [],
+                'terminals': build_terminal_list(session_token, sid=sid),
             },
             room=sid,
         )
@@ -7737,6 +7903,13 @@ def is_local_shell_allowed_for_client(client_ip, browser_authorized=False):
         return True
     return is_local_client_ip(client_ip)
 
+def is_ssh_allowed_for_client(client_ip, browser_authorized=False):
+    if get_prefixed_env('ALLOW_REMOTE_SSH') == '1':
+        return True
+    if browser_authorized:
+        return True
+    return is_local_client_ip(client_ip)
+
 def is_uart_allowed_for_client(client_ip, browser_authorized=False):
     if get_prefixed_env('ALLOW_REMOTE_UART') == '1':
         return True
@@ -7840,7 +8013,7 @@ def read_console_key(stdin=None):
     except Exception:
         return None
 
-def handle_console_copy_shortcut(key, access_url, access_token, copy_func=None):
+def handle_console_copy_shortcut(key, access_url, access_token, authorization_url=None, copy_func=None):
     if not isinstance(key, str) or not key:
         return False
     key = key.lower()
@@ -7850,6 +8023,9 @@ def handle_console_copy_shortcut(key, access_url, access_token, copy_func=None):
     elif key == 'u':
         label = 'Access URL'
         text = access_url
+    elif key == 'a':
+        label = 'Browser Authorization URL'
+        text = authorization_url or mint_browser_authorization_url(access_url)
     else:
         return False
     copy_func = copy_text_to_clipboard if copy_func is None else copy_func
@@ -7864,20 +8040,20 @@ def console_copy_shortcuts_available(stdin=None):
     stdin = sys.stdin if stdin is None else stdin
     return bool(getattr(stdin, 'isatty', lambda: False)() and get_clipboard_command())
 
-def console_copy_shortcut_loop(access_url, access_token, stdin=None):
+def console_copy_shortcut_loop(access_url, access_token, authorization_url=None, stdin=None):
     while True:
         key = read_console_key(stdin=stdin)
         if key is None:
             return
-        handle_console_copy_shortcut(key, access_url, access_token)
+        handle_console_copy_shortcut(key, access_url, access_token, authorization_url=authorization_url)
 
-def start_console_copy_shortcuts(access_url, access_token, stdin=None):
+def start_console_copy_shortcuts(access_url, access_token, authorization_url=None, stdin=None):
     stdin = sys.stdin if stdin is None else stdin
     if not console_copy_shortcuts_available(stdin=stdin):
         return False
     thread = threading.Thread(
         target=console_copy_shortcut_loop,
-        args=(access_url, access_token, stdin),
+        args=(access_url, access_token, authorization_url, stdin),
         daemon=True,
     )
     thread.start()
@@ -7953,6 +8129,31 @@ def get_access_window_python_command():
 def append_access_url_path(url, path):
     return url.split('?', 1)[0].rstrip('/') + path
 
+def append_access_url_query(url, **params):
+    parts = urllib.parse.urlsplit(url)
+    query = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+    query.extend(
+        (key, value)
+        for key, value in params.items()
+        if value is not None and value != ''
+    )
+    return urllib.parse.urlunsplit((
+        parts.scheme,
+        parts.netloc,
+        parts.path,
+        urllib.parse.urlencode(query),
+        parts.fragment,
+    ))
+
+def mint_browser_authorization_url(access_url):
+    global BROWSER_AUTH_GRANT_TOKEN, BROWSER_AUTH_GRANT_EXPIRES_AT, BROWSER_AUTH_GRANT_USED
+    with BROWSER_AUTH_GRANT_LOCK:
+        BROWSER_AUTH_GRANT_TOKEN = secrets.token_urlsafe(32)
+        BROWSER_AUTH_GRANT_EXPIRES_AT = int(time.time() + BROWSER_AUTH_GRANT_TTL_SECONDS)
+        BROWSER_AUTH_GRANT_USED = False
+        grant_token = BROWSER_AUTH_GRANT_TOKEN
+    return append_access_url_query(access_url, authorize=grant_token)
+
 def unique_strings(values):
     result = []
     seen = set()
@@ -7973,10 +8174,15 @@ def build_access_window_handoff(access_url, access_token):
         append_access_url_path(localhost_url, '/launcher/shutdown'),
         append_access_url_path(access_url, '/launcher/shutdown'),
     ])
+    authorization_urls = unique_strings([
+        append_access_url_path(localhost_url, '/launcher/browser_authorization_url'),
+        append_access_url_path(access_url, '/launcher/browser_authorization_url'),
+    ])
     control = {
         'instance_id': LAUNCHER_INSTANCE_ID,
         'status_urls': status_urls,
         'shutdown_urls': shutdown_urls,
+        'authorization_urls': authorization_urls,
         'token': LAUNCHER_SHUTDOWN_TOKEN,
     }
     return {
@@ -7988,6 +8194,8 @@ def build_access_window_handoff(access_url, access_token):
         'status_urls': status_urls,
         'shutdown_url': shutdown_urls[0] if shutdown_urls else '',
         'shutdown_urls': shutdown_urls,
+        'authorization_url_endpoint': authorization_urls[0] if authorization_urls else '',
+        'authorization_url_endpoints': authorization_urls,
         'shutdown_token': LAUNCHER_SHUTDOWN_TOKEN,
         'title': f'{APP_NAME} Access ({get_runtime_name()})',
     }
@@ -8071,6 +8279,9 @@ if __name__ == '__main__':
     if HTTPS_ENABLED and not (CLI_ARGS.certfile and CLI_ARGS.keyfile):
         print(f"HTTPS Local CA: {LOCAL_CA_CERT_PATH}")
         print("Import the HTTPS Local CA into Windows Trusted Root Certification Authorities to trust the WSL IP URL.")
+    if not is_loopback_bind(bind_host) and get_prefixed_env('ALLOW_REMOTE_SSH') != '1':
+        print("[!] SSH requires browser authorization for non-loopback clients.")
+        print(f"[!] Set {get_prefixed_env_name('ALLOW_REMOTE_SSH')}=1 only if remote clients should bypass browser authorization for SSH.")
     if is_local_shell_enabled() and not is_loopback_bind(bind_host) and get_prefixed_env('ALLOW_REMOTE_LOCAL_SHELL') != '1':
         print("[!] WARNING: Local Shell is enabled while listening on a non-loopback address.")
         print("[!] Non-loopback clients must use browser authorization unless explicitly trusted.")
@@ -8086,7 +8297,10 @@ if __name__ == '__main__':
     console_shortcuts_available = console_copy_shortcuts_available()
     url_hint = " (Press u to copy)" if console_shortcuts_available else ""
     token_hint = " (Press t to copy)" if console_shortcuts_available else ""
+    authorization_hint = "Press a to mint and copy." if console_shortcuts_available else "Use the access window to mint one."
     print(f"Access URL: {access_url}{url_hint}")
+    print(f"Session ID: {LAUNCHER_INSTANCE_ID}")
+    print(f"Browser Authorization URL: {authorization_hint}")
     print(f"Access Token: {ACCESS_TOKEN}{token_hint}")
     start_console_copy_shortcuts(access_url, ACCESS_TOKEN)
     start_access_window(access_url, ACCESS_TOKEN)

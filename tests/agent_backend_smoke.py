@@ -2846,12 +2846,23 @@ def test_console_copy_shortcuts_map_token_and_url():
         copy_func=copy_func,
     ) is True
     assert standterm.handle_console_copy_shortcut(
+        'a',
+        'http://127.0.0.1:5000/?token=abc',
+        'abc',
+        authorization_url='http://127.0.0.1:5000/?token=abc&authorize=grant',
+        copy_func=copy_func,
+    ) is True
+    assert standterm.handle_console_copy_shortcut(
         'x',
         'http://127.0.0.1:5000/?token=abc',
         'abc',
         copy_func=copy_func,
     ) is False
-    assert copied == ['abc', 'http://127.0.0.1:5000/?token=abc']
+    assert copied == [
+        'abc',
+        'http://127.0.0.1:5000/?token=abc',
+        'http://127.0.0.1:5000/?token=abc&authorize=grant',
+    ]
 
 
 def test_access_window_missing_gui_helper_is_nonfatal():
@@ -2908,6 +2919,8 @@ def test_access_window_handoff_uses_stdin_not_args_or_env():
     assert kwargs.get('env') is None
     assert 'abc' not in ' '.join(command)
     assert '"token":"abc"' in process.stdin.text
+    assert '"authorization_urls":' in process.stdin.text
+    assert '/launcher/browser_authorization_url' in process.stdin.text
     assert '"control":' in process.stdin.text
     assert '"instance_id":' in process.stdin.text
     assert '"status_url":' in process.stdin.text
@@ -2922,6 +2935,10 @@ def test_access_window_stdin_handoff_loads_status_url():
         access_window.sys.stdin = io.StringIO(json.dumps({
             'url': 'https://example.test/?token=abc',
             'token': 'abc',
+            'authorization_url_endpoints': [
+                'https://127.0.0.1:5000/launcher/browser_authorization_url',
+                'https://172.20.1.2:5000/launcher/browser_authorization_url',
+            ],
             'control': {
                 'instance_id': 'instance-1',
                 'status_urls': [
@@ -2942,6 +2959,10 @@ def test_access_window_stdin_handoff_loads_status_url():
 
     assert args.url == 'https://example.test/?token=abc'
     assert args.token == 'abc'
+    assert args.authorization_urls == [
+        'https://127.0.0.1:5000/launcher/browser_authorization_url',
+        'https://172.20.1.2:5000/launcher/browser_authorization_url',
+    ]
     assert args.instance_id == 'instance-1'
     assert args.status_url == 'https://127.0.0.1:5000/launcher/status'
     assert args.status_urls == [
@@ -2954,6 +2975,10 @@ def test_access_window_stdin_handoff_loads_status_url():
         'https://172.20.1.2:5000/launcher/shutdown',
     ]
     assert args.shutdown_token == 'shutdown-token'
+    assert 'session    instance-1' in access_window.format_launcher_status({
+        'status': 'ok',
+        'instance_id': args.instance_id,
+    }, state={'name': access_window.UI_STATE_CURRENT})
 
 
 def test_access_window_fetch_status_falls_back_and_detects_instance_mismatch():
@@ -3020,6 +3045,69 @@ def test_access_window_copy_token_requires_current_status():
 
     assert root.copied == ''
     assert status.value == 'Access Token is unavailable until StandTerm status is current.'
+
+
+def test_browser_authorization_gate_ui_contract():
+    template = (Path(__file__).resolve().parents[1] / 'templates' / 'index.html').read_text(encoding='utf-8')
+
+    assert 'YOU SHALL NOT PASS!!' in template
+    assert 'First time? Please use an Auth URL.' in template
+    assert 'Session ID: {{ launcher_instance_id }}' in template
+    assert 'id="browser-auth-url-input"' in template
+    assert 'Download authorization file manually' in template
+    assert 'id="browser-auth-help-modal"' in template
+    assert "authorizationUrl.searchParams.get('authorize')" in template
+    assert "connectionForm.style.display = authorizationRequired ? 'none' : 'block';" in template
+    assert 'startBrowserPairingAutoCheck();' in template
+    assert 'id="checkBrowserAuthBtn"' not in template
+
+
+def test_browser_authorization_grant_writes_pairing_file_and_is_one_time():
+    original_authorized_dir = standterm.AUTHORIZED_DIR
+    original_authorized_browsers_path = standterm.AUTHORIZED_BROWSERS_PATH
+    original_grant_token = standterm.BROWSER_AUTH_GRANT_TOKEN
+    original_grant_expires_at = standterm.BROWSER_AUTH_GRANT_EXPIRES_AT
+    original_grant_used = standterm.BROWSER_AUTH_GRANT_USED
+    with tempfile.TemporaryDirectory(prefix='standterm-browser-auth-') as temp_dir:
+        standterm.AUTHORIZED_DIR = Path(temp_dir) / 'authorized'
+        standterm.AUTHORIZED_BROWSERS_PATH = standterm.AUTHORIZED_DIR / 'browsers.json'
+        public_key = standterm.base64.b64encode(b'test-public-key').decode('ascii')
+        browser_id = standterm.build_browser_id(public_key)
+        client = make_client()
+        try:
+            client.emit('register_browser_identity', {
+                'browser_id': browser_id,
+                'public_key': public_key,
+            })
+            authorization_url = standterm.mint_browser_authorization_url('https://example.test/?token=abc')
+            query = standterm.urllib.parse.parse_qs(standterm.urllib.parse.urlsplit(authorization_url).query)
+            grant_token = query['authorize'][0]
+
+            client.emit('browser_authorization_grant', {'grant_token': grant_token})
+            challenge = last_payload(client, 'browser_auth_challenge')
+            assert challenge['browser_id'] == browser_id
+            assert isinstance(challenge['nonce'], str)
+            assert standterm.BROWSER_AUTH_GRANT_TOKEN is None
+            assert standterm.BROWSER_AUTH_GRANT_USED is True
+
+            pairing_files = list(standterm.AUTHORIZED_DIR.glob('browser-authorize_*.json'))
+            assert len(pairing_files) == 1
+            pairing = json.loads(pairing_files[0].read_text(encoding='utf-8'))
+            assert pairing['browser_id'] == browser_id
+            assert pairing['public_key'] == public_key
+            assert standterm.is_browser_authorized(browser_id, public_key) is True
+
+            client.emit('browser_authorization_grant', {'grant_token': grant_token})
+            denied = last_payload(client, 'browser_authorization_status')
+            assert denied['status'] == 'failed'
+            assert denied['error_code'] == 'browser_authorization_grant_used'
+        finally:
+            client.disconnect()
+    standterm.AUTHORIZED_DIR = original_authorized_dir
+    standterm.AUTHORIZED_BROWSERS_PATH = original_authorized_browsers_path
+    standterm.BROWSER_AUTH_GRANT_TOKEN = original_grant_token
+    standterm.BROWSER_AUTH_GRANT_EXPIRES_AT = original_grant_expires_at
+    standterm.BROWSER_AUTH_GRANT_USED = original_grant_used
 
 
 def test_launcher_shutdown_requires_local_token():
@@ -3168,6 +3256,89 @@ def test_wsl_client_ips_require_explicit_trust_for_local_resources():
             standterm.os.environ.pop('STANDTERM_TRUST_WSL_CLIENT_IPS', None)
         else:
             standterm.os.environ['STANDTERM_TRUST_WSL_CLIENT_IPS'] = original_standterm_env
+
+
+def test_remote_ssh_requires_browser_authorization_or_explicit_remote_access():
+    remote_ip = '172.20.0.1'
+    data = {
+        'connection_type': standterm.CONNECTION_TYPE_SSH,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'host': 'example.test',
+        'port': 22,
+        'username': 'operator',
+    }
+    original_standterm_env = standterm.os.environ.get('STANDTERM_ALLOW_REMOTE_SSH')
+    try:
+        standterm.os.environ.pop('STANDTERM_ALLOW_REMOTE_SSH', None)
+        policy = standterm.build_terminal_policy(browser_authorized=False, client_ip=remote_ip)
+        ssh_option = next(
+            option
+            for option in policy['connection_options']
+            if option['connection_type'] == standterm.CONNECTION_TYPE_SSH
+        )
+        assert ssh_option['allowed'] is False
+        assert ssh_option['authorization_available'] is True
+        assert standterm.CONNECTION_TYPE_SSH in policy['browser_authorization']['required_for']
+
+        payload, error = standterm.validate_start_ssh_payload(
+            data,
+            remote_ip,
+            browser_authorized=False,
+        )
+        assert payload is None
+        assert error['error_code'] == 'ssh_remote_unauthorized'
+
+        payload, error = standterm.validate_start_ssh_payload(
+            data,
+            remote_ip,
+            browser_authorized=True,
+        )
+        assert error is None
+        assert payload['connection_type'] == standterm.CONNECTION_TYPE_SSH
+
+        standterm.os.environ['STANDTERM_ALLOW_REMOTE_SSH'] = '1'
+        payload, error = standterm.validate_start_ssh_payload(
+            data,
+            remote_ip,
+            browser_authorized=False,
+        )
+        assert error is None
+        assert payload['host'] == 'example.test'
+    finally:
+        if original_standterm_env is None:
+            standterm.os.environ.pop('STANDTERM_ALLOW_REMOTE_SSH', None)
+        else:
+            standterm.os.environ['STANDTERM_ALLOW_REMOTE_SSH'] = original_standterm_env
+
+
+def test_remote_unauthorized_socket_cannot_attach_existing_ssh_terminal():
+    flask_client = standterm.app.test_client()
+    response = flask_client.get('/?token=' + standterm.ACCESS_TOKEN)
+    assert response.status_code == 200
+    local_client = make_socket_client(flask_client)
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+    bridge.connection_type = standterm.CONNECTION_TYPE_SSH
+    remote_client = make_socket_client(flask_client)
+    remote_sid = current_sid_for_session(session_token)
+    standterm.socket_client_ips[remote_sid] = '172.20.0.1'
+    standterm.socket_browser_authorized[remote_sid] = False
+
+    remote_client.emit('list_terminals')
+    terminal_list = last_payload(remote_client, 'terminal_list')
+    assert terminal_list['terminals'] == []
+
+    remote_client.emit('ssh_input', {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'data': 'whoami\n',
+    })
+    assert bridge.writes == []
+    denied = last_payload(remote_client, 'ssh_output')
+    assert denied['message_type'] == 'connection_error'
+    assert denied['error_code'] == 'ssh_remote_unauthorized'
+
+    remote_client.disconnect()
+    local_client.disconnect()
 
 
 def test_settings_capabilities_are_separate_from_local_resource_access():
@@ -3970,6 +4141,7 @@ def test_ssh_backend_action_contract_uses_public_bridge_method():
         max_username_length=standterm.MAX_USERNAME_LENGTH,
         max_password_bytes=standterm.MAX_PASSWORD_BYTES,
         has_control_chars=standterm.has_control_chars,
+        is_allowed_for_client=lambda _client_ip, browser_authorized=False: True,
         allowed_action_types={'offer_localhost_key_setup'},
         backend_action_store=action_store,
         bridge_kwargs={},
@@ -5066,10 +5238,14 @@ def main():
         test_access_window_fetch_status_falls_back_and_detects_instance_mismatch,
         test_access_window_unauthorized_status_is_stale,
         test_access_window_copy_token_requires_current_status,
+        test_browser_authorization_gate_ui_contract,
+        test_browser_authorization_grant_writes_pairing_file_and_is_one_time,
         test_launcher_shutdown_requires_local_token,
         test_wsl_local_shell_choice_is_structured_and_wsl_only,
         test_terminal_policy_creates_authorized_dir_for_fresh_checkout,
         test_wsl_client_ips_require_explicit_trust_for_local_resources,
+        test_remote_ssh_requires_browser_authorization_or_explicit_remote_access,
+        test_remote_unauthorized_socket_cannot_attach_existing_ssh_terminal,
         test_settings_capabilities_are_separate_from_local_resource_access,
         test_readonly_settings_snapshot_socket_event_is_typed,
         test_backend_settings_schema_is_declared_and_typed,

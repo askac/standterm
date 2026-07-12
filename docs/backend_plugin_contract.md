@@ -21,9 +21,11 @@ per backend:
 
 `connection_type` is a normalized identifier such as `ssh`, `local_shell`, or
 `uart`. `allowed` is the current client-side availability result after local
-access and browser authorization checks. Plugins may expose additional
-connection-specific metadata, but new start form metadata should be declared in
-`start_fields`.
+access and browser authorization checks. SSH, Local Shell, and UART all require
+a local client, browser authorization, or an explicit remote-access override
+when the browser reaches StandTerm over a non-loopback address. Plugins may
+expose additional connection-specific metadata, but new start form metadata
+should be declared in `start_fields`.
 
 ## Start Fields
 
