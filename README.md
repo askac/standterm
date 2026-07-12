@@ -197,26 +197,31 @@ STANDTERM_HOST=127.0.0.1 STANDTERM_PORT=5000 ./run.sh
 ## Browser Authorization And HTTPS
 
 When StandTerm listens on a non-loopback address, HTTPS is enabled by default so
-modern browsers can use WebCrypto for browser authorization. Local Shell and
-UART only bypass browser authorization for true loopback clients by default.
+modern browsers can use WebCrypto for browser authorization. SSH, Local Shell,
+and UART only bypass browser authorization for true loopback clients by default.
 WSL host/NAT client IPs must authorize the browser unless you explicitly trust
-that WSL network with `STANDTERM_TRUST_WSL_CLIENT_IPS=1`.
+that WSL network with `STANDTERM_TRUST_WSL_CLIENT_IPS=1` or explicitly allow the
+specific remote backend.
 
 On WSL, the default bind is `0.0.0.0` so Windows browsers can reach the WSL
 server IP. Use `STANDTERM_HOST=127.0.0.1` when you only need loopback access.
 
-On WSL, the Authorizer panel provides a StandTerm CA download link and pairing
-steps. Import `standterm-local-ca.crt` into Windows Trusted Root Certification
-Authorities to trust the generated WSL IP certificate.
+On WSL, the browser authorization gate provides a StandTerm CA download link in
+its manual authorization help. Import `standterm-local-ca.crt` into Windows
+Trusted Root Certification Authorities to trust the generated WSL IP certificate.
 
 To authorize a browser from the WSL IP URL:
 
-1. Open the HTTPS Access URL printed by `run.sh`.
-2. If the page is not trusted, download the StandTerm CA from the Authorizer panel
-   and import it into Windows Trusted Root Certification Authorities.
-3. Click `Authorize` to download `browser-authorize_*.json`.
-4. Move that file into the repo-local `authorized/` directory.
-5. Click `Check`.
+1. Copy a Browser Authorization URL from the launcher TUI (`a`) or access window.
+   The URL is minted only when copied, is valid for the current `app.py` process,
+   and expires quickly if unused.
+2. Open that URL in the browser you want to authorize.
+3. If the page is not trusted, open the manual authorization help, download the
+   StandTerm CA, and import it into Windows Trusted Root Certification Authorities.
+4. StandTerm writes the matching `browser-authorize_*.json` into `authorized/`
+   and accepts it automatically. If automatic authorization is unavailable, use
+   the authorization gate's manual download fallback. After the file is moved to
+   `authorized/`, the page detects and accepts it automatically.
 
 Accepted browser keys are stored in `authorized/browsers.json`. Delete that file
 or remove an entry to revoke access.
@@ -437,9 +442,10 @@ Common settings:
 | `STANDTERM_HTTPS=1` | Force HTTPS. |
 | `STANDTERM_DISABLE_AUTO_HTTPS=1` | Disable automatic HTTPS for non-loopback binds. |
 | `STANDTERM_CERTS_DIR` | Override local certificate storage. |
+| `STANDTERM_ALLOW_REMOTE_SSH=1` | Acknowledge SSH while listening on a non-loopback address. |
 | `STANDTERM_ALLOW_REMOTE_LOCAL_SHELL=1` | Acknowledge Local Shell while listening on a non-loopback address. |
 | `STANDTERM_ALLOW_REMOTE_UART=1` | Acknowledge UART while listening on a non-loopback address. |
-| `STANDTERM_TRUST_WSL_CLIENT_IPS=1` | Treat WSL host/NAT client IPs as local for Local Shell and UART. Use only on a trusted private WSL network. |
+| `STANDTERM_TRUST_WSL_CLIENT_IPS=1` | Treat WSL host/NAT client IPs as local for SSH, Local Shell, and UART. Use only on a trusted private WSL network. |
 | `STANDTERM_DEBUG_POLICY=1` | Print server-side policy decisions. |
 | `STANDTERM_AGENT_PROVIDER=static_env` | Use the static test Agent provider. |
 | `STANDTERM_AGENT_STATIC_INPUT` | Input text for the static test Agent provider. |

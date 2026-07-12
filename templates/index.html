@@ -154,8 +154,10 @@
         .settings-btn { padding: 7px 18px; border: none; border-radius: 5px; cursor: pointer; font-size: 13px; }
 
         /* Controls */
-        #controls { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 100; background: #222; padding: 30px; border-radius: 8px; color: white; border: 1px solid #444; box-shadow: 0 10px 25px rgba(0,0,0,0.5); width: 320px; }
-        #controls h2 { margin-top: 0; color: #0a84ff; font-size: 1.2rem; }
+        #controls { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 100; background: #222; padding: 30px; border-radius: 8px; color: white; border: 1px solid #444; box-shadow: 0 10px 25px rgba(0,0,0,0.5); width: min(380px, calc(100vw - 24px)); box-sizing: border-box; }
+        .controls-title { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+        #controls .controls-title h2 { margin: 0; color: #0a84ff; font-size: 1.2rem; }
+        #launcher-session-id { color: #777; font: 10px/1.2 Consolas, "Courier New", monospace; text-align: right; overflow-wrap: anywhere; }
         #controls input, #controls select { display: block; width: 100%; margin-bottom: 15px; padding: 10px; background: #333; border: 1px solid #555; color: white; border-radius: 4px; box-sizing: border-box; }
         #controls button { width: 100%; padding: 12px; background: #0a84ff; border: none; color: white; border-radius: 4px; cursor: pointer; font-weight: bold; }
         #controls button:hover { background: #007aff; }
@@ -169,20 +171,42 @@
         #ssh-fields { display: block; }
         #local-shell-fields { display: none; }
         #uart-fields { display: none; }
-        #browser-auth-box { display: none; margin-bottom: 14px; padding: 10px 12px; background: #1f1f1f; border: 1px solid #444; border-radius: 6px; }
-        #browser-auth-header { color: #aaa; font-size: 12px; line-height: 1.4; margin-bottom: 10px; word-break: break-word; }
-        #browser-auth-message { display: inline; }
-        #browser-auth-details-toggle { width: auto !important; padding: 0 !important; margin-left: 4px; background: transparent !important; border: none !important; color: #64a9ff !important; font-size: 12px; font-weight: normal; cursor: pointer; }
-        #browser-auth-details-toggle:hover { color: #9dccff !important; text-decoration: underline; }
-        #browser-auth-details { display: none; margin: 0 0 10px 0; padding-left: 18px; color: #bbb; font-size: 12px; line-height: 1.45; }
-        #browser-auth-details li { margin-bottom: 5px; }
-        #browser-auth-details a { color: #64a9ff; }
-        #browser-auth-actions { display: flex; gap: 10px; }
-        #browser-auth-actions button { width: auto; flex: 1; }
-        #authorizeBrowserBtn { background: #0a84ff !important; }
-        #authorizeBrowserBtn:hover { background: #007aff !important; }
-        #checkBrowserAuthBtn { background: #444 !important; }
-        #checkBrowserAuthBtn:hover { background: #555 !important; }
+        #browser-auth-box { display: none; }
+        #browser-auth-warning { margin-bottom: 8px; color: #ff453a; font-size: 1.35rem; font-weight: 800; text-align: center; }
+        #browser-auth-title { margin-bottom: 6px; color: #fff; font-size: 1rem; font-weight: 700; text-align: center; }
+        #browser-auth-message { min-height: 34px; margin-bottom: 14px; color: #bbb; font-size: 12px; line-height: 1.4; text-align: center; overflow-wrap: anywhere; }
+        #browser-auth-url-form { display: flex; align-items: stretch; gap: 8px; }
+        #browser-auth-url-input { min-width: 0; margin: 0 !important; }
+        #browser-auth-url-submit { width: 48px !important; flex: 0 0 48px; padding: 10px 8px !important; }
+        #browser-auth-url-error { display: none; margin-top: 7px; color: #ff9f0a; font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; }
+        .browser-auth-divider { display: flex; align-items: center; gap: 10px; margin: 16px 0 12px; color: #777; font-size: 11px; }
+        .browser-auth-divider::before, .browser-auth-divider::after { content: ""; height: 1px; flex: 1; background: #444; }
+        #browser-auth-actions { display: flex; align-items: stretch; gap: 8px; }
+        #browser-auth-actions button { margin: 0; }
+        #authorizeBrowserBtn { flex: 1; width: auto !important; background: #444 !important; font-size: 12px; }
+        #authorizeBrowserBtn:hover { background: #555 !important; }
+        #browser-auth-help-btn { width: 42px !important; flex: 0 0 42px; padding: 10px 8px !important; background: #333 !important; font-size: 16px; }
+        #browser-auth-help-btn:hover { background: #555 !important; }
+        #browser-auth-help-modal {
+            display: none; position: fixed; inset: 0; z-index: 4200;
+            align-items: center; justify-content: center; padding: 16px;
+            background: rgba(0,0,0,0.78);
+        }
+        #browser-auth-help-modal.open { display: flex; }
+        .browser-auth-help-box {
+            width: min(460px, calc(100vw - 32px)); overflow: hidden;
+            background: #1c1c1e; border: 1px solid #555; border-radius: 8px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.9); color: #ddd;
+        }
+        .browser-auth-help-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid #3a3a3c; }
+        .browser-auth-help-header h3 { margin: 0; color: #fff; font-size: 1rem; }
+        #browser-auth-help-close { width: 30px; padding: 5px !important; background: #444 !important; border: none; border-radius: 4px; color: #fff; cursor: pointer; }
+        .browser-auth-help-body { padding: 14px 18px 18px; color: #bbb; font-size: 13px; line-height: 1.5; }
+        .browser-auth-help-body ol { margin: 0; padding-left: 20px; }
+        .browser-auth-help-body li { margin-bottom: 8px; }
+        .browser-auth-help-body code { color: #fff; overflow-wrap: anywhere; }
+        #browser-auth-ca-help { display: none; margin: 14px 0 0; padding-top: 12px; border-top: 1px solid #3a3a3c; }
+        #browser-auth-ca-help a { color: #64a9ff; }
         .action-box {
             display: none;
             margin-bottom: 14px;
@@ -655,7 +679,10 @@
     </div>
 
     <div id="controls" style="display: none;">
-        <h2>Web Terminal</h2>
+        <div class="controls-title">
+            <h2>StandTerm</h2>
+            <span id="launcher-session-id">Session ID: {{ launcher_instance_id }}</span>
+        </div>
         <div id="errorBox" class="error-msg"></div>
         <div id="actionBox" class="action-box">
             <div id="actionMessage"></div>
@@ -665,40 +692,63 @@
                 <button id="actionNoBtn" class="action-primary">No</button>
             </div>
         </div>
-        <div class="mode-selector" id="modeSelector">
-            <label data-mode="ssh"><input type="radio" name="connection_type" value="ssh">SSH</label>
-            <label data-mode="local_shell"><input type="radio" name="connection_type" value="local_shell">Local Shell</label>
-            <label data-mode="uart"><input type="radio" name="connection_type" value="uart">UART</label>
-        </div>
-        <div id="ssh-fields">
-            <div style="display: flex; gap: 10px;">
-                <input type="text" id="host" placeholder="Host" value="127.0.0.1" style="flex: 3;">
-                <input type="text" id="port" placeholder="Port" value="22" style="flex: 1;">
-            </div>
-            <input type="text" id="username" placeholder="Username" value="aska">
-            <input type="password" id="password" placeholder="Password (Optional)">
-        </div>
-        <div id="local-shell-fields">
-            <select id="local-shell-kind"></select>
-        </div>
-        <div id="uart-fields">
-            <select id="uart-port-select"></select>
-            <input type="text" id="uart-port" list="uart-port-list" placeholder="COM3 or /dev/ttyUSB0">
-            <datalist id="uart-port-list"></datalist>
-            <select id="uart-baud"></select>
-        </div>
         <div id="browser-auth-box">
-            <div id="browser-auth-header">
-                <span id="browser-auth-message"></span>
-                <button id="browser-auth-details-toggle" type="button">Details...</button>
-            </div>
-            <ol id="browser-auth-details"></ol>
+            <div id="browser-auth-warning">YOU SHALL NOT PASS!!</div>
+            <div id="browser-auth-title">Unauthorized browser</div>
+            <div id="browser-auth-message">First time? Please use an Auth URL.</div>
+            <form id="browser-auth-url-form">
+                <input id="browser-auth-url-input" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="Paste Browser Authorization URL">
+                <button id="browser-auth-url-submit" type="submit">OK</button>
+            </form>
+            <div id="browser-auth-url-error"></div>
+            <div class="browser-auth-divider">or</div>
             <div id="browser-auth-actions">
-                <button id="authorizeBrowserBtn" type="button">Authorize</button>
-                <button id="checkBrowserAuthBtn" type="button">Check</button>
+                <button id="authorizeBrowserBtn" type="button">Download authorization file manually</button>
+                <button id="browser-auth-help-btn" type="button" title="How to use the authorization file" aria-label="How to use the authorization file">&#x2753;</button>
             </div>
         </div>
-        <button id="connectBtn">Connect to SSH</button>
+        <div id="connection-form">
+            <div class="mode-selector" id="modeSelector">
+                <label data-mode="ssh"><input type="radio" name="connection_type" value="ssh">SSH</label>
+                <label data-mode="local_shell"><input type="radio" name="connection_type" value="local_shell">Local Shell</label>
+                <label data-mode="uart"><input type="radio" name="connection_type" value="uart">UART</label>
+            </div>
+            <div id="ssh-fields">
+                <div style="display: flex; gap: 10px;">
+                    <input type="text" id="host" placeholder="Host" value="127.0.0.1" style="flex: 3;">
+                    <input type="text" id="port" placeholder="Port" value="22" style="flex: 1;">
+                </div>
+                <input type="text" id="username" placeholder="Username" value="aska">
+                <input type="password" id="password" placeholder="Password (Optional)">
+            </div>
+            <div id="local-shell-fields">
+                <select id="local-shell-kind"></select>
+            </div>
+            <div id="uart-fields">
+                <select id="uart-port-select"></select>
+                <input type="text" id="uart-port" list="uart-port-list" placeholder="COM3 or /dev/ttyUSB0">
+                <datalist id="uart-port-list"></datalist>
+                <select id="uart-baud"></select>
+            </div>
+            <button id="connectBtn">Connect to SSH</button>
+        </div>
+    </div>
+
+    <div id="browser-auth-help-modal" aria-hidden="true">
+        <div class="browser-auth-help-box" role="dialog" aria-modal="true" aria-labelledby="browser-auth-help-title">
+            <div class="browser-auth-help-header">
+                <h3 id="browser-auth-help-title">Manual browser authorization</h3>
+                <button id="browser-auth-help-close" type="button" aria-label="Close">X</button>
+            </div>
+            <div class="browser-auth-help-body">
+                <ol>
+                    <li>Download the authorization file for this browser.</li>
+                    <li>Move it into <code id="browser-auth-help-dir">authorized/</code> on the StandTerm host.</li>
+                    <li>Keep this page open. StandTerm checks for the file automatically and unlocks the connection options when it is accepted.</li>
+                </ol>
+                <p id="browser-auth-ca-help"><strong>HTTPS still grumpy?</strong> <a id="browser-auth-ca-link" href="#">Download StandTerm CA</a> and import it into the browser host's trusted root certificates.</p>
+            </div>
+        </div>
     </div>
     
     <div id="terminal-tabs">
@@ -1039,6 +1089,9 @@
         const BROWSER_AUTH_KEY = 'identity';
         const BROWSER_KEY_ALGORITHM = { name: 'ECDSA', namedCurve: 'P-256' };
         const BROWSER_SIGN_ALGORITHM = { name: 'ECDSA', hash: { name: 'SHA-256' } };
+        const URL_PARAMS = new URLSearchParams(window.location.search);
+        const BROWSER_AUTH_GRANT = URL_PARAMS.get('authorize') || '';
+        let browserAuthGrantSubmitted = false;
 
         function arrayBufferToBase64(buffer) {
             let binary = '';
@@ -1204,10 +1257,17 @@
             const uartBaudSelect = document.getElementById('uart-baud');
             const browserAuthBox = document.getElementById('browser-auth-box');
             const browserAuthMessage = document.getElementById('browser-auth-message');
-            const browserAuthDetailsToggle = document.getElementById('browser-auth-details-toggle');
-            const browserAuthDetails = document.getElementById('browser-auth-details');
+            const browserAuthUrlForm = document.getElementById('browser-auth-url-form');
+            const browserAuthUrlInput = document.getElementById('browser-auth-url-input');
+            const browserAuthUrlError = document.getElementById('browser-auth-url-error');
             const authorizeBrowserBtn = document.getElementById('authorizeBrowserBtn');
-            const checkBrowserAuthBtn = document.getElementById('checkBrowserAuthBtn');
+            const browserAuthHelpBtn = document.getElementById('browser-auth-help-btn');
+            const browserAuthHelpModal = document.getElementById('browser-auth-help-modal');
+            const browserAuthHelpCloseBtn = document.getElementById('browser-auth-help-close');
+            const browserAuthHelpDir = document.getElementById('browser-auth-help-dir');
+            const browserAuthCaHelp = document.getElementById('browser-auth-ca-help');
+            const browserAuthCaLink = document.getElementById('browser-auth-ca-link');
+            const connectionForm = document.getElementById('connection-form');
             const modeInputs = [...document.querySelectorAll('input[name="connection_type"]')];
             const terminalTermEl = document.getElementById('terminal-term');
             const terminalSizeEl = document.getElementById('terminal-size');
@@ -1294,7 +1354,8 @@
             let browserIdentityPromise = null;
             let browserIdentityRegistered = false;
             let browserPairingResponseTimer = null;
-            let browserAuthDetailsVisible = false;
+            let browserPairingCheckTimer = null;
+            let browserPairingCheckExpiresAt = 0;
             let agentPanelVisible = false;
             let agentPanelTerminalIdOverride = null;
             let agentPanelPosition = null;
@@ -2787,65 +2848,43 @@
             }
 
             function updateBrowserAuthUi(message) {
-                const localShellOption = getConnectionOption('local_shell');
-                const authorizationAvailable = localShellOption && localShellOption.authorization_available;
-                const alreadyAuthorized = localShellOption && localShellOption.browser_authorized;
-                browserAuthBox.style.display = authorizationAvailable && !alreadyAuthorized ? 'block' : 'none';
-                if (authorizationAvailable && !alreadyAuthorized) {
-                    browserAuthMessage.innerText = message || (
-                        localShellOption.allowed
-                            ? 'Authorize this browser for Local Shell access when using the WSL IP URL.'
-                            : 'Authorize this browser to enable Local Shell.'
-                    );
-                    browserAuthDetailsToggle.style.display = '';
-                    renderBrowserAuthDetails();
-                } else {
-                    browserAuthMessage.innerText = '';
-                    browserAuthDetailsToggle.style.display = 'none';
-                    browserAuthDetails.style.display = 'none';
-                    browserAuthDetails.replaceChildren();
-                }
+                const browserAuthorization = terminalPolicy.browser_authorization || {};
+                const requiredFor = Array.isArray(browserAuthorization.required_for)
+                    ? browserAuthorization.required_for
+                    : [];
+                const authorizationAvailable = !!browserAuthorization.available || requiredFor.length > 0;
+                const alreadyAuthorized = !!browserAuthorization.authorized;
+                const authorizationRequired = authorizationAvailable && !alreadyAuthorized;
+                browserAuthBox.style.display = authorizationRequired ? 'block' : 'none';
+                connectionForm.style.display = authorizationRequired ? 'none' : 'block';
+                browserAuthMessage.innerText = authorizationRequired
+                    ? (message || 'First time? Please use an Auth URL.')
+                    : '';
+                browserAuthHelpDir.innerText = terminalPolicy.authorized_dir || 'authorized/';
+                browserAuthCaHelp.style.display = terminalPolicy.ca_download_url ? 'block' : 'none';
+                browserAuthCaLink.href = terminalPolicy.ca_download_url || '#';
+                if (!authorizationRequired) stopBrowserPairingAutoCheck();
             }
 
-            function appendBrowserAuthDetail(text, linkText, linkUrl) {
-                const item = document.createElement('li');
-                if (text) item.appendChild(document.createTextNode(text));
-                if (linkText && linkUrl) {
-                    if (text) item.appendChild(document.createTextNode(' '));
-                    const link = document.createElement('a');
-                    link.href = linkUrl;
-                    link.target = '_blank';
-                    link.rel = 'noopener noreferrer';
-                    link.innerText = linkText;
-                    item.appendChild(link);
-                }
-                browserAuthDetails.appendChild(item);
+            function setBrowserAuthUrlError(message) {
+                browserAuthUrlError.innerText = message || '';
+                browserAuthUrlError.style.display = message ? 'block' : 'none';
             }
 
-            function renderBrowserAuthDetails() {
-                browserAuthDetails.replaceChildren();
-                if (terminalPolicy.https_enabled) {
-                    appendBrowserAuthDetail('Use the HTTPS Access URL when opening StandTerm through the WSL IP.');
-                } else {
-                    appendBrowserAuthDetail('Use a secure browser context. For WSL IP access, restart StandTerm with HTTPS enabled.');
-                }
-                if (terminalPolicy.ca_download_url) {
-                    appendBrowserAuthDetail('If the browser does not trust this page yet, download the local CA certificate:', 'Download StandTerm CA', terminalPolicy.ca_download_url);
-                    appendBrowserAuthDetail('Import standterm-local-ca.crt into Windows Trusted Root Certification Authorities, then reload the HTTPS URL.');
-                }
-                appendBrowserAuthDetail('Click Authorize to download browser-authorize_*.json.');
-                if (terminalPolicy.authorized_dir_ready === false) {
-                    appendBrowserAuthDetail('The server could not create the authorization directory. Check server filesystem permissions before clicking Authorize.');
-                }
-                appendBrowserAuthDetail(`Move the downloaded authorization file into ${terminalPolicy.authorized_dir || 'authorized/'}.`);
-                appendBrowserAuthDetail('Click Check. If the file matches this browser key, Local Shell becomes available.');
-                browserAuthDetails.style.display = browserAuthDetailsVisible ? 'block' : 'none';
-                browserAuthDetailsToggle.innerText = browserAuthDetailsVisible ? 'Hide details' : 'Details...';
+            function openBrowserAuthHelp() {
+                browserAuthHelpModal.classList.add('open');
+                browserAuthHelpModal.setAttribute('aria-hidden', 'false');
+                browserAuthHelpCloseBtn.focus();
+            }
+
+            function closeBrowserAuthHelp() {
+                browserAuthHelpModal.classList.remove('open');
+                browserAuthHelpModal.setAttribute('aria-hidden', 'true');
+                browserAuthHelpBtn.focus();
             }
 
             function setBrowserAuthBusy(isBusy) {
                 authorizeBrowserBtn.disabled = isBusy;
-                checkBrowserAuthBtn.disabled = isBusy;
             }
 
             function applyTerminalPolicy(policy) {
@@ -2973,6 +3012,24 @@
                     });
             }
 
+            function submitBrowserAuthorizationGrantIfPresent() {
+                if (!BROWSER_AUTH_GRANT || browserAuthGrantSubmitted || !socket || !socket.connected) {
+                    return Promise.resolve();
+                }
+                browserAuthGrantSubmitted = true;
+                try {
+                    const cleanUrl = new URL(window.location.href);
+                    cleanUrl.searchParams.delete('token');
+                    cleanUrl.searchParams.delete('authorize');
+                    window.history.replaceState({}, document.title, cleanUrl.toString());
+                } catch (e) {}
+                updateBrowserAuthUi('Authorizing this browser from the launch URL...');
+                socket.emit('browser_authorization_grant', {
+                    grant_token: BROWSER_AUTH_GRANT
+                });
+                return Promise.resolve();
+            }
+
             function downloadTextFile(filename, content) {
                 const blob = new Blob([content], { type: 'application/json' });
                 const url = URL.createObjectURL(blob);
@@ -2989,7 +3046,7 @@
                 if (browserPairingResponseTimer) clearTimeout(browserPairingResponseTimer);
                 browserPairingResponseTimer = setTimeout(() => {
                     setBrowserAuthBusy(false);
-                    updateBrowserAuthUi('No authorization response from server. Restart StandTerm, refresh this page, then try Authorize again.');
+                    updateBrowserAuthUi('No authorization response from server. Refresh this page, then try the manual download again.');
                 }, 5000);
             }
 
@@ -2997,6 +3054,27 @@
                 if (!browserPairingResponseTimer) return;
                 clearTimeout(browserPairingResponseTimer);
                 browserPairingResponseTimer = null;
+            }
+
+            function stopBrowserPairingAutoCheck() {
+                if (browserPairingCheckTimer) clearInterval(browserPairingCheckTimer);
+                browserPairingCheckTimer = null;
+                browserPairingCheckExpiresAt = 0;
+            }
+
+            function startBrowserPairingAutoCheck() {
+                stopBrowserPairingAutoCheck();
+                browserPairingCheckExpiresAt = Date.now() + 120000;
+                const check = () => {
+                    if (Date.now() >= browserPairingCheckExpiresAt) {
+                        stopBrowserPairingAutoCheck();
+                        updateBrowserAuthUi('Still locked. Put the downloaded file in the authorized directory, then download a fresh file to retry.');
+                        return;
+                    }
+                    if (socket && socket.connected) socket.emit('check_browser_pairing');
+                };
+                check();
+                browserPairingCheckTimer = setInterval(check, 2000);
             }
 
             function openExternalUrl(url) {
@@ -3649,6 +3727,7 @@
                 updateDebugHud('socket.connect', 'connected');
                 updatePolicyDebugPanel('socket.connect');
                 registerBrowserIdentity()
+                    .then(() => submitBrowserAuthorizationGrantIfPresent())
                     .catch(err => updateBrowserAuthUi(err.message));
                 socket.emit('list_terminals');
             });
@@ -3696,15 +3775,17 @@
                 setBrowserAuthBusy(false);
                 if (!data || typeof data.filename !== 'string' || typeof data.content !== 'string') return;
                 downloadTextFile(data.filename, data.content);
-                updateBrowserAuthUi(`Move ${data.filename} to ${data.authorized_dir}, then click Check.`);
+                updateBrowserAuthUi(`Downloaded ${data.filename}. Move it to ${data.authorized_dir}; this page will spot it automatically.`);
+                startBrowserPairingAutoCheck();
             });
             socket.on('browser_authorization_status', data => {
                 clearBrowserPairingResponseTimer();
                 setBrowserAuthBusy(false);
                 if (!data || typeof data !== 'object') return;
                 if (data.status === 'authorized') {
+                    stopBrowserPairingAutoCheck();
                     userSelectedConnectionType = null;
-                    browserAuthBox.style.display = 'none';
+                    updateBrowserAuthUi('Welcome aboard. Loading connection options...');
                     updatePolicyDebugPanel('browser_authorized', data);
                     if (socket && socket.connected) socket.emit('refresh_terminal_policy');
                 } else if (data.message) {
@@ -3997,9 +4078,35 @@
                 submitConnection(getConnectionFormData());
             };
             connectBtn.onclick = doConnect;
-            browserAuthDetailsToggle.onclick = () => {
-                browserAuthDetailsVisible = !browserAuthDetailsVisible;
-                renderBrowserAuthDetails();
+            browserAuthUrlForm.onsubmit = event => {
+                event.preventDefault();
+                setBrowserAuthUrlError('');
+                let authorizationUrl;
+                try {
+                    authorizationUrl = new URL(browserAuthUrlInput.value.trim());
+                } catch (e) {
+                    setBrowserAuthUrlError('That does not look like a complete Auth URL.');
+                    browserAuthUrlInput.focus();
+                    return;
+                }
+                if (!['http:', 'https:'].includes(authorizationUrl.protocol)) {
+                    setBrowserAuthUrlError('Auth URLs must use HTTP or HTTPS.');
+                    browserAuthUrlInput.focus();
+                    return;
+                }
+                if (!authorizationUrl.searchParams.get('authorize')) {
+                    setBrowserAuthUrlError('That URL is missing its one-time authorization code.');
+                    browserAuthUrlInput.focus();
+                    return;
+                }
+                browserAuthMessage.innerText = 'Opening the gate...';
+                window.location.assign(authorizationUrl.toString());
+            };
+            browserAuthUrlInput.oninput = () => setBrowserAuthUrlError('');
+            browserAuthHelpBtn.onclick = openBrowserAuthHelp;
+            browserAuthHelpCloseBtn.onclick = closeBrowserAuthHelp;
+            browserAuthHelpModal.onclick = event => {
+                if (event.target === browserAuthHelpModal) closeBrowserAuthHelp();
             };
             authorizeBrowserBtn.onclick = () => {
                 if (!socket || !socket.connected) {
@@ -4013,25 +4120,6 @@
                     .then(() => {
                         updateBrowserAuthUi('Requesting authorization file from server...');
                         socket.emit('request_browser_pairing');
-                        startBrowserPairingResponseTimer();
-                    })
-                    .catch(err => {
-                        setBrowserAuthBusy(false);
-                        updateBrowserAuthUi(err.message);
-                    });
-            };
-            checkBrowserAuthBtn.onclick = () => {
-                if (!socket || !socket.connected) {
-                    updateBrowserAuthUi('Socket is not connected yet. Wait until the Socket status is Connected, then try again.');
-                    return;
-                }
-                clearBrowserPairingResponseTimer();
-                setBrowserAuthBusy(true);
-                updateBrowserAuthUi('Checking authorization file...');
-                const ready = browserIdentityRegistered ? Promise.resolve() : registerBrowserIdentity();
-                ready
-                    .then(() => {
-                        socket.emit('check_browser_pairing');
                         startBrowserPairingResponseTimer();
                     })
                     .catch(err => {

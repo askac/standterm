@@ -180,6 +180,76 @@ def test_access_required_page_accepts_token_login(browser, access_url):
         close_context(context)
 
 
+def test_browser_authorization_gate_hides_connection_controls(browser, access_url):
+    context = browser.new_context(viewport={'width': 390, 'height': 844})
+    page = context.new_page()
+    try:
+        page.goto(debug_url(access_url), wait_until='domcontentloaded')
+        page.wait_for_function('() => !!window.terminalTest', timeout=10000)
+        page.wait_for_function(
+            "() => window.terminalTest.getSocketState().connected === true",
+            timeout=10000,
+        )
+        page.wait_for_selector('#connectBtn:not([disabled])', timeout=10000)
+        page.evaluate(
+            """() => {
+                const policy = window.terminalTest.getTerminalPolicy();
+                policy.browser_authorization = {
+                    available: true,
+                    authorized: false,
+                    required_for: ['ssh', 'local_shell', 'uart']
+                };
+                policy.connection_options.forEach(option => { option.allowed = false; });
+                window.terminalTest.applyTerminalPolicy(policy);
+            }"""
+        )
+        page.wait_for_selector('#browser-auth-box', state='visible', timeout=5000)
+        state = page.evaluate(
+            """() => {
+                const controls = document.getElementById('controls').getBoundingClientRect();
+                const actions = document.getElementById('browser-auth-actions').getBoundingClientRect();
+                return {
+                    title: document.querySelector('#controls h2').innerText,
+                    sessionId: document.getElementById('launcher-session-id').innerText,
+                    warning: document.getElementById('browser-auth-warning').innerText,
+                    message: document.getElementById('browser-auth-message').innerText,
+                    connectionDisplay: getComputedStyle(document.getElementById('connection-form')).display,
+                    sshVisible: document.getElementById('ssh-fields').getClientRects().length > 0,
+                    actionsInsideControls: actions.left >= controls.left && actions.right <= controls.right
+                };
+            }"""
+        )
+        check(state['title'] == 'StandTerm', 'authorization gate does not show the StandTerm product name')
+        check(state['sessionId'].startswith('Session ID: '), 'authorization gate does not show the launcher session ID')
+        check(len(state['sessionId']) > len('Session ID: '), 'authorization gate launcher session ID is empty')
+        check(state['warning'] == 'YOU SHALL NOT PASS!!', 'authorization gate warning is missing')
+        check(state['message'] == 'First time? Please use an Auth URL.', 'authorization gate first-use hint is missing')
+        check(state['connectionDisplay'] == 'none', 'authorization gate left connection controls visible')
+        check(state['sshVisible'] is False, 'authorization gate left SSH fields visible')
+        check(state['actionsInsideControls'] is True, 'authorization gate actions overflow the controls panel')
+
+        page.fill('#browser-auth-url-input', 'https://example.test/?token=abc')
+        page.click('#browser-auth-url-submit')
+        check(
+            'one-time authorization code' in page.locator('#browser-auth-url-error').inner_text(),
+            'authorization gate accepted a URL without an authorization grant',
+        )
+
+        page.click('#browser-auth-help-btn')
+        page.wait_for_selector('#browser-auth-help-modal.open', timeout=5000)
+        check(
+            'checks for the file automatically' in page.locator('.browser-auth-help-body').inner_text(),
+            'manual authorization help does not explain automatic checking',
+        )
+        page.click('#browser-auth-help-close')
+        check(
+            page.locator('#browser-auth-help-modal').get_attribute('aria-hidden') == 'true',
+            'manual authorization help did not close',
+        )
+    finally:
+        close_context(context)
+
+
 def close_context(context):
     try:
         context.close()
@@ -1232,6 +1302,7 @@ def main():
     sync_playwright, PlaywrightError, _ = load_playwright()
     tests = [
         test_access_required_page_accepts_token_login,
+        test_browser_authorization_gate_hides_connection_controls,
         test_agent_panel_can_be_dragged,
         test_terminal_pip_hides_selected_tab_and_keeps_background_tab,
         test_restored_terminal_list_allocates_next_new_tab_id,

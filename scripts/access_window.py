@@ -5,6 +5,7 @@ import ssl
 import sys
 import tkinter as tk
 import urllib.error
+import urllib.parse
 import urllib.request
 import webbrowser
 from tkinter import messagebox, ttk
@@ -60,6 +61,11 @@ def apply_handoff(args, handoff):
     args.instance_id = control.get('instance_id') or handoff.get('instance_id', '')
     args.status_urls = urls_from_value(control.get('status_urls')) or urls_from_value(handoff.get('status_urls'))
     args.shutdown_urls = urls_from_value(control.get('shutdown_urls')) or urls_from_value(handoff.get('shutdown_urls'))
+    args.authorization_urls = (
+        urls_from_value(control.get('authorization_urls'))
+        or urls_from_value(handoff.get('authorization_url_endpoints'))
+        or urls_from_value(handoff.get('authorization_url_endpoint'))
+    )
     args.status_url = args.status_urls[0] if args.status_urls else handoff.get('status_url', '')
     args.shutdown_url = args.shutdown_urls[0] if args.shutdown_urls else handoff.get('shutdown_url', '')
     if not args.status_urls:
@@ -123,6 +129,54 @@ def request_standterm_shutdown_any(urls, token):
             return True, message
         last_message = message
     return False, last_message
+
+def request_browser_authorization_url(url, token, access_url):
+    if not url or not token:
+        return None, 'Browser authorization URL is unavailable.'
+    body = urllib.parse.urlencode({'access_url': access_url}).encode('utf-8')
+    request = urllib.request.Request(
+        url,
+        data=body,
+        method='POST',
+        headers={
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-StandTerm-Launcher-Token': token,
+        },
+    )
+    context = ssl._create_unverified_context() if url.lower().startswith('https://') else None
+    try:
+        with urllib.request.urlopen(request, timeout=5, context=context) as response:
+            data = json.loads(response.read().decode('utf-8', errors='replace'))
+    except urllib.error.HTTPError as exc:
+        return None, f'Browser authorization URL failed: HTTP {exc.code}'
+    except Exception as exc:
+        return None, f'Browser authorization URL failed: {exc}'
+    if not isinstance(data, dict) or data.get('status') != 'ok' or not data.get('authorization_url'):
+        return None, 'Browser authorization URL response was invalid.'
+    return data['authorization_url'], 'Browser authorization URL minted.'
+
+def request_browser_authorization_url_any(urls, token, access_url):
+    last_message = 'Browser authorization URL is unavailable.'
+    for url in urls_from_value(urls):
+        authorization_url, message = request_browser_authorization_url(url, token, access_url)
+        if authorization_url:
+            return authorization_url, message
+        last_message = message
+    return None, last_message
+
+def copy_browser_authorization_url(root, args, status_var, is_current=None):
+    if is_current is not None and not is_current():
+        status_var.set('Browser Authorization URL is unavailable until StandTerm status is current.')
+        return
+    authorization_url, message = request_browser_authorization_url_any(
+        args.authorization_urls,
+        args.shutdown_token,
+        args.url,
+    )
+    if not authorization_url:
+        status_var.set(message)
+        return
+    copy_to_clipboard(root, authorization_url, status_var, 'Browser Authorization URL')
 
 
 def make_launcher_error(kind, message, url='', http_status=None, error_code=''):
@@ -282,6 +336,7 @@ def format_launcher_status(data, error=None, state=None):
         ])
     return '\n'.join([
         f'STANDTERM  {data.get("status", "unknown")}',
+        f'session    {data.get("instance_id", "unknown")}',
         f'runtime    {data.get("runtime", "unknown")}',
         f'uptime     {format_uptime(data.get("uptime_seconds"))}',
         f'sessions   {data.get("sessions", 0)}',
@@ -333,7 +388,7 @@ def build_window(args):
     ttk.Label(outer, text='StandTerm access', font=('', 12, 'bold')).grid(
         row=0,
         column=0,
-        columnspan=3,
+        columnspan=5,
         sticky='w',
         pady=(0, 10),
     )
@@ -341,7 +396,7 @@ def build_window(args):
     ttk.Label(outer, text='Access URL and token are hidden. Use the buttons below.').grid(
         row=1,
         column=0,
-        columnspan=3,
+        columnspan=5,
         sticky='w',
         pady=(0, 10),
     )
@@ -359,10 +414,10 @@ def build_window(args):
         pady=8,
         width=44,
     )
-    status_box.grid(row=2, column=0, columnspan=3, sticky='ew', pady=(0, 10))
+    status_box.grid(row=2, column=0, columnspan=5, sticky='ew', pady=(0, 10))
 
     buttons = ttk.Frame(outer)
-    buttons.grid(row=3, column=0, columnspan=3, sticky='ew', pady=(0, 10))
+    buttons.grid(row=3, column=0, columnspan=5, sticky='ew', pady=(0, 10))
 
     open_button = ttk.Button(
         buttons,
@@ -376,20 +431,26 @@ def build_window(args):
         command=lambda: copy_to_clipboard(root, args.url, status_var, 'Access URL', lambda: access_window_is_current(launcher_state)),
     )
     url_button.grid(row=0, column=1, padx=(0, 8))
+    authorization_button = ttk.Button(
+        buttons,
+        text='Copy Auth URL',
+        command=lambda: copy_browser_authorization_url(root, args, status_var, lambda: access_window_is_current(launcher_state)),
+    )
+    authorization_button.grid(row=0, column=2, padx=(0, 8))
     token_button = ttk.Button(
         buttons,
         text='Copy Token',
         command=lambda: copy_to_clipboard(root, args.token, status_var, 'Access Token', lambda: access_window_is_current(launcher_state)),
     )
-    token_button.grid(row=0, column=2, padx=(0, 8))
-    access_buttons = [open_button, url_button, token_button]
+    token_button.grid(row=0, column=3, padx=(0, 8))
+    access_buttons = [open_button, url_button, authorization_button, token_button]
 
     shutdown_button = ttk.Button(
         buttons,
         text='Shutdown',
         command=lambda: shutdown_standterm(root, args.shutdown_urls, args.shutdown_token, status_var, launcher_state, refresh_buttons),
     )
-    shutdown_button.grid(row=0, column=3, padx=(0, 8))
+    shutdown_button.grid(row=0, column=4, padx=(0, 8))
     if not args.shutdown_urls or not args.shutdown_token:
         shutdown_button.state(['disabled'])
 
@@ -423,6 +484,7 @@ def parse_args(argv):
     parser.add_argument('--from-env', action='store_true')
     parser.add_argument('--url', default='')
     parser.add_argument('--token', default='')
+    parser.add_argument('--authorization-url-endpoint', default='')
     parser.add_argument('--instance-id', default='')
     parser.add_argument('--status-url', default='')
     parser.add_argument('--shutdown-url', default='')
@@ -431,6 +493,7 @@ def parse_args(argv):
     args = parser.parse_args(argv)
     args.status_urls = urls_from_value(args.status_url)
     args.shutdown_urls = urls_from_value(args.shutdown_url)
+    args.authorization_urls = urls_from_value(args.authorization_url_endpoint)
     if args.handoff:
         apply_handoff(args, load_handoff_file(args.handoff))
     if args.stdin:
@@ -438,11 +501,13 @@ def parse_args(argv):
     if args.from_env:
         args.url = os.getenv('STANDTERM_ACCESS_WINDOW_URL', '')
         args.token = os.getenv('STANDTERM_ACCESS_WINDOW_TOKEN', '')
+        args.authorization_url_endpoint = os.getenv('STANDTERM_ACCESS_WINDOW_AUTHORIZATION_URL_ENDPOINT', '')
         args.instance_id = os.getenv('STANDTERM_ACCESS_WINDOW_INSTANCE_ID', '')
         args.status_url = os.getenv('STANDTERM_ACCESS_WINDOW_STATUS_URL', '')
         args.shutdown_url = os.getenv('STANDTERM_ACCESS_WINDOW_SHUTDOWN_URL', '')
         args.status_urls = urls_from_value(args.status_url)
         args.shutdown_urls = urls_from_value(args.shutdown_url)
+        args.authorization_urls = urls_from_value(args.authorization_url_endpoint)
         args.shutdown_token = os.getenv('STANDTERM_ACCESS_WINDOW_SHUTDOWN_TOKEN', '')
         args.title = os.getenv('STANDTERM_ACCESS_WINDOW_TITLE', args.title)
     if not args.url:
