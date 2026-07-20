@@ -3356,6 +3356,44 @@ def test_remote_unauthorized_socket_cannot_attach_existing_ssh_terminal():
     local_client.disconnect()
 
 
+def test_browser_authorization_success_refreshes_visible_terminal_list():
+    original_verify_browser_signature = standterm.verify_browser_signature
+    flask_client = standterm.app.test_client()
+    response = flask_client.get('/?token=' + standterm.ACCESS_TOKEN)
+    assert response.status_code == 200
+    client = make_socket_client(flask_client)
+    session_token = current_session_token()
+    sid = current_sid_for_session(session_token)
+    bridge = add_dummy_bridge(session_token)
+    bridge.connection_type = standterm.CONNECTION_TYPE_SSH
+    standterm.socket_client_ips[sid] = '172.20.0.1'
+    standterm.socket_browser_authorized[sid] = False
+    standterm.socket_browser_identities[sid] = {
+        'browser_id': 'browser-id',
+        'public_key': 'public-key',
+    }
+    standterm.socket_browser_auth_challenges[sid] = 'nonce'
+    standterm.verify_browser_signature = lambda public_key, nonce, signature: True
+    client.get_received()
+    try:
+        client.emit('browser_auth_signature', {'signature': 'signature'})
+        events = client.get_received()
+        authorization_events = [
+            event for event in events
+            if event['name'] == 'browser_authorization_status'
+        ]
+        terminal_list_events = [
+            event for event in events
+            if event['name'] == 'terminal_list'
+        ]
+        assert authorization_events[-1]['args'][0]['status'] == 'authorized'
+        assert terminal_list_events[-1]['args'][0]['terminals'][0]['terminal_id'] == standterm.TERMINAL_ID_MAIN
+        assert standterm.socket_browser_authorized[sid] is True
+    finally:
+        standterm.verify_browser_signature = original_verify_browser_signature
+        client.disconnect()
+
+
 def test_settings_capabilities_are_separate_from_local_resource_access():
     original_is_wsl = standterm.is_wsl
     original_get_wsl_host_addresses = standterm.get_wsl_host_addresses
@@ -5262,6 +5300,7 @@ def main():
         test_wsl_client_ips_require_explicit_trust_for_local_resources,
         test_remote_ssh_requires_browser_authorization_or_explicit_remote_access,
         test_remote_unauthorized_socket_cannot_attach_existing_ssh_terminal,
+        test_browser_authorization_success_refreshes_visible_terminal_list,
         test_settings_capabilities_are_separate_from_local_resource_access,
         test_readonly_settings_snapshot_socket_event_is_typed,
         test_backend_settings_schema_is_declared_and_typed,

@@ -4796,6 +4796,15 @@ def build_terminal_list(session_token, sid=None):
         terminals.append(terminal_info)
     return terminals
 
+def emit_terminal_list(sid, session_token):
+    socketio.emit(
+        'terminal_list',
+        {
+            'terminals': build_terminal_list(session_token, sid=sid),
+        },
+        room=sid,
+    )
+
 def emit_terminal_policy(sid, refresh_serial_ports=False):
     browser_authorized = socket_browser_authorized.get(sid, False)
     client_ip = socket_client_ips.get(sid, 'unknown')
@@ -5926,6 +5935,8 @@ def on_browser_auth_signature(data):
             },
             room=request.sid,
         )
+        emit_terminal_policy(request.sid)
+        emit_terminal_list(request.sid, session_token)
     else:
         socket_browser_authorized[request.sid] = False
         socketio.emit(
@@ -5937,7 +5948,7 @@ def on_browser_auth_signature(data):
             },
             room=request.sid,
         )
-    emit_terminal_policy(request.sid)
+        emit_terminal_policy(request.sid)
 
 @socketio.on('browser_authorization_grant')
 def on_browser_authorization_grant(data):
@@ -6141,13 +6152,7 @@ def on_list_terminals():
     session_token = socket_session_tokens.get(request.sid)
     if not session_token:
         return
-    socketio.emit(
-        'terminal_list',
-        {
-            'terminals': build_terminal_list(session_token, sid=request.sid),
-        },
-        room=request.sid,
-    )
+    emit_terminal_list(request.sid, session_token)
 
 @socketio.on('refresh_terminal_policy')
 def on_refresh_terminal_policy(data=None):
