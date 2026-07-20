@@ -116,7 +116,7 @@
         #paste-review-approve { background: #0a84ff; }
         .settings-box {
             background: #1c1c1e; border: 1px solid #3a3a3c; border-radius: 10px;
-            width: 500px; max-height: 80vh; display: flex; flex-direction: column;
+            width: min(680px, calc(100vw - 24px)); max-height: 80vh; display: flex; flex-direction: column;
             box-shadow: 0 20px 60px rgba(0,0,0,0.9); color: #ddd; font-size: 13px; overflow: hidden;
         }
         .settings-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 20px; border-bottom: 1px solid #3a3a3c; }
@@ -150,6 +150,13 @@
         .settings-secret-actions button { width: auto; margin: 0; padding: 5px 10px; background: #3a3a3c; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
         .settings-secret-actions button:disabled { color: #777; cursor: default; opacity: 0.7; }
         .settings-secret-value { margin-top: 8px; padding: 8px; background: #0d0d0d; border: 1px solid #333; border-radius: 5px; color: #ddd; font: 11px/1.4 Consolas, "Courier New", monospace; overflow-wrap: anywhere; display: none; }
+        .diagnostics-actions { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 10px; }
+        .diagnostics-actions button { padding: 6px 12px; background: #3a3a3c; border: none; border-radius: 4px; color: #fff; cursor: pointer; }
+        #connection-diagnostics-log {
+            width: 100%; height: min(360px, 42vh); box-sizing: border-box; resize: vertical;
+            background: #0d0d0d; border: 1px solid #444; border-radius: 5px; color: #ddd;
+            padding: 10px; font: 11px/1.45 Consolas, "Courier New", monospace; white-space: pre; outline: none;
+        }
         .settings-footer { display: flex; justify-content: space-between; padding: 12px 20px; border-top: 1px solid #3a3a3c; }
         .settings-btn { padding: 7px 18px; border: none; border-radius: 5px; cursor: pointer; font-size: 13px; }
 
@@ -565,6 +572,7 @@
                     <div class="settings-nav-item active" data-tab="general">General</div>
                     <div class="settings-nav-item" data-tab="appearance">Appearance</div>
                     <div class="settings-nav-item" data-tab="server">Server</div>
+                    <div class="settings-nav-item" data-tab="diagnostics">Diagnostics</div>
                 </div>
                 <div class="settings-content">
                     <div class="settings-tab active" id="tab-general">
@@ -652,6 +660,14 @@
                             <legend>Connections</legend>
                             <ul class="settings-list" id="server-settings-connections"></ul>
                         </fieldset>
+                    </div>
+                    <div class="settings-tab" id="tab-diagnostics">
+                        <div class="settings-status" id="connection-diagnostics-status">No connection events.</div>
+                        <div class="diagnostics-actions">
+                            <button type="button" id="connection-diagnostics-clear">Clear</button>
+                            <button type="button" id="connection-diagnostics-copy">Copy Log</button>
+                        </div>
+                        <textarea id="connection-diagnostics-log" readonly spellcheck="false" aria-label="Connection diagnostics log"></textarea>
                     </div>
                 </div>
             </div>
@@ -862,6 +878,7 @@
     <script>
         // --- Official Windows Terminal Color Schemes Replicated ---
         const INITIAL_TERMINAL_POLICY = {{ terminal_policy|tojson }};
+        const LAUNCHER_INSTANCE_ID = {{ launcher_instance_id|tojson }};
         const initialUrl = new URL(window.location.href);
         const pendingAccessToken = typeof window.standtermPendingAccessToken === 'string'
             ? window.standtermPendingAccessToken
@@ -1330,7 +1347,17 @@
             const serverAccessShowBtn = document.getElementById('server-access-show-btn');
             const serverAccessStatus = document.getElementById('server-access-status');
             const serverAccessUrl = document.getElementById('server-access-url');
+            const connectionDiagnosticsStatus = document.getElementById('connection-diagnostics-status');
+            const connectionDiagnosticsLog = document.getElementById('connection-diagnostics-log');
+            const connectionDiagnosticsCopyBtn = document.getElementById('connection-diagnostics-copy');
+            const connectionDiagnosticsClearBtn = document.getElementById('connection-diagnostics-clear');
             const debugEnabled = (new URLSearchParams(window.location.search)).get('debug') === '1';
+            const CONNECTION_DIAGNOSTICS_STORAGE_KEY = 'standterm-connection-diagnostics-v1';
+            const CONNECTION_DIAGNOSTICS_LIMIT = 100;
+            const CONNECTION_DIAGNOSTIC_DETAIL_KEYS = new Set([
+                'attempt', 'error_code', 'message', 'online', 'persisted', 'reason', 'recovered',
+                'socket_id', 'status', 'terminal_count', 'transport', 'visibility'
+            ]);
             const INITIAL_TERMINAL_ID = 'main';
             let activeTerminalId = INITIAL_TERMINAL_ID;
             let nextTerminalIndex = 2;
@@ -1367,6 +1394,7 @@
             let currentSettingsAdminGrant = null;
             let sessionRenewTimer = null;
             let accessUrlRevealTimer = null;
+            let connectionDiagnostics = loadConnectionDiagnostics();
             const accessTokenVault = createVolatileAccessTokenVault(volatileAccessToken);
             volatileAccessToken = '';
 
@@ -2930,6 +2958,103 @@
                 }
             }
 
+            function sanitizeConnectionDiagnosticText(value) {
+                return String(value)
+                    .replace(/[\u0000-\u001f\u007f]/g, '')
+                    .replace(/\b(?:https?|wss?):\/\/\S+/gi, '[url redacted]')
+                    .replace(/([?&](?:token|authorize)=)[^&\s]*/gi, '$1[redacted]')
+                    .slice(0, 160);
+            }
+
+            function normalizeConnectionDiagnosticDetails(details) {
+                if (!details || typeof details !== 'object' || Array.isArray(details)) return {};
+                const normalized = {};
+                Object.entries(details).forEach(([key, value]) => {
+                    if (!CONNECTION_DIAGNOSTIC_DETAIL_KEYS.has(key)) return;
+                    if (typeof value === 'string') normalized[key] = sanitizeConnectionDiagnosticText(value);
+                    else if (typeof value === 'boolean' || Number.isFinite(value)) normalized[key] = value;
+                    else if (value === null) normalized[key] = null;
+                });
+                return normalized;
+            }
+
+            function normalizeConnectionDiagnosticEntry(entry) {
+                if (!entry || typeof entry !== 'object') return null;
+                const event = typeof entry.event === 'string' && /^[a-z0-9_.-]{1,64}$/i.test(entry.event)
+                    ? entry.event
+                    : null;
+                const at = typeof entry.at === 'string' && Number.isFinite(Date.parse(entry.at))
+                    ? new Date(entry.at).toISOString()
+                    : null;
+                if (!event || !at) return null;
+                return {
+                    at,
+                    event,
+                    launcher_session_id: sanitizeConnectionDiagnosticText(entry.launcher_session_id || 'unknown'),
+                    details: normalizeConnectionDiagnosticDetails(entry.details)
+                };
+            }
+
+            function loadConnectionDiagnostics() {
+                try {
+                    const parsed = JSON.parse(sessionStorage.getItem(CONNECTION_DIAGNOSTICS_STORAGE_KEY) || '[]');
+                    if (!Array.isArray(parsed)) return [];
+                    return parsed
+                        .map(normalizeConnectionDiagnosticEntry)
+                        .filter(Boolean)
+                        .slice(-CONNECTION_DIAGNOSTICS_LIMIT);
+                } catch (e) {
+                    return [];
+                }
+            }
+
+            function persistConnectionDiagnostics() {
+                try {
+                    sessionStorage.setItem(CONNECTION_DIAGNOSTICS_STORAGE_KEY, JSON.stringify(connectionDiagnostics));
+                } catch (e) {}
+            }
+
+            function buildConnectionDiagnosticsText() {
+                const header = [
+                    'StandTerm connection diagnostics',
+                    `Launcher Session ID: ${LAUNCHER_INSTANCE_ID}`,
+                    `Browser time zone: ${Intl.DateTimeFormat().resolvedOptions().timeZone || 'unknown'}`,
+                    ''
+                ];
+                const entries = connectionDiagnostics.map(entry => {
+                    const details = Object.keys(entry.details).length ? ` ${JSON.stringify(entry.details)}` : '';
+                    return `[${entry.at}] [session=${entry.launcher_session_id}] ${entry.event}${details}`;
+                });
+                return header.concat(entries).join('\n');
+            }
+
+            function renderConnectionDiagnostics() {
+                if (!connectionDiagnosticsLog || !connectionDiagnosticsStatus) return;
+                connectionDiagnosticsLog.value = buildConnectionDiagnosticsText();
+                const count = connectionDiagnostics.length;
+                connectionDiagnosticsStatus.textContent = count === 1 ? '1 connection event.' : `${count} connection events.`;
+            }
+
+            function recordConnectionDiagnostic(event, details = {}) {
+                const entry = normalizeConnectionDiagnosticEntry({
+                    at: new Date().toISOString(),
+                    event,
+                    launcher_session_id: LAUNCHER_INSTANCE_ID,
+                    details
+                });
+                if (!entry) return;
+                connectionDiagnostics.push(entry);
+                connectionDiagnostics = connectionDiagnostics.slice(-CONNECTION_DIAGNOSTICS_LIMIT);
+                persistConnectionDiagnostics();
+                renderConnectionDiagnostics();
+            }
+
+            function clearConnectionDiagnostics() {
+                connectionDiagnostics = [];
+                persistConnectionDiagnostics();
+                renderConnectionDiagnostics();
+            }
+
             function escapeForDebug(text) {
                 return text
                     .replace(/\\/g, '\\\\')
@@ -3708,6 +3833,9 @@
                     },
                     handleSshOutput(payload) {
                         handleSshOutputPayload(payload);
+                    },
+                    getConnectionDiagnostics() {
+                        return cloneForTest(connectionDiagnostics);
                     }
                 };
             }
@@ -3717,9 +3845,82 @@
             updateActiveTerminalUi();
             requestAnimationFrame(fitAndNotifyResize);
 
+            recordConnectionDiagnostic('diagnostics.ready', {
+                online: navigator.onLine,
+                visibility: document.visibilityState
+            });
+            document.addEventListener('visibilitychange', () => {
+                recordConnectionDiagnostic('page.visibility', {
+                    online: navigator.onLine,
+                    visibility: document.visibilityState
+                });
+            });
+            window.addEventListener('online', () => {
+                recordConnectionDiagnostic('page.online', {
+                    online: navigator.onLine,
+                    visibility: document.visibilityState
+                });
+            });
+            window.addEventListener('offline', () => {
+                recordConnectionDiagnostic('page.offline', {
+                    online: navigator.onLine,
+                    visibility: document.visibilityState
+                });
+            });
+            window.addEventListener('pageshow', event => {
+                recordConnectionDiagnostic('page.show', {
+                    online: navigator.onLine,
+                    persisted: !!event.persisted,
+                    visibility: document.visibilityState
+                });
+            });
+            window.addEventListener('pagehide', event => {
+                recordConnectionDiagnostic('page.hide', {
+                    online: navigator.onLine,
+                    persisted: !!event.persisted,
+                    visibility: document.visibilityState
+                });
+            });
+
             socket = io({ transports: ['polling', 'websocket'], reconnectionAttempts: 5 });
             installBrowserTestHook();
+            socket.io.on('reconnect_attempt', attempt => {
+                recordConnectionDiagnostic('socket.reconnect_attempt', {
+                    attempt,
+                    online: navigator.onLine,
+                    visibility: document.visibilityState
+                });
+            });
+            socket.io.on('reconnect', attempt => {
+                recordConnectionDiagnostic('socket.reconnect', {
+                    attempt,
+                    online: navigator.onLine,
+                    visibility: document.visibilityState
+                });
+            });
+            socket.io.on('reconnect_error', err => {
+                recordConnectionDiagnostic('socket.reconnect_error', {
+                    message: err && err.message ? err.message : 'unknown',
+                    online: navigator.onLine,
+                    visibility: document.visibilityState
+                });
+            });
+            socket.io.on('reconnect_failed', () => {
+                recordConnectionDiagnostic('socket.reconnect_failed', {
+                    online: navigator.onLine,
+                    visibility: document.visibilityState
+                });
+            });
             socket.on('connect', () => {
+                recordConnectionDiagnostic('socket.connect', {
+                    socket_id: socket.id || null,
+                    transport: socket.io && socket.io.engine && socket.io.engine.transport
+                        ? socket.io.engine.transport.name
+                        : null,
+                    recovered: !!socket.recovered,
+                    online: navigator.onLine,
+                    visibility: document.visibilityState
+                });
                 socketStatusEl.innerText = "Connected";
                 socketStatusEl.style.color = "#34c759";
                 hideSessionRecovery();
@@ -3732,6 +3933,12 @@
                 socket.emit('list_terminals');
             });
             socket.on('connect_error', (err) => {
+                recordConnectionDiagnostic('socket.connect_error', {
+                    error_code: err && err.data && err.data.error_code ? err.data.error_code : null,
+                    message: err && err.message ? err.message : 'connect_error',
+                    online: navigator.onLine,
+                    visibility: document.visibilityState
+                });
                 if (isSessionRequiredConnectError(err)) {
                     socketStatusEl.innerText = "Session expired";
                     socketStatusEl.style.color = "#ff453a";
@@ -3757,6 +3964,7 @@
             });
             socket.on('browser_auth_challenge', data => {
                 if (!data || typeof data.nonce !== 'string') return;
+                recordConnectionDiagnostic('browser_auth.challenge');
                 getBrowserIdentity()
                     .then(identity => crypto.subtle.sign(
                         BROWSER_SIGN_ALGORITHM,
@@ -3782,6 +3990,10 @@
                 clearBrowserPairingResponseTimer();
                 setBrowserAuthBusy(false);
                 if (!data || typeof data !== 'object') return;
+                recordConnectionDiagnostic('browser_auth.status', {
+                    status: typeof data.status === 'string' ? data.status : 'unknown',
+                    error_code: typeof data.error_code === 'string' ? data.error_code : null
+                });
                 if (data.status === 'authorized') {
                     stopBrowserPairingAutoCheck();
                     userSelectedConnectionType = null;
@@ -3794,6 +4006,9 @@
                 }
             });
             socket.on('terminal_list', data => {
+                recordConnectionDiagnostic('terminal.list', {
+                    terminal_count: data && Array.isArray(data.terminals) ? data.terminals.length : 0
+                });
                 handleTerminalListPayload(data);
             });
             socket.on('agent_state', data => {
@@ -3818,6 +4033,11 @@
                 applyOperatorObservationState(data);
             });
             socket.on('disconnect', (r) => {
+                recordConnectionDiagnostic('socket.disconnect', {
+                    reason: r || 'unknown',
+                    online: navigator.onLine,
+                    visibility: document.visibilityState
+                });
                 clearBrowserPairingResponseTimer();
                 setBrowserAuthBusy(false);
                 clearSessionRenewTimer();
@@ -5185,6 +5405,7 @@
                 document.getElementById('pref-fontWeight').value = prefs.fontWeight;
                 document.getElementById('pref-cursorStyle').value = prefs.cursorStyle;
                 settingsModal.classList.add('open');
+                renderConnectionDiagnostics();
                 requestServerSettingsSnapshot();
             };
             document.getElementById('settings-option').onclick = openSettings;
@@ -5236,12 +5457,24 @@
                         .finally(() => { serverAccessShowBtn.disabled = false; });
                 };
             }
+            if (connectionDiagnosticsCopyBtn) {
+                connectionDiagnosticsCopyBtn.onclick = () => {
+                    copyToClipboard(buildConnectionDiagnosticsText());
+                    if (connectionDiagnosticsStatus) {
+                        connectionDiagnosticsStatus.textContent = `Copied ${connectionDiagnostics.length} connection events.`;
+                    }
+                };
+            }
+            if (connectionDiagnosticsClearBtn) {
+                connectionDiagnosticsClearBtn.onclick = clearConnectionDiagnostics;
+            }
             document.querySelectorAll('.settings-nav-item').forEach(item => {
                 item.onclick = () => {
                     document.querySelectorAll('.settings-nav-item').forEach(i => i.classList.remove('active'));
                     document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
                     item.classList.add('active'); document.getElementById('tab-' + item.dataset.tab).classList.add('active');
                     if (item.dataset.tab === 'server') requestServerSettingsSnapshot();
+                    if (item.dataset.tab === 'diagnostics') renderConnectionDiagnostics();
                 };
             });
             document.getElementById('settings-save').onclick = () => {

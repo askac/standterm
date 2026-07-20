@@ -1064,6 +1064,71 @@ def test_settings_server_tab_loads_readonly_snapshot(browser, access_url):
         close_context(context)
 
 
+def test_connection_diagnostics_are_session_scoped_and_redacted(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        token = urllib.parse.parse_qs(urllib.parse.urlparse(access_url).query)['token'][0]
+        page.evaluate("() => window.dispatchEvent(new Event('offline'))")
+        page.click('#quick-settings')
+        page.wait_for_selector('#settings-modal.open', timeout=5000)
+        page.click('.settings-nav-item[data-tab="diagnostics"]')
+        state = page.evaluate(
+            """() => ({
+                entries: window.terminalTest.getConnectionDiagnostics(),
+                text: document.getElementById('connection-diagnostics-log').value,
+                status: document.getElementById('connection-diagnostics-status').textContent
+            })"""
+        )
+        events = [entry['event'] for entry in state['entries']]
+        check('diagnostics.ready' in events, 'diagnostics did not record initialization')
+        check('socket.connect' in events, 'diagnostics did not record socket connection')
+        check('terminal.list' in events, 'diagnostics did not record terminal list count')
+        check('page.offline' in events, 'diagnostics did not record browser offline event')
+        check('Launcher Session ID:' in state['text'], 'diagnostics omitted launcher session ID')
+        check(token not in state['text'], 'diagnostics exposed the access token')
+        check('connection events.' in state['status'], 'diagnostics did not show event count')
+
+        page.evaluate(
+            """() => {
+                const key = 'standterm-connection-diagnostics-v1';
+                const entries = JSON.parse(sessionStorage.getItem(key));
+                entries.push({
+                    at: new Date().toISOString(),
+                    event: 'test.injected',
+                    launcher_session_id: 'fake\\nentry',
+                    details: { message: 'https://example.invalid/?token=should-not-leak' }
+                });
+                sessionStorage.setItem(key, JSON.stringify(entries));
+            }"""
+        )
+
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_function('() => !!window.terminalTest', timeout=10000)
+        restored_events = page.evaluate(
+            "() => window.terminalTest.getConnectionDiagnostics().map(entry => entry.event)"
+        )
+        check('page.offline' in restored_events, 'diagnostics did not survive a same-tab reload')
+        restored_text = page.evaluate(
+            "() => document.getElementById('connection-diagnostics-log').value"
+        )
+        check('should-not-leak' not in restored_text, 'diagnostics did not redact a stored token')
+        check('example.invalid' not in restored_text, 'diagnostics did not redact a stored URL')
+
+        page.click('#quick-settings')
+        page.click('.settings-nav-item[data-tab="diagnostics"]')
+        page.click('#connection-diagnostics-clear')
+        cleared = page.evaluate(
+            """() => ({
+                entries: window.terminalTest.getConnectionDiagnostics(),
+                status: document.getElementById('connection-diagnostics-status').textContent
+            })"""
+        )
+        check(cleared['entries'] == [], 'diagnostics clear did not remove stored events')
+        check(cleared['status'] == '0 connection events.', 'diagnostics clear did not update status')
+    finally:
+        close_context(context)
+
+
 def test_settings_access_recovery_fetches_access_url_on_demand(browser, access_url):
     parsed = urllib.parse.urlparse(access_url)
     token = urllib.parse.parse_qs(parsed.query)['token'][0]
@@ -1317,6 +1382,7 @@ def main():
         test_cjk_width_compatibility_defaults_off,
         test_cursor_type_setting_updates_existing_and_new_terminals,
         test_settings_server_tab_loads_readonly_snapshot,
+        test_connection_diagnostics_are_session_scoped_and_redacted,
         test_settings_access_recovery_fetches_access_url_on_demand,
         test_access_url_token_is_remembered_only_for_recovery,
         test_connection_controls_follow_start_fields_without_legacy_payload,

@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from .base import BackendSettingSchema, BackendStartFieldSchema, TerminalBackendPlugin, TerminalBridge
+from runtime_logging import log_message
 
 try:
     from ptyprocess import PtyProcess
@@ -69,10 +70,10 @@ class LocalShellBridge(TerminalBridge):
                 env=env,
                 dimensions=(rows, cols),
             )
-            print(f"[+] Local shell started for {self.sid}: {self.shell}")
+            log_message(f"[+] Local shell started for {self.sid}: {self.shell}")
             return True, None
         except Exception as exc:
-            print(f"[!] Local shell start error: {exc}")
+            log_message(f"[!] Local shell start error: {exc}")
             return False, {'message': str(exc), 'error_code': 'local_shell_start_failed'}
 
     def _connect_windows(self, cols, rows):
@@ -88,10 +89,10 @@ class LocalShellBridge(TerminalBridge):
             cwd = str(Path.home())
             self.process = self._spawn_windows_process(cols, rows, cwd, env)
             self.resize(cols, rows)
-            print(f"[+] Windows local shell started for {self.sid}: {self.shell}")
+            log_message(f"[+] Windows local shell started for {self.sid}: {self.shell}")
             return True, None
         except Exception as exc:
-            print(f"[!] Windows local shell start error: {exc}")
+            log_message(f"[!] Windows local shell start error: {exc}")
             return False, {'message': str(exc), 'error_code': 'local_shell_start_failed'}
 
     def _spawn_windows_process(self, cols, rows, cwd, env):
@@ -110,7 +111,7 @@ class LocalShellBridge(TerminalBridge):
         raise last_error
 
     def read_loop(self):
-        print(f"[*] Starting local shell read loop for {self.sid}")
+        log_message(f"[*] Starting local shell read loop for {self.sid}")
         while True:
             self.runtime.sleep(0.01)
             if not self.process:
@@ -154,7 +155,7 @@ class LocalShellBridge(TerminalBridge):
             except Exception as exc:
                 if self.closing:
                     break
-                print(f"[!] Local shell read error: {exc}")
+                log_message(f"[!] Local shell read error: {exc}")
                 self.emit_output({
                     'message_type': 'ssh_closed',
                     'message': 'Local shell closed due to a read error.',
@@ -162,7 +163,7 @@ class LocalShellBridge(TerminalBridge):
                 })
                 break
 
-        print(f"[*] Local shell read loop terminated for {self.sid}")
+        log_message(f"[*] Local shell read loop terminated for {self.sid}")
         self.runtime.unregister_bridge(self.owner_session, self.terminal_id, self)
 
     def _read_windows_once(self):
@@ -191,7 +192,7 @@ class LocalShellBridge(TerminalBridge):
         except Exception as exc:
             if self.closing:
                 return False
-            print(f"[!] Windows local shell read error: {exc}")
+            log_message(f"[!] Windows local shell read error: {exc}")
             self.emit_output({
                 'message_type': 'ssh_closed',
                 'message': 'Local shell closed due to a read error.',
@@ -206,7 +207,7 @@ class LocalShellBridge(TerminalBridge):
                     data = data.encode('utf-8')
                 self.process.write(data)
             except Exception as exc:
-                print(f"[!] Local shell write error: {exc}")
+                log_message(f"[!] Local shell write error: {exc}")
 
     def resize(self, cols, rows):
         if self.process:
@@ -221,7 +222,7 @@ class LocalShellBridge(TerminalBridge):
                 else:
                     self.process.setwinsize(rows, cols)
             except Exception as exc:
-                print(f"[!] Local shell resize error: {exc}")
+                log_message(f"[!] Local shell resize error: {exc}")
 
     def close(self):
         if not self.process:

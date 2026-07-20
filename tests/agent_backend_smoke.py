@@ -4,6 +4,7 @@ import threading
 import time
 import json
 import io
+import re
 import stat
 from pathlib import Path
 
@@ -117,6 +118,20 @@ def make_socket_client(flask_client):
     socket_client = standterm.socketio.test_client(standterm.app, flask_test_client=flask_client)
     assert socket_client.is_connected()
     return socket_client
+
+
+def test_runtime_messages_include_local_iso_timestamp():
+    output = io.StringIO()
+    standterm.log_message('[*] first line\n[-] second line', file=output)
+    lines = output.getvalue().splitlines()
+    check_pattern = re.compile(
+        r'^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}\] '
+    )
+    assert len(lines) == 2
+    assert check_pattern.match(lines[0]), lines[0]
+    assert check_pattern.match(lines[1]), lines[1]
+    assert lines[0].endswith('[*] first line')
+    assert lines[1].endswith('[-] second line')
 
 
 def flask_session_cookie_value(flask_client):
@@ -5177,6 +5192,7 @@ def test_viewport_snapshot_context_clears_on_terminal_close_and_disconnect():
 
 def main():
     tests = [
+        test_runtime_messages_include_local_iso_timestamp,
         test_access_required_page_accepts_login_token,
         test_access_required_page_rejects_invalid_login_token,
         test_session_renew_extends_existing_cookie_session,
