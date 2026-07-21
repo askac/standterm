@@ -3,6 +3,7 @@ import select
 import subprocess
 
 from .base import BackendSettingSchema, BackendStartFieldSchema, TerminalBackendPlugin, TerminalBridge
+from runtime_logging import log_message
 
 
 class UARTBridge(TerminalBridge):
@@ -54,16 +55,16 @@ class UARTBridge(TerminalBridge):
                 timeout=0,
                 write_timeout=1,
             )
-            print(f"[+] UART opened for {self.sid}: {self.device} @ {self.baud_rate}")
+            log_message(f"[+] UART opened for {self.sid}: {self.device} @ {self.baud_rate}")
             return True, None
         except serial_lib.SerialException as exc:
-            print(f"[!] UART open error: {exc}")
+            log_message(f"[!] UART open error: {exc}")
             return False, {'message': str(exc), 'error_code': 'uart_open_failed'}
         except PermissionError as exc:
-            print(f"[!] UART permission error: {exc}")
+            log_message(f"[!] UART permission error: {exc}")
             return False, {'message': str(exc), 'error_code': 'uart_permission_denied'}
         except Exception as exc:
-            print(f"[!] UART start error: {exc}")
+            log_message(f"[!] UART start error: {exc}")
             return False, {'message': str(exc), 'error_code': 'uart_open_failed'}
 
     def _connect_wsl_windows_com(self):
@@ -90,12 +91,12 @@ class UARTBridge(TerminalBridge):
                 bufsize=0,
             )
         except Exception as exc:
-            print(f"[!] Windows UART helper start error: {exc}")
+            log_message(f"[!] Windows UART helper start error: {exc}")
             return False, {'message': str(exc), 'error_code': 'uart_helper_start_failed'}
 
         status = self._read_helper_status(timeout_seconds=5)
         if status.get('event') == 'ready':
-            print(f"[+] Windows UART helper opened for {self.sid}: {self.device} @ {self.baud_rate}")
+            log_message(f"[+] Windows UART helper opened for {self.sid}: {self.device} @ {self.baud_rate}")
             return True, None
 
         message = status.get('message') or 'Windows UART helper did not become ready.'
@@ -131,7 +132,7 @@ class UARTBridge(TerminalBridge):
         return {'event': 'error', 'message': 'Timed out while opening Windows UART port.'}
 
     def read_loop(self):
-        print(f"[*] Starting UART read loop for {self.sid}")
+        log_message(f"[*] Starting UART read loop for {self.sid}")
         while True:
             self.runtime.sleep(0.01)
             if not self.serial:
@@ -158,7 +159,7 @@ class UARTBridge(TerminalBridge):
             except Exception as exc:
                 if self.closing:
                     break
-                print(f"[!] UART read error: {exc}")
+                log_message(f"[!] UART read error: {exc}")
                 self.emit_output({
                     'message_type': 'ssh_closed',
                     'message': 'UART connection closed due to a read error.',
@@ -166,7 +167,7 @@ class UARTBridge(TerminalBridge):
                 })
                 break
 
-        print(f"[*] UART read loop terminated for {self.sid}")
+        log_message(f"[*] UART read loop terminated for {self.sid}")
         self.runtime.unregister_bridge(self.owner_session, self.terminal_id, self)
 
     def _read_windows_helper_once(self):
@@ -189,7 +190,7 @@ class UARTBridge(TerminalBridge):
             else:
                 self.serial.write(encoded)
         except Exception as exc:
-            print(f"[!] UART write error: {exc}")
+            log_message(f"[!] UART write error: {exc}")
 
     def resize(self, cols, rows):
         return

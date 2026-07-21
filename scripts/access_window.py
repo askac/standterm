@@ -23,6 +23,9 @@ ERROR_UNREACHABLE = 'unreachable'
 ERROR_INSTANCE_MISMATCH = 'instance_mismatch'
 ERROR_HTTP = 'http'
 
+LAUNCHER_POLL_INTERVAL_MS = 2000
+LAUNCHER_OFFLINE_POLL_LIMIT = 5
+
 
 def load_handoff_file(path):
     if not path:
@@ -225,6 +228,19 @@ def launcher_poll_state(error):
     return UI_STATE_OFFLINE
 
 
+def update_launcher_poll_lifecycle(state, error):
+    state_name = launcher_poll_state(error)
+    state['name'] = state_name
+    if state_name == UI_STATE_CURRENT:
+        state['offline_polls'] = 0
+        return False
+    if state_name == UI_STATE_STALE:
+        state['offline_polls'] = 0
+        return True
+    state['offline_polls'] = state.get('offline_polls', 0) + 1
+    return state['offline_polls'] >= LAUNCHER_OFFLINE_POLL_LIMIT
+
+
 def shutdown_standterm(root, urls, token, status_var, state=None, refresh_buttons=None):
     if state is not None and not access_window_can_shutdown(state):
         status_var.set(f'Shutdown is unavailable while StandTerm is {access_window_state_name(state)}.')
@@ -366,20 +382,33 @@ def poll_launcher_status(root, args, status_text_var, launcher_state, access_but
     if access_window_state_name(launcher_state) == UI_STATE_SHUTTING_DOWN:
         return
     data, error = fetch_launcher_json_any(args.status_urls, args.shutdown_token, args.instance_id)
-    launcher_state['name'] = launcher_poll_state(error)
+    should_close = update_launcher_poll_lifecycle(launcher_state, error)
     status_text_var.set(format_launcher_status(data or {}, error=error, state=launcher_state))
     update_button_states(args, launcher_state, access_buttons, shutdown_button)
-    root.after(2000, lambda: poll_launcher_status(root, args, status_text_var, launcher_state, access_buttons, shutdown_button))
+    if should_close:
+        root.destroy()
+        return
+    root.after(
+        LAUNCHER_POLL_INTERVAL_MS,
+        lambda: poll_launcher_status(root, args, status_text_var, launcher_state, access_buttons, shutdown_button),
+    )
+
+
+def bind_window_close(root):
+    root.protocol('WM_DELETE_WINDOW', root.destroy)
 
 
 def build_window(args):
     root = tk.Tk()
     root.title(args.title)
     root.resizable(False, False)
-    root.protocol('WM_DELETE_WINDOW', root.iconify)
+    bind_window_close(root)
 
     status_var = tk.StringVar(value='Ready.')
-    launcher_state = {'name': UI_STATE_STARTING if args.status_urls and args.shutdown_token else UI_STATE_CURRENT}
+    launcher_state = {
+        'name': UI_STATE_STARTING if args.status_urls and args.shutdown_token else UI_STATE_CURRENT,
+        'offline_polls': 0,
+    }
 
     outer = ttk.Frame(root, padding=14)
     outer.grid(row=0, column=0, sticky='nsew')

@@ -4,6 +4,7 @@ import threading
 import time
 import json
 import io
+import re
 import stat
 from pathlib import Path
 
@@ -117,6 +118,20 @@ def make_socket_client(flask_client):
     socket_client = standterm.socketio.test_client(standterm.app, flask_test_client=flask_client)
     assert socket_client.is_connected()
     return socket_client
+
+
+def test_runtime_messages_include_local_iso_timestamp():
+    output = io.StringIO()
+    standterm.log_message('[*] first line\n[-] second line', file=output)
+    lines = output.getvalue().splitlines()
+    check_pattern = re.compile(
+        r'^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}\] '
+    )
+    assert len(lines) == 2
+    assert check_pattern.match(lines[0]), lines[0]
+    assert check_pattern.match(lines[1]), lines[1]
+    assert lines[0].endswith('[*] first line')
+    assert lines[1].endswith('[-] second line')
 
 
 def flask_session_cookie_value(flask_client):
@@ -2897,6 +2912,19 @@ def test_access_window_handoff_uses_stdin_not_args_or_env():
     class FakeProcess:
         def __init__(self):
             self.stdin = FakeStdin()
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
 
     def fake_popen(command, **kwargs):
         process = FakeProcess()
@@ -2912,6 +2940,7 @@ def test_access_window_handoff_uses_stdin_not_args_or_env():
         standterm.access_window_enabled = original_access_window_enabled
         standterm.get_access_window_python_command = original_get_access_window_python_command
         standterm.subprocess.Popen = original_popen
+        standterm.cleanup_access_window()
 
     assert len(calls) == 1
     command, kwargs, process = calls[0]
@@ -2927,6 +2956,84 @@ def test_access_window_handoff_uses_stdin_not_args_or_env():
     assert '"status_urls":' in process.stdin.text
     assert '"shutdown_token":' in process.stdin.text
     assert process.stdin.closed is True
+
+
+def test_access_window_close_protocol_destroys_window():
+    class FakeRoot:
+        def __init__(self):
+            self.protocols = {}
+            self.destroyed = False
+
+        def protocol(self, name, callback):
+            self.protocols[name] = callback
+
+        def destroy(self):
+            self.destroyed = True
+
+    root = FakeRoot()
+    access_window.bind_window_close(root)
+    root.protocols['WM_DELETE_WINDOW']()
+
+    assert root.destroyed is True
+
+
+def test_access_window_launcher_cleanup_is_owned_and_idempotent():
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.terminate_calls = 0
+            self.kill_calls = 0
+            self.wait_calls = 0
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.terminate_calls += 1
+
+        def wait(self, timeout=None):
+            self.wait_calls += 1
+            if self.returncode is None and self.wait_calls == 1:
+                raise standterm.subprocess.TimeoutExpired('access-window', timeout)
+            return self.returncode
+
+        def kill(self):
+            self.kill_calls += 1
+            self.returncode = -9
+
+    process = FakeProcess()
+    with standterm.access_window_process_lock:
+        standterm.access_window_process = process
+
+    assert standterm.cleanup_access_window() is True
+    assert standterm.cleanup_access_window() is False
+    assert process.terminate_calls == 1
+    assert process.kill_calls == 1
+    assert process.wait_calls == 2
+
+
+def test_access_window_launcher_poll_lifecycle_tolerates_transient_offline_state():
+    offline_error = access_window.make_launcher_error(
+        access_window.ERROR_UNREACHABLE,
+        'connection refused',
+    )
+    stale_error = access_window.make_launcher_error(
+        access_window.ERROR_INSTANCE_MISMATCH,
+        'instance mismatch',
+    )
+    state = {'name': access_window.UI_STATE_CURRENT, 'offline_polls': 0}
+
+    for _ in range(access_window.LAUNCHER_OFFLINE_POLL_LIMIT - 1):
+        assert access_window.update_launcher_poll_lifecycle(state, offline_error) is False
+    assert state['name'] == access_window.UI_STATE_OFFLINE
+    assert access_window.update_launcher_poll_lifecycle(state, None) is False
+    assert state == {'name': access_window.UI_STATE_CURRENT, 'offline_polls': 0}
+    assert access_window.update_launcher_poll_lifecycle(state, stale_error) is True
+
+    state = {'name': access_window.UI_STATE_CURRENT, 'offline_polls': 0}
+    for _ in range(access_window.LAUNCHER_OFFLINE_POLL_LIMIT - 1):
+        assert access_window.update_launcher_poll_lifecycle(state, offline_error) is False
+    assert access_window.update_launcher_poll_lifecycle(state, offline_error) is True
 
 
 def test_access_window_stdin_handoff_loads_status_url():
@@ -3339,6 +3446,44 @@ def test_remote_unauthorized_socket_cannot_attach_existing_ssh_terminal():
 
     remote_client.disconnect()
     local_client.disconnect()
+
+
+def test_browser_authorization_success_refreshes_visible_terminal_list():
+    original_verify_browser_signature = standterm.verify_browser_signature
+    flask_client = standterm.app.test_client()
+    response = flask_client.get('/?token=' + standterm.ACCESS_TOKEN)
+    assert response.status_code == 200
+    client = make_socket_client(flask_client)
+    session_token = current_session_token()
+    sid = current_sid_for_session(session_token)
+    bridge = add_dummy_bridge(session_token)
+    bridge.connection_type = standterm.CONNECTION_TYPE_SSH
+    standterm.socket_client_ips[sid] = '172.20.0.1'
+    standterm.socket_browser_authorized[sid] = False
+    standterm.socket_browser_identities[sid] = {
+        'browser_id': 'browser-id',
+        'public_key': 'public-key',
+    }
+    standterm.socket_browser_auth_challenges[sid] = 'nonce'
+    standterm.verify_browser_signature = lambda public_key, nonce, signature: True
+    client.get_received()
+    try:
+        client.emit('browser_auth_signature', {'signature': 'signature'})
+        events = client.get_received()
+        authorization_events = [
+            event for event in events
+            if event['name'] == 'browser_authorization_status'
+        ]
+        terminal_list_events = [
+            event for event in events
+            if event['name'] == 'terminal_list'
+        ]
+        assert authorization_events[-1]['args'][0]['status'] == 'authorized'
+        assert terminal_list_events[-1]['args'][0]['terminals'][0]['terminal_id'] == standterm.TERMINAL_ID_MAIN
+        assert standterm.socket_browser_authorized[sid] is True
+    finally:
+        standterm.verify_browser_signature = original_verify_browser_signature
+        client.disconnect()
 
 
 def test_settings_capabilities_are_separate_from_local_resource_access():
@@ -5177,6 +5322,7 @@ def test_viewport_snapshot_context_clears_on_terminal_close_and_disconnect():
 
 def main():
     tests = [
+        test_runtime_messages_include_local_iso_timestamp,
         test_access_required_page_accepts_login_token,
         test_access_required_page_rejects_invalid_login_token,
         test_session_renew_extends_existing_cookie_session,
@@ -5234,6 +5380,9 @@ def main():
         test_console_copy_shortcuts_map_token_and_url,
         test_access_window_missing_gui_helper_is_nonfatal,
         test_access_window_handoff_uses_stdin_not_args_or_env,
+        test_access_window_close_protocol_destroys_window,
+        test_access_window_launcher_cleanup_is_owned_and_idempotent,
+        test_access_window_launcher_poll_lifecycle_tolerates_transient_offline_state,
         test_access_window_stdin_handoff_loads_status_url,
         test_access_window_fetch_status_falls_back_and_detects_instance_mismatch,
         test_access_window_unauthorized_status_is_stale,
@@ -5246,6 +5395,7 @@ def main():
         test_wsl_client_ips_require_explicit_trust_for_local_resources,
         test_remote_ssh_requires_browser_authorization_or_explicit_remote_access,
         test_remote_unauthorized_socket_cannot_attach_existing_ssh_terminal,
+        test_browser_authorization_success_refreshes_visible_terminal_list,
         test_settings_capabilities_are_separate_from_local_resource_access,
         test_readonly_settings_snapshot_socket_event_is_typed,
         test_backend_settings_schema_is_declared_and_typed,

@@ -69,6 +69,7 @@ from terminal_backends import (
     UARTBackendPlugin,
     UARTBridge,
 )
+from runtime_logging import log_message
 
 paramiko = None
 serial_module = None
@@ -95,7 +96,7 @@ if ASYNC_MODE == 'eventlet':
         import eventlet
         eventlet.monkey_patch()
     except Exception as exc:
-        print(f"[!] Eventlet unavailable ({exc}); falling back to threading.", file=sys.stderr)
+        log_message(f"[!] Eventlet unavailable ({exc}); falling back to threading.", file=sys.stderr)
         ASYNC_MODE = 'threading'
 
 app = Flask(__name__, static_url_path='/static', static_folder='static')
@@ -113,6 +114,8 @@ logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
 # Default to threading for consistent cross-platform behavior.
 socketio = SocketIO(app, async_mode=ASYNC_MODE, logger=False, engineio_logger=False)
+access_window_process = None
+access_window_process_lock = threading.Lock()
 
 # SSH Configuration
 SSH_HOST = '127.0.0.1'
@@ -132,10 +135,10 @@ def parse_optional_seconds_env(name, default=None):
     try:
         seconds = int(raw_value)
     except ValueError:
-        print(f"[!] Ignoring invalid {env_name}={raw_value!r}; expected seconds or 'session'.", file=sys.stderr)
+        log_message(f"[!] Ignoring invalid {env_name}={raw_value!r}; expected seconds or 'session'.", file=sys.stderr)
         return default
     if seconds < 0:
-        print(f"[!] Ignoring invalid {env_name}={raw_value!r}; expected a non-negative value.", file=sys.stderr)
+        log_message(f"[!] Ignoring invalid {env_name}={raw_value!r}; expected a non-negative value.", file=sys.stderr)
         return default
     return seconds
 
@@ -527,7 +530,7 @@ def ensure_authorized_dir():
         os.chmod(AUTHORIZED_DIR, 0o700)
         return True
     except OSError as exc:
-        print(f"[!] Failed to create browser authorization directory {AUTHORIZED_DIR}: {exc}", file=sys.stderr)
+        log_message(f"[!] Failed to create browser authorization directory {AUTHORIZED_DIR}: {exc}", file=sys.stderr)
         return False
 
 def resolve_operator_observation_dir():
@@ -4795,6 +4798,15 @@ def build_terminal_list(session_token, sid=None):
         terminals.append(terminal_info)
     return terminals
 
+def emit_terminal_list(sid, session_token):
+    socketio.emit(
+        'terminal_list',
+        {
+            'terminals': build_terminal_list(session_token, sid=sid),
+        },
+        room=sid,
+    )
+
 def emit_terminal_policy(sid, refresh_serial_ports=False):
     browser_authorized = socket_browser_authorized.get(sid, False)
     client_ip = socket_client_ips.get(sid, 'unknown')
@@ -4811,13 +4823,12 @@ def emit_terminal_policy(sid, refresh_serial_ports=False):
         {},
     )
     if DEBUG_POLICY:
-        print(
+        log_message(
             '[policy] '
             f'sid={sid} client_ip={client_ip} '
             f'browser_authorized={browser_authorized} '
             f'default={policy.get("default_connection")} '
             f'local_shell_allowed={local_shell_option.get("allowed")}',
-            flush=True,
         )
     socketio.emit(
         'terminal_policy',
@@ -4862,14 +4873,13 @@ def log_terminal_input(sid, terminal_id, data):
     data_bytes = data.encode('utf-8', errors='backslashreplace')
     hex_bytes = ' '.join(f'{byte:02x}' for byte in data_bytes)
     codepoints = ' '.join(f'U+{ord(ch):04X}' for ch in data)
-    print(
+    log_message(
         '[debug-input] '
         f'sid={sid} terminal_id={terminal_id} '
         f'chars={len(data)} bytes={len(data_bytes)} '
         f'hex={hex_bytes} '
         f'codepoints={codepoints} '
         f'text={escape_debug_text(data)}',
-        flush=True,
     )
 
 def emit_connection_error(sid, message, error_code=None, action_type=None, action_message=None,
@@ -5062,6 +5072,7 @@ def access_url():
 def schedule_launcher_shutdown():
     def shutdown_after_response():
         time.sleep(0.25)
+        cleanup_access_window()
         os._exit(0)
 
     for session_token in list(active_sessions):
@@ -5624,7 +5635,7 @@ def write_external_agentinfo_files(base_url=None):
         write_json_file_atomic(EXTERNAL_AGENT_INFO_PATH, payload)
         written.append(str(EXTERNAL_AGENT_INFO_PATH))
     except OSError as exc:
-        print(f"[!] Failed to write External Agent Info {EXTERNAL_AGENT_INFO_PATH}: {exc}", file=sys.stderr)
+        log_message(f"[!] Failed to write External Agent Info {EXTERNAL_AGENT_INFO_PATH}: {exc}", file=sys.stderr)
     if EXTERNAL_AGENT_CURRENT_INFO_PATH:
         try:
             current_payload = dict(payload)
@@ -5633,7 +5644,7 @@ def write_external_agentinfo_files(base_url=None):
             write_json_file_atomic(EXTERNAL_AGENT_CURRENT_INFO_PATH, current_payload)
             written.append(str(EXTERNAL_AGENT_CURRENT_INFO_PATH))
         except OSError as exc:
-            print(f"[!] Failed to write External Agent Info pointer {EXTERNAL_AGENT_CURRENT_INFO_PATH}: {exc}", file=sys.stderr)
+            log_message(f"[!] Failed to write External Agent Info pointer {EXTERNAL_AGENT_CURRENT_INFO_PATH}: {exc}", file=sys.stderr)
     return written
 
 def write_external_agent_handoff(payload):
@@ -5854,7 +5865,7 @@ def on_connect():
     session_token = get_request_session_token()
     client_ip = get_request_client_ip()
     if not session_token:
-        print(f"[!] Unauthorized WebSocket attempt: {request.sid} from {client_ip}")
+        log_message(f"[!] Unauthorized WebSocket attempt: {request.sid} from {client_ip}")
         raise ConnectionRefusedError({
             'error_code': 'session_required',
             'message': 'Session expired. Enter the access token again.',
@@ -5864,7 +5875,7 @@ def on_connect():
     socket_browser_authorized[request.sid] = False
     get_agent_session_id(session_token)
     get_agent_viewer_id(request.sid)
-    print(f"[+] Client connected: {request.sid} from {client_ip}")
+    log_message(f"[+] Client connected: {request.sid} from {client_ip}")
 
 @socketio.on('register_browser_identity')
 def on_register_browser_identity(data):
@@ -5927,6 +5938,8 @@ def on_browser_auth_signature(data):
             },
             room=request.sid,
         )
+        emit_terminal_policy(request.sid)
+        emit_terminal_list(request.sid, session_token)
     else:
         socket_browser_authorized[request.sid] = False
         socketio.emit(
@@ -5938,7 +5951,7 @@ def on_browser_auth_signature(data):
             },
             room=request.sid,
         )
-    emit_terminal_policy(request.sid)
+        emit_terminal_policy(request.sid)
 
 @socketio.on('browser_authorization_grant')
 def on_browser_authorization_grant(data):
@@ -6142,13 +6155,7 @@ def on_list_terminals():
     session_token = socket_session_tokens.get(request.sid)
     if not session_token:
         return
-    socketio.emit(
-        'terminal_list',
-        {
-            'terminals': build_terminal_list(session_token, sid=request.sid),
-        },
-        room=request.sid,
-    )
+    emit_terminal_list(request.sid, session_token)
 
 @socketio.on('refresh_terminal_policy')
 def on_refresh_terminal_policy(data=None):
@@ -7509,7 +7516,7 @@ def on_start_ssh(data):
         bridge.attach(request.sid)
         success, result = plugin.connect_bridge(bridge, payload, cols, rows)
     except Exception as exc:
-        print(f"[!] Backend start error for {connection_type}: {exc}")
+        log_message(f"[!] Backend start error for {connection_type}: {exc}")
         close_bridge(bridge)
         emit_connection_error(
             request.sid,
@@ -7692,7 +7699,7 @@ def on_disconnect(reason=None):
         agent_viewport_snapshot_store.discard(session_token, sid=request.sid)
         agent_viewport_render_request_store.discard(session_token, sid=request.sid)
         detach_session_bridges(session_token, request.sid)
-    print(f"[-] Client disconnected: {request.sid} from {client_ip}; reason={reason or 'unknown'}")
+    log_message(f"[-] Client disconnected: {request.sid} from {client_ip}; reason={reason or 'unknown'}")
 
 def is_wsl():
     if not sys.platform.startswith('linux'):
@@ -8031,9 +8038,9 @@ def handle_console_copy_shortcut(key, access_url, access_token, authorization_ur
     copy_func = copy_text_to_clipboard if copy_func is None else copy_func
     ok, message = copy_func(text)
     if ok:
-        print(f"[clipboard] Copied {label}.", flush=True)
+        log_message(f"[clipboard] Copied {label}.")
     else:
-        print(f"[clipboard] Failed to copy {label}: {message}", flush=True)
+        log_message(f"[clipboard] Failed to copy {label}: {message}")
     return True
 
 def console_copy_shortcuts_available(stdin=None):
@@ -8216,20 +8223,42 @@ def access_window_python_supports_tk(command):
     except (TypeError, ValueError):
         return False
 
+def cleanup_access_window():
+    global access_window_process
+    with access_window_process_lock:
+        process = access_window_process
+        access_window_process = None
+    if process is None:
+        return False
+    try:
+        if process.poll() is not None:
+            return True
+        process.terminate()
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=2)
+    except Exception as exc:
+        log_message(f'[!] Access window cleanup failed: {exc}')
+    return True
+
 def start_access_window(access_url, access_token):
+    global access_window_process
     if not access_window_enabled():
         return False
     command = get_access_window_python_command()
     if not command:
-        print('[!] Access window unavailable: no suitable Python/Tk runtime found.', flush=True)
+        log_message('[!] Access window unavailable: no suitable Python/Tk runtime found.')
         return False
     if not access_window_python_supports_tk(command):
-        print('[!] Access window skipped: tkinter with Tk 8.6+ is required.', flush=True)
-        print('    macOS: brew install python3 python-tk, or sudo port install python313 py313-tkinter tk +quartz,', flush=True)
-        print('    then delete tools/.venv_* and rerun the launcher. Use the Access URL/Token above meanwhile.', flush=True)
+        log_message('[!] Access window skipped: tkinter with Tk 8.6+ is required.')
+        log_message('    macOS: brew install python3 python-tk, or sudo port install python313 py313-tkinter tk +quartz,')
+        log_message('    then delete tools/.venv_* and rerun the launcher. Use the Access URL/Token above meanwhile.')
         return False
 
     handoff = build_access_window_handoff(access_url, access_token)
+    cleanup_access_window()
 
     try:
         process = subprocess.Popen(
@@ -8240,71 +8269,74 @@ def start_access_window(access_url, access_token):
             text=True,
             close_fds=True,
         )
+        with access_window_process_lock:
+            access_window_process = process
         process.stdin.write(json.dumps(handoff, separators=(',', ':')))
         process.stdin.close()
     except Exception as exc:
-        print(f'[!] Access window failed to start: {exc}', flush=True)
+        cleanup_access_window()
+        log_message(f'[!] Access window failed to start: {exc}')
         return False
-    print('[*] Access window started.', flush=True)
+    log_message('[*] Access window started.')
     return True
 
 if __name__ == '__main__':
-    print("[*] Python imports completed; resolving bind host...", flush=True)
+    log_message("[*] Python imports completed; resolving bind host...")
     bind_host = get_bind_host()
     access_host = get_access_host(bind_host)
     port = DEFAULT_PORT
     HTTPS_ENABLED = should_enable_https(bind_host)
     ssl_context = get_ssl_context(bind_host, access_host)
     scheme = get_url_scheme()
-    print("\n" + "="*60)
-    print(f"{APP_NAME} Server Starting...")
-    print(f"Runtime: {get_runtime_name()}")
-    print(f"Async Mode: {ASYNC_MODE}")
-    print(f"Debug Input: {'on' if DEBUG_INPUT else 'off'}")
-    print(f"Debug Policy: {'on' if DEBUG_POLICY else 'off'}")
-    print(f"HTTPS: {'on' if HTTPS_ENABLED else 'off'}")
+    log_message("="*60)
+    log_message(f"{APP_NAME} Server Starting...")
+    log_message(f"Runtime: {get_runtime_name()}")
+    log_message(f"Async Mode: {ASYNC_MODE}")
+    log_message(f"Debug Input: {'on' if DEBUG_INPUT else 'off'}")
+    log_message(f"Debug Policy: {'on' if DEBUG_POLICY else 'off'}")
+    log_message(f"HTTPS: {'on' if HTTPS_ENABLED else 'off'}")
     if HTTPS_ENABLED and not HTTPS_REQUESTED:
-        print("HTTPS Mode: auto-enabled because bind host is non-loopback.")
-    print(f"Default Connection: {DEFAULT_CONNECTION_TYPE}")
+        log_message("HTTPS Mode: auto-enabled because bind host is non-loopback.")
+    log_message(f"Default Connection: {DEFAULT_CONNECTION_TYPE}")
     if FORCE_CONNECTION_TYPE:
-        print(f"Forced Connection: {FORCE_CONNECTION_TYPE}")
+        log_message(f"Forced Connection: {FORCE_CONNECTION_TYPE}")
     access_url = f"{scheme}://{access_host}:{port}/?token={ACCESS_TOKEN}"
-    print(f"Listening on: {bind_host}:{port}")
+    log_message(f"Listening on: {bind_host}:{port}")
     write_external_agentinfo_files(base_url=f'{scheme}://{access_host}:{port}')
     for line in build_external_agent_startup_lines():
-        print(line)
+        log_message(line)
     if is_wsl() and not is_loopback_bind(bind_host):
-        print(f"WSL Localhost URL: {get_localhost_access_url(port)}")
-        print("WSL Localhost URL is useful when browsers require a secure context for authorization.")
+        log_message(f"WSL Localhost URL: {get_localhost_access_url(port)}")
+        log_message("WSL Localhost URL is useful when browsers require a secure context for authorization.")
     if HTTPS_ENABLED and not (CLI_ARGS.certfile and CLI_ARGS.keyfile):
-        print(f"HTTPS Local CA: {LOCAL_CA_CERT_PATH}")
-        print("Import the HTTPS Local CA into Windows Trusted Root Certification Authorities to trust the WSL IP URL.")
+        log_message(f"HTTPS Local CA: {LOCAL_CA_CERT_PATH}")
+        log_message("Import the HTTPS Local CA into Windows Trusted Root Certification Authorities to trust the WSL IP URL.")
     if not is_loopback_bind(bind_host) and get_prefixed_env('ALLOW_REMOTE_SSH') != '1':
-        print("[!] SSH requires browser authorization for non-loopback clients.")
-        print(f"[!] Set {get_prefixed_env_name('ALLOW_REMOTE_SSH')}=1 only if remote clients should bypass browser authorization for SSH.")
+        log_message("[!] SSH requires browser authorization for non-loopback clients.")
+        log_message(f"[!] Set {get_prefixed_env_name('ALLOW_REMOTE_SSH')}=1 only if remote clients should bypass browser authorization for SSH.")
     if is_local_shell_enabled() and not is_loopback_bind(bind_host) and get_prefixed_env('ALLOW_REMOTE_LOCAL_SHELL') != '1':
-        print("[!] WARNING: Local Shell is enabled while listening on a non-loopback address.")
-        print("[!] Non-loopback clients must use browser authorization unless explicitly trusted.")
-        print(f"[!] Set {get_prefixed_env_name('TRUST_WSL_CLIENT_IPS')}=1 only if the WSL host/NAT network is private and trusted.")
-        print(f"[!] Set {get_prefixed_env_name('ALLOW_REMOTE_LOCAL_SHELL')}=1 only if remote clients should bypass browser authorization.")
+        log_message("[!] WARNING: Local Shell is enabled while listening on a non-loopback address.")
+        log_message("[!] Non-loopback clients must use browser authorization unless explicitly trusted.")
+        log_message(f"[!] Set {get_prefixed_env_name('TRUST_WSL_CLIENT_IPS')}=1 only if the WSL host/NAT network is private and trusted.")
+        log_message(f"[!] Set {get_prefixed_env_name('ALLOW_REMOTE_LOCAL_SHELL')}=1 only if remote clients should bypass browser authorization.")
     if is_uart_enabled() and not is_loopback_bind(bind_host) and get_prefixed_env('ALLOW_REMOTE_UART') != '1':
-        print("[!] WARNING: UART is enabled while listening on a non-loopback address.")
-        print("[!] Non-loopback clients must use browser authorization unless explicitly trusted.")
-        print(f"[!] Set {get_prefixed_env_name('TRUST_WSL_CLIENT_IPS')}=1 only if the WSL host/NAT network is private and trusted.")
-        print(f"[!] Set {get_prefixed_env_name('ALLOW_REMOTE_UART')}=1 only if remote clients should bypass browser authorization.")
+        log_message("[!] WARNING: UART is enabled while listening on a non-loopback address.")
+        log_message("[!] Non-loopback clients must use browser authorization unless explicitly trusted.")
+        log_message(f"[!] Set {get_prefixed_env_name('TRUST_WSL_CLIENT_IPS')}=1 only if the WSL host/NAT network is private and trusted.")
+        log_message(f"[!] Set {get_prefixed_env_name('ALLOW_REMOTE_UART')}=1 only if remote clients should bypass browser authorization.")
     if sys.platform == 'darwin':
-        print("Tip: Enable Remote Login in macOS if you want localhost SSH access.")
+        log_message("Tip: Enable Remote Login in macOS if you want localhost SSH access.")
     console_shortcuts_available = console_copy_shortcuts_available()
     url_hint = " (Press u to copy)" if console_shortcuts_available else ""
     token_hint = " (Press t to copy)" if console_shortcuts_available else ""
     authorization_hint = "Press a to mint and copy." if console_shortcuts_available else "Use the access window to mint one."
-    print(f"Access URL: {access_url}{url_hint}")
-    print(f"Session ID: {LAUNCHER_INSTANCE_ID}")
-    print(f"Browser Authorization URL: {authorization_hint}")
-    print(f"Access Token: {ACCESS_TOKEN}{token_hint}")
+    log_message(f"Access URL: {access_url}{url_hint}")
+    log_message(f"Session ID: {LAUNCHER_INSTANCE_ID}")
+    log_message(f"Browser Authorization URL: {authorization_hint}")
+    log_message(f"Access Token: {ACCESS_TOKEN}{token_hint}")
     start_console_copy_shortcuts(access_url, ACCESS_TOKEN)
     start_access_window(access_url, ACCESS_TOKEN)
-    print("="*60 + "\n")
+    log_message("="*60)
     
     sys.stdout.flush()
 
@@ -8314,4 +8346,7 @@ if __name__ == '__main__':
     if ASYNC_MODE == 'threading':
         run_kwargs['allow_unsafe_werkzeug'] = True
 
-    socketio.run(app, **run_kwargs)
+    try:
+        socketio.run(app, **run_kwargs)
+    finally:
+        cleanup_access_window()

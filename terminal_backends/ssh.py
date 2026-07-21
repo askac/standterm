@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 from .base import BackendAction, BackendSettingSchema, BackendStartFieldSchema, TerminalBackendPlugin, TerminalBridge
+from runtime_logging import log_message
 
 
 class SSHBridge(TerminalBridge):
@@ -326,7 +327,7 @@ class SSHBridge(TerminalBridge):
                 allow_agent=True,
                 look_for_keys=True,
             )
-            print(f"[+] Local key auth succeeded via agent/default keys for {self.sid}")
+            log_message(f"[+] Local key auth succeeded via agent/default keys for {self.sid}")
             return True, None
         except paramiko_module.AuthenticationException as exc:
             auth_errors.append(f"agent/default keys: {exc}")
@@ -355,7 +356,7 @@ class SSHBridge(TerminalBridge):
                     allow_agent=False,
                     look_for_keys=False,
                 )
-                print(f"[+] Local key auth succeeded via {key_path.name} for {self.sid}")
+                log_message(f"[+] Local key auth succeeded via {key_path.name} for {self.sid}")
                 return True, None
             except Exception as exc:
                 auth_errors.append(f"{key_path.name}: {exc}")
@@ -366,7 +367,7 @@ class SSHBridge(TerminalBridge):
         paramiko_module = self._get_paramiko()
         try:
             pwd = password if password else ""
-            print(f"[*] Attempting SSH connection for {user!r} at {host!r}:{port}...")
+            log_message(f"[*] Attempting SSH connection for {user!r} at {host!r}:{port}...")
 
             is_localhost = self._is_local_target(host)
             if is_localhost and not pwd:
@@ -377,10 +378,10 @@ class SSHBridge(TerminalBridge):
                         missing_local_keys = self._get_missing_local_public_keys()
                         if missing_local_keys:
                             hint = self._build_local_key_setup_hint()
-                            print(f"[*] Local key auth failed for {self.sid}; offering localhost key setup.")
+                            log_message(f"[*] Local key auth failed for {self.sid}; offering localhost key setup.")
                             return False, hint
                     elif setup_availability.get('reason'):
-                        print(f"[*] Local key auth failed for {self.sid}; auto setup unavailable.")
+                        log_message(f"[*] Local key auth failed for {self.sid}; auto setup unavailable.")
                         return False, self._build_manual_local_key_setup_hint(
                             setup_availability['reason'],
                             setup_availability.get('error_code'),
@@ -402,15 +403,15 @@ class SSHBridge(TerminalBridge):
 
             self.channel = self.ssh.invoke_shell(term=self._ssh_term, width=cols, height=rows)
             self.channel.setblocking(0)
-            print(f"[+] SSH connection established for {self.sid}")
+            log_message(f"[+] SSH connection established for {self.sid}")
             return True, None
         except Exception as e:
             error_msg = str(e)
-            print(f"[!] SSH Connection Error: {error_msg}")
+            log_message(f"[!] SSH Connection Error: {error_msg}")
             return False, {'message': error_msg}
 
     def read_loop(self):
-        print(f"[*] Starting SSH read loop for {self.sid}")
+        log_message(f"[*] Starting SSH read loop for {self.sid}")
         while True:
             # Short sleep to prevent CPU hogging while allowing high responsiveness
             self.runtime.sleep(0.01)
@@ -427,7 +428,7 @@ class SSHBridge(TerminalBridge):
                         })
 
                 if self.channel.exit_status_ready():
-                    print(f"[*] SSH session exited for {self.sid}")
+                    log_message(f"[*] SSH session exited for {self.sid}")
                     self.emit_output({
                         'message_type': 'ssh_closed',
                         'message': 'SSH session closed.',
@@ -436,14 +437,14 @@ class SSHBridge(TerminalBridge):
             except Exception as e:
                 if self.closing:
                     break
-                print(f"[!] Read error: {e}")
+                log_message(f"[!] Read error: {e}")
                 self.emit_output({
                     'message_type': 'ssh_closed',
                     'message': 'SSH connection closed due to a read error.',
                     'error_code': 'ssh_read_error',
                 })
                 break
-        print(f"[*] SSH read loop terminated for {self.sid}")
+        log_message(f"[*] SSH read loop terminated for {self.sid}")
         self.runtime.unregister_bridge(self.owner_session, self.terminal_id, self)
 
     def write(self, data):
@@ -451,14 +452,14 @@ class SSHBridge(TerminalBridge):
             try:
                 self.channel.send(data)
             except Exception as e:
-                print(f"[!] Write error: {e}")
+                log_message(f"[!] Write error: {e}")
 
     def resize(self, cols, rows):
         if self.channel:
             try:
                 self.channel.resize_pty(width=cols, height=rows)
             except Exception as e:
-                print(f"[!] Resize error: {e}")
+                log_message(f"[!] Resize error: {e}")
 
     def close(self):
         if self.channel:
