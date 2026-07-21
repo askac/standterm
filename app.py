@@ -114,6 +114,8 @@ logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
 # Default to threading for consistent cross-platform behavior.
 socketio = SocketIO(app, async_mode=ASYNC_MODE, logger=False, engineio_logger=False)
+access_window_process = None
+access_window_process_lock = threading.Lock()
 
 # SSH Configuration
 SSH_HOST = '127.0.0.1'
@@ -5070,6 +5072,7 @@ def access_url():
 def schedule_launcher_shutdown():
     def shutdown_after_response():
         time.sleep(0.25)
+        cleanup_access_window()
         os._exit(0)
 
     for session_token in list(active_sessions):
@@ -8220,7 +8223,28 @@ def access_window_python_supports_tk(command):
     except (TypeError, ValueError):
         return False
 
+def cleanup_access_window():
+    global access_window_process
+    with access_window_process_lock:
+        process = access_window_process
+        access_window_process = None
+    if process is None:
+        return False
+    try:
+        if process.poll() is not None:
+            return True
+        process.terminate()
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=2)
+    except Exception as exc:
+        log_message(f'[!] Access window cleanup failed: {exc}')
+    return True
+
 def start_access_window(access_url, access_token):
+    global access_window_process
     if not access_window_enabled():
         return False
     command = get_access_window_python_command()
@@ -8234,6 +8258,7 @@ def start_access_window(access_url, access_token):
         return False
 
     handoff = build_access_window_handoff(access_url, access_token)
+    cleanup_access_window()
 
     try:
         process = subprocess.Popen(
@@ -8244,9 +8269,12 @@ def start_access_window(access_url, access_token):
             text=True,
             close_fds=True,
         )
+        with access_window_process_lock:
+            access_window_process = process
         process.stdin.write(json.dumps(handoff, separators=(',', ':')))
         process.stdin.close()
     except Exception as exc:
+        cleanup_access_window()
         log_message(f'[!] Access window failed to start: {exc}')
         return False
     log_message('[*] Access window started.')
@@ -8318,4 +8346,7 @@ if __name__ == '__main__':
     if ASYNC_MODE == 'threading':
         run_kwargs['allow_unsafe_werkzeug'] = True
 
-    socketio.run(app, **run_kwargs)
+    try:
+        socketio.run(app, **run_kwargs)
+    finally:
+        cleanup_access_window()

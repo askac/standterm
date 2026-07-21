@@ -2912,6 +2912,19 @@ def test_access_window_handoff_uses_stdin_not_args_or_env():
     class FakeProcess:
         def __init__(self):
             self.stdin = FakeStdin()
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
 
     def fake_popen(command, **kwargs):
         process = FakeProcess()
@@ -2927,6 +2940,7 @@ def test_access_window_handoff_uses_stdin_not_args_or_env():
         standterm.access_window_enabled = original_access_window_enabled
         standterm.get_access_window_python_command = original_get_access_window_python_command
         standterm.subprocess.Popen = original_popen
+        standterm.cleanup_access_window()
 
     assert len(calls) == 1
     command, kwargs, process = calls[0]
@@ -2942,6 +2956,84 @@ def test_access_window_handoff_uses_stdin_not_args_or_env():
     assert '"status_urls":' in process.stdin.text
     assert '"shutdown_token":' in process.stdin.text
     assert process.stdin.closed is True
+
+
+def test_access_window_close_protocol_destroys_window():
+    class FakeRoot:
+        def __init__(self):
+            self.protocols = {}
+            self.destroyed = False
+
+        def protocol(self, name, callback):
+            self.protocols[name] = callback
+
+        def destroy(self):
+            self.destroyed = True
+
+    root = FakeRoot()
+    access_window.bind_window_close(root)
+    root.protocols['WM_DELETE_WINDOW']()
+
+    assert root.destroyed is True
+
+
+def test_access_window_launcher_cleanup_is_owned_and_idempotent():
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.terminate_calls = 0
+            self.kill_calls = 0
+            self.wait_calls = 0
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.terminate_calls += 1
+
+        def wait(self, timeout=None):
+            self.wait_calls += 1
+            if self.returncode is None and self.wait_calls == 1:
+                raise standterm.subprocess.TimeoutExpired('access-window', timeout)
+            return self.returncode
+
+        def kill(self):
+            self.kill_calls += 1
+            self.returncode = -9
+
+    process = FakeProcess()
+    with standterm.access_window_process_lock:
+        standterm.access_window_process = process
+
+    assert standterm.cleanup_access_window() is True
+    assert standterm.cleanup_access_window() is False
+    assert process.terminate_calls == 1
+    assert process.kill_calls == 1
+    assert process.wait_calls == 2
+
+
+def test_access_window_launcher_poll_lifecycle_tolerates_transient_offline_state():
+    offline_error = access_window.make_launcher_error(
+        access_window.ERROR_UNREACHABLE,
+        'connection refused',
+    )
+    stale_error = access_window.make_launcher_error(
+        access_window.ERROR_INSTANCE_MISMATCH,
+        'instance mismatch',
+    )
+    state = {'name': access_window.UI_STATE_CURRENT, 'offline_polls': 0}
+
+    for _ in range(access_window.LAUNCHER_OFFLINE_POLL_LIMIT - 1):
+        assert access_window.update_launcher_poll_lifecycle(state, offline_error) is False
+    assert state['name'] == access_window.UI_STATE_OFFLINE
+    assert access_window.update_launcher_poll_lifecycle(state, None) is False
+    assert state == {'name': access_window.UI_STATE_CURRENT, 'offline_polls': 0}
+    assert access_window.update_launcher_poll_lifecycle(state, stale_error) is True
+
+    state = {'name': access_window.UI_STATE_CURRENT, 'offline_polls': 0}
+    for _ in range(access_window.LAUNCHER_OFFLINE_POLL_LIMIT - 1):
+        assert access_window.update_launcher_poll_lifecycle(state, offline_error) is False
+    assert access_window.update_launcher_poll_lifecycle(state, offline_error) is True
 
 
 def test_access_window_stdin_handoff_loads_status_url():
@@ -5288,6 +5380,9 @@ def main():
         test_console_copy_shortcuts_map_token_and_url,
         test_access_window_missing_gui_helper_is_nonfatal,
         test_access_window_handoff_uses_stdin_not_args_or_env,
+        test_access_window_close_protocol_destroys_window,
+        test_access_window_launcher_cleanup_is_owned_and_idempotent,
+        test_access_window_launcher_poll_lifecycle_tolerates_transient_offline_state,
         test_access_window_stdin_handoff_loads_status_url,
         test_access_window_fetch_status_falls_back_and_detects_instance_mismatch,
         test_access_window_unauthorized_status_is_stale,

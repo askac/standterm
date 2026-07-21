@@ -68,6 +68,7 @@ def start_server():
         'STANDTERM_PORT': str(port),
         'STANDTERM_DISABLE_AUTO_HTTPS': '1',
         'STANDTERM_ASYNC_MODE': 'threading',
+        'STANDTERM_ACCESS_UI': 'off',
         'STANDTERM_OPERATOR_OBSERVATION_DIR': tempfile.mkdtemp(prefix='standterm-observation-smoke-'),
     })
     proc = subprocess.Popen(
