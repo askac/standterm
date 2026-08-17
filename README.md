@@ -512,6 +512,7 @@ StandTerm vendors xterm.js runtime files under `static/` so the terminal works
 without a CDN:
 
 - `@xterm/xterm` 6.0.0: `static/js/xterm.js`, `static/css/xterm.css`
+- `@xterm/addon-webgl` 0.19.0: `static/js/xterm-addon-webgl.js`
 - `@xterm/addon-fit` 0.11.0: `static/js/xterm-addon-fit.js`
 - `@xterm/addon-web-links` 0.12.0: `static/js/xterm-addon-web-links.js`
 - Powerline Symbols: `static/fonts/PowerlineSymbols.otf` (optional prompt-symbol fallback)

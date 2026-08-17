@@ -6,6 +6,7 @@ assets from a CDN.
 Current sources:
 
 - `xterm.js`: `@xterm/xterm` 6.0.0
+- `xterm-addon-webgl.js`: `@xterm/addon-webgl` 0.19.0
 - `xterm-addon-fit.js`: `@xterm/addon-fit` 0.11.0
 - `xterm-addon-web-links.js`: `@xterm/addon-web-links` 0.12.0
 
@@ -18,6 +19,6 @@ Source checkout:
 The JavaScript bundles are copied from the npm package `lib/` output. The
 matching stylesheet is copied to `../css/xterm.css` from `@xterm/xterm`.
 
-xterm.js and its addons are MIT licensed. Keep
-`../licenses/xtermjs-MIT-LICENSE.txt` and the xterm.js section in
+xterm.js and its addons are MIT licensed. Keep the matching files under
+`../licenses/` and the xterm.js section in
 `../../THIRD-PARTY-NOTICES.md` when releasing these files.
