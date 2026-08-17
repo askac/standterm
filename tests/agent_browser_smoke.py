@@ -1035,6 +1035,59 @@ def test_powerline_symbol_fallback_is_optional_and_applies_immediately(browser, 
         close_context(context)
 
 
+def test_webgl_renderer_closes_block_glyph_row_gaps(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        options = page.evaluate("() => window.terminalTest.getActiveTerminalOptions()")
+        check(options['renderer'] == 'webgl', 'terminal did not activate the WebGL renderer')
+
+        page.evaluate(
+            """() => window.terminalTest.writeTerminalOutput(
+                '\\x1b[2J\\x1b[H\\x1b[38;2;215;135;135m'
+                + '████████\\r\\n████████\\r\\n████████'
+                + '\\x1b[0m'
+            )"""
+        )
+        page.wait_for_timeout(200)
+        pixels = page.evaluate(
+            """() => {
+                const canvases = Array.from(document.querySelectorAll(
+                    '.terminal-pane.active .xterm-screen canvas'
+                ));
+                const canvas = canvases[canvases.length - 1];
+                if (!canvas) return { error: 'missing_canvas' };
+                const gl = canvas.getContext('webgl2');
+                if (!gl) return { error: 'missing_webgl_context' };
+                const rgba = new Uint8Array(canvas.width * canvas.height * 4);
+                gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+                const coloredRows = [];
+                for (let y = 0; y < canvas.height; y += 1) {
+                    let count = 0;
+                    for (let x = 0; x < canvas.width; x += 1) {
+                        const offset = (y * canvas.width + x) * 4;
+                        const red = rgba[offset];
+                        const green = rgba[offset + 1];
+                        const blue = rgba[offset + 2];
+                        if (red > 180 && green >= 100 && green <= 170 && blue >= 100 && blue <= 170) {
+                            count += 1;
+                        }
+                    }
+                    if (count >= 20) coloredRows.push(y);
+                }
+                let maxStep = 0;
+                for (let index = 1; index < coloredRows.length; index += 1) {
+                    maxStep = Math.max(maxStep, coloredRows[index] - coloredRows[index - 1]);
+                }
+                return { coloredRowCount: coloredRows.length, maxStep };
+            }"""
+        )
+        check(not pixels.get('error'), f"could not inspect WebGL terminal pixels: {pixels.get('error')}")
+        check(pixels['coloredRowCount'] > 20, 'block glyph fixture did not render enough colored rows')
+        check(pixels['maxStep'] == 1, 'block glyphs retained a blank pixel row between terminal cells')
+    finally:
+        close_context(context)
+
+
 def test_cursor_type_setting_updates_existing_and_new_terminals(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
@@ -1508,6 +1561,7 @@ def main():
         test_cjk_width_compatibility_defaults_off,
         test_windows_font_fallback_defaults_and_migrates_legacy,
         test_powerline_symbol_fallback_is_optional_and_applies_immediately,
+        test_webgl_renderer_closes_block_glyph_row_gaps,
         test_cursor_type_setting_updates_existing_and_new_terminals,
         test_settings_server_tab_loads_readonly_snapshot,
         test_connection_diagnostics_are_session_scoped_and_redacted,

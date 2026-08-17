@@ -1247,11 +1247,13 @@
         async function initApp() {
             try {
                 await loadScript('/static/js/xterm.js');
-                document.getElementById('progress-bar').style.width = '25%';
+                document.getElementById('progress-bar').style.width = '20%';
+                await loadScript('/static/js/xterm-addon-webgl.js');
+                document.getElementById('progress-bar').style.width = '40%';
                 await loadScript('/static/js/socket.io.min.js');
-                document.getElementById('progress-bar').style.width = '50%';
+                document.getElementById('progress-bar').style.width = '60%';
                 await loadScript('/static/js/xterm-addon-fit.js');
-                document.getElementById('progress-bar').style.width = '75%';
+                document.getElementById('progress-bar').style.width = '80%';
                 await loadScript('/static/js/xterm-addon-web-links.js');
                 document.getElementById('progress-bar').style.width = '100%';
             } catch (e) {
@@ -2315,6 +2317,24 @@
                 });
                 applyCjkWidthPreference(term);
                 return term;
+            }
+
+            function enableWebglRenderer(state) {
+                if (!state || !state.term || typeof WebglAddon === 'undefined') return;
+                let addon = null;
+                try {
+                    // Keep the drawing buffer readable for Agent viewport PNG capture.
+                    addon = new WebglAddon.WebglAddon(true);
+                    addon.onContextLoss(() => {
+                        addon.dispose();
+                        if (state.webglAddon === addon) state.webglAddon = null;
+                    });
+                    state.term.loadAddon(addon);
+                    state.webglAddon = addon;
+                } catch (error) {
+                    if (addon) addon.dispose();
+                    console.warn('WebGL terminal renderer unavailable; using DOM renderer.', error);
+                }
             }
 
             function syncAgentTerminalMirrorSize(state) {
@@ -3496,6 +3516,7 @@
                     titleEl,
                     term,
                     fitAddon,
+                    webglAddon: null,
                     webLinksAddon: null,
                     inPip: false,
                     pipWindow: null,
@@ -3509,6 +3530,7 @@
                     pipPagehideHandler: null,
                     pipResizeHandler: null
                 };
+                enableWebglRenderer(state);
                 terminals.set(terminalId, state);
                 configureWebLinks(state);
                 syncAgentTerminalMirrorSize(state);
@@ -3539,6 +3561,7 @@
                 });
                 detachAgentFromTerminal(state, { notifyServer });
                 if (state.webLinksAddon) state.webLinksAddon.dispose();
+                if (state.webglAddon) state.webglAddon.dispose();
                 if (state.agentTerminalMirror) state.agentTerminalMirror.dispose();
                 state.term.dispose();
                 state.container.remove();
@@ -3729,6 +3752,7 @@
                             fontSize: state.term.options.fontSize,
                             fontWeight: state.term.options.fontWeight,
                             colorScheme: prefs.colorScheme,
+                            renderer: state.webglAddon ? 'webgl' : 'dom',
                             mirrorCursorStyle: state.agentTerminalMirror
                                 ? state.agentTerminalMirror.options.cursorStyle
                                 : null,
