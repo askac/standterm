@@ -910,6 +910,131 @@ def test_cjk_width_compatibility_defaults_off(browser, access_url):
         close_context(context)
 
 
+def test_windows_font_fallback_defaults_and_migrates_legacy(browser, access_url):
+    expected = 'Consolas, "Cascadia Mono", "Courier New", monospace'
+    legacy = 'Consolas, "Courier New", monospace'
+    custom = 'Custom Mono, monospace'
+    context, page = new_page(browser, access_url)
+    try:
+        initial = page.evaluate("() => window.terminalTest.getActiveTerminalOptions().fontFamily")
+        check(initial == expected, 'terminal font fallback did not default to Cascadia Mono')
+
+        page.evaluate(
+            "fontFace => localStorage.setItem('terminal.pref.v1', JSON.stringify({ fontFace }))",
+            legacy,
+        )
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_function('() => !!window.terminalTest', timeout=10000)
+        page.wait_for_function(
+            "() => window.terminalTest.getSocketState().connected === true",
+            timeout=10000,
+        )
+        page.wait_for_function(
+            '() => window.terminalTest.getActiveTerminalOptions() !== null',
+            timeout=10000,
+        )
+        migrated = page.evaluate("() => window.terminalTest.getActiveTerminalOptions().fontFamily")
+        check(migrated == expected, 'legacy terminal font fallback was not migrated')
+
+        page.evaluate(
+            "fontFace => localStorage.setItem('terminal.pref.v1', JSON.stringify({ fontFace }))",
+            custom,
+        )
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_function('() => !!window.terminalTest', timeout=10000)
+        page.wait_for_function(
+            '() => window.terminalTest.getActiveTerminalOptions() !== null',
+            timeout=10000,
+        )
+        preserved = page.evaluate("() => window.terminalTest.getActiveTerminalOptions().fontFamily")
+        check(preserved == custom, 'custom terminal font face was overwritten by default migration')
+    finally:
+        close_context(context)
+
+
+def test_powerline_symbol_fallback_is_optional_and_applies_immediately(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        initial = page.evaluate("() => window.terminalTest.getActiveTerminalOptions()")
+        check(
+            not initial['fontFamily'].startswith('"StandTerm Powerline Symbols"'),
+            'Powerline symbol fallback defaulted on',
+        )
+
+        page.click('#quick-settings')
+        page.wait_for_selector('#settings-modal.open', timeout=5000)
+        page.click('.settings-nav-item[data-tab="appearance"]')
+        check(
+            page.locator('#pref-powerlineSymbols').is_checked() is False,
+            'Powerline symbol fallback checkbox defaulted on',
+        )
+        page.check('#pref-powerlineSymbols')
+        page.click('#settings-save')
+        page.wait_for_function(
+            "() => window.terminalTest.getActiveTerminalOptions().fontFamily.startsWith('\\\"StandTerm Powerline Symbols\\\"')",
+            timeout=5000,
+        )
+        enabled = page.evaluate(
+            """() => ({
+                options: window.terminalTest.getActiveTerminalOptions(),
+                stored: JSON.parse(localStorage.getItem('terminal.pref.v1')).powerlineSymbols
+            })"""
+        )
+        check(enabled['stored'] is True, 'Powerline symbol fallback preference was not saved')
+        check(
+            enabled['options']['mirrorFontFamily'] == enabled['options']['fontFamily'],
+            'Powerline symbol fallback did not update the agent mirror',
+        )
+        loaded = page.evaluate(
+            """async () => {
+                const fonts = await document.fonts.load(
+                    '14px "StandTerm Powerline Symbols"',
+                    '\ue0a0'
+                );
+                return fonts.length;
+            }"""
+        )
+        check(loaded > 0, 'bundled Powerline symbols font did not load')
+
+        page.click('#new-tab-btn')
+        page.wait_for_function(
+            "() => window.terminalTest.getTerminalTabsState().tabs.length === 2",
+            timeout=5000,
+        )
+        new_tab = page.evaluate("() => window.terminalTest.getActiveTerminalOptions()")
+        check(
+            new_tab['fontFamily'] == enabled['options']['fontFamily'],
+            'new terminal did not use the Powerline symbol fallback',
+        )
+        check(
+            new_tab['mirrorFontFamily'] == enabled['options']['fontFamily'],
+            'new agent mirror did not use the Powerline symbol fallback',
+        )
+
+        page.click('#quick-settings')
+        page.wait_for_selector('#settings-modal.open', timeout=5000)
+        page.click('.settings-nav-item[data-tab="appearance"]')
+        page.uncheck('#pref-powerlineSymbols')
+        page.click('#settings-save')
+        page.wait_for_function(
+            "() => !window.terminalTest.getActiveTerminalOptions().fontFamily.startsWith('\\\"StandTerm Powerline Symbols\\\"')",
+            timeout=5000,
+        )
+        disabled = page.evaluate(
+            """() => ({
+                options: window.terminalTest.getActiveTerminalOptions(),
+                stored: JSON.parse(localStorage.getItem('terminal.pref.v1')).powerlineSymbols
+            })"""
+        )
+        check(disabled['stored'] is False, 'Powerline symbol fallback disable was not saved')
+        check(
+            disabled['options']['mirrorFontFamily'] == disabled['options']['fontFamily'],
+            'disabling Powerline symbol fallback did not update the agent mirror',
+        )
+    finally:
+        close_context(context)
+
+
 def test_cursor_type_setting_updates_existing_and_new_terminals(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
@@ -1381,6 +1506,8 @@ def main():
         test_paste_review_approve_and_cancel,
         test_approval_payload_and_stale_rejections,
         test_cjk_width_compatibility_defaults_off,
+        test_windows_font_fallback_defaults_and_migrates_legacy,
+        test_powerline_symbol_fallback_is_optional_and_applies_immediately,
         test_cursor_type_setting_updates_existing_and_new_terminals,
         test_settings_server_tab_loads_readonly_snapshot,
         test_connection_diagnostics_are_session_scoped_and_redacted,
