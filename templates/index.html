@@ -5,6 +5,14 @@
     <!-- Local Fallback Assets -->
     <link rel="stylesheet" href="/static/css/xterm.css" />
     <style>
+        @font-face {
+            font-family: "StandTerm Powerline Symbols";
+            src: url("/static/fonts/PowerlineSymbols.otf") format("opentype");
+            font-display: block;
+            font-style: normal;
+            font-weight: 400;
+            unicode-range: U+E0A0-E0A2, U+E0B0-E0B3;
+        }
         :root { --status-bar-height: 26px; --tab-bar-height: 34px; }
         body { margin: 0; background: #000; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
         #terminal-tabs { position: absolute; top: 0; left: 0; right: 0; height: var(--tab-bar-height); box-sizing: border-box; background: #151515; border-bottom: 1px solid #2a2a2a; display: none; align-items: center; gap: 4px; padding: 4px 8px; z-index: 40; overflow: hidden; }
@@ -610,6 +618,7 @@
                                 </select>
                             </div>
                             <div class="settings-row"><label for="pref-fontFace">Font face</label><input type="text" id="pref-fontFace"></div>
+                            <div class="settings-row"><label for="pref-powerlineSymbols" title="Use the bundled Powerline symbols font as a fallback for prompt glyphs such as the branch symbol.">Enable Powerline symbol fallback</label><input type="checkbox" id="pref-powerlineSymbols"></div>
                             <div class="settings-row"><label for="pref-fontSize">Font size</label><input type="number" id="pref-fontSize" min="8" max="32"></div>
                             <div class="settings-row"><label for="pref-fontWeight" title="Heavier weights can improve perceived brightness of thin glyphs, especially with macOS grayscale antialiasing.">Font weight</label>
                                 <select id="pref-fontWeight"><option value="normal">Normal (400)</option><option value="500">Medium (500)</option><option value="600">Semibold (600)</option><option value="bold">Bold (700)</option></select>
@@ -930,6 +939,7 @@
         // --- Preferences ---
         const PREF_KEY = 'terminal.pref.v1';
         const LEGACY_DEFAULT_FONT_FACE = 'Consolas, "Courier New", monospace';
+        const WINDOWS_TERMINAL_FONT_FACE = 'Consolas, "Cascadia Mono", "Courier New", monospace';
         const LEGACY_MAC_DEFAULT_FONT_FACE = 'Menlo, Monaco, "Noto Sans Mono CJK TC", "PingFang TC", "Apple LiGothic", monospace';
         const MAC_TERMINAL_FONT_FACE = 'Menlo, Monaco, "SF Mono", "Noto Sans Mono CJK TC", "Sarasa Mono TC", "Biaodian Pro Sans CNS", monospace';
         function isApplePlatform() {
@@ -937,7 +947,7 @@
         }
         function getDefaultTerminalFontFace() {
             if (isApplePlatform()) return MAC_TERMINAL_FONT_FACE;
-            return LEGACY_DEFAULT_FONT_FACE;
+            return WINDOWS_TERMINAL_FONT_FACE;
         }
         const PREF_DEFAULTS = {
             useCustomMenu: true,
@@ -946,6 +956,7 @@
             detectUrls: true,
             urlClickAction: 'overlay',
             fontFace: getDefaultTerminalFontFace(),
+            powerlineSymbols: false,
             fontSize: 14,
             // macOS grayscale antialiasing renders thin bright glyphs dimmer
             // than Windows ClearType, so default to a slightly heavier weight
@@ -975,6 +986,10 @@
             }
         }
         function savePrefs(p) { localStorage.setItem(PREF_KEY, JSON.stringify(p)); }
+        function getTerminalFontFace() {
+            if (!prefs.powerlineSymbols) return prefs.fontFace;
+            return '"StandTerm Powerline Symbols", ' + prefs.fontFace;
+        }
         function normalizeFontSize(value, fallback = PREF_DEFAULTS.fontSize) {
             const text = String(value).trim();
             if (!/^\d+$/.test(text)) return fallback;
@@ -2292,7 +2307,7 @@
                     cursorBlink: false,
                     disableStdin: true,
                     cursorStyle: prefs.cursorStyle,
-                    fontFamily: prefs.fontFace,
+                    fontFamily: getTerminalFontFace(),
                     fontSize: prefs.fontSize,
                     fontWeight: prefs.fontWeight,
                     scrollback: 1000,
@@ -3448,7 +3463,7 @@
                     allowProposedApi: true,
                     cursorBlink: true,
                     cursorStyle: prefs.cursorStyle,
-                    fontFamily: prefs.fontFace,
+                    fontFamily: getTerminalFontFace(),
                     fontSize: prefs.fontSize,
                     fontWeight: prefs.fontWeight,
                     theme: SCHEMES[prefs.colorScheme] || SCHEMES.vintage
@@ -3716,6 +3731,9 @@
                             colorScheme: prefs.colorScheme,
                             mirrorCursorStyle: state.agentTerminalMirror
                                 ? state.agentTerminalMirror.options.cursorStyle
+                                : null,
+                            mirrorFontFamily: state.agentTerminalMirror
+                                ? state.agentTerminalMirror.options.fontFamily
                                 : null
                         });
                     },
@@ -5401,6 +5419,7 @@
                 document.getElementById('pref-urlClickAction').value = prefs.urlClickAction;
                 document.getElementById('pref-colorScheme').value = prefs.colorScheme;
                 document.getElementById('pref-fontFace').value = prefs.fontFace;
+                document.getElementById('pref-powerlineSymbols').checked = prefs.powerlineSymbols;
                 document.getElementById('pref-fontSize').value = prefs.fontSize;
                 document.getElementById('pref-fontWeight').value = prefs.fontWeight;
                 document.getElementById('pref-cursorStyle').value = prefs.cursorStyle;
@@ -5486,20 +5505,21 @@
                 prefs.urlClickAction = document.getElementById('pref-urlClickAction').value;
                 prefs.colorScheme = document.getElementById('pref-colorScheme').value;
                 prefs.fontFace = document.getElementById('pref-fontFace').value;
+                prefs.powerlineSymbols = document.getElementById('pref-powerlineSymbols').checked;
                 prefs.fontSize = normalizeFontSize(document.getElementById('pref-fontSize').value, prefs.fontSize);
                 prefs.fontWeight = normalizeFontWeight(document.getElementById('pref-fontWeight').value, prefs.fontWeight);
                 prefs.cursorStyle = normalizeCursorStyle(document.getElementById('pref-cursorStyle').value, prefs.cursorStyle);
                 savePrefs(prefs);
                 terminals.forEach(state => {
                     state.term.options.cursorStyle = prefs.cursorStyle;
-                    state.term.options.fontFamily = prefs.fontFace;
+                    state.term.options.fontFamily = getTerminalFontFace();
                     state.term.options.fontSize = prefs.fontSize;
                     state.term.options.fontWeight = prefs.fontWeight;
                     state.term.options.theme = SCHEMES[prefs.colorScheme] || SCHEMES.vintage;
                     applyCjkWidthPreference(state.term);
                     if (state.agentTerminalMirror) {
                         state.agentTerminalMirror.options.cursorStyle = prefs.cursorStyle;
-                        state.agentTerminalMirror.options.fontFamily = prefs.fontFace;
+                        state.agentTerminalMirror.options.fontFamily = getTerminalFontFace();
                         state.agentTerminalMirror.options.fontSize = prefs.fontSize;
                         state.agentTerminalMirror.options.fontWeight = prefs.fontWeight;
                         state.agentTerminalMirror.options.theme = SCHEMES[prefs.colorScheme] || SCHEMES.vintage;

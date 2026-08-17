@@ -514,15 +514,16 @@ without a CDN:
 - `@xterm/xterm` 6.0.0: `static/js/xterm.js`, `static/css/xterm.css`
 - `@xterm/addon-fit` 0.11.0: `static/js/xterm-addon-fit.js`
 - `@xterm/addon-web-links` 0.12.0: `static/js/xterm-addon-web-links.js`
+- Powerline Symbols: `static/fonts/PowerlineSymbols.otf` (optional prompt-symbol fallback)
 
 The browser bundles are copied from official npm release packages. A matching
 source checkout is kept at `/mnt/d/workspace/github/xterm.js`, tag `6.0.0` /
 commit `f447274f430fd22513f6adbf9862d19524471c04`, for auditing and future
 upgrades.
 
-xterm.js and these addons are MIT licensed. Keep `THIRD-PARTY-NOTICES.md`,
-`static/licenses/xtermjs-MIT-LICENSE.txt`, and `static/js/README.md` when
-publishing releases that include the vendored files.
+xterm.js, these addons, and Powerline Symbols are MIT licensed. Keep
+`THIRD-PARTY-NOTICES.md`, the matching files under `static/licenses/`, and the
+asset README files when publishing releases that include the vendored files.
 
 ## Security Notes
 

@@ -15,6 +15,14 @@ This project incorporates components from the following projects:
 - **Copyright**: (c) 2014-2023 Guillermo Rauch
 - **Project**: https://github.com/socketio/socket.io
 
+## Powerline Symbols
+- **License**: MIT
+- **Copyright**: Copyright 2013 Kim Silkebækken and other contributors
+- **Project**: https://github.com/powerline/powerline
+- **Vendored file**: `static/fonts/PowerlineSymbols.otf`
+- **Upstream commit**: `11808cbe5c16e4621edcaefa916b5add81eab799`
+- **License text**: `static/licenses/powerline-MIT-LICENSE.txt`
+
 ## Microsoft Windows Terminal (Color Schemes)
 - **License**: MIT
 - **Copyright**: (c) Microsoft Corporation
