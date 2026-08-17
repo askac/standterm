@@ -2892,6 +2892,95 @@ def test_access_window_missing_gui_helper_is_nonfatal():
         standterm.get_access_window_python_command = original_get_access_window_python_command
 
 
+def test_windows_proxy_bypass_applies_and_restores_owned_state():
+    original_is_wsl = standterm.is_wsl
+    original_enabled = standterm.windows_proxy_bypass_enabled
+    original_command = standterm.get_windows_proxy_bypass_command
+    original_run = standterm.subprocess.run
+    original_state = standterm.windows_proxy_bypass_state
+    calls = []
+
+    class Result:
+        returncode = 0
+        stderr = ''
+
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        if '-Action' in command and command[command.index('-Action') + 1] == 'Restore':
+            return Result('{"status":"restored","state_file":""}\n')
+        return Result('{"status":"applied","state_file":"C:\\\\Temp\\\\StandTerm\\\\proxy.json"}\n')
+
+    try:
+        standterm.is_wsl = lambda: True
+        standterm.windows_proxy_bypass_enabled = lambda: True
+        standterm.get_windows_proxy_bypass_command = lambda: ['powershell.exe', '-File', 'proxy.ps1']
+        standterm.subprocess.run = fake_run
+        standterm.windows_proxy_bypass_state = None
+
+        assert standterm.start_windows_proxy_bypass('172.20.1.2') == 'applied'
+        assert standterm.cleanup_windows_proxy_bypass() is True
+        assert standterm.cleanup_windows_proxy_bypass() is False
+    finally:
+        standterm.is_wsl = original_is_wsl
+        standterm.windows_proxy_bypass_enabled = original_enabled
+        standterm.get_windows_proxy_bypass_command = original_command
+        standterm.subprocess.run = original_run
+        standterm.windows_proxy_bypass_state = original_state
+
+    assert len(calls) == 2
+    apply_command, apply_kwargs = calls[0]
+    restore_command, restore_kwargs = calls[1]
+    assert apply_command[-6:] == [
+        '-Action',
+        'Apply',
+        '-HostAddress',
+        '172.20.1.2',
+        '-SessionId',
+        standterm.LAUNCHER_INSTANCE_ID,
+    ]
+    assert restore_command[-6:] == [
+        '-Action',
+        'Restore',
+        '-SessionId',
+        standterm.LAUNCHER_INSTANCE_ID,
+        '-StateFile',
+        'C:\\Temp\\StandTerm\\proxy.json',
+    ]
+    assert apply_kwargs['timeout'] == 10
+    assert restore_kwargs['timeout'] == 10
+
+
+def test_windows_proxy_bypass_skips_non_wsl_and_non_private_hosts():
+    original_is_wsl = standterm.is_wsl
+    original_enabled = standterm.windows_proxy_bypass_enabled
+    original_command = standterm.get_windows_proxy_bypass_command
+    try:
+        standterm.get_windows_proxy_bypass_command = lambda: (_ for _ in ()).throw(
+            AssertionError('proxy helper should not run')
+        )
+        standterm.windows_proxy_bypass_enabled = lambda: True
+        standterm.is_wsl = lambda: False
+        assert standterm.start_windows_proxy_bypass('172.20.1.2') == 'skipped'
+        standterm.is_wsl = lambda: True
+        assert standterm.start_windows_proxy_bypass('127.0.0.1') == 'skipped'
+        assert standterm.start_windows_proxy_bypass('example.com') == 'skipped'
+    finally:
+        standterm.is_wsl = original_is_wsl
+        standterm.windows_proxy_bypass_enabled = original_enabled
+        standterm.get_windows_proxy_bypass_command = original_command
+
+
+def test_windows_proxy_helper_result_uses_structured_json_only():
+    assert standterm.parse_proxy_helper_result('warning\n{"status":"applied","state_file":"state"}\n') == {
+        'status': 'applied',
+        'state_file': 'state',
+    }
+    assert standterm.parse_proxy_helper_result('status=applied') == {}
+
+
 def test_access_window_handoff_uses_stdin_not_args_or_env():
     original_access_window_enabled = standterm.access_window_enabled
     original_get_access_window_python_command = standterm.get_access_window_python_command
@@ -5379,6 +5468,9 @@ def main():
         test_console_clipboard_copy_passes_text_to_command,
         test_console_copy_shortcuts_map_token_and_url,
         test_access_window_missing_gui_helper_is_nonfatal,
+        test_windows_proxy_bypass_applies_and_restores_owned_state,
+        test_windows_proxy_bypass_skips_non_wsl_and_non_private_hosts,
+        test_windows_proxy_helper_result_uses_structured_json_only,
         test_access_window_handoff_uses_stdin_not_args_or_env,
         test_access_window_close_protocol_destroys_window,
         test_access_window_launcher_cleanup_is_owned_and_idempotent,

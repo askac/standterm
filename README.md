@@ -164,6 +164,14 @@ browser setup and remain a separate manual check:
 tools/.venv_wsl/bin/python tests/agent_browser_smoke.py
 ```
 
+On Windows, or from WSL with Windows PowerShell interop enabled, the proxy
+bypass helper has an isolated registry smoke test that does not modify the real
+Internet Settings key:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\windows_proxy_bypass_smoke.ps1
+```
+
 ## Terminal Backends
 
 StandTerm has three terminal backends:
@@ -205,6 +213,13 @@ specific remote backend.
 
 On WSL, the default bind is `0.0.0.0` so Windows browsers can reach the WSL
 server IP. Use `STANDTERM_HOST=127.0.0.1` when you only need loopback access.
+
+When the WSL Access URL uses a private address such as `172.x.x.x`, StandTerm
+checks the current Windows system proxy before opening the browser. If needed,
+it temporarily adds only that Access Host to the Windows proxy bypass list and
+restores the previous list when the launcher exits. Set
+`STANDTERM_WINDOWS_PROXY_BYPASS=off` to disable this behavior. If StandTerm is
+forcibly terminated, review the Windows proxy bypass list before the next run.
 
 On WSL, the browser authorization gate provides a StandTerm CA download link in
 its manual authorization help. Import `standterm-local-ca.crt` into Windows
@@ -446,6 +461,7 @@ Common settings:
 | `STANDTERM_ALLOW_REMOTE_LOCAL_SHELL=1` | Acknowledge Local Shell while listening on a non-loopback address. |
 | `STANDTERM_ALLOW_REMOTE_UART=1` | Acknowledge UART while listening on a non-loopback address. |
 | `STANDTERM_TRUST_WSL_CLIENT_IPS=1` | Treat WSL host/NAT client IPs as local for SSH, Local Shell, and UART. Use only on a trusted private WSL network. |
+| `STANDTERM_WINDOWS_PROXY_BYPASS=off` | Disable the temporary Windows system-proxy bypass for the WSL Access Host. |
 | `STANDTERM_DEBUG_POLICY=1` | Print server-side policy decisions. |
 | `STANDTERM_AGENT_PROVIDER=static_env` | Use the static test Agent provider. |
 | `STANDTERM_AGENT_STATIC_INPUT` | Input text for the static test Agent provider. |
