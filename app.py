@@ -16,6 +16,7 @@ import hashlib
 import threading
 import shlex
 import urllib.parse
+import atexit
 from collections import deque
 from pathlib import Path
 from flask import Flask, render_template, request, abort, make_response, redirect, send_file, jsonify
@@ -116,6 +117,8 @@ logging.getLogger('werkzeug').setLevel(logging.ERROR)
 socketio = SocketIO(app, async_mode=ASYNC_MODE, logger=False, engineio_logger=False)
 access_window_process = None
 access_window_process_lock = threading.Lock()
+windows_proxy_bypass_state = None
+windows_proxy_bypass_lock = threading.Lock()
 
 # SSH Configuration
 SSH_HOST = '127.0.0.1'
@@ -5073,6 +5076,7 @@ def schedule_launcher_shutdown():
     def shutdown_after_response():
         time.sleep(0.25)
         cleanup_access_window()
+        cleanup_windows_proxy_bypass()
         os._exit(0)
 
     for session_token in list(active_sessions):
@@ -8096,6 +8100,135 @@ def wslpath_to_windows(path):
         return ''
     return result.stdout.strip()
 
+def windows_proxy_bypass_enabled():
+    mode = get_prefixed_env('WINDOWS_PROXY_BYPASS', 'auto').strip().lower()
+    return mode not in {'0', 'false', 'no', 'off', 'disabled'}
+
+def is_private_non_loopback_host(host):
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.version == 4 and address.is_private and not address.is_loopback
+
+def get_windows_proxy_bypass_command():
+    powershell = shutil.which('powershell.exe')
+    script_path = wslpath_to_windows(APP_DIR / 'scripts' / 'windows_proxy_bypass.ps1')
+    if not powershell or not script_path:
+        return []
+    return [
+        powershell,
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        script_path,
+    ]
+
+def parse_proxy_helper_result(output):
+    for line in reversed((output or '').splitlines()):
+        try:
+            payload = json.loads(line.strip())
+        except (TypeError, ValueError):
+            continue
+        if isinstance(payload, dict) and isinstance(payload.get('status'), str):
+            return payload
+    return {}
+
+def start_windows_proxy_bypass(host):
+    global windows_proxy_bypass_state
+    if not windows_proxy_bypass_enabled() or not is_wsl() or not is_private_non_loopback_host(host):
+        return 'skipped'
+    command = get_windows_proxy_bypass_command()
+    if not command:
+        log_message('[proxy] Windows proxy check skipped: PowerShell helper is unavailable.')
+        return 'unavailable'
+    try:
+        result = subprocess.run(
+            command + [
+                '-Action',
+                'Apply',
+                '-HostAddress',
+                host,
+                '-SessionId',
+                LAUNCHER_INSTANCE_ID,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except Exception as exc:
+        log_message(f'[proxy] Windows proxy check failed: {exc}')
+        return 'failed'
+    payload = parse_proxy_helper_result(result.stdout)
+    status = payload.get('status', 'failed')
+    if result.returncode != 0 or not payload:
+        message = (result.stderr or '').strip().splitlines()
+        detail = message[-1] if message else f'exit code {result.returncode}'
+        log_message(f'[proxy] Windows proxy check failed: {detail}')
+        return 'failed'
+    if status == 'applied':
+        state_file = payload.get('state_file')
+        if not isinstance(state_file, str) or not state_file:
+            log_message('[proxy] Windows proxy bypass was applied without a restorable state file.')
+            return 'failed'
+        with windows_proxy_bypass_lock:
+            windows_proxy_bypass_state = {
+                'command': command,
+                'state_file': state_file,
+                'session_id': LAUNCHER_INSTANCE_ID,
+            }
+        log_message(f'[proxy] Temporarily bypassing the Windows system proxy for {host}.')
+    elif status == 'already_bypassed':
+        log_message(f'[proxy] Windows system proxy already bypasses {host}.')
+    elif status == 'proxy_disabled':
+        log_message('[proxy] Windows system proxy is not configured; no bypass is needed.')
+    elif status != 'ignored_host':
+        log_message(f'[proxy] Windows proxy check returned status={status}.')
+    return status
+
+def cleanup_windows_proxy_bypass():
+    global windows_proxy_bypass_state
+    with windows_proxy_bypass_lock:
+        state = windows_proxy_bypass_state
+        windows_proxy_bypass_state = None
+    if state is None:
+        return False
+    try:
+        result = subprocess.run(
+            state['command'] + [
+                '-Action',
+                'Restore',
+                '-SessionId',
+                state['session_id'],
+                '-StateFile',
+                state['state_file'],
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        payload = parse_proxy_helper_result(result.stdout)
+        status = payload.get('status')
+        if result.returncode != 0 or not status:
+            message = (result.stderr or '').strip().splitlines()
+            detail = message[-1] if message else f'exit code {result.returncode}'
+            log_message(f'[proxy] Windows proxy bypass restore failed: {detail}')
+        elif status == 'restored':
+            log_message('[proxy] Restored the previous Windows system proxy bypass settings.')
+        elif status == 'changed_externally':
+            log_message('[proxy] Windows proxy settings changed externally; leaving the newer settings untouched.')
+        elif status not in {'state_missing', 'session_mismatch'}:
+            log_message(f'[proxy] Windows proxy bypass restore returned status={status}.')
+    except Exception as exc:
+        log_message(f'[proxy] Windows proxy bypass restore failed: {exc}')
+    return True
+
+atexit.register(cleanup_windows_proxy_bypass)
+
 def get_access_window_script_path(for_windows=False):
     script_path = APP_DIR / 'scripts' / 'access_window.py'
     if for_windows:
@@ -8301,6 +8434,7 @@ if __name__ == '__main__':
     if FORCE_CONNECTION_TYPE:
         log_message(f"Forced Connection: {FORCE_CONNECTION_TYPE}")
     access_url = f"{scheme}://{access_host}:{port}/?token={ACCESS_TOKEN}"
+    start_windows_proxy_bypass(access_host)
     log_message(f"Listening on: {bind_host}:{port}")
     write_external_agentinfo_files(base_url=f'{scheme}://{access_host}:{port}')
     for line in build_external_agent_startup_lines():
@@ -8350,3 +8484,4 @@ if __name__ == '__main__':
         socketio.run(app, **run_kwargs)
     finally:
         cleanup_access_window()
+        cleanup_windows_proxy_bypass()
