@@ -5870,9 +5870,10 @@ def on_connect():
     client_ip = get_request_client_ip()
     if not session_token:
         log_message(f"[!] Unauthorized WebSocket attempt: {request.sid} from {client_ip}")
-        raise ConnectionRefusedError({
+        message = 'Session expired. Enter the access token again.'
+        raise ConnectionRefusedError(message, {
             'error_code': 'session_required',
-            'message': 'Session expired. Enter the access token again.',
+            'message': message,
         })
     socket_session_tokens[request.sid] = session_token
     socket_client_ips[request.sid] = client_ip

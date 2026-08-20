@@ -176,6 +176,12 @@
         #controls input, #controls select { display: block; width: 100%; margin-bottom: 15px; padding: 10px; background: #333; border: 1px solid #555; color: white; border-radius: 4px; box-sizing: border-box; }
         #controls button { width: 100%; padding: 12px; background: #0a84ff; border: none; color: white; border-radius: 4px; cursor: pointer; font-weight: bold; }
         #controls button:hover { background: #007aff; }
+        #server-availability-message {
+            display: none; margin-bottom: 16px; padding: 12px;
+            background: #3a2618; border: 1px solid #8a572f; border-radius: 5px;
+            color: #ffd7a8; font-size: 13px; line-height: 1.45;
+        }
+        #server-availability-message strong { display: block; margin-bottom: 4px; color: #ff9f0a; }
         .mode-selector { display: flex; border: 1px solid #555; border-radius: 6px; overflow: hidden; margin-bottom: 15px; background: #161616; }
         .mode-selector label { flex: 1; padding: 9px 8px; text-align: center; cursor: pointer; font-size: 13px; color: #aaa; border-right: 1px solid #444; user-select: none; }
         .mode-selector label:last-child { border-right: none; }
@@ -708,6 +714,10 @@
             <h2>StandTerm</h2>
             <span id="launcher-session-id">Session ID: {{ launcher_instance_id }}</span>
         </div>
+        <div id="server-availability-message" role="status" aria-live="polite">
+            <strong>Server not available</strong>
+            StandTerm is not running or cannot be reached. This page will keep checking and reconnect automatically. If the server restarted, you may be asked for the current access token.
+        </div>
         <div id="errorBox" class="error-msg"></div>
         <div id="actionBox" class="action-box">
             <div id="actionMessage"></div>
@@ -873,8 +883,8 @@
 
     <div id="session-recovery-modal">
         <div class="session-recovery-box">
-            <h3>Session expired</h3>
-            <p>Enter the access token printed by the launcher to continue.</p>
+            <h3>Access token required</h3>
+            <p>The StandTerm server restarted or your session expired. Enter the access token printed by the current launcher to continue.</p>
             <form id="session-recovery-form" autocomplete="off">
                 <input id="session-recovery-token" name="token" type="password" required>
                 <button type="submit">Unlock</button>
@@ -1368,6 +1378,7 @@
             const connectionDiagnosticsLog = document.getElementById('connection-diagnostics-log');
             const connectionDiagnosticsCopyBtn = document.getElementById('connection-diagnostics-copy');
             const connectionDiagnosticsClearBtn = document.getElementById('connection-diagnostics-clear');
+            const serverAvailabilityMessage = document.getElementById('server-availability-message');
             const debugEnabled = (new URLSearchParams(window.location.search)).get('debug') === '1';
             const CONNECTION_DIAGNOSTICS_STORAGE_KEY = 'standterm-connection-diagnostics-v1';
             const CONNECTION_DIAGNOSTICS_LIMIT = 100;
@@ -1386,6 +1397,7 @@
             let pendingReconnect = null;
             let overlayFallbackTimer = null;
             let socket = null;
+            let serverConnectionState = 'connecting';
             let terminalPolicy = { ...INITIAL_TERMINAL_POLICY };
             let defaultConnectionType = 'ssh';
             let forcedConnectionType = null;
@@ -2918,8 +2930,9 @@
                 const authorizationAvailable = !!browserAuthorization.available || requiredFor.length > 0;
                 const alreadyAuthorized = !!browserAuthorization.authorized;
                 const authorizationRequired = authorizationAvailable && !alreadyAuthorized;
-                browserAuthBox.style.display = authorizationRequired ? 'block' : 'none';
-                connectionForm.style.display = authorizationRequired ? 'none' : 'block';
+                const serverUnavailable = serverConnectionState === 'unavailable';
+                browserAuthBox.style.display = !serverUnavailable && authorizationRequired ? 'block' : 'none';
+                connectionForm.style.display = serverUnavailable || authorizationRequired ? 'none' : 'block';
                 browserAuthMessage.innerText = authorizationRequired
                     ? (message || 'First time? Please use an Auth URL.')
                     : '';
@@ -3727,8 +3740,25 @@
                     getSocketState() {
                         return cloneForTest({
                             connected: !!(socket && socket.connected),
-                            id: socket && socket.id ? socket.id : null
+                            id: socket && socket.id ? socket.id : null,
+                            serverConnectionState,
+                            retriesContinuously: !!(socket && socket.io && socket.io._reconnectionAttempts === Infinity)
                         });
+                    },
+                    disconnectSocketForTest() {
+                        if (!socket) return false;
+                        socket.disconnect();
+                        return true;
+                    },
+                    closeSocketTransportForTest() {
+                        if (!socket || !socket.io || !socket.io.engine) return false;
+                        socket.io.engine.close();
+                        return true;
+                    },
+                    connectSocketForTest() {
+                        if (!socket) return false;
+                        socket.connect();
+                        return true;
                     },
                     getActiveAgentState() {
                         return serializeAgentForTest(getActiveTerminalState());
@@ -3902,6 +3932,9 @@
                     online: navigator.onLine,
                     visibility: document.visibilityState
                 });
+                if (socket && !socket.connected && serverConnectionState === 'unavailable') {
+                    socket.connect();
+                }
             });
             window.addEventListener('offline', () => {
                 recordConnectionDiagnostic('page.offline', {
@@ -3924,9 +3957,15 @@
                 });
             });
 
-            socket = io({ transports: ['polling', 'websocket'], reconnectionAttempts: 5 });
+            socket = io({
+                transports: ['polling', 'websocket'],
+                reconnection: true,
+                reconnectionAttempts: Infinity
+            });
+            setServerConnectionState('connecting');
             installBrowserTestHook();
             socket.io.on('reconnect_attempt', attempt => {
+                setServerConnectionState('unavailable');
                 recordConnectionDiagnostic('socket.reconnect_attempt', {
                     attempt,
                     online: navigator.onLine,
@@ -3963,8 +4002,7 @@
                     online: navigator.onLine,
                     visibility: document.visibilityState
                 });
-                socketStatusEl.innerText = "Connected";
-                socketStatusEl.style.color = "#34c759";
+                setServerConnectionState('available');
                 hideSessionRecovery();
                 scheduleSessionRenew();
                 updateDebugHud('socket.connect', 'connected');
@@ -3982,12 +4020,10 @@
                     visibility: document.visibilityState
                 });
                 if (isSessionRequiredConnectError(err)) {
-                    socketStatusEl.innerText = "Session expired";
-                    socketStatusEl.style.color = "#ff453a";
-                    showSessionRecovery('Session expired. Enter the access token again.');
+                    setServerConnectionState('session_required');
+                    showSessionRecovery('Enter the access token printed by the current StandTerm launcher.');
                 } else {
-                    socketStatusEl.innerText = "Reconnecting...";
-                    socketStatusEl.style.color = "#ff9f0a";
+                    setServerConnectionState('unavailable');
                 }
                 updateDebugHud('socket.connect_error', err && err.message ? err.message : 'connect_error');
                 updatePolicyDebugPanel('socket.connect_error', { message: err && err.message ? err.message : null });
@@ -4083,8 +4119,7 @@
                 clearBrowserPairingResponseTimer();
                 setBrowserAuthBusy(false);
                 clearSessionRenewTimer();
-                socketStatusEl.innerText = "Disconnected (" + r + ")";
-                socketStatusEl.style.color = "#ff9f0a";
+                setServerConnectionState('unavailable');
                 terminals.forEach(state => {
                     if (state.agent && state.agent.snapshotTimer) clearTimeout(state.agent.snapshotTimer);
                     state.connected = false;
@@ -4094,7 +4129,6 @@
                     state.needsReplay = true;
                     state.agent = createAgentClientState();
                 });
-                connectBtn.disabled = false;
                 updateActiveTerminalUi();
                 updateDebugHud('socket.disconnect', r);
                 updatePolicyDebugPanel('socket.disconnect', { reason: r });
@@ -4110,6 +4144,31 @@
             function hideError() {
                 errorEl.style.display = 'none';
                 errorEl.innerText = '';
+            }
+
+            function setServerConnectionState(state) {
+                const allowedStates = new Set(['connecting', 'available', 'unavailable', 'session_required']);
+                if (!allowedStates.has(state)) return;
+                serverConnectionState = state;
+                const unavailable = state === 'unavailable';
+                if (serverAvailabilityMessage) {
+                    serverAvailabilityMessage.style.display = unavailable ? 'block' : 'none';
+                }
+                updateBrowserAuthUi();
+                if (state === 'available') {
+                    socketStatusEl.innerText = 'Connected';
+                    socketStatusEl.style.color = '#34c759';
+                } else if (state === 'session_required') {
+                    socketStatusEl.innerText = 'Access token required';
+                    socketStatusEl.style.color = '#ff453a';
+                } else if (state === 'unavailable') {
+                    socketStatusEl.innerText = 'Server not available (retrying)';
+                    socketStatusEl.style.color = '#ff9f0a';
+                } else {
+                    socketStatusEl.innerText = 'Connecting...';
+                    socketStatusEl.style.color = '#ffcc00';
+                }
+                connectBtn.disabled = state !== 'available';
             }
 
             function isSessionRequiredConnectError(err) {
@@ -4284,7 +4343,7 @@
 
             function resetConnectButton() {
                 connectBtn.innerText = getConnectButtonText();
-                connectBtn.disabled = false;
+                connectBtn.disabled = serverConnectionState !== 'available';
                 updatePolicyDebugPanel('reset_connect_button');
             }
 
@@ -4336,6 +4395,7 @@
             }
 
             const doConnect = () => {
+                if (serverConnectionState !== 'available' || !socket || !socket.connected) return;
                 pendingReconnect = null;
                 submitConnection(getConnectionFormData());
             };

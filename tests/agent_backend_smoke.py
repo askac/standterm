@@ -3253,7 +3253,9 @@ def test_browser_authorization_gate_ui_contract():
     assert 'Download authorization file manually' in template
     assert 'id="browser-auth-help-modal"' in template
     assert "authorizationUrl.searchParams.get('authorize')" in template
-    assert "connectionForm.style.display = authorizationRequired ? 'none' : 'block';" in template
+    assert "const serverUnavailable = serverConnectionState === 'unavailable';" in template
+    assert "browserAuthBox.style.display = !serverUnavailable && authorizationRequired ? 'block' : 'none';" in template
+    assert "connectionForm.style.display = serverUnavailable || authorizationRequired ? 'none' : 'block';" in template
     assert 'startBrowserPairingAutoCheck();' in template
     assert 'id="checkBrowserAuthBtn"' not in template
 

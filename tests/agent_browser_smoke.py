@@ -258,6 +258,112 @@ def close_context(context):
         pass
 
 
+def test_server_unavailable_waits_for_reconnect(browser, access_url):
+    context = browser.new_context(viewport={'width': 1280, 'height': 800})
+    page = context.new_page()
+    try:
+        page.goto(debug_url(access_url), wait_until='domcontentloaded')
+        page.wait_for_function('() => !!window.terminalTest', timeout=10000)
+        page.wait_for_function(
+            "() => window.terminalTest.getSocketState().connected === true",
+            timeout=10000,
+        )
+        initial_state = page.evaluate("() => window.terminalTest.getSocketState()")
+        check(initial_state['retriesContinuously'] is True, 'socket reconnect attempts are still bounded')
+
+        context.set_offline(True)
+        page.evaluate("() => window.terminalTest.closeSocketTransportForTest()")
+        page.wait_for_function(
+            "() => window.terminalTest.getSocketState().serverConnectionState === 'unavailable'",
+            timeout=5000,
+        )
+        unavailable = page.evaluate(
+            """() => ({
+                socketStatus: document.getElementById('socketStatus').innerText,
+                message: document.getElementById('server-availability-message').innerText,
+                messageDisplay: document.getElementById('server-availability-message').style.display,
+                connectionFormDisplay: getComputedStyle(document.getElementById('connection-form')).display,
+                connectDisabled: document.getElementById('connectBtn').disabled
+            })"""
+        )
+        check(unavailable['socketStatus'] == 'Server not available (retrying)', 'socket status did not identify server unavailability')
+        check('keep checking and reconnect automatically' in unavailable['message'], 'server unavailable guidance did not explain automatic recovery')
+        check(unavailable['messageDisplay'] == 'block', 'server unavailable guidance was not visible')
+        check(unavailable['connectionFormDisplay'] == 'none', 'connection picker remained visible while the server was unavailable')
+        check(unavailable['connectDisabled'] is True, 'terminal connect button remained enabled while the server was unavailable')
+
+        context.set_offline(False)
+        page.wait_for_function(
+            "() => window.terminalTest.getSocketState().connected === true",
+            timeout=10000,
+        )
+        recovered = page.evaluate(
+            """() => ({
+                serverState: window.terminalTest.getSocketState().serverConnectionState,
+                messageDisplay: document.getElementById('server-availability-message').style.display,
+                connectionFormDisplay: getComputedStyle(document.getElementById('connection-form')).display,
+                connectDisabled: document.getElementById('connectBtn').disabled
+            })"""
+        )
+        check(recovered['serverState'] == 'available', 'server state did not recover after reconnect')
+        check(recovered['messageDisplay'] == 'none', 'server unavailable guidance remained visible after reconnect')
+        check(recovered['connectionFormDisplay'] == 'block', 'connection picker did not return after reconnect')
+        check(recovered['connectDisabled'] is False, 'terminal connect button did not recover after reconnect')
+    finally:
+        close_context(context)
+
+
+def test_invalid_session_reconnect_prompts_for_current_token(browser, access_url):
+    parsed = urllib.parse.urlparse(access_url)
+    token = urllib.parse.parse_qs(parsed.query)['token'][0]
+    context = browser.new_context(viewport={'width': 1280, 'height': 800})
+    page = context.new_page()
+    try:
+        page.goto(debug_url(access_url), wait_until='domcontentloaded')
+        page.wait_for_function('() => !!window.terminalTest', timeout=10000)
+        page.wait_for_function(
+            "() => window.terminalTest.getSocketState().connected === true",
+            timeout=10000,
+        )
+        context.clear_cookies()
+        page.evaluate("() => window.terminalTest.disconnectSocketForTest()")
+        page.wait_for_function(
+            "() => window.terminalTest.getSocketState().serverConnectionState === 'unavailable'",
+            timeout=5000,
+        )
+        page.evaluate("() => window.terminalTest.connectSocketForTest()")
+        page.wait_for_function(
+            "() => window.terminalTest.getSocketState().serverConnectionState === 'session_required'",
+            timeout=10000,
+        )
+        page.wait_for_selector('#session-recovery-modal.open', timeout=5000)
+        recovery = page.evaluate(
+            """() => ({
+                serverState: window.terminalTest.getSocketState().serverConnectionState,
+                title: document.querySelector('#session-recovery-modal h3').innerText,
+                detail: document.querySelector('#session-recovery-modal p').innerText,
+                message: document.getElementById('session-recovery-message').innerText
+            })"""
+        )
+        check(recovery['serverState'] == 'session_required', 'invalid session did not use the structured session-required state')
+        check(recovery['title'] == 'Access token required', 'session recovery did not ask for an access token')
+        check('server restarted or your session expired' in recovery['detail'], 'session recovery did not explain why the token is required')
+        check('current StandTerm launcher' in recovery['message'], 'session recovery did not request the current launcher token')
+
+        page.fill('#session-recovery-token', token)
+        page.click('#session-recovery-form button[type="submit"]')
+        page.wait_for_function(
+            "() => window.terminalTest.getSocketState().connected === true",
+            timeout=10000,
+        )
+        check(
+            page.evaluate("() => window.terminalTest.getSocketState().serverConnectionState") == 'available',
+            'valid current token did not restore the server connection',
+        )
+    finally:
+        close_context(context)
+
+
 def js_arg_object(event_name, payload):
     return {'event_name': event_name, 'payload': payload}
 
@@ -1547,6 +1653,8 @@ def main():
     tests = [
         test_access_required_page_accepts_token_login,
         test_browser_authorization_gate_hides_connection_controls,
+        test_server_unavailable_waits_for_reconnect,
+        test_invalid_session_reconnect_prompts_for_current_token,
         test_agent_panel_can_be_dragged,
         test_terminal_pip_hides_selected_tab_and_keeps_background_tab,
         test_restored_terminal_list_allocates_next_new_tab_id,
