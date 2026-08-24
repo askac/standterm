@@ -2,6 +2,7 @@
 import argparse
 import copy
 import json
+import os
 import sys
 import threading
 
@@ -31,7 +32,7 @@ def parse_args():
     parser.add_argument('--agentinfo', help='Read tokenless StandTerm agentinfo JSON from a local path or URL')
     parser.add_argument('--url', help='StandTerm base URL, for example http://127.0.0.1:5010')
     parser.add_argument('--token', help='External agent attach token. Omit only on dev servers with STANDTERM_AGENT_DEV_TOKEN=1.')
-    parser.add_argument('--terminal', default='main', help='Default terminal id')
+    parser.add_argument('--terminal', help='Default terminal id')
     parser.add_argument('--ca-file', help='CA certificate bundle used to verify HTTPS StandTerm servers')
     parser.add_argument('--insecure', action='store_true', help='Disable HTTPS certificate verification')
     return parser.parse_args()
@@ -328,35 +329,51 @@ class StandTermConnection:
         self.get_json = get_json
         self.lock = threading.Lock()
 
-    def _load_handoff(self):
-        if not self.args.handoff:
+    def _load_handoff(self, terminal_id=None):
+        handoff_path = getattr(self.args, 'handoff', None)
+        if not handoff_path:
+            agentinfo = self._load_agentinfo()
+            selected_terminal = terminal_id or getattr(self.args, 'terminal', None)
+            if agentinfo and selected_terminal:
+                handoff_path = cli.resolve_terminal_handoff_path(agentinfo, selected_terminal)
+            elif agentinfo and isinstance(agentinfo.get('handoff_path'), str):
+                handoff_path = agentinfo['handoff_path']
+        if not handoff_path or not os.path.isfile(handoff_path):
             return {}
-        return cli.load_handoff(self.args.handoff)
+        return cli.load_handoff(handoff_path)
 
     def _load_agentinfo(self):
-        if not self.args.agentinfo:
+        if not getattr(self.args, 'agentinfo', None):
             return None
         return cli.load_agentinfo(
             self.args.agentinfo,
-            ca_file=self.args.ca_file,
-            insecure=self.args.insecure,
+            ca_file=getattr(self.args, 'ca_file', None),
+            insecure=getattr(self.args, 'insecure', False),
         )
 
     def connection_fields(self, terminal_id=None):
-        handoff = self._load_handoff()
+        agentinfo = self._load_agentinfo() or {}
+        handoff = self._load_handoff(terminal_id=terminal_id)
         transport = handoff.get('transport') if isinstance(handoff.get('transport'), dict) else {}
-        url = self.args.url or handoff.get('url')
-        token = self.args.token or handoff.get('token')
-        terminal = terminal_id or self.args.terminal or handoff.get('terminal_id') or 'main'
-        ca_file = self.args.ca_file or transport.get('tls_ca_cert_path') or handoff.get('tls_ca_cert_path')
+        agentinfo_transport = agentinfo.get('transport') if isinstance(agentinfo.get('transport'), dict) else {}
+        url = getattr(self.args, 'url', None) or handoff.get('url') or agentinfo.get('base_url')
+        token = getattr(self.args, 'token', None) or handoff.get('token')
+        terminal = terminal_id or getattr(self.args, 'terminal', None) or handoff.get('terminal_id') or 'main'
+        ca_file = (
+            getattr(self.args, 'ca_file', None)
+            or transport.get('tls_ca_cert_path')
+            or handoff.get('tls_ca_cert_path')
+            or agentinfo_transport.get('tls_ca_cert_path')
+            or agentinfo.get('tls_ca_cert_path')
+        )
         if not url:
-            raise ValueError('--url is required unless --handoff provides url')
+            raise ValueError('--url is required unless --handoff or --agentinfo provides url')
         return {
             'url': url,
             'token': token,
             'terminal_id': terminal,
             'ca_file': ca_file,
-            'insecure': self.args.insecure,
+            'insecure': getattr(self.args, 'insecure', False),
         }
 
     def discover(self, refresh=False):

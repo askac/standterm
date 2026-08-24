@@ -37,6 +37,8 @@
         #agent-pause-btn:hover { border-color: #ff453a; background: #4a1616; color: #fff; }
         #agent-pause-btn.visible { display: inline-flex; align-items: center; justify-content: center; }
         #agent-toggle-btn.shifted { margin-left: 0; }
+        .agent-status-mint { display: none; }
+        .agent-status-mint.visible { display: inline-flex; align-items: center; justify-content: center; }
         #new-tab-btn { margin-left: auto; }
         body.operator-observing #status-bar { background: #5a1010; border-top-color: #ff453a; color: #fff; }
         #terminal { position: absolute; top: 0; left: 0; right: 0; height: calc(100vh - var(--status-bar-height)); width: 100vw; background: #000; z-index: 1; display: none; }
@@ -176,6 +178,12 @@
         #controls input, #controls select { display: block; width: 100%; margin-bottom: 15px; padding: 10px; background: #333; border: 1px solid #555; color: white; border-radius: 4px; box-sizing: border-box; }
         #controls button { width: 100%; padding: 12px; background: #0a84ff; border: none; color: white; border-radius: 4px; cursor: pointer; font-weight: bold; }
         #controls button:hover { background: #007aff; }
+        #server-availability-message {
+            display: none; margin-bottom: 16px; padding: 12px;
+            background: #3a2618; border: 1px solid #8a572f; border-radius: 5px;
+            color: #ffd7a8; font-size: 13px; line-height: 1.45;
+        }
+        #server-availability-message strong { display: block; margin-bottom: 4px; color: #ff9f0a; }
         .mode-selector { display: flex; border: 1px solid #555; border-radius: 6px; overflow: hidden; margin-bottom: 15px; background: #161616; }
         .mode-selector label { flex: 1; padding: 9px 8px; text-align: center; cursor: pointer; font-size: 13px; color: #aaa; border-right: 1px solid #444; user-select: none; }
         .mode-selector label:last-child { border-right: none; }
@@ -708,6 +716,10 @@
             <h2>StandTerm</h2>
             <span id="launcher-session-id">Session ID: {{ launcher_instance_id }}</span>
         </div>
+        <div id="server-availability-message" role="status" aria-live="polite">
+            <strong>Server not available</strong>
+            StandTerm is not running or cannot be reached. This page will keep checking and reconnect automatically. If the server restarted, you may be asked for the current access token.
+        </div>
         <div id="errorBox" class="error-msg"></div>
         <div id="actionBox" class="action-box">
             <div id="actionMessage"></div>
@@ -795,6 +807,8 @@
         <span id="uptime-section" class="sb-item" style="display:none"><span class="sb-sep">|</span>connected:&nbsp;<span id="uptime-display"></span></span>
         <button id="agent-pause-btn" class="status-action" title="Pause Agent terminal input">PAUSE</button>
         <button id="agent-toggle-btn" class="status-action" title="Show Agent panel">Show Agent Panel</button>
+        <button id="agent-status-mint-btn" class="status-action agent-status-mint" title="Mint a standard external-agent token for the active terminal">Mint Agent</button>
+        <button id="agent-status-mint-3x-btn" class="status-action agent-status-mint" title="Mint a 3x idle-time external-agent token for the active terminal">Mint Agent 3&times;</button>
         <button id="new-tab-btn" class="status-action" title="New terminal tab">Add tab</button>
         <button id="close-tabs-btn" class="status-action" title="Close all terminal tabs">Close tabs</button>
         <div id="quick-settings" title="Settings">&#x2699;&#xFE0F;</div>
@@ -831,6 +845,7 @@
             <div id="agent-external-box">
                 <div id="agent-external-actions">
                     <button type="button" id="agent-external-token-btn">Mint token</button>
+                    <button type="button" id="agent-external-token-3x-btn">Mint token 3&times;</button>
                 </div>
                 <div id="agent-external-hint">Enable external agent before minting a token.</div>
                 <details id="agent-external-output">
@@ -873,8 +888,8 @@
 
     <div id="session-recovery-modal">
         <div class="session-recovery-box">
-            <h3>Session expired</h3>
-            <p>Enter the access token printed by the launcher to continue.</p>
+            <h3>Access token required</h3>
+            <p>The StandTerm server restarted or your session expired. Enter the access token printed by the current launcher to continue.</p>
             <form id="session-recovery-form" autocomplete="off">
                 <input id="session-recovery-token" name="token" type="password" required>
                 <button type="submit">Unlock</button>
@@ -1320,6 +1335,9 @@
             const agentMockSendBtn = document.getElementById('agent-mock-send-btn');
             const agentProviderRunBtn = document.getElementById('agent-provider-run-btn');
             const agentExternalTokenBtn = document.getElementById('agent-external-token-btn');
+            const agentExternalToken3xBtn = document.getElementById('agent-external-token-3x-btn');
+            const agentStatusMintBtn = document.getElementById('agent-status-mint-btn');
+            const agentStatusMint3xBtn = document.getElementById('agent-status-mint-3x-btn');
             const agentGatePrivacy = document.getElementById('agent-gate-privacy');
             const agentGateHuman = document.getElementById('agent-gate-human');
             const agentGatePause = document.getElementById('agent-gate-pause');
@@ -1368,6 +1386,7 @@
             const connectionDiagnosticsLog = document.getElementById('connection-diagnostics-log');
             const connectionDiagnosticsCopyBtn = document.getElementById('connection-diagnostics-copy');
             const connectionDiagnosticsClearBtn = document.getElementById('connection-diagnostics-clear');
+            const serverAvailabilityMessage = document.getElementById('server-availability-message');
             const debugEnabled = (new URLSearchParams(window.location.search)).get('debug') === '1';
             const CONNECTION_DIAGNOSTICS_STORAGE_KEY = 'standterm-connection-diagnostics-v1';
             const CONNECTION_DIAGNOSTICS_LIMIT = 100;
@@ -1386,6 +1405,7 @@
             let pendingReconnect = null;
             let overlayFallbackTimer = null;
             let socket = null;
+            let serverConnectionState = 'connecting';
             let terminalPolicy = { ...INITIAL_TERMINAL_POLICY };
             let defaultConnectionType = 'ssh';
             let forcedConnectionType = null;
@@ -2134,6 +2154,7 @@
                     expiresAt: fields.expiresAt === null || fields.expiresAt === undefined
                         ? null
                         : (Number.isFinite(Number(fields.expiresAt)) ? Number(fields.expiresAt) : null),
+                    idleTimeoutMultiplier: fields.idleTimeoutMultiplier === 3 ? 3 : 1,
                     command: typeof fields.command === 'string' ? fields.command : '',
                     errorCode: typeof fields.errorCode === 'string' ? fields.errorCode : null
                 };
@@ -2168,9 +2189,13 @@
                 const paused = !!(agent && (agent.paused || mode === AGENT_MODE_PAUSED));
                 const disabled = !usable || mode === AGENT_MODE_DISABLED || paused || minting;
                 agentExternalTokenBtn.disabled = disabled;
+                agentExternalToken3xBtn.disabled = disabled;
                 agentExternalTokenBtn.innerText = minting
                     ? 'Minting...'
                     : (hasRenewableAgentExternalToken(state) ? 'Renew token' : 'Mint token');
+                agentExternalToken3xBtn.innerText = minting
+                    ? 'Minting...'
+                    : (hasRenewableAgentExternalToken(state) ? 'Renew token 3×' : 'Mint token 3×');
                 if (!usable) {
                     agentExternalHint.innerText = 'Connect a terminal before minting a token.';
                 } else if (minting) {
@@ -2200,13 +2225,42 @@
                 }
             }
 
+            function updateAgentStatusMintButtons() {
+                const state = getActiveTerminalState();
+                const agent = state ? state.agent : null;
+                const mode = agent ? agent.mode : AGENT_MODE_DISABLED;
+                const token = getCurrentAgentExternalToken(state);
+                const minting = !!(token && token.status === 'minting');
+                const available = !!(
+                    canUseAgentPanel(state)
+                    && !agentPanelVisible
+                    && mode !== AGENT_MODE_DISABLED
+                    && mode !== AGENT_MODE_PAUSED
+                    && !(agent && agent.paused)
+                );
+                [agentStatusMintBtn, agentStatusMint3xBtn].forEach(button => {
+                    button.classList.toggle('visible', available);
+                    button.disabled = !available || minting;
+                });
+                agentStatusMintBtn.innerText = minting ? 'Minting...' : 'Mint Agent';
+                agentStatusMint3xBtn.innerText = minting ? 'Minting...' : 'Mint Agent 3×';
+                if (state) {
+                    const target = state.label || state.id;
+                    agentStatusMintBtn.title = `Mint a standard external-agent token for ${target}`;
+                    agentStatusMint3xBtn.title = `Mint a 3× idle-time external-agent token for ${target}`;
+                }
+            }
+
             function applyAgentExternalTokenState(data) {
                 if (!data || typeof data.terminal_id !== 'string') return;
                 const state = terminals.get(data.terminal_id);
                 if (!state || !state.agent) return;
                 const token = getCurrentAgentExternalToken(state);
                 if (!token) return;
-                token.status = typeof data.token_status === 'string' ? data.token_status : 'active';
+                const tokenStatus = typeof data.token_status === 'string' ? data.token_status : 'active';
+                if (!(token.status === 'minting' && tokenStatus === 'active')) {
+                    token.status = tokenStatus;
+                }
                 token.expiresAt = getExternalAgentTokenExpiresAt(data.external_agent_token);
                 updateAgentPanel();
                 updateAgentDebugState('agent.external_token_state', state);
@@ -2277,6 +2331,7 @@
                 agentMockSendBtn.disabled = agentMockInput.disabled || !agentMockInput.value;
                 agentProviderRunBtn.disabled = agentMockInput.disabled;
                 updateAgentExternalUi(usable, mode, agent, state);
+                updateAgentStatusMintButtons();
                 renderAgentGateState(state);
                 renderAgentStatusPanel(state);
                 renderAgentActionPanel(state);
@@ -2517,6 +2572,174 @@
                 });
             }
 
+            function rgbNumberToCss(value) {
+                return `#${Math.max(0, Number(value) || 0).toString(16).padStart(6, '0').slice(-6)}`;
+            }
+
+            function buildAgentTerminalPalette(theme) {
+                const ansiKeys = [
+                    'black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white',
+                    'brightBlack', 'brightRed', 'brightGreen', 'brightYellow',
+                    'brightBlue', 'brightMagenta', 'brightCyan', 'brightWhite'
+                ];
+                const palette = ansiKeys.map(key => theme[key] || '#000000');
+                const cubeLevels = [0, 95, 135, 175, 215, 255];
+                for (let red = 0; red < 6; red += 1) {
+                    for (let green = 0; green < 6; green += 1) {
+                        for (let blue = 0; blue < 6; blue += 1) {
+                            palette.push(rgbNumberToCss(
+                                (cubeLevels[red] << 16) | (cubeLevels[green] << 8) | cubeLevels[blue]
+                            ));
+                        }
+                    }
+                }
+                for (let index = 0; index < 24; index += 1) {
+                    const level = 8 + index * 10;
+                    palette.push(rgbNumberToCss((level << 16) | (level << 8) | level));
+                }
+                return palette;
+            }
+
+            function getAgentTerminalCellColor(cell, foreground, theme, palette) {
+                const isRgb = foreground ? cell.isFgRGB() : cell.isBgRGB();
+                const isPalette = foreground ? cell.isFgPalette() : cell.isBgPalette();
+                const value = foreground ? cell.getFgColor() : cell.getBgColor();
+                if (isRgb) return rgbNumberToCss(value);
+                if (isPalette) {
+                    let paletteIndex = Math.max(0, Math.min(255, Number(value) || 0));
+                    if (foreground && cell.isBold() && paletteIndex < 8) paletteIndex += 8;
+                    return palette[paletteIndex] || (foreground ? theme.foreground : theme.background);
+                }
+                return foreground ? theme.foreground : theme.background;
+            }
+
+            function getAgentMirrorCanvasGeometry(state, renderElement) {
+                const cols = state.agentTerminalMirrorSize.cols;
+                const rows = state.agentTerminalMirrorSize.rows;
+                const rect = renderElement ? renderElement.getBoundingClientRect() : null;
+                if (rect && rect.width >= cols && rect.height >= rows) {
+                    return {
+                        pixelWidth: Math.ceil(rect.width),
+                        pixelHeight: Math.ceil(rect.height),
+                        cellWidth: rect.width / cols,
+                        cellHeight: rect.height / rows
+                    };
+                }
+                const measureCanvas = document.createElement('canvas');
+                const measureContext = measureCanvas.getContext('2d');
+                const fontSize = normalizeFontSize(state.agentTerminalMirror.options.fontSize || prefs.fontSize);
+                const fontWeight = state.agentTerminalMirror.options.fontWeight || prefs.fontWeight;
+                const fontFamily = state.agentTerminalMirror.options.fontFamily || getTerminalFontFace();
+                measureContext.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
+                const cellWidth = Math.max(1, Math.ceil(measureContext.measureText('W').width));
+                const cellHeight = Math.max(1, Math.ceil(fontSize * 1.25));
+                return {
+                    pixelWidth: cols * cellWidth,
+                    pixelHeight: rows * cellHeight,
+                    cellWidth,
+                    cellHeight
+                };
+            }
+
+            function renderAgentTerminalMirrorToPng(state, renderElement) {
+                syncAgentTerminalMirrorSize(state);
+                const mirror = state.agentTerminalMirror;
+                const activeBuffer = mirror && mirror.buffer && mirror.buffer.active;
+                if (!activeBuffer || typeof activeBuffer.getLine !== 'function') return null;
+                const cols = state.agentTerminalMirrorSize.cols;
+                const rows = state.agentTerminalMirrorSize.rows;
+                if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols <= 0 || rows <= 0) return null;
+                const geometry = getAgentMirrorCanvasGeometry(state, renderElement);
+                if (geometry.pixelWidth * geometry.pixelHeight > AGENT_VIEWPORT_RENDER_MAX_PIXELS) {
+                    return { errorCode: 'agent_render_too_large' };
+                }
+                const canvas = document.createElement('canvas');
+                canvas.width = geometry.pixelWidth;
+                canvas.height = geometry.pixelHeight;
+                const context = canvas.getContext('2d');
+                if (!context) return null;
+                const theme = mirror.options.theme || SCHEMES[prefs.colorScheme] || SCHEMES.vintage;
+                const normalizedTheme = {
+                    ...theme,
+                    background: theme.background || '#000000',
+                    foreground: theme.foreground || '#ffffff'
+                };
+                const palette = buildAgentTerminalPalette(normalizedTheme);
+                const fontSize = normalizeFontSize(mirror.options.fontSize || prefs.fontSize);
+                const fontWeight = mirror.options.fontWeight || prefs.fontWeight;
+                const fontFamily = mirror.options.fontFamily || getTerminalFontFace();
+                const baselineOffset = Math.min(
+                    geometry.cellHeight - 1,
+                    Math.max(fontSize, Math.floor((geometry.cellHeight + fontSize) / 2))
+                );
+                const baseY = Number.isFinite(Number(activeBuffer.baseY)) ? Number(activeBuffer.baseY) : 0;
+                context.textBaseline = 'alphabetic';
+                context.fillStyle = normalizedTheme.background;
+                context.fillRect(0, 0, canvas.width, canvas.height);
+
+                for (let row = 0; row < rows; row += 1) {
+                    const bufferLine = activeBuffer.getLine(baseY + row);
+                    if (!bufferLine || typeof bufferLine.getCell !== 'function') continue;
+                    for (let column = 0; column < cols; column += 1) {
+                        const cell = bufferLine.getCell(column);
+                        if (!cell || cell.getWidth() === 0) continue;
+                        let foreground = getAgentTerminalCellColor(cell, true, normalizedTheme, palette);
+                        let background = getAgentTerminalCellColor(cell, false, normalizedTheme, palette);
+                        if (cell.isInverse()) [foreground, background] = [background, foreground];
+                        const x = column * geometry.cellWidth;
+                        const y = row * geometry.cellHeight;
+                        if (background !== normalizedTheme.background) {
+                            context.fillStyle = background;
+                            context.fillRect(
+                                Math.floor(x),
+                                Math.floor(y),
+                                Math.ceil(geometry.cellWidth * Math.max(1, cell.getWidth())),
+                                Math.ceil(geometry.cellHeight)
+                            );
+                        }
+                        const chars = cell.getChars();
+                        if (!chars || cell.isInvisible()) continue;
+                        const weight = cell.isBold() ? 'bold' : fontWeight;
+                        const style = cell.isItalic() ? 'italic' : 'normal';
+                        context.font = `${style} ${weight} ${fontSize}px ${fontFamily}`;
+                        context.globalAlpha = cell.isDim() ? 0.5 : 1;
+                        context.fillStyle = foreground;
+                        context.fillText(
+                            chars,
+                            x,
+                            y + baselineOffset,
+                            geometry.cellWidth * Math.max(1, cell.getWidth())
+                        );
+                        context.globalAlpha = 1;
+                        context.strokeStyle = foreground;
+                        context.lineWidth = 1;
+                        if (cell.isUnderline()) {
+                            context.beginPath();
+                            context.moveTo(x, y + geometry.cellHeight - 2);
+                            context.lineTo(x + geometry.cellWidth * Math.max(1, cell.getWidth()), y + geometry.cellHeight - 2);
+                            context.stroke();
+                        }
+                        if (cell.isStrikethrough()) {
+                            context.beginPath();
+                            context.moveTo(x, y + geometry.cellHeight / 2);
+                            context.lineTo(x + geometry.cellWidth * Math.max(1, cell.getWidth()), y + geometry.cellHeight / 2);
+                            context.stroke();
+                        }
+                        if (cell.isOverline()) {
+                            context.beginPath();
+                            context.moveTo(x, y + 1);
+                            context.lineTo(x + geometry.cellWidth * Math.max(1, cell.getWidth()), y + 1);
+                            context.stroke();
+                        }
+                    }
+                }
+                return {
+                    imageBase64: dataUrlToBase64(canvas.toDataURL('image/png')),
+                    pixelWidth: geometry.pixelWidth,
+                    pixelHeight: geometry.pixelHeight
+                };
+            }
+
             async function buildAgentViewportRenderResult(state, requestPayload) {
                 const requestId = getAgentStringField(requestPayload, 'request_id');
                 const terminalId = getAgentStringField(requestPayload, 'terminal_id') || (state ? state.id : null);
@@ -2539,22 +2762,43 @@
                 }
                 const terminalElement = state.term && state.term.element;
                 const renderElement = terminalElement ? (terminalElement.querySelector('.xterm-screen') || terminalElement) : null;
-                if (!renderElement) {
-                    result.error_code = 'agent_render_invalid';
-                    return result;
-                }
-                state.term.refresh(0, Math.max(0, state.term.rows - 1));
-                const rect = renderElement.getBoundingClientRect();
-                const pixelRatio = 1;
-                const pixelWidth = Math.max(1, Math.ceil(rect.width * pixelRatio));
-                const pixelHeight = Math.max(1, Math.ceil(rect.height * pixelRatio));
-                if (pixelWidth * pixelHeight > AGENT_VIEWPORT_RENDER_MAX_PIXELS) {
-                    result.error_code = 'agent_render_too_large';
-                    return result;
-                }
                 try {
-                    const backgroundColor = getAgentRenderBackgroundColor(state, renderElement);
-                    const imageBase64 = await renderElementToPngBase64(renderElement, pixelWidth, pixelHeight, backgroundColor);
+                    const rect = renderElement ? renderElement.getBoundingClientRect() : null;
+                    const useVisibleDom = !!(
+                        renderElement
+                        && document.visibilityState !== 'hidden'
+                        && rect.width > 1
+                        && rect.height > 1
+                    );
+                    let imageBase64;
+                    let pixelWidth;
+                    let pixelHeight;
+                    if (useVisibleDom) {
+                        state.term.refresh(0, Math.max(0, state.term.rows - 1));
+                        pixelWidth = Math.ceil(rect.width);
+                        pixelHeight = Math.ceil(rect.height);
+                        if (pixelWidth * pixelHeight > AGENT_VIEWPORT_RENDER_MAX_PIXELS) {
+                            result.error_code = 'agent_render_too_large';
+                            return result;
+                        }
+                        const backgroundColor = getAgentRenderBackgroundColor(state, renderElement);
+                        imageBase64 = await renderElementToPngBase64(renderElement, pixelWidth, pixelHeight, backgroundColor);
+                        result.source = 'visible_xterm_dom';
+                    } else {
+                        const mirrorRender = renderAgentTerminalMirrorToPng(state, renderElement);
+                        if (!mirrorRender) {
+                            result.error_code = 'agent_render_not_visible';
+                            return result;
+                        }
+                        if (mirrorRender.errorCode) {
+                            result.error_code = mirrorRender.errorCode;
+                            return result;
+                        }
+                        imageBase64 = mirrorRender.imageBase64;
+                        pixelWidth = mirrorRender.pixelWidth;
+                        pixelHeight = mirrorRender.pixelHeight;
+                        result.source = 'terminal_mirror_canvas';
+                    }
                     if (!imageBase64 || estimateBase64Bytes(imageBase64) > AGENT_VIEWPORT_RENDER_MAX_IMAGE_BYTES) {
                         result.error_code = 'agent_render_too_large';
                         return result;
@@ -2918,8 +3162,9 @@
                 const authorizationAvailable = !!browserAuthorization.available || requiredFor.length > 0;
                 const alreadyAuthorized = !!browserAuthorization.authorized;
                 const authorizationRequired = authorizationAvailable && !alreadyAuthorized;
-                browserAuthBox.style.display = authorizationRequired ? 'block' : 'none';
-                connectionForm.style.display = authorizationRequired ? 'none' : 'block';
+                const serverUnavailable = serverConnectionState === 'unavailable';
+                browserAuthBox.style.display = !serverUnavailable && authorizationRequired ? 'block' : 'none';
+                connectionForm.style.display = serverUnavailable || authorizationRequired ? 'none' : 'block';
                 browserAuthMessage.innerText = authorizationRequired
                     ? (message || 'First time? Please use an Auth URL.')
                     : '';
@@ -3727,8 +3972,25 @@
                     getSocketState() {
                         return cloneForTest({
                             connected: !!(socket && socket.connected),
-                            id: socket && socket.id ? socket.id : null
+                            id: socket && socket.id ? socket.id : null,
+                            serverConnectionState,
+                            retriesContinuously: !!(socket && socket.io && socket.io._reconnectionAttempts === Infinity)
                         });
+                    },
+                    disconnectSocketForTest() {
+                        if (!socket) return false;
+                        socket.disconnect();
+                        return true;
+                    },
+                    closeSocketTransportForTest() {
+                        if (!socket || !socket.io || !socket.io.engine) return false;
+                        socket.io.engine.close();
+                        return true;
+                    },
+                    connectSocketForTest() {
+                        if (!socket) return false;
+                        socket.connect();
+                        return true;
                     },
                     getActiveAgentState() {
                         return serializeAgentForTest(getActiveTerminalState());
@@ -3843,6 +4105,12 @@
                             terminal_id: activeTerminalId
                         });
                     },
+                    buildViewportRenderResultForTerminal(terminalId, payload) {
+                        return buildAgentViewportRenderResult(terminals.get(terminalId), payload || {
+                            request_id: 'test-render',
+                            terminal_id: terminalId
+                        });
+                    },
                     applyColorScheme(colorScheme) {
                         const state = getActiveTerminalState();
                         if (!state || !SCHEMES[colorScheme]) return false;
@@ -3902,6 +4170,9 @@
                     online: navigator.onLine,
                     visibility: document.visibilityState
                 });
+                if (socket && !socket.connected && serverConnectionState === 'unavailable') {
+                    socket.connect();
+                }
             });
             window.addEventListener('offline', () => {
                 recordConnectionDiagnostic('page.offline', {
@@ -3924,9 +4195,15 @@
                 });
             });
 
-            socket = io({ transports: ['polling', 'websocket'], reconnectionAttempts: 5 });
+            socket = io({
+                transports: ['polling', 'websocket'],
+                reconnection: true,
+                reconnectionAttempts: Infinity
+            });
+            setServerConnectionState('connecting');
             installBrowserTestHook();
             socket.io.on('reconnect_attempt', attempt => {
+                setServerConnectionState('unavailable');
                 recordConnectionDiagnostic('socket.reconnect_attempt', {
                     attempt,
                     online: navigator.onLine,
@@ -3963,8 +4240,7 @@
                     online: navigator.onLine,
                     visibility: document.visibilityState
                 });
-                socketStatusEl.innerText = "Connected";
-                socketStatusEl.style.color = "#34c759";
+                setServerConnectionState('available');
                 hideSessionRecovery();
                 scheduleSessionRenew();
                 updateDebugHud('socket.connect', 'connected');
@@ -3982,12 +4258,10 @@
                     visibility: document.visibilityState
                 });
                 if (isSessionRequiredConnectError(err)) {
-                    socketStatusEl.innerText = "Session expired";
-                    socketStatusEl.style.color = "#ff453a";
-                    showSessionRecovery('Session expired. Enter the access token again.');
+                    setServerConnectionState('session_required');
+                    showSessionRecovery('Enter the access token printed by the current StandTerm launcher.');
                 } else {
-                    socketStatusEl.innerText = "Reconnecting...";
-                    socketStatusEl.style.color = "#ff9f0a";
+                    setServerConnectionState('unavailable');
                 }
                 updateDebugHud('socket.connect_error', err && err.message ? err.message : 'connect_error');
                 updatePolicyDebugPanel('socket.connect_error', { message: err && err.message ? err.message : null });
@@ -4083,8 +4357,7 @@
                 clearBrowserPairingResponseTimer();
                 setBrowserAuthBusy(false);
                 clearSessionRenewTimer();
-                socketStatusEl.innerText = "Disconnected (" + r + ")";
-                socketStatusEl.style.color = "#ff9f0a";
+                setServerConnectionState('unavailable');
                 terminals.forEach(state => {
                     if (state.agent && state.agent.snapshotTimer) clearTimeout(state.agent.snapshotTimer);
                     state.connected = false;
@@ -4094,7 +4367,6 @@
                     state.needsReplay = true;
                     state.agent = createAgentClientState();
                 });
-                connectBtn.disabled = false;
                 updateActiveTerminalUi();
                 updateDebugHud('socket.disconnect', r);
                 updatePolicyDebugPanel('socket.disconnect', { reason: r });
@@ -4110,6 +4382,31 @@
             function hideError() {
                 errorEl.style.display = 'none';
                 errorEl.innerText = '';
+            }
+
+            function setServerConnectionState(state) {
+                const allowedStates = new Set(['connecting', 'available', 'unavailable', 'session_required']);
+                if (!allowedStates.has(state)) return;
+                serverConnectionState = state;
+                const unavailable = state === 'unavailable';
+                if (serverAvailabilityMessage) {
+                    serverAvailabilityMessage.style.display = unavailable ? 'block' : 'none';
+                }
+                updateBrowserAuthUi();
+                if (state === 'available') {
+                    socketStatusEl.innerText = 'Connected';
+                    socketStatusEl.style.color = '#34c759';
+                } else if (state === 'session_required') {
+                    socketStatusEl.innerText = 'Access token required';
+                    socketStatusEl.style.color = '#ff453a';
+                } else if (state === 'unavailable') {
+                    socketStatusEl.innerText = 'Server not available (retrying)';
+                    socketStatusEl.style.color = '#ff9f0a';
+                } else {
+                    socketStatusEl.innerText = 'Connecting...';
+                    socketStatusEl.style.color = '#ffcc00';
+                }
+                connectBtn.disabled = state !== 'available';
             }
 
             function isSessionRequiredConnectError(err) {
@@ -4284,7 +4581,7 @@
 
             function resetConnectButton() {
                 connectBtn.innerText = getConnectButtonText();
-                connectBtn.disabled = false;
+                connectBtn.disabled = serverConnectionState !== 'available';
                 updatePolicyDebugPanel('reset_connect_button');
             }
 
@@ -4336,6 +4633,7 @@
             }
 
             const doConnect = () => {
+                if (serverConnectionState !== 'available' || !socket || !socket.connected) return;
                 pendingReconnect = null;
                 submitConnection(getConnectionFormData());
             };
@@ -4458,19 +4756,28 @@
             function shellQuote(value) {
                 return `'${String(value).replace(/'/g, `'\\''`)}'`;
             }
-            agentExternalTokenBtn.onclick = async () => {
-                const state = getAgentPanelTerminalState();
-                if (!canUseAgentPanel(state) || agentExternalTokenBtn.disabled) return;
+            async function mintAgentExternalToken(state, idleTimeoutMultiplier = 1, options = {}) {
+                if (!canUseAgentPanel(state)) return;
+                const agent = state.agent;
+                if (
+                    !agent
+                    || agent.mode === AGENT_MODE_DISABLED
+                    || agent.mode === AGENT_MODE_PAUSED
+                    || agent.paused
+                    || (getCurrentAgentExternalToken(state) || {}).status === 'minting'
+                ) return;
                 const payload = {
                     terminal_id: state.id,
-                    viewer_id: state.agent.viewerId,
-                    agent_binding_id: state.agent.agentBindingId,
-                    mode_version: state.agent.modeVersion,
-                    privacy_version: state.agent.privacyVersion
+                    viewer_id: agent.viewerId,
+                    agent_binding_id: agent.agentBindingId,
+                    mode_version: agent.modeVersion,
+                    privacy_version: agent.privacyVersion,
+                    idle_timeout_multiplier: idleTimeoutMultiplier
                 };
                 setAgentExternalTokenState(state, {
                     status: 'minting',
-                    command: 'minting external agent token...'
+                    command: `minting ${idleTimeoutMultiplier}× external agent token...`,
+                    idleTimeoutMultiplier
                 });
                 updateAgentPanel();
                 try {
@@ -4484,33 +4791,57 @@
                         setAgentExternalTokenState(state, {
                             status: 'error',
                             command: `error: ${result.error_code || response.status}`,
-                            errorCode: result.error_code || String(response.status)
+                            errorCode: result.error_code || String(response.status),
+                            idleTimeoutMultiplier
                         });
                         updateAgentPanel();
-                        agentExternalOutput.open = true;
+                        if (options.openOutput) agentExternalOutput.open = true;
                         return;
                     }
                     let cli = result.cli_command || `tools/.venv_wsl/bin/python scripts/agent_cli.py --url ${shellQuote(result.url)} --token ${shellQuote(result.token)} --terminal ${shellQuote(result.terminal_id)} send --text ${shellQuote('pwd\n')}`;
+                    if (result.terminal_handoff_path) {
+                        cli += `\n# terminal handoff: ${result.terminal_handoff_path}`;
+                    }
                     if (result.handoff_path) {
-                        cli += `\n# local handoff: ${result.handoff_path}`;
+                        cli += `\n# latest handoff: ${result.handoff_path}`;
                     }
                     setAgentExternalTokenState(state, {
                         status: 'active',
                         expiresAt: getExternalAgentTokenExpiresAt(result.external_agent_token),
-                        command: cli
+                        command: cli,
+                        idleTimeoutMultiplier
                     });
                     updateAgentPanel();
-                    agentExternalOutput.open = true;
-                    agentExternalCommand.select();
+                    if (options.openOutput) {
+                        agentExternalOutput.open = true;
+                        agentExternalCommand.select();
+                    }
                 } catch (error) {
                     setAgentExternalTokenState(state, {
                         status: 'error',
                         command: `error: ${error.message || error}`,
-                        errorCode: error && error.message ? error.message : String(error)
+                        errorCode: error && error.message ? error.message : String(error),
+                        idleTimeoutMultiplier
                     });
                     updateAgentPanel();
-                    agentExternalOutput.open = true;
+                    if (options.openOutput) agentExternalOutput.open = true;
                 }
+            }
+            agentExternalTokenBtn.onclick = () => {
+                if (agentExternalTokenBtn.disabled) return;
+                mintAgentExternalToken(getAgentPanelTerminalState(), 1, { openOutput: true });
+            };
+            agentExternalToken3xBtn.onclick = () => {
+                if (agentExternalToken3xBtn.disabled) return;
+                mintAgentExternalToken(getAgentPanelTerminalState(), 3, { openOutput: true });
+            };
+            agentStatusMintBtn.onclick = () => {
+                if (agentStatusMintBtn.disabled) return;
+                mintAgentExternalToken(getActiveTerminalState(), 1);
+            };
+            agentStatusMint3xBtn.onclick = () => {
+                if (agentStatusMint3xBtn.disabled) return;
+                mintAgentExternalToken(getActiveTerminalState(), 3);
             };
             function getPendingAgentAction(state) {
                 return state && state.agent ? state.agent.pendingAction : null;

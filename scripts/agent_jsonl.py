@@ -12,7 +12,7 @@ def parse_args():
     parser.add_argument('--agentinfo', help='Read tokenless StandTerm agentinfo JSON from a local path or URL')
     parser.add_argument('--url', help='StandTerm base URL, for example http://127.0.0.1:5010')
     parser.add_argument('--token', help='External agent attach token. Omit only on dev servers with STANDTERM_AGENT_DEV_TOKEN=1.')
-    parser.add_argument('--terminal', default='main', help='Default terminal id')
+    parser.add_argument('--terminal', help='Default terminal id')
     parser.add_argument('--ca-file', help='CA certificate bundle used to verify HTTPS StandTerm servers')
     parser.add_argument('--insecure', action='store_true', help='Disable HTTPS certificate verification')
     args = parser.parse_args()

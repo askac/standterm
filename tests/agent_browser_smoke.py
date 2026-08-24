@@ -258,6 +258,112 @@ def close_context(context):
         pass
 
 
+def test_server_unavailable_waits_for_reconnect(browser, access_url):
+    context = browser.new_context(viewport={'width': 1280, 'height': 800})
+    page = context.new_page()
+    try:
+        page.goto(debug_url(access_url), wait_until='domcontentloaded')
+        page.wait_for_function('() => !!window.terminalTest', timeout=10000)
+        page.wait_for_function(
+            "() => window.terminalTest.getSocketState().connected === true",
+            timeout=10000,
+        )
+        initial_state = page.evaluate("() => window.terminalTest.getSocketState()")
+        check(initial_state['retriesContinuously'] is True, 'socket reconnect attempts are still bounded')
+
+        context.set_offline(True)
+        page.evaluate("() => window.terminalTest.closeSocketTransportForTest()")
+        page.wait_for_function(
+            "() => window.terminalTest.getSocketState().serverConnectionState === 'unavailable'",
+            timeout=5000,
+        )
+        unavailable = page.evaluate(
+            """() => ({
+                socketStatus: document.getElementById('socketStatus').innerText,
+                message: document.getElementById('server-availability-message').innerText,
+                messageDisplay: document.getElementById('server-availability-message').style.display,
+                connectionFormDisplay: getComputedStyle(document.getElementById('connection-form')).display,
+                connectDisabled: document.getElementById('connectBtn').disabled
+            })"""
+        )
+        check(unavailable['socketStatus'] == 'Server not available (retrying)', 'socket status did not identify server unavailability')
+        check('keep checking and reconnect automatically' in unavailable['message'], 'server unavailable guidance did not explain automatic recovery')
+        check(unavailable['messageDisplay'] == 'block', 'server unavailable guidance was not visible')
+        check(unavailable['connectionFormDisplay'] == 'none', 'connection picker remained visible while the server was unavailable')
+        check(unavailable['connectDisabled'] is True, 'terminal connect button remained enabled while the server was unavailable')
+
+        context.set_offline(False)
+        page.wait_for_function(
+            "() => window.terminalTest.getSocketState().connected === true",
+            timeout=10000,
+        )
+        recovered = page.evaluate(
+            """() => ({
+                serverState: window.terminalTest.getSocketState().serverConnectionState,
+                messageDisplay: document.getElementById('server-availability-message').style.display,
+                connectionFormDisplay: getComputedStyle(document.getElementById('connection-form')).display,
+                connectDisabled: document.getElementById('connectBtn').disabled
+            })"""
+        )
+        check(recovered['serverState'] == 'available', 'server state did not recover after reconnect')
+        check(recovered['messageDisplay'] == 'none', 'server unavailable guidance remained visible after reconnect')
+        check(recovered['connectionFormDisplay'] == 'block', 'connection picker did not return after reconnect')
+        check(recovered['connectDisabled'] is False, 'terminal connect button did not recover after reconnect')
+    finally:
+        close_context(context)
+
+
+def test_invalid_session_reconnect_prompts_for_current_token(browser, access_url):
+    parsed = urllib.parse.urlparse(access_url)
+    token = urllib.parse.parse_qs(parsed.query)['token'][0]
+    context = browser.new_context(viewport={'width': 1280, 'height': 800})
+    page = context.new_page()
+    try:
+        page.goto(debug_url(access_url), wait_until='domcontentloaded')
+        page.wait_for_function('() => !!window.terminalTest', timeout=10000)
+        page.wait_for_function(
+            "() => window.terminalTest.getSocketState().connected === true",
+            timeout=10000,
+        )
+        context.clear_cookies()
+        page.evaluate("() => window.terminalTest.disconnectSocketForTest()")
+        page.wait_for_function(
+            "() => window.terminalTest.getSocketState().serverConnectionState === 'unavailable'",
+            timeout=5000,
+        )
+        page.evaluate("() => window.terminalTest.connectSocketForTest()")
+        page.wait_for_function(
+            "() => window.terminalTest.getSocketState().serverConnectionState === 'session_required'",
+            timeout=10000,
+        )
+        page.wait_for_selector('#session-recovery-modal.open', timeout=5000)
+        recovery = page.evaluate(
+            """() => ({
+                serverState: window.terminalTest.getSocketState().serverConnectionState,
+                title: document.querySelector('#session-recovery-modal h3').innerText,
+                detail: document.querySelector('#session-recovery-modal p').innerText,
+                message: document.getElementById('session-recovery-message').innerText
+            })"""
+        )
+        check(recovery['serverState'] == 'session_required', 'invalid session did not use the structured session-required state')
+        check(recovery['title'] == 'Access token required', 'session recovery did not ask for an access token')
+        check('server restarted or your session expired' in recovery['detail'], 'session recovery did not explain why the token is required')
+        check('current StandTerm launcher' in recovery['message'], 'session recovery did not request the current launcher token')
+
+        page.fill('#session-recovery-token', token)
+        page.click('#session-recovery-form button[type="submit"]')
+        page.wait_for_function(
+            "() => window.terminalTest.getSocketState().connected === true",
+            timeout=10000,
+        )
+        check(
+            page.evaluate("() => window.terminalTest.getSocketState().serverConnectionState") == 'available',
+            'valid current token did not restore the server connection',
+        )
+    finally:
+        close_context(context)
+
+
 def js_arg_object(event_name, payload):
     return {'event_name': event_name, 'payload': payload}
 
@@ -678,6 +784,54 @@ def test_agent_panel_status_gates_and_external_hint(browser, access_url):
         check(enabled_external['modeLabels'] == ['Observer', 'Approval', 'Full'], 'agent permission buttons did not use user-facing labels')
         check(enabled_external['buttonDisabled'] is False, 'external token button did not enable in observe mode')
         check('Mint' in enabled_external['hint'], 'external token hint did not show available state')
+
+        panel_mint_state = page.evaluate(
+            """() => ({
+                panel3xDisabled: document.getElementById('agent-external-token-3x-btn').disabled,
+                statusMintVisible: document.getElementById('agent-status-mint-btn').classList.contains('visible'),
+                statusMint3xVisible: document.getElementById('agent-status-mint-3x-btn').classList.contains('visible')
+            })"""
+        )
+        check(panel_mint_state['panel3xDisabled'] is False, 'Agent panel 3x mint button did not enable')
+        check(panel_mint_state['statusMintVisible'] is False, 'status mint button stayed visible while Agent panel was open')
+        check(panel_mint_state['statusMint3xVisible'] is False, 'status 3x mint button stayed visible while Agent panel was open')
+
+        page.click('#agent-panel-close-btn')
+        page.wait_for_function(
+            """() => (
+                document.getElementById('agent-status-mint-btn').classList.contains('visible')
+                && document.getElementById('agent-status-mint-3x-btn').classList.contains('visible')
+            )""",
+            timeout=5000,
+        )
+        page.click('#agent-status-mint-3x-btn')
+        page.wait_for_function(
+            """() => {
+                const token = window.terminalTest.getActiveAgentState()?.external_token;
+                return token && (token.status === 'active' || token.status === 'error');
+            }""",
+            timeout=5000,
+        )
+        status_minted = page.evaluate(
+            """() => {
+                const token = window.terminalTest.getActiveAgentState()?.external_token;
+                return {
+                    status: token?.status,
+                    remainingMs: Number(token?.expiresAt || 0) - Date.now(),
+                    idleTimeoutMultiplier: token?.idleTimeoutMultiplier,
+                    panelVisible: document.getElementById('agent-panel').classList.contains('visible')
+                };
+            }"""
+        )
+        check(status_minted['status'] == 'active', 'status-bar 3x mint did not complete')
+        check(status_minted['idleTimeoutMultiplier'] == 3, 'status-bar 3x mint did not retain the structured multiplier')
+        check(status_minted['remainingMs'] > 10 * 60 * 1000, 'status-bar 3x mint did not extend the idle lifetime')
+        check(status_minted['panelVisible'] is False, 'status-bar mint unexpectedly opened the Agent panel')
+
+        page.click('#agent-toggle-btn')
+        page.wait_for_selector('#agent-panel.visible', timeout=5000)
+        minted_command = page.evaluate("() => document.getElementById('agent-external-command').value")
+        check('# terminal handoff:' in minted_command, '3x mint did not expose the stable terminal handoff path')
     finally:
         close_context(context)
 
@@ -781,6 +935,7 @@ def test_rendered_viewport_snapshot_returns_png(browser, access_url):
         check(result['render_type'] == 'xterm_viewport', 'render result used the wrong render type')
         check(result['render_mode'] == 'visible_xterm_png', 'render result used the wrong render mode')
         check(result['mime_type'] == 'image/png', 'render result used the wrong MIME type')
+        check(result['source'] == 'visible_xterm_dom', 'foreground render did not use the visible xterm DOM')
         check(result['image_base64'].startswith('iVBORw0KGgo'), 'render result is not a PNG')
         check(result['pixel_width'] > 0 and result['pixel_height'] > 0, 'render result has invalid dimensions')
         check(result['cols'] > 0 and result['rows'] > 0, 'render result has invalid terminal size')
@@ -810,6 +965,69 @@ def test_rendered_viewport_snapshot_returns_png(browser, access_url):
             all(channel >= 245 for channel in background_pixel[:3]),
             f'rendered PNG background does not match light xterm theme: {background_pixel}',
         )
+    finally:
+        close_context(context)
+
+
+def test_background_terminal_render_uses_mirror_canvas_png(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        attach_agent(page)
+        page.evaluate("() => window.terminalTest.applyColorScheme('oneHalfLight')")
+        page.evaluate(
+            """payload => window.terminalTest.writeTerminalOutput(payload.data, payload.output_seq)""",
+            {'data': '\x1b[31mbackground-render-check\x1b[0m\r\n', 'output_seq': 322},
+        )
+        page.wait_for_function(
+            "() => window.terminalTest.getMirrorSnapshot()?.output_seq === 322",
+            timeout=10000,
+        )
+        page.click('#new-tab-btn')
+        page.wait_for_function(
+            "() => window.terminalTest.getTerminalTabsState().activeTerminalId !== 'main'",
+            timeout=5000,
+        )
+        result = page.evaluate(
+            """async () => await window.terminalTest.buildViewportRenderResultForTerminal('main', {
+                request_id: 'render-background-test-1',
+                terminal_id: 'main',
+                render_mode: 'visible_xterm_png'
+            })"""
+        )
+        check(result['status'] == 'ok', f"background render result failed: {result}")
+        check(result['source'] == 'terminal_mirror_canvas', 'background render did not use the mirror canvas')
+        check(result['image_base64'].startswith('iVBORw0KGgo'), 'background render result is not a PNG')
+        check(result['pixel_width'] > 1 and result['pixel_height'] > 1, 'background render returned a degenerate PNG')
+        check(result['cols'] > 0 and result['rows'] > 0, 'background render has invalid terminal size')
+        check(result['output_seq'] == 322, 'background render did not preserve output_seq')
+        decoded = page.evaluate(
+            """async payload => {
+                const image = new Image();
+                const loaded = new Promise((resolve, reject) => {
+                    image.onload = resolve;
+                    image.onerror = () => reject(new Error('png decode failed'));
+                });
+                image.src = `data:image/png;base64,${payload.image_base64}`;
+                await loaded;
+                const canvas = document.createElement('canvas');
+                canvas.width = image.width;
+                canvas.height = image.height;
+                const context = canvas.getContext('2d');
+                context.drawImage(image, 0, 0);
+                const pixels = context.getImageData(0, 0, image.width, image.height).data;
+                let nonBackgroundPixels = 0;
+                for (let index = 0; index < pixels.length; index += 4) {
+                    if (pixels[index] < 245 || pixels[index + 1] < 245 || pixels[index + 2] < 245) {
+                        nonBackgroundPixels += 1;
+                    }
+                }
+                return { width: image.width, height: image.height, nonBackgroundPixels };
+            }""",
+            result,
+        )
+        check(decoded['width'] == result['pixel_width'], 'background PNG width metadata does not match the image')
+        check(decoded['height'] == result['pixel_height'], 'background PNG height metadata does not match the image')
+        check(decoded['nonBackgroundPixels'] > 0, 'background PNG did not contain terminal glyphs')
     finally:
         close_context(context)
 
@@ -1547,6 +1765,8 @@ def main():
     tests = [
         test_access_required_page_accepts_token_login,
         test_browser_authorization_gate_hides_connection_controls,
+        test_server_unavailable_waits_for_reconnect,
+        test_invalid_session_reconnect_prompts_for_current_token,
         test_agent_panel_can_be_dragged,
         test_terminal_pip_hides_selected_tab_and_keeps_background_tab,
         test_restored_terminal_list_allocates_next_new_tab_id,
@@ -1556,6 +1776,7 @@ def main():
         test_agent_panel_status_gates_and_external_hint,
         test_session_recovery_new_tab_can_renew_external_agent_token,
         test_rendered_viewport_snapshot_returns_png,
+        test_background_terminal_render_uses_mirror_canvas_png,
         test_paste_review_approve_and_cancel,
         test_approval_payload_and_stale_rejections,
         test_cjk_width_compatibility_defaults_off,

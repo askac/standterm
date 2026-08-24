@@ -1,3 +1,4 @@
+import base64
 import sys
 import tempfile
 import threading
@@ -6,12 +7,31 @@ import json
 import io
 import re
 import stat
+import struct
+import zlib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import app as standterm
 import scripts.access_window as access_window
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+import agent_cli
+
+
+def make_test_png_base64(width, height):
+    def png_chunk(chunk_type, data):
+        checksum = zlib.crc32(chunk_type + data) & 0xffffffff
+        return struct.pack('>I', len(data)) + chunk_type + data + struct.pack('>I', checksum)
+
+    scanline = b'\x00' + (b'\x00\x00\x00\xff' * width)
+    image_bytes = (
+        b'\x89PNG\r\n\x1a\n'
+        + png_chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0))
+        + png_chunk(b'IDAT', zlib.compress(scanline * height))
+        + png_chunk(b'IEND', b'')
+    )
+    return base64.b64encode(image_bytes).decode('ascii')
 
 
 class DummyBridge(standterm.TerminalBridge):
@@ -890,10 +910,7 @@ def test_external_agent_render_requests_browser_viewport_png():
     session_token = current_session_token()
     bridge = add_dummy_bridge(session_token)
     sid = current_sid_for_session(session_token)
-    one_pixel_png = (
-        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8'
-        '/x8AAwMCAO+/p9sAAAAASUVORK5CYII='
-    )
+    viewport_png = make_test_png_base64(100, 30)
 
     client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
     client.emit('replay_terminal', {'terminal_id': standterm.TERMINAL_ID_MAIN})
@@ -943,11 +960,11 @@ def test_external_agent_render_requests_browser_viewport_png():
         'render_type': 'xterm_viewport',
         'render_mode': standterm.AGENT_RENDER_MODE_VISIBLE_XTERM_PNG,
         'mime_type': 'image/png',
-        'image_base64': one_pixel_png,
+        'image_base64': viewport_png,
         'cols': 100,
         'rows': 30,
-        'pixel_width': 1,
-        'pixel_height': 1,
+        'pixel_width': 100,
+        'pixel_height': 30,
         'output_seq': bridge.output_seq,
         'captured_at': '2026-05-22T00:00:00.000Z',
     })
@@ -960,7 +977,7 @@ def test_external_agent_render_requests_browser_viewport_png():
     assert result['render']['render_type'] == 'xterm_viewport'
     assert result['render']['render_mode'] == standterm.AGENT_RENDER_MODE_VISIBLE_XTERM_PNG
     assert result['render']['mime_type'] == 'image/png'
-    assert result['render']['image_base64'] == one_pixel_png
+    assert result['render']['image_base64'] == viewport_png
     assert result['render']['image_byte_length'] > 0
     assert result['render']['output_seq'] == bridge.output_seq
 
@@ -974,6 +991,35 @@ def test_external_agent_render_requests_browser_viewport_png():
     assert 'image_base64' not in render_audit
 
     client.disconnect()
+
+
+def test_external_agent_render_rejects_one_pixel_png_as_not_visible():
+    one_pixel_png = (
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8'
+        '/x8AAwMCAO+/p9sAAAAASUVORK5CYII='
+    )
+    expected_request = {
+        'request_id': 'agrv_background',
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'render_mode': standterm.AGENT_RENDER_MODE_VISIBLE_XTERM_PNG,
+    }
+    result, error_code = standterm.validate_agent_viewport_render_result_payload({
+        'request_id': expected_request['request_id'],
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'render_type': 'xterm_viewport',
+        'render_mode': standterm.AGENT_RENDER_MODE_VISIBLE_XTERM_PNG,
+        'mime_type': 'image/png',
+        'image_base64': one_pixel_png,
+        'cols': 100,
+        'rows': 30,
+        'pixel_width': 1,
+        'pixel_height': 1,
+        'output_seq': 1,
+    }, expected_request)
+
+    assert result is None
+    assert error_code == standterm.AGENT_ERROR_RENDER_NOT_VISIBLE
+
 
 def test_external_agent_render_mirror_screen_returns_structured_screen_without_png_request():
     client = make_client()
@@ -2651,6 +2697,218 @@ def test_external_agent_http_bridge_mints_token_and_accepts_cli_command():
     client.disconnect()
 
 
+def test_external_agent_per_terminal_handoffs_are_isolated_and_cli_resolvable():
+    flask_client = make_flask_client()
+    client = make_socket_client(flask_client)
+    session_token = current_session_token()
+    terminal_ids = ('term-2', 'term-3')
+    bridges_by_terminal = {}
+    for terminal_id in terminal_ids:
+        bridge = DummyBridge(session_token, terminal_id)
+        standterm.set_bridge(session_token, terminal_id, bridge)
+        bridges_by_terminal[terminal_id] = bridge
+        client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': terminal_id})
+        client.emit(standterm.AGENT_EVENT_MODE_SET, {
+            'terminal_id': terminal_id,
+            'mode': 'direct',
+        })
+
+    sid = current_sid_for_session(session_token)
+    original_handoff_path = standterm.EXTERNAL_AGENT_HANDOFF_PATH
+    with tempfile.TemporaryDirectory(prefix='standterm-multi-agent-smoke-') as handoff_dir:
+        standterm.EXTERNAL_AGENT_HANDOFF_PATH = Path(handoff_dir) / 'standterm_external_agent_handoff.json'
+        try:
+            minted = {}
+            for terminal_id in terminal_ids:
+                token, record, error_code = standterm.mint_external_agent_attach_token(
+                    session_token,
+                    terminal_id,
+                    sid,
+                )
+                assert error_code is None
+                payload = standterm.build_external_agent_token_payload(
+                    token,
+                    record,
+                    terminal_id,
+                    'https://172.17.186.221:5000',
+                )
+                minted[terminal_id] = payload
+
+            terminal_paths = {
+                terminal_id: Path(payload['terminal_handoff_path'])
+                for terminal_id, payload in minted.items()
+            }
+            assert terminal_paths['term-2'] != terminal_paths['term-3']
+            assert all(path.is_file() for path in terminal_paths.values())
+            assert standterm.EXTERNAL_AGENT_HANDOFF_PATH.is_file()
+            legacy_payload = json.loads(standterm.EXTERNAL_AGENT_HANDOFF_PATH.read_text(encoding='utf-8'))
+            assert legacy_payload['terminal_id'] == 'term-3'
+            assert legacy_payload['token'] == minted['term-3']['token']
+            if not sys.platform.startswith('win'):
+                assert standterm.EXTERNAL_AGENT_HANDOFF_PATH.stat().st_mode & 0o777 == 0o600
+
+            agentinfo = standterm.build_external_agentinfo_payload(base_url='https://172.17.186.221:5000')
+            assert set(agentinfo['terminal_handoffs']) == set(terminal_ids)
+            assert 'agt_' not in json.dumps(agentinfo)
+            agentinfo_path = Path(handoff_dir) / 'standterm_agentinfo.json'
+            standterm.write_json_file_atomic(agentinfo_path, agentinfo)
+
+            resolved = {}
+            for terminal_id in terminal_ids:
+                args = type('Args', (), {
+                    'agentinfo': str(agentinfo_path),
+                    'agentinfo_payload': None,
+                    'handoff': None,
+                    'url': None,
+                    'token': None,
+                    'terminal': terminal_id,
+                    'ca_file': None,
+                    'insecure': False,
+                })()
+                agent_cli.apply_agentinfo(args)
+                agent_cli.apply_handoff(args)
+                resolved[terminal_id] = args
+                assert Path(args.handoff) == terminal_paths[terminal_id]
+                assert args.token == minted[terminal_id]['token']
+                assert args.terminal == terminal_id
+                assert args.url == 'https://127.0.0.1:5000'
+
+            legacy_args = type('Args', (), {
+                'handoff': str(standterm.EXTERNAL_AGENT_HANDOFF_PATH),
+                'url': None,
+                'token': None,
+                'terminal': None,
+                'ca_file': None,
+            })()
+            agent_cli.apply_handoff(legacy_args)
+            assert legacy_args.token == minted['term-3']['token']
+            assert legacy_args.terminal == 'term-3'
+
+            results = {}
+            def send_to_terminal(terminal_id):
+                results[terminal_id] = standterm.process_external_agent_command({
+                    'op': 'send',
+                    'token': resolved[terminal_id].token,
+                    'terminal_id': terminal_id,
+                    'kind': 'text',
+                    'text': f'{terminal_id}-input\n',
+                })
+
+            threads = [threading.Thread(target=send_to_terminal, args=(terminal_id,)) for terminal_id in terminal_ids]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            assert all(result['status'] == standterm.AGENT_STATUS_COMPLETED for result in results.values())
+            assert bridges_by_terminal['term-2'].writes == ['term-2-input\n']
+            assert bridges_by_terminal['term-3'].writes == ['term-3-input\n']
+
+            mismatch = standterm.process_external_agent_command({
+                'op': 'screen',
+                'token': minted['term-3']['token'],
+                'terminal_id': 'term-2',
+            })
+            assert mismatch['error_code'] == standterm.AGENT_ERROR_TERMINAL_MISMATCH
+
+            revoked = standterm.process_external_agent_command({
+                'op': 'revoke',
+                'token': minted['term-2']['token'],
+                'terminal_id': 'term-2',
+            })
+            assert revoked['status'] == 'ok'
+            assert not terminal_paths['term-2'].exists()
+            assert terminal_paths['term-3'].is_file()
+            assert standterm.process_external_agent_command({
+                'op': 'state',
+                'token': minted['term-3']['token'],
+                'terminal_id': 'term-3',
+            })['status'] == 'ok'
+
+            token, record, error_code = standterm.mint_external_agent_attach_token(
+                session_token,
+                'term-2',
+                sid,
+            )
+            assert error_code is None
+            standterm.build_external_agent_token_payload(
+                token,
+                record,
+                'term-2',
+                'https://172.17.186.221:5000',
+            )
+            assert terminal_paths['term-2'].is_file()
+            standterm.close_terminal_bridge(session_token, 'term-2')
+            assert not terminal_paths['term-2'].exists()
+            assert terminal_paths['term-3'].is_file()
+            assert standterm.process_external_agent_command({
+                'op': 'state',
+                'token': minted['term-3']['token'],
+                'terminal_id': 'term-3',
+            })['status'] == 'ok'
+
+            if not sys.platform.startswith('win'):
+                assert standterm.get_external_agent_handoff_directory().parent.stat().st_mode & 0o777 == 0o700
+                assert standterm.get_external_agent_handoff_directory().stat().st_mode & 0o777 == 0o700
+                assert terminal_paths['term-3'].stat().st_mode & 0o777 == 0o600
+            assert list(Path(handoff_dir).rglob('.*.tmp')) == []
+
+            token_hash = standterm.hash_external_agent_token(minted['term-3']['token'])
+            standterm.external_agent_attach_store._tokens[token_hash]['expires_at'] = standterm.time.time() - 1
+            assert 'term-3' not in standterm.build_external_agent_terminal_handoff_index()
+            assert not terminal_paths['term-3'].exists()
+            standterm.cleanup_external_agent_handoff_artifacts()
+            assert not standterm.get_external_agent_handoff_directory().exists()
+        finally:
+            standterm.EXTERNAL_AGENT_HANDOFF_PATH = original_handoff_path
+
+    client.disconnect()
+
+
+def test_external_agent_token_route_supports_bounded_three_x_idle_timeout():
+    flask_client = make_flask_client()
+    client = make_socket_client(flask_client)
+    session_token = current_session_token()
+    add_dummy_bridge(session_token)
+    client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'mode': 'observe',
+    })
+    state = last_payload(client, standterm.AGENT_EVENT_STATE)
+
+    original_handoff_path = standterm.EXTERNAL_AGENT_HANDOFF_PATH
+    with tempfile.TemporaryDirectory(prefix='standterm-agent-3x-smoke-') as handoff_dir:
+        standterm.EXTERNAL_AGENT_HANDOFF_PATH = Path(handoff_dir) / 'standterm_external_agent_handoff.json'
+        try:
+            request_payload = {
+                'terminal_id': standterm.TERMINAL_ID_MAIN,
+                'viewer_id': state['viewer_id'],
+                'agent_binding_id': state['agent_binding_id'],
+                'mode_version': state['mode_version'],
+                'privacy_version': state['privacy_version'],
+                'idle_timeout_multiplier': 3,
+            }
+            response = flask_client.post('/agent/external/token', json=request_payload)
+            assert response.status_code == 200
+            payload = response.get_json()
+            assert payload['external_agent_token']['idle_timeout_seconds'] == (
+                standterm.AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS * 3
+            )
+            assert payload['security']['idle_timeout_seconds'] == (
+                standterm.AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS * 3
+            )
+
+            for invalid_multiplier in (0, 2, 4, True, '3'):
+                request_payload['idle_timeout_multiplier'] = invalid_multiplier
+                rejected = flask_client.post('/agent/external/token', json=request_payload)
+                assert rejected.status_code == 400
+                assert rejected.get_json()['error_code'] == standterm.AGENT_ERROR_ACTION_INVALID_DATA
+        finally:
+            standterm.EXTERNAL_AGENT_HANDOFF_PATH = original_handoff_path
+
+    client.disconnect()
+
+
 def test_external_agent_handoff_uses_loopback_command_url_for_non_loopback_browser_url():
     payload = standterm.build_external_agent_discovery_payload(
         'https://172.17.186.221:5000',
@@ -2674,6 +2932,8 @@ def assert_agentinfo_is_tokenless(payload):
     assert payload['security']['token_bearing_commands_included'] is False
     assert payload['handoff_contains_secret'] is True
     assert payload['handoff_path'].endswith('standterm_external_agent_handoff.json')
+    assert Path(payload['terminal_handoff_directory']).parent.name == 'standterm_external_agent_handoffs'
+    assert isinstance(payload['terminal_handoffs'], dict)
     assert payload['transport']['command_endpoint'].endswith('/agent/external/command')
     assert payload['agentinfo_url'].endswith('/agentinfo')
     assert payload['monitoring_policy']['keepalive_op'] == 'heartbeat'
@@ -2693,6 +2953,8 @@ def test_external_agentinfo_payload_route_and_pointer_are_tokenless():
     assert payload['base_url'].startswith('http://localhost')
     assert payload['command_endpoint'] == payload['base_url'].rstrip('/') + '/agent/external/command'
     assert '--agentinfo' in payload['recommended_commands']['discover']
+    assert payload['agentinfo_url'] in payload['recommended_commands']['discover']
+    assert payload['agentinfo_path'] not in payload['recommended_commands']['discover']
     assert '--handoff' in payload['recommended_commands']['hello_after_token_mint']
     assert '--handoff' in payload['recommended_commands']['render_after_token_mint']
     assert '--handoff' in payload['recommended_commands']['shcmd_after_token_mint']
@@ -2743,10 +3005,12 @@ def test_external_agent_startup_lines_point_to_launch_handoff():
     )
     assert str(standterm.EXTERNAL_AGENT_INFO_PATH) in joined
     assert str(standterm.EXTERNAL_AGENT_HANDOFF_PATH) in joined
+    assert str(standterm.get_external_agent_handoff_directory()) in joined
     assert str(standterm.APP_DIR / 'scripts' / 'agent_cli.py') in joined
     assert standterm.sys.executable in joined
     assert '--agentinfo' in discover_line
-    assert str(standterm.EXTERNAL_AGENT_INFO_PATH) in discover_line
+    assert f'http://127.0.0.1:{standterm.DEFAULT_PORT}/agentinfo' in discover_line
+    assert str(standterm.EXTERNAL_AGENT_INFO_PATH) not in discover_line
     assert discover_line.endswith(' discover')
     assert '--handoff' in hello_line
     assert f'--url http://127.0.0.1:{standterm.DEFAULT_PORT}' in hello_line
@@ -2762,6 +3026,7 @@ def test_external_agent_startup_lines_point_to_launch_handoff():
     assert render_line.endswith(' render')
     assert 'after browser Agent attach and external token mint' in joined
     assert 'explicit --url, --token, and --terminal' in joined
+    assert '--agentinfo with explicit --terminal' in joined
     try:
         standterm.HTTPS_ENABLED = True
         tls_lines = standterm.build_external_agent_startup_lines()
@@ -3253,7 +3518,9 @@ def test_browser_authorization_gate_ui_contract():
     assert 'Download authorization file manually' in template
     assert 'id="browser-auth-help-modal"' in template
     assert "authorizationUrl.searchParams.get('authorize')" in template
-    assert "connectionForm.style.display = authorizationRequired ? 'none' : 'block';" in template
+    assert "const serverUnavailable = serverConnectionState === 'unavailable';" in template
+    assert "browserAuthBox.style.display = !serverUnavailable && authorizationRequired ? 'block' : 'none';" in template
+    assert "connectionForm.style.display = serverUnavailable || authorizationRequired ? 'none' : 'block';" in template
     assert 'startBrowserPairingAutoCheck();' in template
     assert 'id="checkBrowserAuthBtn"' not in template
 
@@ -5431,6 +5698,7 @@ def main():
         test_external_agent_screen_falls_back_to_headless_grid_without_browser_snapshot,
         test_external_agent_screen_tail_lines_and_region_reduce_viewport_payload,
         test_external_agent_render_requests_browser_viewport_png,
+        test_external_agent_render_rejects_one_pixel_png_as_not_visible,
         test_external_agent_render_mirror_screen_returns_structured_screen_without_png_request,
         test_external_agent_render_auto_uses_mirror_screen_without_png_request,
         test_external_agent_render_timeout_is_typed,
@@ -5461,6 +5729,8 @@ def main():
         test_external_agent_token_revoke_and_terminal_close_invalidate_access,
         test_external_agent_expired_and_wrong_terminal_tokens_are_rejected,
         test_external_agent_http_bridge_mints_token_and_accepts_cli_command,
+        test_external_agent_per_terminal_handoffs_are_isolated_and_cli_resolvable,
+        test_external_agent_token_route_supports_bounded_three_x_idle_timeout,
         test_external_agent_handoff_uses_loopback_command_url_for_non_loopback_browser_url,
         test_external_agentinfo_payload_route_and_pointer_are_tokenless,
         test_external_agent_startup_lines_point_to_launch_handoff,
