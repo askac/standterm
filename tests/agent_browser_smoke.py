@@ -976,7 +976,14 @@ def test_background_terminal_render_uses_mirror_canvas_png(browser, access_url):
         page.evaluate("() => window.terminalTest.applyColorScheme('oneHalfLight')")
         page.evaluate(
             """payload => window.terminalTest.writeTerminalOutput(payload.data, payload.output_seq)""",
-            {'data': '\x1b[31mbackground-render-check\x1b[0m\r\n', 'output_seq': 322},
+            {
+                'data': (
+                    '\x1b[2J\x1b[H\x1b[38;5;45m'
+                    '████████\r\n████████\r\n████████\r\n'
+                    '\x1b[38;5;226;48;5;33m▄▄▄▄▄▄▄▄\r\n▀▀▀▀▀▀▀▀\x1b[0m'
+                ),
+                'output_seq': 322,
+            },
         )
         page.wait_for_function(
             "() => window.terminalTest.getMirrorSnapshot()?.output_seq === 322",
@@ -1016,18 +1023,68 @@ def test_background_terminal_render_uses_mirror_canvas_png(browser, access_url):
                 context.drawImage(image, 0, 0);
                 const pixels = context.getImageData(0, 0, image.width, image.height).data;
                 let nonBackgroundPixels = 0;
+                const cyanRows = [];
+                const yellowRows = [];
+                const cyanColumns = [];
                 for (let index = 0; index < pixels.length; index += 4) {
                     if (pixels[index] < 245 || pixels[index + 1] < 245 || pixels[index + 2] < 245) {
                         nonBackgroundPixels += 1;
                     }
                 }
-                return { width: image.width, height: image.height, nonBackgroundPixels };
+                for (let y = 0; y < image.height; y += 1) {
+                    let cyanCount = 0;
+                    let yellowCount = 0;
+                    for (let x = 0; x < image.width; x += 1) {
+                        const offset = (y * image.width + x) * 4;
+                        const red = pixels[offset];
+                        const green = pixels[offset + 1];
+                        const blue = pixels[offset + 2];
+                        if (red < 40 && green >= 190 && blue >= 220) cyanCount += 1;
+                        if (red >= 220 && green >= 220 && blue < 40) yellowCount += 1;
+                    }
+                    if (cyanCount >= 20) cyanRows.push(y);
+                    if (yellowCount >= 20) yellowRows.push(y);
+                }
+                for (let x = 0; x < image.width; x += 1) {
+                    let cyanCount = 0;
+                    for (let y = 0; y < image.height; y += 1) {
+                        const offset = (y * image.width + x) * 4;
+                        const red = pixels[offset];
+                        const green = pixels[offset + 1];
+                        const blue = pixels[offset + 2];
+                        if (red < 40 && green >= 190 && blue >= 220) cyanCount += 1;
+                    }
+                    if (cyanCount >= 10) cyanColumns.push(x);
+                }
+                const maxStep = values => values.reduce(
+                    (largest, value, index) => index === 0
+                        ? largest
+                        : Math.max(largest, value - values[index - 1]),
+                    0
+                );
+                return {
+                    width: image.width,
+                    height: image.height,
+                    nonBackgroundPixels,
+                    cyanRowCount: cyanRows.length,
+                    cyanRowMaxStep: maxStep(cyanRows),
+                    cyanColumnCount: cyanColumns.length,
+                    cyanColumnMaxStep: maxStep(cyanColumns),
+                    yellowRowCount: yellowRows.length,
+                    yellowRowMaxStep: maxStep(yellowRows)
+                };
             }""",
             result,
         )
         check(decoded['width'] == result['pixel_width'], 'background PNG width metadata does not match the image')
         check(decoded['height'] == result['pixel_height'], 'background PNG height metadata does not match the image')
         check(decoded['nonBackgroundPixels'] > 0, 'background PNG did not contain terminal glyphs')
+        check(decoded['cyanRowCount'] > 20, 'background PNG did not render enough full-block rows')
+        check(decoded['cyanRowMaxStep'] == 1, 'background PNG retained horizontal full-block seams')
+        check(decoded['cyanColumnCount'] > 20, 'background PNG did not render enough full-block columns')
+        check(decoded['cyanColumnMaxStep'] == 1, 'background PNG retained vertical full-block seams')
+        check(decoded['yellowRowCount'] > 8, 'background PNG did not render enough half-block rows')
+        check(decoded['yellowRowMaxStep'] == 1, 'background PNG retained a half-block boundary seam')
     finally:
         close_context(context)
 
