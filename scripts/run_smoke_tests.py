@@ -18,6 +18,7 @@ COMPILE_TARGETS = [
     'tests/external_agent_boundary_smoke.py',
     'tests/agent_repl_smoke.py',
     'tests/agent_rsfile_smoke.py',
+    'tests/static_site_smoke.py',
 ]
 
 HEADLESS_SMOKE_TESTS = [
@@ -25,6 +26,7 @@ HEADLESS_SMOKE_TESTS = [
     'tests/agent_repl_smoke.py',
     'tests/agent_backend_smoke.py',
     'tests/agent_rsfile_smoke.py',
+    'tests/static_site_smoke.py',
 ]
 
 

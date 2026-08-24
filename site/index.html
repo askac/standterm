@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Long-form field stories about human-guided terminal automation with StandTerm.">
+  <meta name="theme-color" content="#0b0f14">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="StandTerm Stories · Work that stays visible">
+  <meta property="og:description" content="Long-form field stories about operators and local AI agents sharing real SSH, shell, UART, and TUI sessions.">
+  <meta property="og:url" content="https://askac.github.io/standterm/">
+  <meta property="og:site_name" content="StandTerm Stories">
+  <meta name="twitter:card" content="summary">
+  <link rel="canonical" href="https://askac.github.io/standterm/">
+  <title>StandTerm Stories</title>
+  <link rel="stylesheet" href="styles.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "CollectionPage",
+    "name": "StandTerm Stories",
+    "description": "Long-form field stories about human-guided terminal automation with StandTerm.",
+    "url": "https://askac.github.io/standterm/",
+    "isPartOf": {
+      "@type": "SoftwareSourceCode",
+      "name": "StandTerm",
+      "codeRepository": "https://github.com/askac/standterm"
+    }
+  }
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="./">StandTerm / Stories</a>
+      <nav class="topnav" aria-label="Primary">
+        <a href="https://github.com/askac/standterm">Repository</a>
+        <a class="hide-small" href="https://github.com/askac/standterm#quick-start">Quick start</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <p class="eyebrow">Field notes from the terminal boundary</p>
+      <h1>Work that stays visible.</h1>
+      <p class="dek">Long-form accounts of operators and local agents sharing real terminals: what worked, what failed, and where control deliberately stayed human.</p>
+    </section>
+
+    <section class="site-main" aria-labelledby="stories-heading">
+      <h2 id="stories-heading" class="sr-only">Stories</h2>
+      <div class="story-card-grid">
+        <a class="story-card" href="stories/freebsd-build-worker/">
+          <div>
+            <p class="kicker">Case study · FreeBSD · Hyper-V</p>
+            <h2>I Built a FreeBSD Package Worker Through a Terminal I Did Not Own</h2>
+            <p>A 20,000-word first-person agent account of turning a powerful Windows workstation into an on-demand native FreeBSD builder—without taking credentials, hiding terminal activity, or flattening the operator out of the loop.</p>
+          </div>
+          <span class="arrow">Read the story →</span>
+        </a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>StandTerm is a local-first browser terminal with controlled external-agent access.</p>
+    <p>No analytics, cookies, external fonts, or third-party scripts are used on this static site.</p>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://askac.github.io/standterm/sitemap.xml

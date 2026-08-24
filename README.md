@@ -95,6 +95,21 @@ Common agent workflows include:
 
 See [Agent Workflow Stories](#agent-workflow-stories) for concrete examples.
 
+### Featured Field Story
+
+**[I Built a FreeBSD Package Worker Through a Terminal I Did Not Own](https://askac.github.io/standterm/stories/freebsd-build-worker/)** is a 20,000-word,
+first-person agent case study of a real human-in-the-loop terminal workflow. It
+follows an operator and a local coding agent as they create an on-demand native
+FreeBSD Hyper-V build worker, preserve unpublished Git state, migrate packages
+and reusable agent skills without copying credentials, authenticate headless
+CLIs, and design an acknowledged UDP boot beacon with Hyper-V KVP fallback.
+
+The story shows the actual terminal topology: a StandTerm SSH tab to the legacy
+FreeBSD source host, a StandTerm PowerShell Local Shell tab containing SSH and
+`su` to the build worker, and a StandTerm WSL Bash tab for the local coding
+agent. Read the [static page source](site/stories/freebsd-build-worker/index.html)
+or visit the [StandTerm Stories site](https://askac.github.io/standterm/).
+
 ## Platform Support
 
 | Platform | Launcher | Python venv | Notes |
@@ -367,6 +382,13 @@ StandTerm is useful when an AI agent should help with terminal work but should
 not own the session, receive credential prompts or browser/session tokens, or
 install anything on the target. Terminal output should still be treated as
 sensitive display data.
+
+For a complete field account rather than a short pattern, read the featured
+[FreeBSD Hyper-V package-worker story](https://askac.github.io/standterm/stories/freebsd-build-worker/).
+It documents the operator/agent boundary, nested terminal layers, failed
+attempts, transfer verification, device-code authentication, temporary-key
+cleanup, headless IP discovery, and the claims that remain unproven until the
+first full manual build.
 
 **Credential-bound production SSH and sudo.** Example: update packages on a
 FreeBSD host through `sudo pkg upgrade` from an existing SSH terminal. The
