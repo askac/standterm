@@ -96,24 +96,39 @@ sufficient for attach authorization. Tokens use a sliding idle timeout, scoped
 to the terminal and authorizing browser binding, and are invalidated by terminal
 close, viewer detach/disconnect, session expiry, explicit revoke, or binding
 changes. The default idle timeout is five minutes and can be changed with
-`STANDTERM_AGENT_EXTERNAL_IDLE_TIMEOUT_SECONDS`.
+`STANDTERM_AGENT_EXTERNAL_IDLE_TIMEOUT_SECONDS`. The browser offers standard
+1x and optional 3x mints. `POST /agent/external/token` accepts the structured
+`idle_timeout_multiplier` field only when it is the integer `1` or `3`; the 3x
+choice multiplies the configured base timeout without changing other tokens.
 
 The browser mints tokens through `POST /agent/external/token` using the current
 authenticated StandTerm session cookie and public Agent state fields for the active
 terminal. External clients submit commands through `POST /agent/external/command`,
 which is accepted only from loopback clients and still requires the `agt_...`
-token. When a token is minted, the server also writes the latest local handoff
-JSON to `standterm_external_agent_handoff.json` in the StandTerm launch directory.
-This ignored local file is only a convenience for CLI agents on the StandTerm host;
-it does not bypass the short-lived token, loopback-only command endpoint, or
-Agent panel mode gates. It is also the machine-readable discovery document for
-non-StandTerm agents. It includes `handoff_schema:
+token. When a token is minted, the server writes both the backward-compatible
+latest handoff `standterm_external_agent_handoff.json` and a stable handoff for
+that terminal under a server-instance subdirectory of
+`standterm_external_agent_handoffs/`. These ignored local
+files are only conveniences for CLI agents on the StandTerm host; they do not
+bypass the short-lived token, loopback-only command endpoint, or Agent panel
+mode gates. Each is a machine-readable discovery document for non-StandTerm
+agents and includes `handoff_schema:
 "standterm_external_agent_handoff"`, `schema_version`, `protocol_version`,
 `transport`, `capabilities`, operation templates, and ready-to-run CLI commands.
 Because `/agent/external/command` only accepts loopback clients, the handoff
 `url`, `transport.command_endpoint`, and generated CLI commands use a loopback
 host even when the browser-facing StandTerm URL is a WSL or LAN address. The
 browser-facing address is retained as `browser_url`.
+Tokenless agentinfo exposes only a structured terminal-id-to-handoff-path index,
+never the token-bearing file contents. A caller can therefore use
+`--agentinfo <path-or-url> --terminal <id>` to resolve the matching local token.
+Omitting `--terminal` preserves the latest-handoff behavior. Per-terminal files
+are written atomically with restrictive permissions and removed when their
+matching token is revoked or its terminal/viewer binding is invalidated. Each
+server process uses a distinct directory so an old launch is never selected as
+the current instance; graceful shutdown removes the current directory, while
+fresh agentinfo generation prunes handoffs whose tokens expired or became
+invalid during the launch.
 Agents should call `hello` first when possible and branch only on the typed
 `capabilities` field, not on displayed terminal text.
 See `docs/examples/standterm-external-agent-skill/SKILL.md` and the adjacent
@@ -129,10 +144,12 @@ External clients do not have to run from the StandTerm launch directory. The
 cross-platform connection contract is the loopback command URL, bearer token,
 terminal id, and TLS mode (`--ca-file` for verified HTTPS or `--insecure` only
 for local loopback testing). Local files such as
-`standterm_agentinfo.json`, `standterm_external_agent_handoff.json`, and any
-current-instance pointer are conveniences for agents on the StandTerm host.
-Pointer file locations are platform-specific; when the base URL is known, the
-tokenless HTTP `/agentinfo` endpoint is the platform-neutral discovery surface.
+`standterm_agentinfo.json`, `standterm_external_agent_handoff.json`,
+`standterm_external_agent_handoffs/`, and any current-instance pointer are
+conveniences for agents on the StandTerm host.
+Pointer file locations are platform-specific. When the Agent Info URL is
+available, clients should fetch the tokenless HTTP `/agentinfo` endpoint first;
+local agentinfo files are fallbacks.
 
 The CLI wrapper is intentionally small and speaks this JSON command contract.
 It can read the generated handoff file directly. When StandTerm serves HTTPS with
@@ -148,6 +165,12 @@ environment.
 ```bash
 tools/.venv_wsl/bin/python scripts/agent_cli.py \
   --handoff standterm_external_agent_handoff.json \
+  hello
+
+tools/.venv_wsl/bin/python scripts/agent_cli.py \
+  --agentinfo <agentinfo-url-from-startup-banner> \
+  <tls-args-from-startup-banner> \
+  --terminal term-2 \
   hello
 ```
 
@@ -294,13 +317,15 @@ tools/.venv_wsl/bin/python scripts/agent_jsonl.py \
   --handoff standterm_external_agent_handoff.json
 
 tools/.venv_wsl/bin/python scripts/agent_jsonl.py \
-  --agentinfo standterm_agentinfo.json
+  --agentinfo <agentinfo-url-from-startup-banner> \
+  <tls-args-from-startup-banner>
 ```
 
 `--agentinfo` is tokenless bootstrap data. Helpers use it for launch paths,
-loopback URL, terminal id, TLS CA, and the current handoff path when present.
-Commands that read or write terminal state still need a minted external-agent
-token from `standterm_external_agent_handoff.json` or explicit `--token`.
+loopback URL, terminal id, TLS CA, and either the explicitly selected terminal's
+stable handoff or the latest handoff when no terminal is selected. Commands that
+read or write terminal state still need a minted external-agent token from a
+token-bearing handoff or explicit `--token`.
 
 Each stdin line is a JSON command object. The wrapper fills in the default
 `token` and `terminal_id` from the handoff when omitted, preserves an optional
@@ -496,15 +521,16 @@ Read rendered xterm viewport:
 
 `render_mode` is optional and defaults to `auto`. The current `auto` policy
 resolves to `mirror_screen`. Supported modes are:
-`visible_xterm_png`, which captures the operator browser's current visible
-xterm viewport as PNG, and `mirror_screen`, which returns structured terminal
+`visible_xterm_png`, which returns the terminal viewport as PNG using the
+visible xterm DOM when available and a terminal-mirror canvas when the target
+is in a background tab, and `mirror_screen`, which returns structured terminal
 screen data from the Agent mirror path without PNG bytes. The discovery payload
 includes `render_policy.default_mode`, `effective_auto_mode`, and
 `supported_modes`.
 
-If browser PNG rendering fails with `agent_render_timeout` or
-`agent_render_stale`, clients that do not require pixel-level viewport fidelity
-should retry with `mirror_screen` or use the `screen` operation.
+If browser PNG rendering fails with `agent_render_timeout`,
+`agent_render_stale`, or `agent_render_not_visible`, clients that do not require
+PNG output should retry with `mirror_screen` or use the `screen` operation.
 
 The CLI wrapper can save the returned PNG directly when using the PNG mode:
 
@@ -520,8 +546,14 @@ JSON metadata. `--save` requires `--mode visible-xterm-png`; it is not valid
 with `auto` or `mirror-screen`.
 
 For `visible_xterm_png`, `render` asks the authorizing browser viewer for a
-typed in-memory PNG capture of the currently rendered xterm viewport. The server
-emits `agent_viewport_render_request` to that browser sid, waits up to
+typed in-memory PNG capture of the xterm viewport. A foreground target uses the
+rendered xterm DOM (`source: visible_xterm_dom`). A background browser or
+terminal tab uses the continuously maintained xterm mirror buffer and an
+offscreen canvas (`source: terminal_mirror_canvas`), preserving terminal text,
+ANSI/RGB colors, and common cell styles without switching the operator's active
+tab. The mirror-canvas result is terminal-faithful but may differ in glyph
+antialiasing or other browser-renderer-only details. The server emits
+`agent_viewport_render_request` to that browser sid, waits up to
 `wait_ms`, then returns the browser's `agent_viewport_render_result`. The image
 bytes are returned only in the command response as `render.image_base64`; audit
 records store only metadata such as `request_id`, dimensions, byte length,
@@ -537,6 +569,7 @@ records store only metadata such as `request_id`, dimensions, byte length,
     "terminal_id": "main",
     "render_type": "xterm_viewport",
     "render_mode": "visible_xterm_png",
+    "source": "visible_xterm_dom",
     "mime_type": "image/png",
     "image_base64": "...",
     "image_byte_length": 12345,
@@ -982,8 +1015,9 @@ Payload:
 }
 ```
 
-Requests one browser-rendered xterm viewport PNG for a waiting external
-`render` command. The browser must answer with `agent_viewport_render_result`
+Requests one browser-produced xterm viewport PNG for a waiting external
+`render` command. The browser may use the visible DOM or its background-safe
+terminal mirror canvas and must answer with `agent_viewport_render_result`
 using the same `request_id`.
 
 ### `agent_state`

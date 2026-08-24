@@ -15,6 +15,7 @@ import hmac
 import hashlib
 import threading
 import shlex
+import struct
 import urllib.parse
 import atexit
 from collections import deque
@@ -299,6 +300,7 @@ AGENT_ERROR_RENDER_INVALID = 'agent_render_invalid'
 AGENT_ERROR_RENDER_TOO_LARGE = 'agent_render_too_large'
 AGENT_ERROR_RENDER_TIMEOUT = 'agent_render_timeout'
 AGENT_ERROR_RENDER_STALE = 'agent_render_stale'
+AGENT_ERROR_RENDER_NOT_VISIBLE = 'agent_render_not_visible'
 AGENT_ERROR_PRIVACY_BLOCKED = 'agent_privacy_blocked'
 AGENT_ERROR_STALE_MODE_VERSION = 'agent_stale_mode_version'
 AGENT_ERROR_STALE_PROPOSAL = 'agent_stale_proposal'
@@ -364,6 +366,7 @@ AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS = parse_optional_seconds_env(
     'AGENT_EXTERNAL_IDLE_TIMEOUT_SECONDS',
     default=5 * 60,
 )
+AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_MULTIPLIERS = {1, 3}
 AGENT_EXTERNAL_RECOMMENDED_KEEPALIVE_MAX_MS = 60000
 AGENT_EXTERNAL_TAIL_MAX_EVENTS = 200
 AGENT_EXTERNAL_TAIL_MAX_WAIT_MS = 30000
@@ -2754,6 +2757,8 @@ def validate_agent_viewport_render_result_payload(data, expected_request):
         return None, AGENT_ERROR_RENDER_INVALID
     if pixel_width <= 0 or pixel_height <= 0:
         return None, AGENT_ERROR_RENDER_INVALID
+    if pixel_width <= 1 or pixel_height <= 1:
+        return None, AGENT_ERROR_RENDER_NOT_VISIBLE
     if pixel_width * pixel_height > AGENT_VIEWPORT_RENDER_MAX_PIXELS:
         return None, AGENT_ERROR_RENDER_TOO_LARGE
     if output_seq < 0:
@@ -2767,8 +2772,18 @@ def validate_agent_viewport_render_result_payload(data, expected_request):
         return None, AGENT_ERROR_RENDER_INVALID
     if not image_bytes.startswith(b'\x89PNG\r\n\x1a\n'):
         return None, AGENT_ERROR_RENDER_INVALID
+    if len(image_bytes) < 24 or image_bytes[12:16] != b'IHDR':
+        return None, AGENT_ERROR_RENDER_INVALID
+    actual_pixel_width, actual_pixel_height = struct.unpack('>II', image_bytes[16:24])
+    if actual_pixel_width <= 1 or actual_pixel_height <= 1:
+        return None, AGENT_ERROR_RENDER_NOT_VISIBLE
+    if actual_pixel_width != pixel_width or actual_pixel_height != pixel_height:
+        return None, AGENT_ERROR_RENDER_INVALID
     if len(image_bytes) > AGENT_VIEWPORT_RENDER_MAX_IMAGE_BYTES:
         return None, AGENT_ERROR_RENDER_TOO_LARGE
+    source = data.get('source')
+    if source not in {None, 'visible_xterm_dom', 'terminal_mirror_canvas'}:
+        return None, AGENT_ERROR_RENDER_INVALID
     return {
         'request_id': expected_request.get('request_id'),
         'terminal_id': terminal_id,
@@ -2783,6 +2798,7 @@ def validate_agent_viewport_render_result_payload(data, expected_request):
         'pixel_height': pixel_height,
         'output_seq': output_seq,
         'captured_at': data.get('captured_at') if isinstance(data.get('captured_at'), str) else None,
+        'source': source,
     }, None
 
 class AgentViewportRenderRequestStore:
@@ -2850,6 +2866,7 @@ class AgentViewportRenderRequestStore:
                     AGENT_ERROR_RENDER_TOO_LARGE,
                     AGENT_ERROR_RENDER_TIMEOUT,
                     AGENT_ERROR_RENDER_STALE,
+                    AGENT_ERROR_RENDER_NOT_VISIBLE,
                     AGENT_ERROR_PRIVACY_BLOCKED,
                     AGENT_ERROR_PAUSED,
                     AGENT_ERROR_TERMINAL_NOT_FOUND,
@@ -3013,6 +3030,7 @@ class ExternalAgentAttachStore:
         return None, AGENT_ERROR_EXTERNAL_AGENT_UNAUTHORIZED
 
     def discard(self, session_token, terminal_id=None, sid=None):
+        discarded = []
         for token_hash, record in list(self._tokens.items()):
             if record.get('session_token') == session_token \
                     and (terminal_id is None or record.get('terminal_id') == terminal_id) \
@@ -3020,6 +3038,8 @@ class ExternalAgentAttachStore:
                 record['invalidated'] = True
                 record['error_code'] = AGENT_ERROR_EXTERNAL_AGENT_DISCONNECTED
                 record['invalidated_at'] = time.time()
+                discarded.append(dict(record))
+        return discarded
 
     def clear(self):
         self._tokens.clear()
@@ -3451,8 +3471,12 @@ def mint_external_agent_attach_token(session_token, terminal_id, sid,
 
 def mint_external_agent_attach_token_for_viewer(session_token, terminal_id, viewer_id,
                                                 agent_binding_id, mode_version=None,
-                                                privacy_version=None):
+                                                privacy_version=None,
+                                                idle_timeout_multiplier=1):
     if not session_token or not terminal_id:
+        return None, None, AGENT_ERROR_ACTION_INVALID_DATA
+    if type(idle_timeout_multiplier) is not int \
+            or idle_timeout_multiplier not in AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_MULTIPLIERS:
         return None, None, AGENT_ERROR_ACTION_INVALID_DATA
     with agent_lock:
         matches = [
@@ -3469,7 +3493,15 @@ def mint_external_agent_attach_token_for_viewer(session_token, terminal_id, view
             return None, None, AGENT_ERROR_STALE_MODE_VERSION
         if privacy_version is not None and state.privacy_version != privacy_version:
             return None, None, AGENT_ERROR_STALE_PROPOSAL
-        return mint_external_agent_attach_token(session_token, terminal_id, state.sid)
+        idle_timeout_seconds = AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS
+        if idle_timeout_seconds is not None:
+            idle_timeout_seconds *= idle_timeout_multiplier
+        return mint_external_agent_attach_token(
+            session_token,
+            terminal_id,
+            state.sid,
+            idle_timeout_seconds=idle_timeout_seconds,
+        )
 
 def validate_external_agent_command_token(command, require_terminal=True, renew_token=True):
     if not isinstance(command, dict):
@@ -4335,7 +4367,13 @@ def invalidate_agent_states(session_token, terminal_id=None, sid=None, reason=AG
             set_agent_privacy_state(state, AGENT_PRIVACY_PAUSED)
             bump_agent_mode_version(state)
             with external_agent_lock:
-                external_agent_attach_store.discard(state.session_token, state.terminal_id, state.sid)
+                discarded_records = external_agent_attach_store.discard(
+                    state.session_token,
+                    state.terminal_id,
+                    state.sid,
+                )
+                for record in discarded_records:
+                    remove_external_agent_handoff_for_record(record)
             invalidated.extend((state.sid, action) for action in cancel_agent_pending_actions(state, reason))
         return invalidated
 
@@ -5370,7 +5408,9 @@ def build_external_agent_cli_commands(base_url, token, terminal_id):
         'jsonl': build_external_agent_jsonl_command(base_url, token, terminal_id),
     }
 
-def build_external_agent_discovery_payload(base_url, token, terminal_id):
+def build_external_agent_discovery_payload(
+        base_url, token, terminal_id,
+        idle_timeout_seconds=AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS):
     command_base_url = build_external_agent_loopback_base_url(base_url)
     transport = {
         'type': 'loopback_http_json',
@@ -5497,24 +5537,24 @@ def build_external_agent_discovery_payload(base_url, token, terminal_id):
         },
         'cli_commands': build_external_agent_cli_commands(command_base_url, token, terminal_id),
         'monitoring_policy': build_external_agent_monitoring_policy_payload({
-            'idle_timeout_seconds': AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS,
+            'idle_timeout_seconds': idle_timeout_seconds,
         }),
         'security': {
             'token_prefix': 'agt_',
             'token_is_secret': True,
-            'token_lifetime': 'session' if AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS is None else 'idle_timeout',
-            'idle_timeout_seconds': AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS,
+            'token_lifetime': 'session' if idle_timeout_seconds is None else 'idle_timeout',
+            'idle_timeout_seconds': idle_timeout_seconds,
             'remote_use_requires_loopback_tunnel': True,
             'image_bytes_in_audit': False,
         },
     }
 
-def build_external_agentinfo_recommended_commands(agentinfo_path=None):
+def build_external_agentinfo_recommended_commands(agentinfo_path=None, agentinfo_url=None):
     python_arg = sys.executable
     cli_arg = str(APP_DIR / 'scripts' / 'agent_cli.py')
     shcmd_arg = str(APP_DIR / 'scripts' / 'agent_shcmd.py')
     handoff_arg = str(EXTERNAL_AGENT_HANDOFF_PATH)
-    agentinfo_arg = str(agentinfo_path or EXTERNAL_AGENT_INFO_PATH)
+    agentinfo_arg = str(agentinfo_url or agentinfo_path or EXTERNAL_AGENT_INFO_PATH)
     tls_args = get_external_agent_cli_tls_args()
     return {
         'discover': quote_local_command([
@@ -5562,6 +5602,7 @@ def build_external_agentinfo_payload(base_url=None, agentinfo_path=None):
     agentinfo_url = command_base_url.rstrip('/') + '/agentinfo'
     command_endpoint = command_base_url.rstrip('/') + '/agent/external/command'
     handoff_path = EXTERNAL_AGENT_HANDOFF_PATH
+    terminal_handoffs = build_external_agent_terminal_handoff_index()
     transport = {
         'type': 'loopback_http_json',
         'base_url': command_base_url,
@@ -5588,6 +5629,8 @@ def build_external_agentinfo_payload(base_url=None, agentinfo_path=None):
         'handoff_path': str(handoff_path),
         'handoff_exists': handoff_path.is_file(),
         'handoff_contains_secret': True,
+        'terminal_handoff_directory': str(get_external_agent_handoff_directory()),
+        'terminal_handoffs': terminal_handoffs,
         'transport': transport,
         'python_path': sys.executable,
         'scripts': {
@@ -5602,13 +5645,17 @@ def build_external_agentinfo_payload(base_url=None, agentinfo_path=None):
             'boot_prompt_path': str(APP_DIR / 'docs' / 'examples' / 'standterm-external-agent-skill' / 'boot_prompt.txt'),
         },
         'capabilities': list(EXTERNAL_AGENT_CAPABILITIES),
-        'recommended_commands': build_external_agentinfo_recommended_commands(agentinfo_path=agentinfo_path),
+        'recommended_commands': build_external_agentinfo_recommended_commands(
+            agentinfo_path=agentinfo_path,
+            agentinfo_url=agentinfo_url,
+        ),
         'status_hints': build_external_agentinfo_status_hints(),
         'monitoring_policy': build_external_agent_monitoring_policy_payload(),
         'security': {
             'tokenless': True,
             'contains_secret': False,
             'handoff_contains_secret': True,
+            'terminal_handoff_files_contain_secrets': True,
             'terminal_display_included': False,
             'token_bearing_commands_included': False,
         },
@@ -5651,17 +5698,145 @@ def write_external_agentinfo_files(base_url=None):
             log_message(f"[!] Failed to write External Agent Info pointer {EXTERNAL_AGENT_CURRENT_INFO_PATH}: {exc}", file=sys.stderr)
     return written
 
+def get_external_agent_handoff_directory():
+    return EXTERNAL_AGENT_HANDOFF_PATH.with_name('standterm_external_agent_handoffs') / LAUNCHER_INSTANCE_ID
+
+def get_external_agent_terminal_handoff_path(terminal_id):
+    digest = hashlib.sha256(terminal_id.encode('utf-8')).hexdigest()[:24]
+    return get_external_agent_handoff_directory() / f'terminal-{digest}.json'
+
+def ensure_external_agent_handoff_directory():
+    handoff_dir = get_external_agent_handoff_directory()
+    handoff_root = handoff_dir.parent
+    if handoff_root.is_symlink() or handoff_dir.is_symlink():
+        raise OSError(f'refusing symlinked External Agent handoff directory: {handoff_dir}')
+    handoff_root.mkdir(parents=True, exist_ok=True)
+    handoff_dir.mkdir(exist_ok=True)
+    if not sys.platform.startswith('win'):
+        os.chmod(handoff_root, 0o700)
+        os.chmod(handoff_dir, 0o700)
+    return handoff_dir
+
+def read_external_agent_handoff_file(handoff_path):
+    try:
+        payload = json.loads(handoff_path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+def remove_external_agent_handoff_file_if_matching(handoff_path, token_hash):
+    payload = read_external_agent_handoff_file(handoff_path)
+    token = payload.get('token') if payload else None
+    if not isinstance(token, str) or hash_external_agent_token(token) != token_hash:
+        return False
+    try:
+        handoff_path.unlink()
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        log_message(f"[!] Failed to remove External Agent handoff {handoff_path}: {exc}", file=sys.stderr)
+        return False
+
+def remove_external_agent_handoff_for_record(record):
+    if not isinstance(record, dict):
+        return []
+    terminal_id = record.get('terminal_id')
+    token_hash = record.get('token_hash')
+    if not is_valid_terminal_id(terminal_id) or not isinstance(token_hash, str):
+        return []
+    removed = []
+    for handoff_path in (
+        get_external_agent_terminal_handoff_path(terminal_id),
+        EXTERNAL_AGENT_HANDOFF_PATH,
+    ):
+        if remove_external_agent_handoff_file_if_matching(handoff_path, token_hash):
+            removed.append(str(handoff_path))
+    return removed
+
+def build_external_agent_terminal_handoff_index():
+    handoff_dir = get_external_agent_handoff_directory()
+    if handoff_dir.parent.is_symlink() or handoff_dir.is_symlink() or not handoff_dir.is_dir():
+        return {}
+    active = {}
+    with external_agent_lock:
+        for handoff_path in handoff_dir.glob('terminal-*.json'):
+            payload = read_external_agent_handoff_file(handoff_path)
+            terminal_id = payload.get('terminal_id') if payload else None
+            token = payload.get('token') if payload else None
+            if not is_valid_terminal_id(terminal_id) or not isinstance(token, str):
+                continue
+            record, error_code = external_agent_attach_store.validate(
+                token,
+                terminal_id=terminal_id,
+                renew=False,
+            )
+            if error_code:
+                token_hash = hash_external_agent_token(token)
+                remove_external_agent_handoff_file_if_matching(
+                    handoff_path,
+                    token_hash,
+                )
+                remove_external_agent_handoff_file_if_matching(
+                    EXTERNAL_AGENT_HANDOFF_PATH,
+                    token_hash,
+                )
+                continue
+            active[terminal_id] = {
+                'terminal_id': terminal_id,
+                'handoff_path': str(handoff_path),
+                'expires_at': record.get('expires_at'),
+            }
+    return active
+
 def write_external_agent_handoff(payload):
+    terminal_id = payload.get('terminal_id') if isinstance(payload, dict) else None
+    if not is_valid_terminal_id(terminal_id):
+        raise ValueError('external agent handoff requires a valid terminal_id')
+    ensure_external_agent_handoff_directory()
     handoff_path = EXTERNAL_AGENT_HANDOFF_PATH
+    terminal_handoff_path = get_external_agent_terminal_handoff_path(terminal_id)
+    payload['handoff_path'] = str(handoff_path)
+    payload['terminal_handoff_path'] = str(terminal_handoff_path)
+    write_external_agent_handoff_file(terminal_handoff_path, payload)
     write_external_agent_handoff_file(handoff_path, payload)
     return str(handoff_path)
 
 def write_external_agent_handoff_file(handoff_path, payload):
     write_json_file_atomic(handoff_path, payload)
 
+def cleanup_external_agent_handoff_artifacts():
+    handoff_dir = get_external_agent_handoff_directory()
+    if handoff_dir.parent.is_symlink() or handoff_dir.is_symlink():
+        log_message(f"[!] Refusing to clean symlinked External Agent handoff directory {handoff_dir}", file=sys.stderr)
+        return
+    if not handoff_dir.is_dir():
+        return
+    for handoff_path in handoff_dir.glob('terminal-*.json'):
+        payload = read_external_agent_handoff_file(handoff_path)
+        token = payload.get('token') if payload else None
+        token_hash = hash_external_agent_token(token) if isinstance(token, str) else None
+        try:
+            handoff_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            log_message(f"[!] Failed to remove stale External Agent handoff {handoff_path}: {exc}", file=sys.stderr)
+        if token_hash:
+            remove_external_agent_handoff_file_if_matching(EXTERNAL_AGENT_HANDOFF_PATH, token_hash)
+    try:
+        handoff_dir.rmdir()
+    except OSError:
+        pass
+
 def build_external_agent_token_payload(token, record, terminal_id, base_url):
     command_base_url = build_external_agent_loopback_base_url(base_url)
-    discovery = build_external_agent_discovery_payload(command_base_url, token, terminal_id)
+    discovery = build_external_agent_discovery_payload(
+        command_base_url,
+        token,
+        terminal_id,
+        idle_timeout_seconds=record.get('idle_timeout_seconds'),
+    )
     cli_command = discovery['cli_commands']['send_pwd']
     payload = {
         'status': 'ok',
@@ -5675,7 +5850,7 @@ def build_external_agent_token_payload(token, record, terminal_id, base_url):
         'cli_command': cli_command,
     }
     payload.update(discovery)
-    payload['handoff_path'] = write_external_agent_handoff(payload)
+    write_external_agent_handoff(payload)
     return payload
 
 def quote_local_command(args, platform_name=None):
@@ -5688,10 +5863,10 @@ def build_external_agent_startup_lines():
     python_arg = sys.executable
     cli_arg = str(APP_DIR / 'scripts' / 'agent_cli.py')
     handoff_arg = str(EXTERNAL_AGENT_HANDOFF_PATH)
-    agentinfo_arg = str(EXTERNAL_AGENT_INFO_PATH)
     loopback_url = build_external_agent_loopback_base_url(get_external_agent_local_base_url())
+    agentinfo_url = loopback_url.rstrip('/') + '/agentinfo'
     discover_command = quote_local_command([
-        python_arg, cli_arg, '--agentinfo', agentinfo_arg,
+        python_arg, cli_arg, '--agentinfo', agentinfo_url,
         *get_external_agent_cli_tls_args(), 'discover',
     ])
     hello_command = quote_local_command([
@@ -5708,15 +5883,16 @@ def build_external_agent_startup_lines():
     ])
     return [
         f"External Agent Info: {EXTERNAL_AGENT_INFO_PATH}",
-        f"External Agent Info URL: {loopback_url.rstrip('/')}/agentinfo",
+        f"External Agent Info URL: {agentinfo_url}",
         f"External Agent Info Current: {EXTERNAL_AGENT_CURRENT_INFO_PATH}" if EXTERNAL_AGENT_CURRENT_INFO_PATH else "External Agent Info Current: disabled",
         f"External Agent CLI discover: {discover_command}",
         f"External Agent Handoff: {EXTERNAL_AGENT_HANDOFF_PATH}",
+        f"External Agent Terminal Handoffs: {get_external_agent_handoff_directory()}",
         "External Agent Handoff is created or refreshed after browser Agent attach and external token mint.",
         f"External Agent CLI hello: {hello_command}",
         f"External Agent CLI heartbeat: {heartbeat_command}",
         f"External Agent CLI render: {render_command}",
-        "External Agent multi-terminal tests should pass explicit --url, --token, and --terminal; the handoff file stores the latest minted token.",
+        "External Agent multi-terminal use: pass --agentinfo with explicit --terminal for local handoffs, or explicit --url, --token, and --terminal; the top-level handoff stores the latest minted token.",
     ]
 
 def find_external_agent_dev_state(terminal_id):
@@ -5752,6 +5928,7 @@ def external_agent_token():
         return external_agent_json_response(external_agent_error(AGENT_ERROR_ACTION_INVALID_DATA), 400)
     mode_version = data.get('mode_version')
     privacy_version = data.get('privacy_version')
+    idle_timeout_multiplier = data.get('idle_timeout_multiplier', 1)
     if mode_version is not None:
         try:
             mode_version = int(mode_version)
@@ -5762,6 +5939,9 @@ def external_agent_token():
             privacy_version = int(privacy_version)
         except (TypeError, ValueError):
             return external_agent_json_response(external_agent_error(AGENT_ERROR_ACTION_INVALID_DATA), 400)
+    if type(idle_timeout_multiplier) is not int \
+            or idle_timeout_multiplier not in AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_MULTIPLIERS:
+        return external_agent_json_response(external_agent_error(AGENT_ERROR_ACTION_INVALID_DATA), 400)
     token, record, error_code = mint_external_agent_attach_token_for_viewer(
         session_token,
         terminal_id,
@@ -5769,6 +5949,7 @@ def external_agent_token():
         data.get('agent_binding_id'),
         mode_version=mode_version,
         privacy_version=privacy_version,
+        idle_timeout_multiplier=idle_timeout_multiplier,
     )
     if error_code:
         return external_agent_json_response(external_agent_error(error_code, terminal_id=terminal_id), 409)
@@ -6915,6 +7096,7 @@ def process_external_agent_viewport_render_command(
         render_mode=request_payload.get('render_mode'),
         render_type=request_payload.get('render_type'),
         mime_type=request_payload.get('mime_type'),
+        source=render.get('source') if render else None,
         image_byte_length=render.get('image_byte_length') if render else None,
         cols=render.get('cols') if render else None,
         rows=render.get('rows') if render else None,
@@ -7030,7 +7212,10 @@ def record_external_agent_attached(state, record):
 
 def revoke_external_agent_record(token):
     with external_agent_lock:
-        return external_agent_attach_store.revoke(token)
+        record, error_code = external_agent_attach_store.revoke(token)
+        if record:
+            remove_external_agent_handoff_for_record(record)
+        return record, error_code
 
 
 def record_external_agent_revoked(state, record):
@@ -8484,5 +8669,6 @@ if __name__ == '__main__':
     try:
         socketio.run(app, **run_kwargs)
     finally:
+        cleanup_external_agent_handoff_artifacts()
         cleanup_access_window()
         cleanup_windows_proxy_bypass()

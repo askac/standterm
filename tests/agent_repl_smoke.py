@@ -1146,6 +1146,46 @@ def test_mcp_observe_since_cursor_forwards_tail_command():
     assert result['observation']['display_is_control_signal'] is False
 
 
+def test_mcp_agentinfo_resolves_token_per_terminal():
+    with tempfile.TemporaryDirectory(prefix='standterm-mcp-multi-smoke-') as temp_dir:
+        temp_path = Path(temp_dir)
+        terminal_handoffs = {}
+        for terminal_id, token in (('term-2', 'agt_term_2'), ('term-3', 'agt_term_3')):
+            handoff_path = temp_path / f'{terminal_id}.json'
+            handoff_path.write_text(json.dumps({
+                'url': 'https://127.0.0.1:5010',
+                'token': token,
+                'terminal_id': terminal_id,
+            }) + '\n', encoding='utf-8')
+            terminal_handoffs[terminal_id] = {
+                'terminal_id': terminal_id,
+                'handoff_path': str(handoff_path),
+            }
+        agentinfo_path = temp_path / 'agentinfo.json'
+        agentinfo_path.write_text(json.dumps({
+            'base_url': 'https://127.0.0.1:5010',
+            'terminal_handoffs': terminal_handoffs,
+        }) + '\n', encoding='utf-8')
+        args = SimpleNamespace(
+            handoff=None,
+            agentinfo=str(agentinfo_path),
+            url=None,
+            token=None,
+            terminal=None,
+            ca_file=None,
+            insecure=False,
+        )
+        fake_post = FakePostJson(responses=[
+            (200, {'status': 'ok'}),
+            (200, {'status': 'ok'}),
+        ])
+        connection = mcp.StandTermConnection(args, post_json=fake_post)
+        connection.command({'op': 'state', 'terminal_id': 'term-2'})
+        connection.command({'op': 'state', 'terminal_id': 'term-3'})
+        assert fake_post.calls[0]['payload']['token'] == 'agt_term_2'
+        assert fake_post.calls[1]['payload']['token'] == 'agt_term_3'
+
+
 def test_mcp_send_accepts_structured_keys_only():
     args = SimpleNamespace(
         handoff=None,
@@ -1376,6 +1416,7 @@ def main():
         test_jsonl_client_preserves_backend_failed_result,
         test_mcp_tools_list_exposes_incremental_observe,
         test_mcp_observe_since_cursor_forwards_tail_command,
+        test_mcp_agentinfo_resolves_token_per_terminal,
         test_mcp_send_accepts_structured_keys_only,
         test_mcp_discover_redacts_handoff_token,
         test_type_units_translate_newlines_and_preserve_unicode_characters,

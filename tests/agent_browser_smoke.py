@@ -784,6 +784,54 @@ def test_agent_panel_status_gates_and_external_hint(browser, access_url):
         check(enabled_external['modeLabels'] == ['Observer', 'Approval', 'Full'], 'agent permission buttons did not use user-facing labels')
         check(enabled_external['buttonDisabled'] is False, 'external token button did not enable in observe mode')
         check('Mint' in enabled_external['hint'], 'external token hint did not show available state')
+
+        panel_mint_state = page.evaluate(
+            """() => ({
+                panel3xDisabled: document.getElementById('agent-external-token-3x-btn').disabled,
+                statusMintVisible: document.getElementById('agent-status-mint-btn').classList.contains('visible'),
+                statusMint3xVisible: document.getElementById('agent-status-mint-3x-btn').classList.contains('visible')
+            })"""
+        )
+        check(panel_mint_state['panel3xDisabled'] is False, 'Agent panel 3x mint button did not enable')
+        check(panel_mint_state['statusMintVisible'] is False, 'status mint button stayed visible while Agent panel was open')
+        check(panel_mint_state['statusMint3xVisible'] is False, 'status 3x mint button stayed visible while Agent panel was open')
+
+        page.click('#agent-panel-close-btn')
+        page.wait_for_function(
+            """() => (
+                document.getElementById('agent-status-mint-btn').classList.contains('visible')
+                && document.getElementById('agent-status-mint-3x-btn').classList.contains('visible')
+            )""",
+            timeout=5000,
+        )
+        page.click('#agent-status-mint-3x-btn')
+        page.wait_for_function(
+            """() => {
+                const token = window.terminalTest.getActiveAgentState()?.external_token;
+                return token && (token.status === 'active' || token.status === 'error');
+            }""",
+            timeout=5000,
+        )
+        status_minted = page.evaluate(
+            """() => {
+                const token = window.terminalTest.getActiveAgentState()?.external_token;
+                return {
+                    status: token?.status,
+                    remainingMs: Number(token?.expiresAt || 0) - Date.now(),
+                    idleTimeoutMultiplier: token?.idleTimeoutMultiplier,
+                    panelVisible: document.getElementById('agent-panel').classList.contains('visible')
+                };
+            }"""
+        )
+        check(status_minted['status'] == 'active', 'status-bar 3x mint did not complete')
+        check(status_minted['idleTimeoutMultiplier'] == 3, 'status-bar 3x mint did not retain the structured multiplier')
+        check(status_minted['remainingMs'] > 10 * 60 * 1000, 'status-bar 3x mint did not extend the idle lifetime')
+        check(status_minted['panelVisible'] is False, 'status-bar mint unexpectedly opened the Agent panel')
+
+        page.click('#agent-toggle-btn')
+        page.wait_for_selector('#agent-panel.visible', timeout=5000)
+        minted_command = page.evaluate("() => document.getElementById('agent-external-command').value")
+        check('# terminal handoff:' in minted_command, '3x mint did not expose the stable terminal handoff path')
     finally:
         close_context(context)
 
@@ -887,6 +935,7 @@ def test_rendered_viewport_snapshot_returns_png(browser, access_url):
         check(result['render_type'] == 'xterm_viewport', 'render result used the wrong render type')
         check(result['render_mode'] == 'visible_xterm_png', 'render result used the wrong render mode')
         check(result['mime_type'] == 'image/png', 'render result used the wrong MIME type')
+        check(result['source'] == 'visible_xterm_dom', 'foreground render did not use the visible xterm DOM')
         check(result['image_base64'].startswith('iVBORw0KGgo'), 'render result is not a PNG')
         check(result['pixel_width'] > 0 and result['pixel_height'] > 0, 'render result has invalid dimensions')
         check(result['cols'] > 0 and result['rows'] > 0, 'render result has invalid terminal size')
@@ -916,6 +965,69 @@ def test_rendered_viewport_snapshot_returns_png(browser, access_url):
             all(channel >= 245 for channel in background_pixel[:3]),
             f'rendered PNG background does not match light xterm theme: {background_pixel}',
         )
+    finally:
+        close_context(context)
+
+
+def test_background_terminal_render_uses_mirror_canvas_png(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        attach_agent(page)
+        page.evaluate("() => window.terminalTest.applyColorScheme('oneHalfLight')")
+        page.evaluate(
+            """payload => window.terminalTest.writeTerminalOutput(payload.data, payload.output_seq)""",
+            {'data': '\x1b[31mbackground-render-check\x1b[0m\r\n', 'output_seq': 322},
+        )
+        page.wait_for_function(
+            "() => window.terminalTest.getMirrorSnapshot()?.output_seq === 322",
+            timeout=10000,
+        )
+        page.click('#new-tab-btn')
+        page.wait_for_function(
+            "() => window.terminalTest.getTerminalTabsState().activeTerminalId !== 'main'",
+            timeout=5000,
+        )
+        result = page.evaluate(
+            """async () => await window.terminalTest.buildViewportRenderResultForTerminal('main', {
+                request_id: 'render-background-test-1',
+                terminal_id: 'main',
+                render_mode: 'visible_xterm_png'
+            })"""
+        )
+        check(result['status'] == 'ok', f"background render result failed: {result}")
+        check(result['source'] == 'terminal_mirror_canvas', 'background render did not use the mirror canvas')
+        check(result['image_base64'].startswith('iVBORw0KGgo'), 'background render result is not a PNG')
+        check(result['pixel_width'] > 1 and result['pixel_height'] > 1, 'background render returned a degenerate PNG')
+        check(result['cols'] > 0 and result['rows'] > 0, 'background render has invalid terminal size')
+        check(result['output_seq'] == 322, 'background render did not preserve output_seq')
+        decoded = page.evaluate(
+            """async payload => {
+                const image = new Image();
+                const loaded = new Promise((resolve, reject) => {
+                    image.onload = resolve;
+                    image.onerror = () => reject(new Error('png decode failed'));
+                });
+                image.src = `data:image/png;base64,${payload.image_base64}`;
+                await loaded;
+                const canvas = document.createElement('canvas');
+                canvas.width = image.width;
+                canvas.height = image.height;
+                const context = canvas.getContext('2d');
+                context.drawImage(image, 0, 0);
+                const pixels = context.getImageData(0, 0, image.width, image.height).data;
+                let nonBackgroundPixels = 0;
+                for (let index = 0; index < pixels.length; index += 4) {
+                    if (pixels[index] < 245 || pixels[index + 1] < 245 || pixels[index + 2] < 245) {
+                        nonBackgroundPixels += 1;
+                    }
+                }
+                return { width: image.width, height: image.height, nonBackgroundPixels };
+            }""",
+            result,
+        )
+        check(decoded['width'] == result['pixel_width'], 'background PNG width metadata does not match the image')
+        check(decoded['height'] == result['pixel_height'], 'background PNG height metadata does not match the image')
+        check(decoded['nonBackgroundPixels'] > 0, 'background PNG did not contain terminal glyphs')
     finally:
         close_context(context)
 
@@ -1664,6 +1776,7 @@ def main():
         test_agent_panel_status_gates_and_external_hint,
         test_session_recovery_new_tab_can_renew_external_agent_token,
         test_rendered_viewport_snapshot_returns_png,
+        test_background_terminal_render_uses_mirror_canvas_png,
         test_paste_review_approve_and_cancel,
         test_approval_payload_and_stale_rejections,
         test_cjk_width_compatibility_defaults_off,

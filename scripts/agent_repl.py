@@ -107,7 +107,7 @@ def parse_args():
     parser.add_argument('--agentinfo', help='Read tokenless StandTerm agentinfo JSON from a local path or URL')
     parser.add_argument('--url', help='StandTerm base URL, for example http://127.0.0.1:5012')
     parser.add_argument('--token', help='External agent attach token. Omit only on dev servers with STANDTERM_AGENT_DEV_TOKEN=1.')
-    parser.add_argument('--terminal', default='main', help='Terminal id')
+    parser.add_argument('--terminal', help='Terminal id')
     parser.add_argument('--ca-file', help='CA certificate bundle used to verify HTTPS StandTerm servers')
     parser.add_argument('--insecure', action='store_true', help='Disable HTTPS certificate verification')
     parser.add_argument('--poll-ms', type=int, default=150, help='Tail polling interval in milliseconds')
@@ -174,14 +174,18 @@ def load_handoff(path):
 
 def apply_handoff(args):
     if not args.handoff:
+        if not args.terminal:
+            args.terminal = 'main'
         return
     payload = load_handoff(args.handoff)
     if not args.url:
         args.url = payload.get('url')
     if not args.token:
         args.token = payload.get('token')
-    if args.terminal == 'main' and isinstance(payload.get('terminal_id'), str):
+    if args.terminal in (None, 'main') and isinstance(payload.get('terminal_id'), str):
         args.terminal = payload['terminal_id']
+    if not args.terminal:
+        args.terminal = 'main'
     transport = payload.get('transport')
     if not args.ca_file and isinstance(transport, dict):
         args.ca_file = transport.get('tls_ca_cert_path')
