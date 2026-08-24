@@ -2641,6 +2641,49 @@
                 };
             }
 
+            function drawAgentMirrorBlockGlyph(context, chars, x, y, cellWidth, cellHeight) {
+                const left = Math.floor(x);
+                const top = Math.floor(y);
+                const right = Math.ceil(x + cellWidth);
+                const bottom = Math.ceil(y + cellHeight);
+                const width = Math.max(1, right - left);
+                const height = Math.max(1, bottom - top);
+                let blockLeft = left;
+                let blockTop = top;
+                let blockWidth = width;
+                let blockHeight = height;
+
+                const lowerBlocks = '▁▂▃▄▅▆▇';
+                const lowerIndex = lowerBlocks.indexOf(chars);
+                if (lowerIndex >= 0) {
+                    blockHeight = Math.max(1, Math.ceil(height * (lowerIndex + 1) / 8));
+                    blockTop = bottom - blockHeight;
+                } else {
+                    const leftBlocks = '▏▎▍▌▋▊▉';
+                    const leftIndex = leftBlocks.indexOf(chars);
+                    if (leftIndex >= 0) {
+                        blockWidth = Math.max(1, Math.ceil(width * (leftIndex + 1) / 8));
+                    } else if (chars === '█') {
+                        // The default rectangle already covers the complete cell.
+                    } else if (chars === '▀') {
+                        blockHeight = Math.max(1, Math.ceil(height / 2));
+                    } else if (chars === '▐') {
+                        blockWidth = Math.max(1, Math.ceil(width / 2));
+                        blockLeft = right - blockWidth;
+                    } else if (chars === '▔') {
+                        blockHeight = Math.max(1, Math.ceil(height / 8));
+                    } else if (chars === '▕') {
+                        blockWidth = Math.max(1, Math.ceil(width / 8));
+                        blockLeft = right - blockWidth;
+                    } else {
+                        return false;
+                    }
+                }
+
+                context.fillRect(blockLeft, blockTop, blockWidth, blockHeight);
+                return true;
+            }
+
             function renderAgentTerminalMirrorToPng(state, renderElement) {
                 syncAgentTerminalMirrorSize(state);
                 const mirror = state.agentTerminalMirror;
@@ -2701,15 +2744,21 @@
                         if (!chars || cell.isInvisible()) continue;
                         const weight = cell.isBold() ? 'bold' : fontWeight;
                         const style = cell.isItalic() ? 'italic' : 'normal';
-                        context.font = `${style} ${weight} ${fontSize}px ${fontFamily}`;
                         context.globalAlpha = cell.isDim() ? 0.5 : 1;
                         context.fillStyle = foreground;
-                        context.fillText(
+                        const glyphWidth = geometry.cellWidth * Math.max(1, cell.getWidth());
+                        const drewBlockGlyph = drawAgentMirrorBlockGlyph(
+                            context,
                             chars,
                             x,
-                            y + baselineOffset,
-                            geometry.cellWidth * Math.max(1, cell.getWidth())
+                            y,
+                            glyphWidth,
+                            geometry.cellHeight
                         );
+                        if (!drewBlockGlyph) {
+                            context.font = `${style} ${weight} ${fontSize}px ${fontFamily}`;
+                            context.fillText(chars, x, y + baselineOffset, glyphWidth);
+                        }
                         context.globalAlpha = 1;
                         context.strokeStyle = foreground;
                         context.lineWidth = 1;
