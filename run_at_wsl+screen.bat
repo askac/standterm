@@ -19,20 +19,16 @@ if errorlevel 1 (
     exit /b 1
 )
 
-wsl.exe --cd "%PROJECT_DIR%" bash -lc "command -v screen >/dev/null 2>&1"
-if errorlevel 1 (
-    echo [!] ERROR: screen is required inside WSL but was not found.
-    echo     Install with: sudo apt install screen
-    pause
-    exit /b 1
-)
-
+REM The screen check runs inside the launch command below instead of in its own
+REM wsl.exe round trip. Each wsl.exe invocation costs a WSL entry, and several
+REM seconds when the distro is not already running, so asking one question is
+REM not worth a separate trip.
 echo [*] Starting or attaching WSL screen session: %SCREEN_NAME%
 echo [*] Reattach from Windows with:
 echo     wsl.exe screen -r standterm
 echo [*] Force reattach with:
 echo     wsl.exe screen -d -r standterm
-wsl.exe --cd "%PROJECT_DIR%" bash -lc "export STANDTERM_RESTART_PATH='%STANDTERM_RESTART_PATH%'; chmod +x ./run.sh; screen -wipe standterm >/dev/null 2>&1 || true; if screen -ls | grep -Eq '[[:space:]][0-9]+\.standterm[[:space:]].*\(Detached\)'; then exec screen -r standterm; fi; if screen -ls | grep -Eq '[[:space:]][0-9]+\.standterm[[:space:]].*\(Attached\)'; then exec screen -d -r standterm; fi; exec screen -S standterm bash -lc 'exec ./run.sh %*'"
+wsl.exe --cd "%PROJECT_DIR%" bash -lc "command -v screen >/dev/null 2>&1 || { echo '[!] ERROR: screen is required inside WSL but was not found.'; echo '    Install with: sudo apt install screen'; exit 1; }; export STANDTERM_RESTART_PATH='%STANDTERM_RESTART_PATH%'; chmod +x ./run.sh; screen -wipe standterm >/dev/null 2>&1 || true; if screen -ls | grep -Eq '[[:space:]][0-9]+\.standterm[[:space:]].*\(Detached\)'; then exec screen -r standterm; fi; if screen -ls | grep -Eq '[[:space:]][0-9]+\.standterm[[:space:]].*\(Attached\)'; then exec screen -d -r standterm; fi; exec screen -S standterm bash -lc 'exec ./run.sh %*'"
 if errorlevel 1 (
     pause
     exit /b 1
