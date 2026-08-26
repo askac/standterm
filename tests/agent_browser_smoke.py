@@ -1898,6 +1898,372 @@ def test_terminal_payload_text_is_not_control(browser, access_url):
         close_context(context)
 
 
+def test_ssh_history_and_auto_profile_follow_structured_success(browser, access_url):
+    context = browser.new_context(viewport={'width': 1280, 'height': 800})
+    page = context.new_page()
+    try:
+        page.goto(debug_url(access_url), wait_until='domcontentloaded')
+        page.wait_for_function('() => !!window.terminalTest', timeout=10000)
+        page.wait_for_function(
+            "() => window.terminalTest.getSocketState().connected === true",
+            timeout=10000,
+        )
+        page.evaluate("() => window.terminalTest.setSshSessionState({ profiles: [], history: [] })")
+
+        page.evaluate(
+            """() => {
+                window.terminalTest.stageSshConnectionForTest({
+                    host: 'failed.example', port: '22', username: 'alice',
+                    password: 'must-not-persist', saveSession: true
+                });
+                window.terminalTest.handleSshOutput({
+                    terminal_id: 'main', message_type: 'connection_error', message: 'Rejected'
+                });
+            }"""
+        )
+        failed_state = page.evaluate("() => window.terminalTest.getSshSessionState()")
+        check(failed_state == {'version': 1, 'profiles': [], 'history': []}, 'failed SSH connection was stored')
+
+        page.evaluate(
+            """() => {
+                window.terminalTest.stageSshConnectionForTest({
+                    host: 'history.example', port: '2222', username: 'alice',
+                    password: 'must-not-persist', saveSession: false
+                });
+                window.terminalTest.handleSshOutput({
+                    terminal_id: 'main', message_type: 'ssh_connected',
+                    connection_type: 'ssh', terminal_label: 'SSH'
+                });
+            }"""
+        )
+        history_only = page.evaluate("() => window.terminalTest.getSshSessionState()")
+        check(len(history_only['history']) == 1, 'successful SSH connection did not enter history')
+        check(history_only['profiles'] == [], 'unchecked Save session created a profile')
+
+        history_disabled = page.evaluate(
+            """async () => {
+                const before = window.terminalTest.getSshSessionState();
+                await window.terminalTest.recordSuccessfulSshConnectionForTest({
+                    host: 'private.example', port: '22', username: 'alice',
+                    saveHistory: false, saveSession: false
+                });
+                return { before, after: window.terminalTest.getSshSessionState() };
+            }"""
+        )
+        check(
+            history_disabled['after'] == history_disabled['before'],
+            'disabled Save history retained a successful connection',
+        )
+
+        profile_only = page.evaluate(
+            """async () => {
+                await window.terminalTest.recordSuccessfulSshConnectionForTest({
+                    host: 'profile-only.example', port: '22', username: 'alice',
+                    saveHistory: false, saveSession: true
+                });
+                return window.terminalTest.getSshSessionState();
+            }"""
+        )
+        check(len(profile_only['history']) == 1, 'Save session implicitly enabled SSH history')
+        check(
+            [profile['host'] for profile in profile_only['profiles']] == ['profile-only.example'],
+            'Save session did not create a profile while history was disabled',
+        )
+        page.evaluate(
+            """async () => window.terminalTest.setSshSessionState({
+                profiles: [], history: window.terminalTest.getSshSessionState().history
+            })"""
+        )
+
+        capped_state = page.evaluate(
+            """async () => {
+                for (let index = 0; index < 7; index += 1) {
+                    await window.terminalTest.recordSuccessfulSshConnectionForTest({
+                        host: `host-${index}.example`, port: 22, username: 'alice', saveSession: false
+                    });
+                }
+                return window.terminalTest.getSshSessionState();
+            }"""
+        )
+        check(len(capped_state['history']) == 6, 'SSH history did not cap at six entries')
+        check(
+            capped_state['history'][0]['host'] == 'host-6.example',
+            f'SSH history is not newest first: {capped_state["history"]!r}',
+        )
+        check('host-0.example' not in [entry['host'] for entry in capped_state['history']], 'SSH history kept an evicted entry')
+
+        saved_state = page.evaluate(
+            """async () => {
+                await window.terminalTest.recordSuccessfulSshConnectionForTest({
+                    host: 'saved.example', port: '2200', username: 'bob',
+                    password: 'must-not-persist', saveSession: true
+                });
+                await window.terminalTest.recordSuccessfulSshConnectionForTest({
+                    host: 'SAVED.EXAMPLE', port: 2200, username: 'bob', saveSession: true
+                });
+                return window.terminalTest.getSshSessionState();
+            }"""
+        )
+        check(len(saved_state['profiles']) == 1, 'matching Save session connections created duplicate profiles')
+        check(saved_state['profiles'][0]['name'] == 'bob@saved.example', 'automatic profile name is incorrect')
+        check(saved_state['profiles'][0]['keyId'] is None, 'automatic profile did not reserve an empty key ID')
+        serialized = repr(saved_state).lower()
+        check('must-not-persist' not in serialized, 'SSH session storage retained a password')
+        check('password' not in serialized, 'SSH session storage contains a password field')
+    finally:
+        close_context(context)
+
+
+def test_ssh_profile_picker_and_settings_save_semantics(browser, access_url):
+    context = browser.new_context(viewport={'width': 1280, 'height': 800})
+    page = context.new_page()
+    try:
+        page.goto(debug_url(access_url), wait_until='domcontentloaded')
+        page.wait_for_function('() => !!window.terminalTest', timeout=10000)
+        page.wait_for_function(
+            "() => window.terminalTest.getSocketState().connected === true",
+            timeout=10000,
+        )
+        page.evaluate(
+            """async () => {
+                await window.terminalTest.setSshSessionState({
+                    profiles: [
+                        { id: 'profile-a', sortOrder: 0, name: 'Build Server', host: 'build.example', port: '22', username: 'builder', keyId: null },
+                        { id: 'profile-b', sortOrder: 1, name: 'Deploy Server', host: 'deploy.example', port: '2200', username: 'deployer', keyId: null }
+                    ],
+                    history: [
+                        { id: 'history-a', host: 'recent.example', port: '2022', username: 'recent', lastUsedAt: '2026-08-26T00:00:00.000Z' }
+                    ]
+                });
+                const policy = window.terminalTest.getTerminalPolicy();
+                policy.force_connection = null;
+                policy.default_connection = 'ssh';
+                const ssh = policy.connection_options.find(option => option.connection_type === 'ssh');
+                ssh.allowed = true;
+                window.terminalTest.applyTerminalPolicy(policy);
+                const sshMode = document.querySelector('input[name="connection_type"][value="ssh"]');
+                sshMode.checked = true;
+                sshMode.dispatchEvent(new Event('change', { bubbles: true }));
+                document.getElementById('controls').style.display = 'block';
+                document.getElementById('connection-form').style.display = 'block';
+                document.getElementById('ssh-fields').style.display = 'block';
+            }"""
+        )
+
+        page.evaluate(
+            """() => {
+                document.getElementById('ssh-session-picker-toggle').click();
+                document.querySelector('.ssh-session-picker-entry[data-entry-id="profile-a"]').click();
+            }"""
+        )
+        selected_profile = page.evaluate(
+            """() => ({
+                host: document.getElementById('host').value,
+                port: document.getElementById('port').value,
+                username: document.getElementById('username').value,
+                password: document.getElementById('password').value,
+                indicator: document.getElementById('ssh-profile-indicator').innerText
+            })"""
+        )
+        check(selected_profile == {
+            'host': 'build.example', 'port': '22', 'username': 'builder',
+            'password': '', 'indicator': 'Profile: Build Server'
+        }, 'profile selection did not populate the SSH form safely')
+        check(
+            page.locator('#ssh-profile-name').get_attribute('maxlength') == '64',
+            'SSH profile name input did not expose its 64-character limit',
+        )
+        check(
+            page.evaluate("() => window.terminalTest.getMatchingSshProfileNameForTest()") == 'Build Server',
+            'exact SSH profile target did not resolve its label',
+        )
+
+        page.evaluate(
+            """() => {
+                const terminalId = window.terminalTest.getTerminalTabsState().activeTerminalId;
+                window.terminalTest.stageSshConnectionForTest({
+                    host: 'build.example', port: '22', username: 'builder', profileName: 'Build Server'
+                });
+                window.terminalTest.handleSshOutput({
+                    terminal_id: terminalId, message_type: 'ssh_connected',
+                    connection_type: 'ssh', terminal_label: 'SSH - Build Server'
+                });
+            }"""
+        )
+        detailed_label = page.evaluate(
+            """() => ({
+                tab: document.querySelector('.terminal-tab.active .tab-title').innerText,
+                session: document.getElementById('sshStatus').innerText,
+                termFieldCount: document.querySelectorAll('#terminal-term').length,
+                colorFieldCount: document.querySelectorAll('#terminal-color').length
+            })"""
+        )
+        check(detailed_label['tab'] == 'SSH - Build Server', 'profile label did not replace the SSH tab name')
+        check(detailed_label['session'] == 'SSH - Build Server', 'status bar did not show the full SSH profile label')
+        check(detailed_label['termFieldCount'] == 0, 'status bar still rendered the removed TERM field')
+        check(detailed_label['colorFieldCount'] == 0, 'status bar still rendered the removed color field')
+
+        page.click('#quick-settings')
+        check(page.locator('#pref-showDetailedSshLabels').is_checked() is True, 'detailed SSH labels did not default on')
+        page.uncheck('#pref-showDetailedSshLabels')
+        page.click('#settings-save')
+        compact_label = page.evaluate(
+            """() => ({
+                tab: document.querySelector('.terminal-tab.active .tab-title').innerText,
+                session: document.getElementById('sshStatus').innerText
+            })"""
+        )
+        check(compact_label == {'tab': 'SSH', 'session': 'SSH'}, 'detailed SSH label setting did not apply immediately')
+        page.click('#quick-settings')
+        page.check('#pref-showDetailedSshLabels')
+        page.click('#settings-save')
+
+        page.evaluate(
+            """() => {
+                const port = document.getElementById('port');
+                port.value = '2222';
+                port.dispatchEvent(new Event('input', { bubbles: true }));
+            }"""
+        )
+        check(
+            page.locator('#ssh-profile-indicator').inner_text() == 'Based on: Build Server (modified)',
+            'editing a loaded profile was not labeled as a derived Quick Connect draft',
+        )
+        check(
+            page.evaluate("() => window.terminalTest.getMatchingSshProfileNameForTest()") is None,
+            'modified SSH target kept the original profile label',
+        )
+        page.evaluate(
+            """() => {
+                document.getElementById('ssh-session-picker-toggle').click();
+                document.querySelector('.ssh-session-picker-entry[data-entry-id="history-a"]').click();
+            }"""
+        )
+        history_selection = page.evaluate(
+            """() => ({
+                host: document.getElementById('host').value,
+                indicatorDisplay: document.getElementById('ssh-profile-indicator').style.display,
+                saveChecked: document.getElementById('ssh-save-session').checked
+            })"""
+        )
+        check(history_selection['host'] == 'recent.example', 'history selection did not populate the SSH form')
+        check(history_selection['indicatorDisplay'] == 'none', 'history selection displayed a profile label')
+        check(history_selection['saveChecked'] is False, 'history selection enabled Save session implicitly')
+
+        page.click('#quick-settings')
+        page.click('.settings-nav-item[data-tab="ssh-sessions"]')
+        preloaded_editor = page.evaluate(
+            """() => ({
+                name: document.getElementById('ssh-profile-name').value,
+                host: document.getElementById('ssh-profile-host').value,
+                saveDisabled: document.getElementById('ssh-profile-save').disabled
+            })"""
+        )
+        check(
+            preloaded_editor == {'name': 'recent@recent.example', 'host': 'recent.example', 'saveDisabled': True},
+            'SSH Settings did not preload Quick Connect as a create-only draft',
+        )
+        page.click('#ssh-profile-list button[data-profile-id="profile-a"]')
+        page.fill('#ssh-profile-username', 'builder2')
+        page.click('#ssh-profile-save')
+        page.wait_for_function(
+            """() => document.getElementById('ssh-profile-status').innerText === 'Saved Build Server.'""",
+            timeout=5000,
+        )
+        updated = page.evaluate("() => window.terminalTest.getSshSessionState()")
+        check(len(updated['profiles']) == 2, 'Save created a copy of a loaded profile')
+        profile_a = next(profile for profile in updated['profiles'] if profile['id'] == 'profile-a')
+        check(profile_a['username'] == 'builder2', 'Save did not update the loaded stable ID')
+
+        page.click('#ssh-profile-down')
+        page.wait_for_function(
+            """async () => (await window.terminalTest.getSshSessionState()).profiles[1].id === 'profile-a'""",
+            timeout=5000,
+        )
+        reordered = page.evaluate("() => window.terminalTest.getSshSessionState()")
+        check([profile['id'] for profile in reordered['profiles']] == ['profile-b', 'profile-a'], 'profile move used list index as identity')
+
+        page.fill('#ssh-profile-name', 'Build Server Copy')
+        page.fill('#ssh-profile-port', '2222')
+        page.click('#ssh-profile-create')
+        page.wait_for_function(
+            """async () => (await window.terminalTest.getSshSessionState()).profiles.length === 3""",
+            timeout=5000,
+        )
+        created = page.evaluate("() => window.terminalTest.getSshSessionState()")
+        check(created['profiles'][-1]['name'] == 'Build Server Copy', 'Create did not add a separate profile')
+        check(created['profiles'][-1]['host'] == 'build.example', 'Create did not copy the loaded profile draft')
+        check(created['profiles'][-1]['port'] == '2222', 'Create did not retain edits made after Load')
+        created_profile_id = created['profiles'][-1]['id']
+        check(created_profile_id != 'profile-a', 'Create reused the loaded stable ID')
+        original_profile = next(profile for profile in created['profiles'] if profile['id'] == 'profile-a')
+        check(original_profile['port'] == '22', 'Create modified the loaded profile')
+
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_function('() => !!window.terminalTest', timeout=10000)
+        persisted = page.evaluate("() => window.terminalTest.getSshSessionState()")
+        check(
+            created_profile_id in [profile['id'] for profile in persisted['profiles']],
+            'SSH profiles did not persist in IndexedDB across reload',
+        )
+
+        page.click('#quick-settings')
+        page.click('.settings-nav-item[data-tab="ssh-sessions"]')
+        profile_count_before_clear = len(persisted['profiles'])
+        page.once('dialog', lambda dialog: dialog.accept())
+        page.click('#ssh-history-clear')
+        page.wait_for_function(
+            """async () => (await window.terminalTest.getSshSessionState()).history.length === 0""",
+            timeout=5000,
+        )
+        history_cleared = page.evaluate("() => window.terminalTest.getSshSessionState()")
+        check(len(history_cleared['profiles']) == profile_count_before_clear, 'Clear History deleted SSH profiles')
+        check(page.locator('#ssh-history-clear').is_disabled() is True, 'Clear History remained enabled when empty')
+        page.click(f'#ssh-profile-list button[data-profile-id="{created_profile_id}"]')
+        page.once('dialog', lambda dialog: dialog.accept())
+        page.click('#ssh-profile-delete')
+        page.wait_for_function(
+            """async () => (await window.terminalTest.getSshSessionState()).profiles.length === 2""",
+            timeout=5000,
+        )
+        deleted = page.evaluate("() => window.terminalTest.getSshSessionState()")
+        check(
+            created_profile_id not in [profile['id'] for profile in deleted['profiles']],
+            'Delete Profile did not remove the selected stable ID',
+        )
+
+        page.evaluate(
+            """() => {
+                document.getElementById('settings-close').click();
+                const saveHistory = document.getElementById('ssh-save-history');
+                saveHistory.checked = false;
+                saveHistory.dispatchEvent(new Event('change', { bubbles: true }));
+                document.getElementById('ssh-save-session').checked = true;
+                document.getElementById('new-tab-btn').click();
+            }"""
+        )
+        check(
+            page.locator('#ssh-save-session').is_checked() is False,
+            'new terminal tab retained the previous Save session choice',
+        )
+        check(
+            page.locator('#ssh-save-history').is_checked() is False,
+            'new terminal tab did not retain the Save history preference',
+        )
+        check(
+            page.evaluate("() => JSON.parse(localStorage.getItem('terminal.pref.v1')).saveSshHistory") is False,
+            'Save history preference was not persisted immediately',
+        )
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_function('() => !!window.terminalTest', timeout=10000)
+        check(
+            page.locator('#ssh-save-history').is_checked() is False,
+            'Save history preference did not persist across reload',
+        )
+    finally:
+        close_context(context)
+
+
 def main():
     sync_playwright, PlaywrightError, _ = load_playwright()
     tests = [
@@ -1929,6 +2295,8 @@ def main():
         test_access_url_token_is_remembered_only_for_recovery,
         test_connection_controls_follow_start_fields_without_legacy_payload,
         test_terminal_payload_text_is_not_control,
+        test_ssh_history_and_auto_profile_follow_structured_success,
+        test_ssh_profile_picker_and_settings_save_semantics,
     ]
     proc = None
     browser = None

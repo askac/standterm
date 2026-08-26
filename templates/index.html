@@ -100,7 +100,7 @@
         /* Settings Modal */
         #settings-modal {
             display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0,0,0,0.75); z-index: 4000; align-items: center; justify-content: center;
+            background: rgba(0,0,0,0.75); z-index: 7000; align-items: center; justify-content: center;
         }
         #settings-modal.open { display: flex; }
         #paste-review-modal {
@@ -160,6 +160,23 @@
         .settings-secret-actions button { width: auto; margin: 0; padding: 5px 10px; background: #3a3a3c; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
         .settings-secret-actions button:disabled { color: #777; cursor: default; opacity: 0.7; }
         .settings-secret-value { margin-top: 8px; padding: 8px; background: #0d0d0d; border: 1px solid #333; border-radius: 5px; color: #ddd; font: 11px/1.4 Consolas, "Courier New", monospace; overflow-wrap: anywhere; display: none; }
+        .ssh-profile-manager { display: grid; grid-template-columns: minmax(180px, 0.8fr) minmax(240px, 1.2fr); gap: 14px; }
+        .ssh-profile-list { min-height: 230px; max-height: 360px; overflow-y: auto; border: 1px solid #3a3a3c; border-radius: 6px; background: #111; }
+        .ssh-profile-list-empty { padding: 18px 12px; color: #777; text-align: center; }
+        .ssh-profile-list button { display: block; width: 100%; padding: 9px 11px; border: none; border-bottom: 1px solid #2c2c2e; background: transparent; color: #ddd; text-align: left; cursor: pointer; }
+        .ssh-profile-list button:last-child { border-bottom: none; }
+        .ssh-profile-list button:hover, .ssh-profile-list button.active { background: #2c2c2e; }
+        .ssh-profile-list button.active { color: #64a9ff; }
+        .ssh-profile-list-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .ssh-profile-list-target { display: block; margin-top: 3px; color: #777; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .ssh-profile-editor { display: grid; align-content: start; gap: 9px; }
+        .ssh-profile-editor label { display: grid; gap: 4px; color: #aaa; font-size: 11px; }
+        .ssh-profile-editor input { width: 100%; box-sizing: border-box; padding: 7px 8px; background: #2c2c2e; border: 1px solid #555; border-radius: 4px; color: #fff; outline: none; }
+        .ssh-profile-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+        .ssh-profile-actions button { flex: 1; min-width: 86px; padding: 7px 9px; border: none; border-radius: 4px; background: #3a3a3c; color: #fff; cursor: pointer; }
+        .ssh-profile-actions button.primary { background: #0a84ff; }
+        .ssh-profile-actions button.danger { background: #7d302b; }
+        .ssh-profile-actions button:disabled { color: #777; cursor: default; opacity: 0.7; }
         .diagnostics-actions { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 10px; }
         .diagnostics-actions button { padding: 6px 12px; background: #3a3a3c; border: none; border-radius: 4px; color: #fff; cursor: pointer; }
         #connection-diagnostics-log {
@@ -192,6 +209,23 @@
         .mode-selector.locked label { cursor: default; opacity: 0.55; }
         .mode-selector.locked label.active { opacity: 1; }
         #ssh-fields { display: block; }
+        #ssh-profile-indicator { display: none; margin: -5px 0 10px; color: #64a9ff; font-size: 12px; overflow-wrap: anywhere; }
+        .ssh-save-options { display: flex; align-items: center; gap: 18px; margin: -3px 0 12px; color: #bbb; font-size: 12px; }
+        .ssh-save-options label { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+        #controls .ssh-save-options input { display: inline-block; width: auto; margin: 0; padding: 0; }
+        .ssh-session-picker { position: relative; margin-bottom: 15px; }
+        #controls #ssh-session-picker-toggle { width: 100%; padding: 9px 10px; background: #333; border: 1px solid #555; color: #ddd; border-radius: 4px; font-weight: normal; text-align: left; }
+        #controls #ssh-session-picker-toggle::after { content: "\25BE"; float: right; color: #888; }
+        #ssh-session-picker-panel { display: none; position: absolute; left: 0; right: 0; z-index: 130; max-height: 530px; overflow-y: auto; margin-top: 4px; padding: 4px 0; background: #242426; border: 1px solid #555; border-radius: 5px; box-shadow: 0 10px 24px rgba(0,0,0,0.75); }
+        #ssh-session-picker-panel.open { display: block; }
+        .ssh-session-picker-heading { padding: 6px 10px 4px; color: #777; font-size: 10px; text-transform: uppercase; }
+        #controls .ssh-session-picker-entry { width: 100%; min-height: 30px; padding: 6px 10px; background: transparent; border: none; border-radius: 0; color: #ddd; font-weight: normal; text-align: left; }
+        #controls .ssh-session-picker-entry:hover { background: #0a84ff; }
+        .ssh-session-picker-entry span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .ssh-session-picker-entry small { display: block; margin-top: 2px; color: #888; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        #controls .ssh-session-picker-entry:hover small { color: #d7e9ff; }
+        .ssh-session-picker-empty { padding: 9px 10px; color: #777; font-size: 11px; }
+        #ssh-session-message { min-height: 15px; margin: -8px 0 10px; color: #888; font-size: 11px; overflow-wrap: anywhere; }
         #local-shell-fields { display: none; }
         #uart-fields { display: none; }
         #browser-auth-box { display: none; }
@@ -529,6 +563,12 @@
             border-radius: 5px; cursor: pointer; font-weight: 700;
         }
         #session-recovery-message { min-height: 18px; margin-top: 10px; color: #ff9f0a; font-size: 12px; }
+        @media (max-width: 620px) {
+            .settings-nav { width: 104px; }
+            .settings-nav-item { padding: 9px 10px; }
+            .ssh-profile-manager { grid-template-columns: 1fr; }
+            .ssh-profile-list { min-height: 120px; max-height: 180px; }
+        }
     </style>
 </head>
 <body>
@@ -587,6 +627,7 @@
                 <div class="settings-nav">
                     <div class="settings-nav-item active" data-tab="general">General</div>
                     <div class="settings-nav-item" data-tab="appearance">Appearance</div>
+                    <div class="settings-nav-item" data-tab="ssh-sessions">SSH Sessions</div>
                     <div class="settings-nav-item" data-tab="server">Server</div>
                     <div class="settings-nav-item" data-tab="diagnostics">Diagnostics</div>
                 </div>
@@ -598,6 +639,7 @@
                             <div class="settings-row"><label for="pref-copyOnSelect">Copy on select</label><input type="checkbox" id="pref-copyOnSelect"></div>
                             <div class="settings-row"><label for="pref-enablePicPreview">Enable pic preview</label><input type="checkbox" id="pref-enablePicPreview"></div>
                             <div class="settings-row"><label for="pref-detectUrls">Detect & linkify URLs</label><input type="checkbox" id="pref-detectUrls"></div>
+                            <div class="settings-row"><label for="pref-showDetailedSshLabels">Show detailed SSH labels</label><input type="checkbox" id="pref-showDetailedSshLabels"></div>
                             <div class="settings-row"><label for="pref-cjkWideAmbiguous" title="Render ambiguous-width characters (box drawing, symbols) as wide cells. Enable only for legacy BBS/screen setups that require wide ambiguous width.">CJK wide ambiguous width (BBS compatibility)</label><input type="checkbox" id="pref-cjkWideAmbiguous"></div>
                             <div class="settings-row"><label for="pref-urlClickAction">URL click opens in</label>
                                 <select id="pref-urlClickAction"><option value="overlay">Overlay</option><option value="popup">Popup Window</option><option value="newtab">New Tab</option></select>
@@ -633,6 +675,40 @@
                             </div>
                             <div class="settings-row"><label for="pref-cursorStyle">Cursor type</label>
                                 <select id="pref-cursorStyle"><option value="block">Block</option><option value="underline">Underline</option><option value="bar">Bar</option></select>
+                            </div>
+                        </fieldset>
+                    </div>
+                    <div class="settings-tab" id="tab-ssh-sessions">
+                        <div class="settings-status" id="ssh-profile-status">Profiles are stored only in this browser.</div>
+                        <fieldset class="settings-fieldset">
+                            <legend>SSH Sessions</legend>
+                            <div class="ssh-profile-manager">
+                                <div>
+                                    <div class="ssh-profile-list" id="ssh-profile-list"></div>
+                                    <div class="ssh-profile-actions" style="margin-top:9px;">
+                                        <button type="button" id="ssh-profile-up" aria-label="Move profile up">Move Up</button>
+                                        <button type="button" id="ssh-profile-down" aria-label="Move profile down">Move Down</button>
+                                    </div>
+                                </div>
+                                <div class="ssh-profile-editor">
+                                    <label>Profile name<input type="text" id="ssh-profile-name" maxlength="64" autocomplete="off"></label>
+                                    <label>Host<input type="text" id="ssh-profile-host" autocomplete="off"></label>
+                                    <label>Port<input type="number" id="ssh-profile-port" min="1" max="65535" value="22"></label>
+                                    <label>Username<input type="text" id="ssh-profile-username" autocomplete="off"></label>
+                                    <div class="settings-status">Create always saves a new profile. Save updates only the loaded profile.</div>
+                                    <div class="ssh-profile-actions">
+                                        <button type="button" id="ssh-profile-create">Create</button>
+                                        <button type="button" class="primary" id="ssh-profile-save">Save</button>
+                                        <button type="button" class="danger" id="ssh-profile-delete">Delete</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </fieldset>
+                        <fieldset class="settings-fieldset">
+                            <legend>History</legend>
+                            <div class="settings-row">
+                                <label id="ssh-history-count">0 / 6 recent successful connections</label>
+                                <button type="button" class="settings-inline-action" id="ssh-history-clear">Clear History</button>
                             </div>
                         </fieldset>
                     </div>
@@ -751,12 +827,22 @@
                 <label data-mode="uart"><input type="radio" name="connection_type" value="uart">UART</label>
             </div>
             <div id="ssh-fields">
+                <div id="ssh-profile-indicator"></div>
                 <div style="display: flex; gap: 10px;">
                     <input type="text" id="host" placeholder="Host" value="127.0.0.1" style="flex: 3;">
                     <input type="text" id="port" placeholder="Port" value="22" style="flex: 1;">
                 </div>
                 <input type="text" id="username" placeholder="Username" value="aska">
                 <input type="password" id="password" placeholder="Password (Optional)">
+                <div class="ssh-save-options">
+                    <label><input type="checkbox" id="ssh-save-history" checked>Save history</label>
+                    <label><input type="checkbox" id="ssh-save-session">Save session</label>
+                </div>
+                <div class="ssh-session-picker">
+                    <button type="button" id="ssh-session-picker-toggle" aria-expanded="false" aria-controls="ssh-session-picker-panel">History &amp; Profiles</button>
+                    <div id="ssh-session-picker-panel" role="listbox"></div>
+                </div>
+                <div id="ssh-session-message" aria-live="polite"></div>
             </div>
             <div id="local-shell-fields">
                 <select id="local-shell-kind"></select>
@@ -797,11 +883,7 @@
         <span class="sb-sep">|</span>
         <span class="sb-item">Session:&nbsp;<span id="sshStatus">Disconnected</span></span>
         <span class="sb-sep">|</span>
-        <span class="sb-item">TERM:&nbsp;<span id="terminal-term">{{ ssh_term }}</span></span>
-        <span class="sb-sep">|</span>
         <span class="sb-item">size:&nbsp;<span id="terminal-size">--x--</span></span>
-        <span class="sb-sep">|</span>
-        <span class="sb-item">color:&nbsp;<span id="terminal-color">ANSI/256/TrueColor</span></span>
         <span class="sb-sep">|</span>
         <span class="sb-item" id="clock-display"></span>
         <span id="uptime-section" class="sb-item" style="display:none"><span class="sb-sep">|</span>connected:&nbsp;<span id="uptime-display"></span></span>
@@ -969,6 +1051,8 @@
             copyOnSelect: false,
             enablePicPreview: true,
             detectUrls: true,
+            showDetailedSshLabels: true,
+            saveSshHistory: true,
             urlClickAction: 'overlay',
             fontFace: getDefaultTerminalFontFace(),
             powerlineSymbols: false,
@@ -1196,6 +1280,130 @@
             });
         }
 
+        const SSH_SESSIONS_DB = 'standterm-ssh-sessions-v1';
+        const SSH_SESSIONS_STORE = 'state';
+        const SSH_SESSIONS_KEY = 'current';
+        const SSH_HISTORY_LIMIT = 6;
+        const SSH_PROFILE_NAME_MAX_LENGTH = 64;
+
+        function createSshSessionId(prefix) {
+            if (window.crypto && typeof crypto.randomUUID === 'function') {
+                return `${prefix}-${crypto.randomUUID()}`;
+            }
+            const randomPart = Math.random().toString(36).slice(2);
+            return `${prefix}-${Date.now().toString(36)}-${randomPart}`;
+        }
+
+        function normalizeSshPort(value) {
+            const port = Number.parseInt(String(value ?? '').trim(), 10);
+            return Number.isInteger(port) && port >= 1 && port <= 65535 ? String(port) : '22';
+        }
+
+        function normalizeSshTarget(value) {
+            const source = value && typeof value === 'object' ? value : {};
+            return {
+                host: String(source.host ?? '').trim(),
+                port: normalizeSshPort(source.port),
+                username: String(source.username ?? '').trim()
+            };
+        }
+
+        function normalizeSshProfileName(value, fallback = '') {
+            const name = String(value ?? '').trim() || String(fallback ?? '').trim();
+            return name.slice(0, SSH_PROFILE_NAME_MAX_LENGTH);
+        }
+
+        function getSshProfileTabLabel(profileName) {
+            const normalizedName = normalizeSshProfileName(profileName);
+            return normalizedName ? `SSH - ${normalizedName}` : 'SSH';
+        }
+
+        function getSshTargetKey(value) {
+            const target = normalizeSshTarget(value);
+            return `${target.host.toLowerCase()}\u0000${target.port}\u0000${target.username}`;
+        }
+
+        function normalizeSshSessionState(value) {
+            const source = value && typeof value === 'object' ? value : {};
+            const profiles = (Array.isArray(source.profiles) ? source.profiles : [])
+                .filter(profile => profile && typeof profile === 'object')
+                .map((profile, index) => {
+                    const target = normalizeSshTarget(profile);
+                    return {
+                        id: typeof profile.id === 'string' && profile.id ? profile.id : createSshSessionId('profile'),
+                        sortOrder: Number.isFinite(Number(profile.sortOrder)) ? Number(profile.sortOrder) : index,
+                        name: normalizeSshProfileName(profile.name, `${target.username}@${target.host}`),
+                        ...target,
+                        keyId: typeof profile.keyId === 'string' && profile.keyId ? profile.keyId : null
+                    };
+                })
+                .sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name));
+            profiles.forEach((profile, index) => { profile.sortOrder = index; });
+
+            const seenHistoryTargets = new Set();
+            const history = (Array.isArray(source.history) ? source.history : [])
+                .filter(entry => entry && typeof entry === 'object')
+                .map(entry => ({
+                    id: typeof entry.id === 'string' && entry.id ? entry.id : createSshSessionId('history'),
+                    ...normalizeSshTarget(entry),
+                    lastUsedAt: typeof entry.lastUsedAt === 'string' ? entry.lastUsedAt : new Date(0).toISOString()
+                }))
+                .filter(entry => {
+                    const targetKey = getSshTargetKey(entry);
+                    if (seenHistoryTargets.has(targetKey)) return false;
+                    seenHistoryTargets.add(targetKey);
+                    return true;
+                })
+                .slice(0, SSH_HISTORY_LIMIT);
+            return { version: 1, profiles, history };
+        }
+
+        function openSshSessionsDb() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(SSH_SESSIONS_DB, 1);
+                request.onupgradeneeded = () => {
+                    if (!request.result.objectStoreNames.contains(SSH_SESSIONS_STORE)) {
+                        request.result.createObjectStore(SSH_SESSIONS_STORE);
+                    }
+                };
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        async function loadSshSessionState() {
+            if (!window.indexedDB) throw new Error('SSH Sessions require IndexedDB.');
+            const db = await openSshSessionsDb();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(SSH_SESSIONS_STORE, 'readonly');
+                const request = tx.objectStore(SSH_SESSIONS_STORE).get(SSH_SESSIONS_KEY);
+                request.onsuccess = () => resolve(normalizeSshSessionState(request.result));
+                request.onerror = () => reject(request.error);
+                tx.oncomplete = () => db.close();
+            });
+        }
+
+        async function saveSshSessionState(value) {
+            const normalized = normalizeSshSessionState(value);
+            const db = await openSshSessionsDb();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(SSH_SESSIONS_STORE, 'readwrite');
+                tx.objectStore(SSH_SESSIONS_STORE).put(normalized, SSH_SESSIONS_KEY);
+                tx.oncomplete = () => {
+                    db.close();
+                    resolve(normalized);
+                };
+                tx.onerror = () => {
+                    db.close();
+                    reject(tx.error);
+                };
+                tx.onabort = () => {
+                    db.close();
+                    reject(tx.error || new Error('SSH Sessions storage was aborted.'));
+                };
+            });
+        }
+
         async function buildBrowserIdentityFromKeys(privateKey, publicKey) {
             const publicKeyBuffer = await crypto.subtle.exportKey('spki', publicKey);
             return {
@@ -1314,6 +1522,30 @@
             const connectBtn = document.getElementById('connectBtn');
             const modeSelector = document.getElementById('modeSelector');
             const sshFields = document.getElementById('ssh-fields');
+            const sshHostInput = document.getElementById('host');
+            const sshPortInput = document.getElementById('port');
+            const sshUsernameInput = document.getElementById('username');
+            const sshPasswordInput = document.getElementById('password');
+            const sshSaveHistoryInput = document.getElementById('ssh-save-history');
+            const sshSaveSessionInput = document.getElementById('ssh-save-session');
+            const sshProfileIndicator = document.getElementById('ssh-profile-indicator');
+            const sshSessionPickerToggle = document.getElementById('ssh-session-picker-toggle');
+            const sshSessionPickerPanel = document.getElementById('ssh-session-picker-panel');
+            const sshSessionMessage = document.getElementById('ssh-session-message');
+            const sshProfileStatus = document.getElementById('ssh-profile-status');
+            const sshProfileList = document.getElementById('ssh-profile-list');
+            const sshProfileNameInput = document.getElementById('ssh-profile-name');
+            const sshProfileHostInput = document.getElementById('ssh-profile-host');
+            const sshProfilePortInput = document.getElementById('ssh-profile-port');
+            const sshProfileUsernameInput = document.getElementById('ssh-profile-username');
+            const sshProfileCreateBtn = document.getElementById('ssh-profile-create');
+            const sshProfileSaveBtn = document.getElementById('ssh-profile-save');
+            const sshProfileDeleteBtn = document.getElementById('ssh-profile-delete');
+            const sshProfileUpBtn = document.getElementById('ssh-profile-up');
+            const sshProfileDownBtn = document.getElementById('ssh-profile-down');
+            const sshHistoryCount = document.getElementById('ssh-history-count');
+            const sshHistoryClearBtn = document.getElementById('ssh-history-clear');
+            sshSaveHistoryInput.checked = prefs.saveSshHistory;
             const localShellFields = document.getElementById('local-shell-fields');
             const localShellKindSelect = document.getElementById('local-shell-kind');
             const uartFields = document.getElementById('uart-fields');
@@ -1335,7 +1567,6 @@
             const browserAuthCaLink = document.getElementById('browser-auth-ca-link');
             const connectionForm = document.getElementById('connection-form');
             const modeInputs = [...document.querySelectorAll('input[name="connection_type"]')];
-            const terminalTermEl = document.getElementById('terminal-term');
             const terminalSizeEl = document.getElementById('terminal-size');
             const debugHud = document.getElementById('debug-hud');
             const policyDebugPanel = document.getElementById('policy-debug-panel');
@@ -1429,6 +1660,12 @@
             let selectedConnectionType = null;
             let userSelectedConnectionType = null;
             const userEditedConnectionFields = new Set();
+            const pendingSshConnectionDrafts = new Map();
+            let sshSessionState = normalizeSshSessionState(null);
+            let sshSessionReady = null;
+            let sshSessionWriteQueue = Promise.resolve();
+            let selectedSshPickerEntry = null;
+            let editingSshProfileId = null;
             const UART_MANUAL_PORT_VALUE = '__manual__';
             const UART_PORT_REFRESH_MIN_INTERVAL_MS = 3000;
             let lastUartPortRefreshAt = 0;
@@ -3132,13 +3369,357 @@
 
             function populateSshFields() {
                 [
-                    ['host', document.getElementById('host')],
-                    ['port', document.getElementById('port')],
-                    ['username', document.getElementById('username')],
-                    ['password', document.getElementById('password')]
+                    ['host', sshHostInput],
+                    ['port', sshPortInput],
+                    ['username', sshUsernameInput],
+                    ['password', sshPasswordInput]
                 ].forEach(([fieldName, input]) => {
                     applyConnectionFieldDefault('ssh', fieldName, input, input.defaultValue || '');
                 });
+            }
+
+            function setSshSessionMessage(message, isError = false) {
+                sshSessionMessage.innerText = message || '';
+                sshSessionMessage.style.color = isError ? '#ff9f0a' : '#888';
+            }
+
+            function setSshProfileStatus(message, isError = false) {
+                sshProfileStatus.innerText = message || 'Profiles are stored only in this browser.';
+                sshProfileStatus.style.color = isError ? '#ff9f0a' : '#aaa';
+            }
+
+            function getCurrentSshTarget() {
+                return normalizeSshTarget({
+                    host: sshHostInput.value,
+                    port: sshPortInput.value,
+                    username: sshUsernameInput.value
+                });
+            }
+
+            function findSshProfile(profileId) {
+                return sshSessionState.profiles.find(profile => profile.id === profileId) || null;
+            }
+
+            function findSshHistory(historyId) {
+                return sshSessionState.history.find(entry => entry.id === historyId) || null;
+            }
+
+            function findSshProfileForTarget(target) {
+                const targetKey = getSshTargetKey(target);
+                if (selectedSshPickerEntry && selectedSshPickerEntry.type === 'profile') {
+                    const selectedProfile = findSshProfile(selectedSshPickerEntry.id);
+                    if (selectedProfile && getSshTargetKey(selectedProfile) === targetKey) return selectedProfile;
+                }
+                return sshSessionState.profiles.find(profile => getSshTargetKey(profile) === targetKey) || null;
+            }
+
+            function closeSshSessionPicker() {
+                sshSessionPickerPanel.classList.remove('open');
+                sshSessionPickerToggle.setAttribute('aria-expanded', 'false');
+            }
+
+            function updateSshProfileIndicator() {
+                if (!selectedSshPickerEntry || selectedSshPickerEntry.type !== 'profile') {
+                    sshProfileIndicator.style.display = 'none';
+                    sshProfileIndicator.innerText = '';
+                    return;
+                }
+                const profile = findSshProfile(selectedSshPickerEntry.id);
+                if (!profile) {
+                    selectedSshPickerEntry = null;
+                    sshProfileIndicator.style.display = 'none';
+                    sshProfileIndicator.innerText = '';
+                    return;
+                }
+                const modified = getSshTargetKey(profile) !== getSshTargetKey(getCurrentSshTarget());
+                sshProfileIndicator.innerText = modified
+                    ? `Based on: ${profile.name} (modified)`
+                    : `Profile: ${profile.name}`;
+                sshProfileIndicator.style.display = 'block';
+            }
+
+            function applySshPickerEntry(entryType, entryId) {
+                const entry = entryType === 'profile' ? findSshProfile(entryId) : findSshHistory(entryId);
+                if (!entry) return;
+                selectedSshPickerEntry = { type: entryType, id: entry.id };
+                sshHostInput.value = entry.host;
+                sshPortInput.value = entry.port;
+                sshUsernameInput.value = entry.username;
+                sshPasswordInput.value = '';
+                ['host', 'port', 'username'].forEach(fieldName => {
+                    userEditedConnectionFields.add(getConnectionFieldKey('ssh', fieldName));
+                });
+                clearConnectionFieldEdited('ssh', 'password');
+                updateSshProfileIndicator();
+                setSshSessionMessage('');
+                closeSshSessionPicker();
+            }
+
+            function appendSshPickerGroup(label, entries, entryType) {
+                if (!entries.length) return;
+                const heading = document.createElement('div');
+                heading.className = 'ssh-session-picker-heading';
+                heading.innerText = label;
+                sshSessionPickerPanel.appendChild(heading);
+                entries.forEach(entry => {
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = 'ssh-session-picker-entry';
+                    button.dataset.entryType = entryType;
+                    button.dataset.entryId = entry.id;
+                    button.setAttribute('role', 'option');
+                    const title = document.createElement('span');
+                    title.innerText = entryType === 'profile' ? entry.name : `${entry.username}@${entry.host}`;
+                    const target = document.createElement('small');
+                    target.innerText = `${entry.username}@${entry.host}:${entry.port}`;
+                    button.append(title, target);
+                    button.onclick = () => applySshPickerEntry(entryType, entry.id);
+                    sshSessionPickerPanel.appendChild(button);
+                });
+            }
+
+            function renderSshSessionPicker() {
+                sshSessionPickerPanel.replaceChildren();
+                appendSshPickerGroup('Saved Profiles', sshSessionState.profiles, 'profile');
+                appendSshPickerGroup('Recent History', sshSessionState.history, 'history');
+                if (!sshSessionState.profiles.length && !sshSessionState.history.length) {
+                    const empty = document.createElement('div');
+                    empty.className = 'ssh-session-picker-empty';
+                    empty.innerText = 'No saved profiles or successful SSH connections yet.';
+                    sshSessionPickerPanel.appendChild(empty);
+                }
+                updateSshProfileIndicator();
+            }
+
+            function clearSshProfileEditor(useQuickConnectValues = false) {
+                editingSshProfileId = null;
+                const quickTarget = useQuickConnectValues ? getCurrentSshTarget() : { host: '', port: '22', username: '' };
+                sshProfileNameInput.value = useQuickConnectValues && quickTarget.host
+                    ? normalizeSshProfileName(`${quickTarget.username}@${quickTarget.host}`)
+                    : '';
+                sshProfileHostInput.value = quickTarget.host;
+                sshProfilePortInput.value = quickTarget.port;
+                sshProfileUsernameInput.value = quickTarget.username;
+                renderSshProfileManager();
+            }
+
+            function loadSshProfileEditor(profileId) {
+                const profile = findSshProfile(profileId);
+                if (!profile) return;
+                editingSshProfileId = profile.id;
+                sshProfileNameInput.value = profile.name;
+                sshProfileHostInput.value = profile.host;
+                sshProfilePortInput.value = profile.port;
+                sshProfileUsernameInput.value = profile.username;
+                setSshProfileStatus(`Loaded ${profile.name}. Save will update this entry; Create will make a copy.`);
+                renderSshProfileManager();
+            }
+
+            function renderSshProfileManager() {
+                sshProfileList.replaceChildren();
+                if (!sshSessionState.profiles.length) {
+                    const empty = document.createElement('div');
+                    empty.className = 'ssh-profile-list-empty';
+                    empty.innerText = 'No saved SSH profiles.';
+                    sshProfileList.appendChild(empty);
+                } else {
+                    sshSessionState.profiles.forEach(profile => {
+                        const button = document.createElement('button');
+                        button.type = 'button';
+                        button.dataset.profileId = profile.id;
+                        button.classList.toggle('active', profile.id === editingSshProfileId);
+                        const name = document.createElement('span');
+                        name.className = 'ssh-profile-list-name';
+                        name.innerText = profile.name;
+                        const target = document.createElement('span');
+                        target.className = 'ssh-profile-list-target';
+                        target.innerText = `${profile.username}@${profile.host}:${profile.port}`;
+                        button.append(name, target);
+                        button.onclick = () => loadSshProfileEditor(profile.id);
+                        sshProfileList.appendChild(button);
+                    });
+                }
+                const selectedIndex = sshSessionState.profiles.findIndex(profile => profile.id === editingSshProfileId);
+                sshProfileSaveBtn.disabled = selectedIndex < 0;
+                sshProfileDeleteBtn.disabled = selectedIndex < 0;
+                sshProfileUpBtn.disabled = selectedIndex <= 0;
+                sshProfileDownBtn.disabled = selectedIndex < 0 || selectedIndex >= sshSessionState.profiles.length - 1;
+                sshHistoryCount.innerText = `${sshSessionState.history.length} / ${SSH_HISTORY_LIMIT} recent successful connections`;
+                sshHistoryClearBtn.disabled = sshSessionState.history.length === 0;
+            }
+
+            function renderSshSessionState() {
+                renderSshSessionPicker();
+                renderSshProfileManager();
+            }
+
+            function updateSshSessionState(mutator) {
+                const operation = sshSessionWriteQueue
+                    .catch(() => {})
+                    .then(() => sshSessionReady)
+                    .then(async () => {
+                        const nextState = normalizeSshSessionState(sshSessionState);
+                        const result = mutator(nextState);
+                        sshSessionState = await saveSshSessionState(nextState);
+                        renderSshSessionState();
+                        return result;
+                    });
+                sshSessionWriteQueue = operation;
+                return operation;
+            }
+
+            function initializeSshSessions() {
+                sshSessionReady = loadSshSessionState()
+                    .then(state => {
+                        sshSessionState = state;
+                        renderSshSessionState();
+                        return state;
+                    })
+                    .catch(err => {
+                        sshSessionState = normalizeSshSessionState(null);
+                        renderSshSessionState();
+                        setSshSessionMessage(err.message || 'SSH Sessions storage is unavailable.', true);
+                        setSshProfileStatus(err.message || 'SSH Sessions storage is unavailable.', true);
+                        return sshSessionState;
+                    });
+                return sshSessionReady;
+            }
+
+            async function recordSuccessfulSshConnection(draft) {
+                const target = normalizeSshTarget(draft);
+                if (!target.host || !target.username) return;
+                let createdProfileName = null;
+                const saveHistory = draft.saveHistory !== false;
+                await updateSshSessionState(nextState => {
+                    const targetKey = getSshTargetKey(target);
+                    if (saveHistory) {
+                        const previousHistory = nextState.history.find(entry => getSshTargetKey(entry) === targetKey);
+                        nextState.history = nextState.history.filter(entry => getSshTargetKey(entry) !== targetKey);
+                        nextState.history.unshift({
+                            id: previousHistory ? previousHistory.id : createSshSessionId('history'),
+                            ...target,
+                            lastUsedAt: new Date().toISOString()
+                        });
+                        nextState.history = nextState.history.slice(0, SSH_HISTORY_LIMIT);
+                    }
+                    if (draft.saveSession && !nextState.profiles.some(profile => getSshTargetKey(profile) === targetKey)) {
+                        createdProfileName = normalizeSshProfileName(`${target.username}@${target.host}`);
+                        nextState.profiles.push({
+                            id: createSshSessionId('profile'),
+                            sortOrder: nextState.profiles.length,
+                            name: createdProfileName,
+                            ...target,
+                            keyId: null
+                        });
+                    }
+                });
+                if (createdProfileName && saveHistory) {
+                    setSshSessionMessage(`Saved profile ${createdProfileName} and updated SSH history.`);
+                } else if (createdProfileName) {
+                    setSshSessionMessage(`Saved profile ${createdProfileName}.`);
+                } else if (saveHistory) {
+                    setSshSessionMessage('SSH history updated.');
+                } else {
+                    setSshSessionMessage('');
+                }
+            }
+
+            function readSshProfileEditor() {
+                const target = normalizeSshTarget({
+                    host: sshProfileHostInput.value,
+                    port: sshProfilePortInput.value,
+                    username: sshProfileUsernameInput.value
+                });
+                return {
+                    name: normalizeSshProfileName(sshProfileNameInput.value),
+                    ...target
+                };
+            }
+
+            function validateSshProfileEditor() {
+                if (sshProfileNameInput.value.trim().length > SSH_PROFILE_NAME_MAX_LENGTH) {
+                    setSshProfileStatus(`Profile name must be ${SSH_PROFILE_NAME_MAX_LENGTH} characters or fewer.`, true);
+                    return null;
+                }
+                const portNumber = Number.parseInt(sshProfilePortInput.value, 10);
+                if (!Number.isInteger(portNumber) || portNumber < 1 || portNumber > 65535) {
+                    setSshProfileStatus('Port must be between 1 and 65535.', true);
+                    return null;
+                }
+                const editorValue = readSshProfileEditor();
+                if (!editorValue.name || !editorValue.host || !editorValue.username) {
+                    setSshProfileStatus('Profile name, host, and username are required.', true);
+                    return null;
+                }
+                return editorValue;
+            }
+
+            async function createSshProfileEditor() {
+                const editorValue = validateSshProfileEditor();
+                if (!editorValue) return;
+                const profileId = createSshSessionId('profile');
+                await updateSshSessionState(nextState => {
+                    nextState.profiles.push({
+                        id: profileId,
+                        sortOrder: nextState.profiles.length,
+                        ...editorValue,
+                        keyId: null
+                    });
+                });
+                editingSshProfileId = profileId;
+                renderSshSessionState();
+                setSshProfileStatus(`Created ${editorValue.name}.`);
+            }
+
+            async function saveSshProfileEditor() {
+                const existingProfile = findSshProfile(editingSshProfileId);
+                if (!existingProfile) {
+                    setSshProfileStatus('Load a profile before using Save, or choose Create.', true);
+                    return;
+                }
+                const editorValue = validateSshProfileEditor();
+                if (!editorValue) return;
+                await updateSshSessionState(nextState => {
+                    const existing = nextState.profiles.find(profile => profile.id === existingProfile.id);
+                    if (existing) Object.assign(existing, editorValue);
+                });
+                renderSshSessionState();
+                setSshProfileStatus(`Saved ${editorValue.name}.`);
+            }
+
+            async function deleteEditingSshProfile() {
+                const profile = findSshProfile(editingSshProfileId);
+                if (!profile || !window.confirm(`Delete SSH profile ${profile.name}?`)) return;
+                await updateSshSessionState(nextState => {
+                    nextState.profiles = nextState.profiles.filter(item => item.id !== profile.id);
+                });
+                if (selectedSshPickerEntry && selectedSshPickerEntry.type === 'profile' && selectedSshPickerEntry.id === profile.id) {
+                    selectedSshPickerEntry = null;
+                }
+                clearSshProfileEditor(false);
+                setSshProfileStatus(`Deleted ${profile.name}.`);
+            }
+
+            async function clearSshHistory() {
+                if (!sshSessionState.history.length || !window.confirm('Clear all SSH connection history?')) return;
+                await updateSshSessionState(nextState => {
+                    nextState.history = [];
+                });
+                setSshProfileStatus('SSH history cleared.');
+            }
+
+            async function moveEditingSshProfile(offset) {
+                await updateSshSessionState(nextState => {
+                    const currentIndex = nextState.profiles.findIndex(profile => profile.id === editingSshProfileId);
+                    const nextIndex = currentIndex + offset;
+                    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= nextState.profiles.length) return;
+                    const profiles = [...nextState.profiles];
+                    const [profile] = profiles.splice(currentIndex, 1);
+                    profiles.splice(nextIndex, 0, profile);
+                    profiles.forEach((item, index) => { item.sortOrder = index; });
+                    nextState.profiles = profiles;
+                });
+                setSshProfileStatus('Profile order updated.');
             }
 
             function populateUartFields() {
@@ -3658,6 +4239,13 @@
                 }
             }
 
+            function getTerminalDisplayLabel(state) {
+                const label = state && (state.title || state.label);
+                const isSshLabel = typeof label === 'string' && (label === 'SSH' || label.startsWith('SSH - '));
+                if (state && !prefs.showDetailedSshLabels && (state.connectionType === 'ssh' || isSshLabel)) return 'SSH';
+                return label || (state && state.id) || 'Terminal';
+            }
+
             function updateTabState(state) {
                 state.tabEl.classList.toggle('active', state.id === activeTerminalId);
                 state.tabEl.classList.toggle('connected', state.connected);
@@ -3665,7 +4253,9 @@
                 state.tabEl.classList.toggle('error', state.error);
                 state.tabEl.classList.toggle('operator-observing', !!(state.observation && state.observation.active));
                 state.tabEl.classList.toggle('in-pip', !!state.inPip);
-                state.titleEl.innerText = state.title;
+                const displayLabel = getTerminalDisplayLabel(state);
+                state.titleEl.innerText = displayLabel;
+                state.tabEl.title = displayLabel;
                 updatePipStatus(state);
             }
 
@@ -3729,9 +4319,8 @@
                 updateAgentPauseButton();
                 updateAgentPanel();
                 if (!state) return;
-                sshStatusEl.innerText = state.connected ? state.label : (state.connecting ? 'Connecting' : 'Disconnected');
+                sshStatusEl.innerText = state.connected ? getTerminalDisplayLabel(state) : (state.connecting ? 'Connecting' : 'Disconnected');
                 sshStatusEl.style.color = state.connected ? '#34c759' : (state.connecting ? '#ffcc00' : '#ff9f0a');
-                terminalTermEl.innerText = state.termName || '{{ ssh_term }}';
                 document.getElementById('uptime-section').style.display = state.connectedAt ? 'inline' : 'none';
                 document.getElementById('controls').style.display = state.connected ? 'none' : 'block';
                 if (state.connecting) {
@@ -4263,6 +4852,41 @@
                     handleSshOutput(payload) {
                         handleSshOutputPayload(payload);
                     },
+                    async getSshSessionState() {
+                        await sshSessionReady;
+                        await sshSessionWriteQueue.catch(() => {});
+                        return cloneForTest(sshSessionState);
+                    },
+                    async setSshSessionState(value) {
+                        await sshSessionReady;
+                        sshSessionState = await saveSshSessionState(normalizeSshSessionState(cloneForTest(value)));
+                        editingSshProfileId = null;
+                        selectedSshPickerEntry = null;
+                        renderSshSessionState();
+                        return cloneForTest(sshSessionState);
+                    },
+                    stageSshConnectionForTest(value) {
+                        pendingSshConnectionDrafts.set(activeTerminalId, {
+                            ...normalizeSshTarget(value),
+                            saveHistory: !(value && value.saveHistory === false),
+                            saveSession: !!(value && value.saveSession),
+                            profileName: normalizeSshProfileName(value && value.profileName),
+                            useKey: false
+                        });
+                    },
+                    getMatchingSshProfileNameForTest() {
+                        const profile = findSshProfileForTarget(getCurrentSshTarget());
+                        return profile ? profile.name : null;
+                    },
+                    async recordSuccessfulSshConnectionForTest(value) {
+                        await recordSuccessfulSshConnection({
+                            ...normalizeSshTarget(value),
+                            saveHistory: !(value && value.saveHistory === false),
+                            saveSession: !!(value && value.saveSession),
+                            useKey: false
+                        });
+                        return cloneForTest(sshSessionState);
+                    },
                     getConnectionDiagnostics() {
                         return cloneForTest(connectionDiagnostics);
                     }
@@ -4272,6 +4896,7 @@
             const initialState = createTerminalTab(INITIAL_TERMINAL_ID, 'Terminal 1');
             initialState.container.classList.add('active');
             updateActiveTerminalUi();
+            initializeSshSessions();
             requestAnimationFrame(fitAndNotifyResize);
 
             recordConnectionDiagnostic('diagnostics.ready', {
@@ -4711,10 +5336,12 @@
                     terminal_id: activeTerminalId
                 };
                 if (connectionType === 'ssh') {
-                    formData.host = document.getElementById('host').value;
-                    formData.port = document.getElementById('port').value;
-                    formData.username = document.getElementById('username').value;
-                    formData.password = document.getElementById('password').value;
+                    formData.host = sshHostInput.value;
+                    formData.port = sshPortInput.value;
+                    formData.username = sshUsernameInput.value;
+                    formData.password = sshPasswordInput.value;
+                    const matchingProfile = findSshProfileForTarget(formData);
+                    if (matchingProfile) formData.profile_name = matchingProfile.name;
                 } else if (connectionType === 'local_shell' && localShellKindSelect.value) {
                     formData.local_shell_kind = localShellKindSelect.value;
                 } else if (connectionType === 'uart') {
@@ -4730,6 +5357,11 @@
                     const input = document.getElementById(id);
                     input.value = input.defaultValue;
                 });
+                sshSaveHistoryInput.checked = prefs.saveSshHistory;
+                sshSaveSessionInput.checked = false;
+                selectedSshPickerEntry = null;
+                updateSshProfileIndicator();
+                setSshSessionMessage('');
             }
 
             function submitConnection(formData) {
@@ -4741,9 +5373,23 @@
                 state.connecting = true;
                 state.error = false;
                 state.connectionType = formData.connection_type;
-                state.label = CONNECTION_LABELS[state.connectionType] || 'Terminal';
+                state.label = formData.connection_type === 'ssh' && formData.profile_name
+                    ? getSshProfileTabLabel(formData.profile_name)
+                    : (CONNECTION_LABELS[state.connectionType] || 'Terminal');
+                state.title = state.label;
                 state.connectedAt = null;
                 state.lastNotifiedSize = { cols: null, rows: null };
+                if (formData.connection_type === 'ssh') {
+                    pendingSshConnectionDrafts.set(formData.terminal_id, {
+                        ...normalizeSshTarget(formData),
+                        saveHistory: !!sshSaveHistoryInput.checked,
+                        saveSession: !!sshSaveSessionInput.checked,
+                        profileName: normalizeSshProfileName(formData.profile_name),
+                        useKey: false
+                    });
+                } else {
+                    pendingSshConnectionDrafts.delete(formData.terminal_id);
+                }
                 updateActiveTerminalUi();
                 socket.emit('start_ssh', formData);
                 connectBtn.innerText = "Connecting...";
@@ -4757,6 +5403,39 @@
                 submitConnection(getConnectionFormData());
             };
             connectBtn.onclick = doConnect;
+            sshSessionPickerToggle.onclick = () => {
+                const opening = !sshSessionPickerPanel.classList.contains('open');
+                sshSessionPickerPanel.classList.toggle('open', opening);
+                sshSessionPickerToggle.setAttribute('aria-expanded', opening ? 'true' : 'false');
+            };
+            [sshHostInput, sshPortInput, sshUsernameInput].forEach(input => {
+                input.addEventListener('input', updateSshProfileIndicator);
+            });
+            document.addEventListener('click', event => {
+                if (!event.target.closest('.ssh-session-picker')) closeSshSessionPicker();
+            });
+            sshSaveHistoryInput.onchange = () => {
+                prefs.saveSshHistory = sshSaveHistoryInput.checked;
+                savePrefs(prefs);
+            };
+            sshProfileCreateBtn.onclick = () => {
+                createSshProfileEditor().catch(err => setSshProfileStatus(err.message || 'Profile could not be created.', true));
+            };
+            sshProfileSaveBtn.onclick = () => {
+                saveSshProfileEditor().catch(err => setSshProfileStatus(err.message || 'Profile could not be saved.', true));
+            };
+            sshProfileDeleteBtn.onclick = () => {
+                deleteEditingSshProfile().catch(err => setSshProfileStatus(err.message || 'Profile could not be deleted.', true));
+            };
+            sshProfileUpBtn.onclick = () => {
+                moveEditingSshProfile(-1).catch(err => setSshProfileStatus(err.message || 'Profile could not be moved.', true));
+            };
+            sshProfileDownBtn.onclick = () => {
+                moveEditingSshProfile(1).catch(err => setSshProfileStatus(err.message || 'Profile could not be moved.', true));
+            };
+            sshHistoryClearBtn.onclick = () => {
+                clearSshHistory().catch(err => setSshProfileStatus(err.message || 'SSH history could not be cleared.', true));
+            };
             browserAuthUrlForm.onsubmit = event => {
                 event.preventDefault();
                 setBrowserAuthUrlError('');
@@ -5134,6 +5813,7 @@
                 }
                 switch (messageType) {
                     case 'connection_error':
+                        pendingSshConnectionDrafts.delete(state.id);
                         state.connected = false;
                         state.connecting = false;
                         state.error = true;
@@ -5167,16 +5847,24 @@
                         }
                         break;
                     case 'ssh_connected':
+                        const successfulSshDraft = pendingSshConnectionDrafts.get(state.id) || null;
+                        pendingSshConnectionDrafts.delete(state.id);
                         state.connected = true;
                         state.connecting = false;
                         state.error = false;
                         state.connectionType = normalizeConnectionType(data.connection_type);
-                        state.label = data.terminal_label || CONNECTION_LABELS[state.connectionType] || 'Terminal';
+                        state.label = successfulSshDraft && successfulSshDraft.profileName
+                            ? getSshProfileTabLabel(successfulSshDraft.profileName)
+                            : (data.terminal_label || CONNECTION_LABELS[state.connectionType] || 'Terminal');
                         state.title = state.label;
                         state.lastNotifiedSize = { cols: null, rows: null };
                         state.termName = data.term || state.termName;
                         state.connectedAt = new Date();
                         state.needsReplay = false;
+                        if (successfulSshDraft) {
+                            recordSuccessfulSshConnection(successfulSshDraft)
+                                .catch(err => setSshSessionMessage(err.message || 'SSH history could not be saved.', true));
+                        }
                         requestOperatorObservationState(state);
                         if (state.id === activeTerminalId) {
                             updateActiveTerminalUi();
@@ -5188,6 +5876,7 @@
                         }
                         break;
                     case 'ssh_closed':
+                        pendingSshConnectionDrafts.delete(state.id);
                         state.connected = false;
                         state.connecting = false;
                         state.error = false;
@@ -5417,8 +6106,8 @@
 
             function updatePipStatus(state) {
                 if (!state || !state.inPip || !state.pipTitleEl || !state.pipSizeEl) return;
-                state.pipTitleEl.innerText = state.title || state.label || state.id;
-                const label = state.label && state.label !== 'Disconnected' ? state.label : state.id;
+                const label = getTerminalDisplayLabel(state);
+                state.pipTitleEl.innerText = label;
                 state.pipTitleEl.title = label;
                 state.pipSizeEl.innerText = state.term ? `${state.term.cols}x${state.term.rows}` : '--x--';
                 if (state.pipAgentBtn) {
@@ -5889,6 +6578,7 @@
                 document.getElementById('pref-copyOnSelect').checked = prefs.copyOnSelect;
                 document.getElementById('pref-enablePicPreview').checked = prefs.enablePicPreview;
                 document.getElementById('pref-detectUrls').checked = prefs.detectUrls;
+                document.getElementById('pref-showDetailedSshLabels').checked = prefs.showDetailedSshLabels;
                 document.getElementById('pref-cjkWideAmbiguous').checked = prefs.cjkWideAmbiguous;
                 document.getElementById('pref-urlClickAction').value = prefs.urlClickAction;
                 document.getElementById('pref-colorScheme').value = prefs.colorScheme;
@@ -5897,6 +6587,11 @@
                 document.getElementById('pref-fontSize').value = prefs.fontSize;
                 document.getElementById('pref-fontWeight').value = prefs.fontWeight;
                 document.getElementById('pref-cursorStyle').value = prefs.cursorStyle;
+                if (editingSshProfileId) {
+                    renderSshProfileManager();
+                } else {
+                    clearSshProfileEditor(true);
+                }
                 settingsModal.classList.add('open');
                 renderConnectionDiagnostics();
                 requestServerSettingsSnapshot();
@@ -5966,6 +6661,7 @@
                     document.querySelectorAll('.settings-nav-item').forEach(i => i.classList.remove('active'));
                     document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
                     item.classList.add('active'); document.getElementById('tab-' + item.dataset.tab).classList.add('active');
+                    if (item.dataset.tab === 'ssh-sessions') renderSshProfileManager();
                     if (item.dataset.tab === 'server') requestServerSettingsSnapshot();
                     if (item.dataset.tab === 'diagnostics') renderConnectionDiagnostics();
                 };
@@ -5975,6 +6671,7 @@
                 prefs.copyOnSelect = document.getElementById('pref-copyOnSelect').checked;
                 prefs.enablePicPreview = document.getElementById('pref-enablePicPreview').checked;
                 prefs.detectUrls = document.getElementById('pref-detectUrls').checked;
+                prefs.showDetailedSshLabels = document.getElementById('pref-showDetailedSshLabels').checked;
                 prefs.cjkWideAmbiguous = document.getElementById('pref-cjkWideAmbiguous').checked;
                 prefs.urlClickAction = document.getElementById('pref-urlClickAction').value;
                 prefs.colorScheme = document.getElementById('pref-colorScheme').value;
@@ -6000,7 +6697,7 @@
                         applyCjkWidthPreference(state.agentTerminalMirror);
                     }
                 });
-                fitAndNotifyResize(); applyDetectUrls(); settingsModal.classList.remove('open');
+                updateActiveTerminalUi(); fitAndNotifyResize(); applyDetectUrls(); settingsModal.classList.remove('open');
             };
             document.getElementById('settings-reset').onclick = () => { prefs = { ...PREF_DEFAULTS }; savePrefs(prefs); location.reload(); };
             setTimeout(fitAndNotifyResize, 500);

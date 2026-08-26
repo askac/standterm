@@ -8,6 +8,9 @@ from .base import BackendAction, BackendSettingSchema, BackendStartFieldSchema, 
 from runtime_logging import log_message
 
 
+SSH_PROFILE_NAME_MAX_LENGTH = 64
+
+
 class SSHBridge(TerminalBridge):
     connection_type = 'ssh'
     terminal_kind = 'ssh'
@@ -763,15 +766,30 @@ class SSHBackendPlugin(TerminalBackendPlugin):
         if len(password.encode('utf-8', errors='ignore')) > self._max_password_bytes:
             return None, 'Password is too long.'
 
+        profile_name = data.get('profile_name')
+        if profile_name is not None:
+            if not isinstance(profile_name, str):
+                return None, 'SSH profile name must be a string.'
+            profile_name = profile_name.strip()
+            if len(profile_name) > SSH_PROFILE_NAME_MAX_LENGTH:
+                return None, f'SSH profile name must be {SSH_PROFILE_NAME_MAX_LENGTH} characters or fewer.'
+            if self._has_control_chars(profile_name):
+                return None, 'SSH profile name contains invalid control characters.'
+
         return {
             'host': host,
             'port': port,
             'username': user,
             'password': password,
+            'profile_name': profile_name or None,
         }, None
 
     def create_bridge(self, session_token, terminal_id, payload):
-        return self._bridge_cls(session_token, terminal_id, **self._bridge_kwargs)
+        bridge = self._bridge_cls(session_token, terminal_id, **self._bridge_kwargs)
+        profile_name = payload.get('profile_name')
+        if profile_name:
+            bridge.terminal_label = f'SSH - {profile_name}'
+        return bridge
 
     def connect_bridge(self, bridge, payload, cols, rows):
         return bridge.connect(
