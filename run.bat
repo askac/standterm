@@ -168,22 +168,19 @@ if errorlevel 1 (
     )
 )
 
-call :dependencies_available
-if errorlevel 1 (
-    echo [*] Python dependencies are missing or unavailable; dependency check will run.
-    set "FORCE_RECHECK=true"
-)
-
-if "%FORCE_RECHECK%"=="false" if exist "%INSTALLED_FLAG%" (
-    call :stamp_matches
-    if errorlevel 1 (
-        echo [*] Dependency stamp is stale; dependency check will run.
-        set "FORCE_RECHECK=true"
-    )
-)
-
+REM Consult the install stamp before running the dependency checker. The stamp
+REM records the runtime kind, the Python version, and the requirements.txt hash,
+REM so a match means this runtime already satisfies requirements.txt. The checker
+REM imports paramiko and eventlet, which the server itself imports lazily or not
+REM at all, so running it on every warm start costs seconds for no new information.
 if "%FORCE_RECHECK%"=="true" goto :install_deps
 if not exist "%INSTALLED_FLAG%" goto :install_deps
+
+call :stamp_matches
+if errorlevel 1 (
+    echo [*] Dependency stamp is stale; dependency check will run.
+    goto :install_deps
+)
 
 echo [*] Skipping dependency check (valid flag exists^).
 echo [*] Hint: Use 'run.bat --force' to re-check.

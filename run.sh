@@ -316,18 +316,21 @@ if ! python_is_usable python; then
     venv_activation_is_current || exit 1
 fi
 
-echo "[*] Checking Python dependencies..."
-if ! verify_dependencies; then
-    echo "[*] Python dependencies are missing or unavailable; dependency check will run."
-    FORCE_RECHECK=true
-fi
-if [ "$FORCE_RECHECK" = false ] && [ -f "$INSTALLED_FLAG" ] && ! install_stamp_matches; then
-    echo "[*] Dependency stamp is stale; dependency check will run."
-    FORCE_RECHECK=true
-fi
-
 # 3. Check and install dependencies
-if [ "$FORCE_RECHECK" = true ] || ! install_stamp_matches; then
+# Consult the install stamp before importing anything. The stamp records the
+# platform, the Python version, and the requirements.txt hash, so a match means
+# this venv already satisfies requirements.txt. The import verification below
+# loads paramiko and eventlet, which the server itself imports lazily or not at
+# all, and on a /mnt or network filesystem that costs several seconds on every
+# warm start.
+if [ "$FORCE_RECHECK" = false ] && install_stamp_matches; then
+    echo "[*] Skipping dependency check (flag exists)."
+    echo "[*] Hint: Use './run.sh --force' or delete '$INSTALLED_FLAG' to re-check."
+else
+    if [ "$FORCE_RECHECK" = false ] && [ -f "$INSTALLED_FLAG" ]; then
+        echo "[*] Dependency stamp is stale; dependency check will run."
+    fi
+    echo "[*] Checking Python dependencies..."
     rm -f "$INSTALLED_FLAG"
     ensure_venv_pip || exit 1
     if [ -f "$REQ_FILE" ]; then
@@ -347,9 +350,6 @@ if [ "$FORCE_RECHECK" = true ] || ! install_stamp_matches; then
         echo "    Fix the package error above, then rerun ./run.sh --force."
         exit 1
     fi
-else
-    echo "[*] Skipping dependency check (flag exists)."
-    echo "[*] Hint: Use './run.sh --force' or delete '$INSTALLED_FLAG' to re-check."
 fi
 
 # 4. Start the server
