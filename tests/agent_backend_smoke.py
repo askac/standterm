@@ -3729,6 +3729,7 @@ def test_remote_ssh_requires_browser_authorization_or_explicit_remote_access():
         'host': 'example.test',
         'port': 22,
         'username': 'operator',
+        'profile_name': 'Build Server',
     }
     original_standterm_env = standterm.os.environ.get('STANDTERM_ALLOW_REMOTE_SSH')
     try:
@@ -3758,6 +3759,16 @@ def test_remote_ssh_requires_browser_authorization_or_explicit_remote_access():
         )
         assert error is None
         assert payload['connection_type'] == standterm.CONNECTION_TYPE_SSH
+        assert payload['profile_name'] == 'Build Server'
+
+        invalid_label_data = dict(data, profile_name='x' * 65)
+        payload, error = standterm.validate_start_ssh_payload(
+            invalid_label_data,
+            remote_ip,
+            browser_authorized=True,
+        )
+        assert payload is None
+        assert error == 'SSH profile name must be 64 characters or fewer.'
 
         standterm.os.environ['STANDTERM_ALLOW_REMOTE_SSH'] = '1'
         payload, error = standterm.validate_start_ssh_payload(
@@ -4686,9 +4697,14 @@ def test_ssh_backend_action_contract_uses_public_bridge_method():
 def test_ssh_bridge_is_provided_by_backend_module():
     assert standterm.SSHBridge.__module__ == 'terminal_backends.ssh'
     plugin = standterm.TERMINAL_BACKEND_REGISTRY.get(standterm.CONNECTION_TYPE_SSH)
-    bridge = plugin.create_bridge(standterm.ACCESS_TOKEN, standterm.TERMINAL_ID_MAIN, {})
+    bridge = plugin.create_bridge(
+        standterm.ACCESS_TOKEN,
+        standterm.TERMINAL_ID_MAIN,
+        {'profile_name': 'Build Server'},
+    )
     assert isinstance(bridge, standterm.TerminalBridge)
     assert bridge.connection_type == standterm.CONNECTION_TYPE_SSH
+    assert bridge.terminal_label == 'SSH - Build Server'
     bridge.close()
 
 
