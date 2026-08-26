@@ -1,7 +1,9 @@
 import base64
 import codecs
 import getpass
+import hashlib
 import os
+import re
 from pathlib import Path
 
 from .base import BackendAction, BackendSettingSchema, BackendStartFieldSchema, TerminalBackendPlugin, TerminalBridge
@@ -9,6 +11,62 @@ from runtime_logging import log_message
 
 
 SSH_PROFILE_NAME_MAX_LENGTH = 64
+SSH_BROWSER_KEY_ID_MAX_LENGTH = 128
+SSH_BROWSER_KEY_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]+$')
+
+
+class BrowserSSHKeyError(Exception):
+    pass
+
+
+class BrowserEd25519Key:
+    name = 'ssh-ed25519'
+    public_blob = None
+
+    def __init__(self, paramiko_module, public_key, sign_callback):
+        if not isinstance(public_key, bytes) or len(public_key) != 32:
+            raise BrowserSSHKeyError('Browser Ed25519 public key must be 32 bytes.')
+        self._paramiko = paramiko_module
+        self._public_key = public_key
+        self._sign_callback = sign_callback
+        self._verifier = paramiko_module.Ed25519Key(data=self.asbytes())
+
+    def asbytes(self):
+        message = self._paramiko.Message()
+        message.add_string(self.name)
+        message.add_string(self._public_key)
+        return message.asbytes()
+
+    def get_name(self):
+        return self.name
+
+    def get_bits(self):
+        return 256
+
+    def get_fingerprint(self):
+        return hashlib.md5(self.asbytes()).digest()
+
+    def can_sign(self):
+        return True
+
+    def sign_ssh_data(self, data, algorithm=None):
+        if algorithm != self.name:
+            raise BrowserSSHKeyError('Browser SSH key only supports ssh-ed25519 signatures.')
+        try:
+            signature = self._sign_callback(data, algorithm)
+        except BrowserSSHKeyError:
+            raise
+        except Exception as exc:
+            raise BrowserSSHKeyError(str(exc)) from exc
+        if not isinstance(signature, bytes) or len(signature) != 64:
+            raise BrowserSSHKeyError('Browser Ed25519 signature must be 64 bytes.')
+        signature_message = self._paramiko.Message()
+        signature_message.add_string(self.name)
+        signature_message.add_string(signature)
+        verifier_message = self._paramiko.Message(signature_message.asbytes())
+        if not self._verifier.verify_ssh_sig(data, verifier_message):
+            raise BrowserSSHKeyError('Browser SSH signature verification failed.')
+        return signature_message
 
 
 class SSHBridge(TerminalBridge):
@@ -24,15 +82,30 @@ class SSHBridge(TerminalBridge):
         get_paramiko,
         ssh_term,
         local_public_key_types,
+        request_browser_signature=None,
     ):
         super().__init__(owner_session, terminal_id)
         self._get_paramiko = get_paramiko
         self._ssh_term = ssh_term
         self._local_public_key_types = local_public_key_types
+        self._request_browser_signature = request_browser_signature
+        self._browser_signer_sid = None
         self.ssh = None
+        self.auth_method = None
         self._reset_ssh_client()
         self.channel = None
         self._output_decoder = codecs.getincrementaldecoder('utf-8')(errors='ignore')
+
+    def metadata(self, cols=None, rows=None):
+        metadata = super().metadata(cols=cols, rows=rows)
+        if self.auth_method:
+            metadata['auth_method'] = self.auth_method
+        return metadata
+
+    def set_browser_signer_sid(self, sid):
+        if self._browser_signer_sid is not None and self._browser_signer_sid != sid:
+            raise BrowserSSHKeyError('Browser SSH signer is already assigned.')
+        self._browser_signer_sid = sid
 
     def _reset_ssh_client(self, trust_unknown_host=False):
         paramiko_module = self._get_paramiko()
@@ -366,14 +439,45 @@ class SSHBridge(TerminalBridge):
 
         return False, '; '.join(auth_errors)
 
-    def connect(self, host, port, user, password=None, cols=80, rows=24):
+    def _connect_with_browser_key(self, host, port, user, browser_key, is_localhost):
+        if not self._browser_signer_sid or not self._request_browser_signature:
+            raise BrowserSSHKeyError('Browser SSH signer is unavailable.')
+        paramiko_module = self._get_paramiko()
+        public_key = base64.b64decode(browser_key['public_key'].encode('ascii'), validate=True)
+        signer_key = BrowserEd25519Key(
+            paramiko_module,
+            public_key,
+            lambda data, algorithm: self._request_browser_signature(
+                self,
+                self._browser_signer_sid,
+                browser_key,
+                data,
+                algorithm,
+            ),
+        )
+        self._reset_ssh_client(trust_unknown_host=is_localhost)
+        self.ssh.connect(
+            host,
+            port=int(port),
+            username=user,
+            password=None,
+            pkey=signer_key,
+            timeout=15,
+            allow_agent=False,
+            look_for_keys=False,
+        )
+        self.auth_method = 'browser-key'
+
+    def connect(self, host, port, user, password=None, browser_key=None, cols=80, rows=24):
         paramiko_module = self._get_paramiko()
         try:
             pwd = password if password else ""
             log_message(f"[*] Attempting SSH connection for {user!r} at {host!r}:{port}...")
 
             is_localhost = self._is_local_target(host)
-            if is_localhost and not pwd:
+            if browser_key:
+                self._connect_with_browser_key(host, port, user, browser_key, is_localhost)
+            elif is_localhost and not pwd:
                 success, key_error = self._connect_with_local_keys(host, port, user, None)
                 if not success:
                     setup_availability = self._get_local_key_setup_availability(user)
@@ -392,6 +496,7 @@ class SSHBridge(TerminalBridge):
                     raise paramiko_module.AuthenticationException(
                         f"Local public key auth failed: {key_error or 'no usable local key found'}"
                     )
+                self.auth_method = 'host-key'
             else:
                 self._reset_ssh_client(trust_unknown_host=is_localhost)
                 self.ssh.connect(
@@ -403,11 +508,18 @@ class SSHBridge(TerminalBridge):
                     allow_agent=False,
                     look_for_keys=False,
                 )
+                self.auth_method = 'password'
 
             self.channel = self.ssh.invoke_shell(term=self._ssh_term, width=cols, height=rows)
             self.channel.setblocking(0)
             log_message(f"[+] SSH connection established for {self.sid}")
             return True, None
+        except BrowserSSHKeyError as exc:
+            log_message(f"[!] Browser SSH key error: {exc}")
+            return False, {
+                'message': str(exc),
+                'error_code': 'ssh_browser_key_failed',
+            }
         except Exception as e:
             error_msg = str(e)
             log_message(f"[!] SSH Connection Error: {error_msg}")
@@ -494,6 +606,7 @@ class SSHBackendPlugin(TerminalBackendPlugin):
         max_password_bytes,
         has_control_chars,
         is_allowed_for_client,
+        is_browser_key_allowed,
         allowed_action_types,
         backend_action_store,
         bridge_kwargs,
@@ -512,6 +625,7 @@ class SSHBackendPlugin(TerminalBackendPlugin):
         self._max_password_bytes = max_password_bytes
         self._has_control_chars = has_control_chars
         self._is_allowed_for_client = is_allowed_for_client
+        self._is_browser_key_allowed = is_browser_key_allowed
         self._allowed_action_types = allowed_action_types
         self._backend_action_store = backend_action_store
         self._bridge_kwargs = bridge_kwargs
@@ -531,6 +645,12 @@ class SSHBackendPlugin(TerminalBackendPlugin):
             'allowed': allowed,
             'authorization_available': not allowed,
             'browser_authorized': bool(browser_authorized),
+            'browser_key_allowed': bool(
+                allowed and self._is_browser_key_allowed(
+                    client_ip,
+                    browser_authorized=browser_authorized,
+                )
+            ),
         }
 
     def get_settings_schema(self):
@@ -776,12 +896,51 @@ class SSHBackendPlugin(TerminalBackendPlugin):
             if self._has_control_chars(profile_name):
                 return None, 'SSH profile name contains invalid control characters.'
 
+        use_browser_key = data.get('use_browser_key', False)
+        if not isinstance(use_browser_key, bool):
+            return None, 'Use browser key must be a boolean.'
+        browser_key = None
+        if use_browser_key:
+            if not self._is_browser_key_allowed(client_ip, browser_authorized=browser_authorized):
+                return None, {
+                    'message': 'Browser SSH keys require a local browser or an authorized HTTPS connection.',
+                    'error_code': 'ssh_browser_key_insecure_transport',
+                }
+            if password:
+                return None, 'Password must be empty when browser key authentication is selected.'
+            profile_id = data.get('profile_id')
+            key_id = data.get('key_id')
+            for field_name, field_value in (('SSH profile id', profile_id), ('SSH key id', key_id)):
+                if (
+                    not isinstance(field_value, str)
+                    or not field_value
+                    or len(field_value) > SSH_BROWSER_KEY_ID_MAX_LENGTH
+                    or not SSH_BROWSER_KEY_ID_PATTERN.fullmatch(field_value)
+                ):
+                    return None, f'{field_name} is invalid.'
+            public_key = data.get('browser_public_key')
+            if not isinstance(public_key, str):
+                return None, 'Browser SSH public key must be a Base64 string.'
+            try:
+                public_key_bytes = base64.b64decode(public_key.encode('ascii'), validate=True)
+            except (UnicodeEncodeError, ValueError):
+                return None, 'Browser SSH public key is invalid.'
+            if len(public_key_bytes) != 32:
+                return None, 'Browser SSH public key must be 32 bytes.'
+            browser_key = {
+                'profile_id': profile_id,
+                'key_id': key_id,
+                'public_key': public_key,
+                'fingerprint': hashlib.sha256(public_key_bytes).hexdigest(),
+            }
+
         return {
             'host': host,
             'port': port,
             'username': user,
             'password': password,
             'profile_name': profile_name or None,
+            'browser_key': browser_key,
         }, None
 
     def create_bridge(self, session_token, terminal_id, payload):
@@ -797,6 +956,7 @@ class SSHBackendPlugin(TerminalBackendPlugin):
             payload['port'],
             payload['username'],
             payload['password'],
+            browser_key=payload.get('browser_key'),
             cols=cols,
             rows=rows,
         )

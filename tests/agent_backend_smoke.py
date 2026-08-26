@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import sys
 import tempfile
 import threading
@@ -17,6 +18,7 @@ import app as standterm
 import scripts.access_window as access_window
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import agent_cli
+from terminal_backends.ssh import BrowserEd25519Key, BrowserSSHKeyError
 
 
 def make_test_png_base64(width, height):
@@ -91,6 +93,7 @@ class InvalidProvider(standterm.AgentProvider):
 
 def reset_state():
     standterm.bridges.clear()
+    standterm.pending_terminal_starts.clear()
     standterm.pending_localhost_key_setups.clear()
     standterm.active_sessions.clear()
     standterm.socket_session_tokens.clear()
@@ -111,6 +114,7 @@ def reset_state():
     standterm.agent_headless_terminal_mirror_store.clear()
     standterm.agent_viewport_snapshot_store.clear()
     standterm.agent_viewport_render_request_store.clear()
+    standterm.browser_ssh_sign_request_store.clear()
     standterm.external_agent_attach_store.clear()
     standterm.operator_observations.clear()
     standterm.serial_port_cache['expires_at'] = 0
@@ -3785,6 +3789,207 @@ def test_remote_ssh_requires_browser_authorization_or_explicit_remote_access():
             standterm.os.environ['STANDTERM_ALLOW_REMOTE_SSH'] = original_standterm_env
 
 
+def test_browser_ssh_key_payload_requires_local_or_authorized_https_transport():
+    original_https_enabled = standterm.HTTPS_ENABLED
+    data = {
+        'connection_type': standterm.CONNECTION_TYPE_SSH,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'host': 'example.test',
+        'port': 22,
+        'username': 'operator',
+        'password': '',
+        'profile_name': 'Build Server',
+        'profile_id': 'profile-123',
+        'use_browser_key': True,
+        'key_id': 'key-123',
+        'browser_public_key': base64.b64encode(b'k' * 32).decode('ascii'),
+    }
+    try:
+        standterm.HTTPS_ENABLED = False
+        payload, error = standterm.validate_start_ssh_payload(
+            data,
+            '127.0.0.1',
+            browser_authorized=False,
+        )
+        assert error is None
+        assert payload['browser_key']['profile_id'] == 'profile-123'
+        assert payload['browser_key']['key_id'] == 'key-123'
+        assert payload['password'] == ''
+
+        payload, error = standterm.validate_start_ssh_payload(
+            data,
+            '203.0.113.10',
+            browser_authorized=True,
+        )
+        assert payload is None
+        assert error['error_code'] == 'ssh_browser_key_insecure_transport'
+
+        standterm.HTTPS_ENABLED = True
+        payload, error = standterm.validate_start_ssh_payload(
+            data,
+            '203.0.113.10',
+            browser_authorized=True,
+        )
+        assert error is None
+        assert payload['browser_key']['fingerprint'] == hashlib.sha256(b'k' * 32).hexdigest()
+
+        payload, error = standterm.validate_start_ssh_payload(
+            dict(data, password='must-not-fallback'),
+            '127.0.0.1',
+            browser_authorized=False,
+        )
+        assert payload is None
+        assert error == 'Password must be empty when browser key authentication is selected.'
+
+        for invalid_public_key in (
+            base64.b64encode(b'k' * 31).decode('ascii'),
+            base64.b64encode(b'k' * 33).decode('ascii'),
+            'not-base64',
+        ):
+            payload, error = standterm.validate_start_ssh_payload(
+                dict(data, browser_public_key=invalid_public_key),
+                '127.0.0.1',
+                browser_authorized=False,
+            )
+            assert payload is None
+            assert error in {
+                'Browser SSH public key is invalid.',
+                'Browser SSH public key must be 32 bytes.',
+            }
+    finally:
+        standterm.HTTPS_ENABLED = original_https_enabled
+
+
+def test_browser_ed25519_key_wraps_and_verifies_remote_signature():
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    private_key = ed25519.Ed25519PrivateKey.generate()
+    public_key = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    challenges = []
+    signer = BrowserEd25519Key(
+        standterm.get_paramiko(),
+        public_key,
+        lambda data, algorithm: challenges.append((data, algorithm)) or private_key.sign(data),
+    )
+    challenge = b'structured SSH authentication challenge'
+    signature_message = signer.sign_ssh_data(challenge, 'ssh-ed25519')
+    verifier = standterm.get_paramiko().Ed25519Key(data=signer.asbytes())
+
+    assert challenges == [(challenge, 'ssh-ed25519')]
+    assert verifier.verify_ssh_sig(
+        challenge,
+        standterm.get_paramiko().Message(signature_message.asbytes()),
+    ) is True
+    assert signer.get_name() == 'ssh-ed25519'
+    assert signer.get_bits() == 256
+
+    wrong_private_key = ed25519.Ed25519PrivateKey.generate()
+    wrong_signer = BrowserEd25519Key(
+        standterm.get_paramiko(),
+        public_key,
+        lambda data, _algorithm: wrong_private_key.sign(data),
+    )
+    try:
+        wrong_signer.sign_ssh_data(challenge, 'ssh-ed25519')
+        raise AssertionError('wrong browser key signature was accepted')
+    except BrowserSSHKeyError as exc:
+        assert 'verification failed' in str(exc)
+
+
+def test_browser_ssh_sign_request_store_is_sid_bound_and_fail_closed():
+    store = standterm.BrowserSSHSignRequestStore(timeout_seconds=0.05)
+    browser_key = {
+        'profile_id': 'profile-1',
+        'key_id': 'key-1',
+        'fingerprint': 'f' * 64,
+    }
+    request_payload, error = store.create(
+        'session-1',
+        'terminal-1',
+        'sid-a',
+        'browser-a',
+        browser_key,
+        b'challenge',
+        'ssh-ed25519',
+    )
+    assert error is None
+    second_payload, second_error = store.create(
+        'session-1',
+        'terminal-2',
+        'sid-a',
+        'browser-a',
+        browser_key,
+        b'challenge-2',
+        'ssh-ed25519',
+    )
+    assert second_payload is None
+    assert second_error == 'ssh_browser_key_sign_busy'
+
+    response = {
+        'request_id': request_payload['request_id'],
+        'terminal_id': request_payload['terminal_id'],
+        'profile_id': request_payload['profile_id'],
+        'key_id': request_payload['key_id'],
+        'challenge_sha256': request_payload['challenge_sha256'],
+        'status': 'ok',
+        'signature': base64.b64encode(b's' * 64).decode('ascii'),
+    }
+    assert store.resolve('session-1', 'sid-b', response) == 'ssh_browser_key_sign_stale'
+    assert store.resolve('session-1', 'sid-a', dict(response, key_id='key-2')) == 'ssh_browser_key_sign_stale'
+    assert store.resolve('session-1', 'sid-a', response) is None
+    assert store.resolve('session-1', 'sid-a', response) == 'ssh_browser_key_sign_stale'
+    signature, wait_error = store.wait(request_payload)
+    assert wait_error is None
+    assert signature == b's' * 64
+
+    timeout_payload, error = store.create(
+        'session-1',
+        'terminal-1',
+        'sid-a',
+        'browser-a',
+        browser_key,
+        b'timeout',
+        'ssh-ed25519',
+    )
+    assert error is None
+    signature, wait_error = store.wait(timeout_payload)
+    assert signature is None
+    assert wait_error == 'ssh_browser_key_sign_timeout'
+
+    cancelled_payload, error = store.create(
+        'session-1',
+        'terminal-1',
+        'sid-a',
+        'browser-a',
+        browser_key,
+        b'cancelled',
+        'ssh-ed25519',
+    )
+    assert error is None
+    store.discard('session-1', sid='sid-a')
+    signature, wait_error = store.wait(cancelled_payload)
+    assert signature is None
+    assert wait_error == 'ssh_browser_key_sign_stale'
+
+
+def test_terminal_start_tokens_reject_stale_background_connections():
+    first = standterm.begin_terminal_start('session-1', 'main')
+    assert standterm.is_current_terminal_start('session-1', 'main', first) is True
+
+    replacement = standterm.begin_terminal_start('session-1', 'main')
+    assert standterm.is_current_terminal_start('session-1', 'main', first) is False
+    assert standterm.finish_terminal_start('session-1', 'main', first) is False
+    assert standterm.finish_terminal_start('session-1', 'main', replacement) is True
+
+    cancelled = standterm.begin_terminal_start('session-1', 'secondary')
+    standterm.cancel_terminal_starts('session-1', terminal_id='secondary')
+    assert standterm.is_current_terminal_start('session-1', 'secondary', cancelled) is False
+
+
 def test_remote_unauthorized_socket_cannot_attach_existing_ssh_terminal():
     flask_client = standterm.app.test_client()
     response = flask_client.get('/?token=' + standterm.ACCESS_TOKEN)
@@ -4654,6 +4859,7 @@ def test_ssh_backend_action_contract_uses_public_bridge_method():
         max_password_bytes=standterm.MAX_PASSWORD_BYTES,
         has_control_chars=standterm.has_control_chars,
         is_allowed_for_client=lambda _client_ip, browser_authorized=False: True,
+        is_browser_key_allowed=lambda _client_ip, browser_authorized=False: True,
         allowed_action_types={'offer_localhost_key_setup'},
         backend_action_store=action_store,
         bridge_kwargs={},
@@ -5772,6 +5978,10 @@ def main():
         test_terminal_policy_creates_authorized_dir_for_fresh_checkout,
         test_wsl_client_ips_require_explicit_trust_for_local_resources,
         test_remote_ssh_requires_browser_authorization_or_explicit_remote_access,
+        test_browser_ssh_key_payload_requires_local_or_authorized_https_transport,
+        test_browser_ed25519_key_wraps_and_verifies_remote_signature,
+        test_browser_ssh_sign_request_store_is_sid_bound_and_fail_closed,
+        test_terminal_start_tokens_reject_stale_background_connections,
         test_remote_unauthorized_socket_cannot_attach_existing_ssh_terminal,
         test_browser_authorization_success_refreshes_visible_terminal_list,
         test_settings_capabilities_are_separate_from_local_resource_access,

@@ -217,6 +217,35 @@ Useful launcher options:
 STANDTERM_HOST=127.0.0.1 STANDTERM_PORT=5000 ./run.sh
 ```
 
+## Browser-managed SSH Sessions And Keys
+
+Quick Connect can load saved SSH profiles and the six most recent successful
+SSH targets. Use **Settings > SSH Sessions** to create, update, reorder, or
+delete profiles and to clear history. Profiles and history stay in the current
+browser and never store passwords.
+
+A saved profile can explicitly generate an Ed25519 key with **Use browser key
+authentication**. The private `CryptoKey` is non-extractable and stays in that
+browser's IndexedDB. Copy the displayed OpenSSH public key to the remote
+account's `~/.ssh/authorized_keys`, then select the exact saved profile in Quick
+Connect. **Use key** remains optional, even when the profile has a key. Browser
+key authentication is allowed only from loopback or an authorized HTTPS browser.
+
+During authentication, Python sends the SSH challenge to the initiating browser
+and receives only its Ed25519 signature; the private key is never sent to the
+StandTerm Python process. A changed host, port, or username disables the profile
+key binding. Deleting or unlinking a keyed profile permanently deletes that
+browser key. These keys are protected from export, but they are not hardware
+keys: script running in the same browser origin could still request signatures.
+
+**Settings > General > Import & Export** transfers browser preferences, SSH
+profiles and order, SSH history, and persistent UI layout in a versioned JSON
+envelope containing a Base64 ZIP archive. Import merges profiles by stable ID,
+appends new IDs, and deduplicates history. A local keyed profile keeps its local
+host, port, and username so import cannot silently rebind its key. SSH keys, key
+IDs, passwords, browser authorization identity, access tokens, and runtime
+diagnostics are never included or changed by import.
+
 ## Browser Authorization And HTTPS
 
 When StandTerm listens on a non-loopback address, HTTPS is enabled by default so

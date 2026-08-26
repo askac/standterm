@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import os
 import queue
 import re
@@ -292,6 +294,19 @@ def test_server_unavailable_waits_for_reconnect(browser, access_url):
         check(unavailable['messageDisplay'] == 'block', 'server unavailable guidance was not visible')
         check(unavailable['connectionFormDisplay'] == 'none', 'connection picker remained visible while the server was unavailable')
         check(unavailable['connectDisabled'] is True, 'terminal connect button remained enabled while the server was unavailable')
+        check(page.locator('#server-retry-now').is_visible(), 'Retry Now was not visible with the disconnect warning')
+        page.click('#server-retry-now')
+        check(
+            page.locator('#server-retry-now').inner_text() == 'Retrying...',
+            'Retry Now did not trigger an immediate reconnect attempt',
+        )
+        check(
+            any(
+                event['event'] == 'socket.retry_now'
+                for event in page.evaluate('() => window.terminalTest.getConnectionDiagnostics()')
+            ),
+            'Retry Now did not record an explicit reconnect attempt',
+        )
 
         context.set_offline(False)
         page.wait_for_function(
@@ -2040,6 +2055,7 @@ def test_ssh_profile_picker_and_settings_save_semantics(browser, access_url):
                 policy.default_connection = 'ssh';
                 const ssh = policy.connection_options.find(option => option.connection_type === 'ssh');
                 ssh.allowed = true;
+                ssh.browser_key_allowed = true;
                 window.terminalTest.applyTerminalPolicy(policy);
                 const sshMode = document.querySelector('input[name="connection_type"][value="ssh"]');
                 sshMode.checked = true;
@@ -2264,6 +2280,251 @@ def test_ssh_profile_picker_and_settings_save_semantics(browser, access_url):
         close_context(context)
 
 
+def test_browser_ssh_key_lifecycle_and_settings_transfer(browser, access_url):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    context = browser.new_context(viewport={'width': 1280, 'height': 800})
+    page = context.new_page()
+    try:
+        page.goto(debug_url(access_url), wait_until='domcontentloaded')
+        page.wait_for_function('() => !!window.terminalTest', timeout=10000)
+        page.wait_for_function(
+            "() => window.terminalTest.getSocketState().connected === true",
+            timeout=10000,
+        )
+        page.evaluate(
+            """async () => {
+                await window.terminalTest.setSshSessionState({
+                    profiles: [
+                        { id: 'profile-primary', sortOrder: 0, name: 'Primary', host: 'primary.example', port: '22', username: 'alice', keyId: null },
+                        { id: 'profile-imported', sortOrder: 1, name: 'Imported', host: 'imported.example', port: '2200', username: 'bob', keyId: null }
+                    ],
+                    history: [
+                        { id: 'history-imported', host: 'recent.example', port: '22', username: 'recent', lastUsedAt: '2026-08-26T01:00:00.000Z' }
+                    ]
+                });
+                const policy = window.terminalTest.getTerminalPolicy();
+                policy.force_connection = null;
+                policy.default_connection = 'ssh';
+                const ssh = policy.connection_options.find(option => option.connection_type === 'ssh');
+                ssh.allowed = true;
+                ssh.browser_key_allowed = true;
+                window.terminalTest.applyTerminalPolicy(policy);
+                const sshMode = document.querySelector('input[name="connection_type"][value="ssh"]');
+                sshMode.checked = true;
+                sshMode.dispatchEvent(new Event('change', { bubbles: true }));
+            }"""
+        )
+
+        page.click('#quick-settings')
+        page.click('.settings-nav-item[data-tab="ssh-sessions"]')
+        page.click('#ssh-profile-list button[data-profile-id="profile-primary"]')
+        page.wait_for_function(
+            "() => document.getElementById('ssh-profile-name').value === 'Primary'",
+            timeout=5000,
+        )
+        page.check('#ssh-profile-key-enabled')
+        page.wait_for_function(
+            "() => document.getElementById('ssh-profile-key-status').innerText.includes('SHA256:')",
+            timeout=10000,
+        )
+        check(
+            page.locator('#ssh-profile-key-public').input_value().startswith('ssh-ed25519 '),
+            'generated browser SSH key did not expose an OpenSSH public key',
+        )
+        page.click('#ssh-profile-save')
+        page.wait_for_function(
+            "() => document.getElementById('ssh-profile-status').innerText === 'Saved Primary.'",
+            timeout=5000,
+        )
+        metadata = page.evaluate(
+            "() => window.terminalTest.getBrowserSshKeyMetadataForTest('profile-primary')"
+        )
+        check(metadata['algorithm'] == 'Ed25519', 'browser SSH key did not use Ed25519')
+        check(metadata['privateKeyExtractable'] is False, 'browser SSH private key was extractable')
+        check(len(base64.b64decode(metadata['publicKeyRawB64'])) == 32, 'Ed25519 public key was not 32 bytes')
+        key_type, public_blob_b64 = metadata['publicKeyOpenSsh'].split()
+        public_blob = base64.b64decode(public_blob_b64)
+        key_type_length = int.from_bytes(public_blob[:4], 'big')
+        raw_length_offset = 4 + key_type_length
+        raw_length = int.from_bytes(public_blob[raw_length_offset:raw_length_offset + 4], 'big')
+        check(key_type == 'ssh-ed25519', 'OpenSSH public key used the wrong key type')
+        check(public_blob[4:raw_length_offset] == b'ssh-ed25519', 'OpenSSH public key blob omitted its key type')
+        check(raw_length == 32 and len(public_blob) == raw_length_offset + 4 + raw_length, 'OpenSSH public key blob is invalid')
+        expected_fingerprint = 'SHA256:' + base64.b64encode(hashlib.sha256(public_blob).digest()).decode('ascii').rstrip('=')
+        check(metadata['fingerprint'] == expected_fingerprint, 'browser SSH key fingerprint is not OpenSSH-compatible')
+
+        challenge = b'StandTerm browser-owned SSH signer smoke challenge'
+        signature_b64 = page.evaluate(
+            """args => window.terminalTest.signBrowserSshChallengeForTest(
+                args.profileId, args.challenge
+            )""",
+            {'profileId': 'profile-primary', 'challenge': base64.b64encode(challenge).decode('ascii')},
+        )
+        signature = base64.b64decode(signature_b64)
+        check(len(signature) == 64, 'browser returned an invalid Ed25519 signature length')
+        Ed25519PublicKey.from_public_bytes(base64.b64decode(metadata['publicKeyRawB64'])).verify(
+            signature,
+            challenge,
+        )
+
+        page.click('#settings-close')
+        check(
+            page.evaluate("() => window.terminalTest.setConnectionTypeForTest('ssh')") == 'ssh',
+            'test policy did not select SSH Quick Connect',
+        )
+        page.evaluate(
+            """() => {
+                document.getElementById('ssh-session-picker-toggle').click();
+                document.querySelector('.ssh-session-picker-entry[data-entry-id="profile-primary"]').click();
+            }"""
+        )
+        page.wait_for_function(
+            "() => !document.getElementById('ssh-use-browser-key-label').hidden",
+            timeout=5000,
+        )
+        check(page.locator('#ssh-use-browser-key').is_checked(), 'exact keyed profile did not default Use key on')
+        check(page.locator('#password').is_disabled(), 'Use key did not disable the password field')
+        form_data = page.evaluate('() => window.terminalTest.getConnectionFormDataForTest()')
+        check(
+            form_data.get('use_browser_key') is True,
+            f'Quick Connect omitted the browser key control field: {form_data!r}',
+        )
+        check(form_data['password'] == '', 'Quick Connect sent a password with browser key authentication')
+        check(form_data['profile_id'] == 'profile-primary', 'Quick Connect sent the wrong key owner profile')
+        check(form_data['key_id'] == metadata['keyId'], 'Quick Connect sent the wrong browser key ID')
+
+        page.evaluate(
+            """metadata => {
+                window.terminalTest.stageSshConnectionForTest({
+                    host: 'primary.example', port: '22', username: 'alice',
+                    useKey: true, profileId: 'profile-primary', keyId: metadata.keyId,
+                    publicKeyFingerprintHex: metadata.publicKeyFingerprintHex
+                });
+                window.terminalTest.clearEmitted();
+            }""",
+            metadata,
+        )
+        request_payload = {
+            'request_id': 'request-valid-signature',
+            'terminal_id': 'main',
+            'profile_id': 'profile-primary',
+            'key_id': metadata['keyId'],
+            'public_key_fingerprint': metadata['publicKeyFingerprintHex'],
+            'algorithm': 'ssh-ed25519',
+            'challenge': base64.b64encode(challenge).decode('ascii'),
+            'challenge_sha256': hashlib.sha256(challenge).hexdigest(),
+            'expires_at': time.time() + 10,
+        }
+        page.evaluate(
+            'payload => window.terminalTest.handleBrowserSshSignRequestForTest(payload)',
+            request_payload,
+        )
+        response = page.evaluate(
+            """() => window.terminalTest.getEmitted()
+                .filter(entry => entry.event === 'ssh_browser_sign_response').at(-1).args[0]"""
+        )
+        check(response['status'] == 'ok', 'structured browser SSH signing request failed')
+        Ed25519PublicKey.from_public_bytes(base64.b64decode(metadata['publicKeyRawB64'])).verify(
+            base64.b64decode(response['signature']),
+            challenge,
+        )
+
+        page.fill('#port', '2222')
+        page.locator('#port').dispatch_event('input')
+        page.wait_for_function(
+            "() => document.getElementById('ssh-use-browser-key-label').hidden",
+            timeout=5000,
+        )
+        check(page.locator('#password').is_enabled(), 'modified profile target kept key-only authentication active')
+
+        envelope = page.evaluate('() => window.terminalTest.createBrowserSettingsEnvelopeForTest()')
+        exported = page.evaluate(
+            'envelope => window.terminalTest.decodeBrowserSettingsEnvelopeForTest(envelope)',
+            envelope,
+        )
+        check(exported['format'] == 'standterm-browser-settings', 'settings ZIP payload format is incorrect')
+        check('keys' not in exported, 'settings export included an SSH key collection')
+        check(
+            all('keyId' not in profile for profile in exported['ssh']['profiles']),
+            'settings export included SSH profile key IDs',
+        )
+        exported_text = repr(exported)
+        check('ssh-ed25519 ' not in exported_text, 'settings export included an SSH public key')
+        check(metadata['keyId'] not in exported_text, 'settings export included an SSH key ID')
+
+        page.evaluate(
+            """async keyId => {
+                await window.terminalTest.setSshSessionState({
+                    profiles: [
+                        { id: 'profile-primary', sortOrder: 0, name: 'Changed Locally', host: 'primary.example', port: '22', username: 'alice', keyId },
+                        { id: 'profile-local', sortOrder: 1, name: 'Local Only', host: 'local.example', port: '22', username: 'local', keyId: null }
+                    ],
+                    history: [
+                        { id: 'history-local', host: 'local-recent.example', port: '22', username: 'local', lastUsedAt: '2026-08-26T02:00:00.000Z' }
+                    ]
+                });
+                const saveHistory = document.getElementById('ssh-save-history');
+                saveHistory.checked = false;
+                saveHistory.dispatchEvent(new Event('change', { bubbles: true }));
+            }""",
+            metadata['keyId'],
+        )
+        page.once('dialog', lambda dialog: dialog.accept())
+        with page.expect_navigation(wait_until='domcontentloaded', timeout=10000):
+            page.evaluate(
+                'envelope => window.terminalTest.importBrowserSettingsEnvelopeForTest(envelope)',
+                envelope,
+            )
+        page.wait_for_function('() => !!window.terminalTest', timeout=10000)
+        merged = page.evaluate('() => window.terminalTest.getSshSessionState()')
+        check(
+            [profile['id'] for profile in merged['profiles']]
+            == ['profile-primary', 'profile-local', 'profile-imported'],
+            'settings import did not update by stable ID and append new profiles',
+        )
+        primary = next(profile for profile in merged['profiles'] if profile['id'] == 'profile-primary')
+        check(primary['name'] == 'Primary', 'settings import did not update the matching stable profile ID')
+        check(primary['keyId'] == metadata['keyId'], 'settings import changed the existing browser key link')
+        check(len(merged['history']) == 2, 'settings import did not merge SSH history')
+        check(page.locator('#ssh-save-history').is_checked(), 'settings import did not restore browser preferences')
+        check(
+            page.evaluate("keyId => window.terminalTest.browserSshKeyRecordExistsForTest(keyId)", metadata['keyId']),
+            'settings import removed the existing browser private key',
+        )
+
+        page.click('#quick-settings')
+        page.click('.settings-nav-item[data-tab="ssh-sessions"]')
+        page.click('#ssh-profile-list button[data-profile-id="profile-primary"]')
+        page.wait_for_function("() => document.getElementById('ssh-profile-key-enabled').checked", timeout=5000)
+        page.fill('#ssh-profile-name', 'Primary Copy')
+        page.click('#ssh-profile-create')
+        page.wait_for_function(
+            """async () => (await window.terminalTest.getSshSessionState()).profiles
+                .some(profile => profile.name === 'Primary Copy')""",
+            timeout=5000,
+        )
+        copied_state = page.evaluate('() => window.terminalTest.getSshSessionState()')
+        copied = next(profile for profile in copied_state['profiles'] if profile['name'] == 'Primary Copy')
+        check(copied['keyId'] is None, 'Create copied a browser key from the loaded profile')
+
+        page.click('#ssh-profile-list button[data-profile-id="profile-primary"]')
+        page.wait_for_function("() => document.getElementById('ssh-profile-key-enabled').checked", timeout=5000)
+        page.once('dialog', lambda dialog: dialog.accept())
+        page.click('#ssh-profile-delete')
+        page.wait_for_function(
+            """async () => !(await window.terminalTest.getSshSessionState()).profiles
+                .some(profile => profile.id === 'profile-primary')""",
+            timeout=5000,
+        )
+        check(
+            page.evaluate("keyId => window.terminalTest.browserSshKeyRecordExistsForTest(keyId)", metadata['keyId']) is False,
+            'deleting a keyed profile left its private key orphaned',
+        )
+    finally:
+        close_context(context)
+
+
 def main():
     sync_playwright, PlaywrightError, _ = load_playwright()
     tests = [
@@ -2297,6 +2558,7 @@ def main():
         test_terminal_payload_text_is_not_control,
         test_ssh_history_and_auto_profile_follow_structured_success,
         test_ssh_profile_picker_and_settings_save_semantics,
+        test_browser_ssh_key_lifecycle_and_settings_transfer,
     ]
     proc = None
     browser = None

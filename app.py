@@ -156,6 +156,9 @@ SESSION_COOKIE_MAX_AGE = 12 * 60 * 60
 SESSION_RENEW_INTERVAL_SECONDS = 5 * 60
 SESSION_CLEANUP_INTERVAL_SECONDS = 60
 LOCALHOST_KEY_SETUP_TTL_SECONDS = 120
+SSH_BROWSER_SIGN_TIMEOUT_SECONDS = 15
+SSH_BROWSER_SIGN_REQUEST_EVENT = 'ssh_browser_sign_request'
+SSH_BROWSER_SIGN_RESPONSE_EVENT = 'ssh_browser_sign_response'
 MIN_TERMINAL_COLS = 2
 MAX_TERMINAL_COLS = 500
 MIN_TERMINAL_ROWS = 2
@@ -1865,6 +1868,183 @@ TerminalBridge.set_default_runtime(TERMINAL_BRIDGE_RUNTIME)
 
 pending_backend_actions = BackendActionStore(time_func=time.time)
 pending_localhost_key_setups = pending_backend_actions
+
+
+class BrowserSSHSignRequestStore:
+    def __init__(self, timeout_seconds=SSH_BROWSER_SIGN_TIMEOUT_SECONDS):
+        self._requests = {}
+        self._lock = threading.RLock()
+        self._timeout_seconds = timeout_seconds
+
+    def create(self, session_token, terminal_id, sid, browser_id, browser_key, challenge, algorithm):
+        if not isinstance(challenge, bytes) or not challenge or len(challenge) > 4096:
+            return None, 'ssh_browser_key_invalid_challenge'
+        now = time.time()
+        with self._lock:
+            self._trim(now)
+            if any(entry.get('sid') == sid for entry in self._requests.values()):
+                return None, 'ssh_browser_key_sign_busy'
+            request_id = 'sshs_' + secrets.token_urlsafe(18)
+            challenge_hash = hashlib.sha256(challenge).hexdigest()
+            payload = {
+                'request_id': request_id,
+                'terminal_id': terminal_id,
+                'profile_id': browser_key['profile_id'],
+                'key_id': browser_key['key_id'],
+                'public_key_fingerprint': browser_key['fingerprint'],
+                'algorithm': algorithm,
+                'challenge': base64.b64encode(challenge).decode('ascii'),
+                'challenge_sha256': challenge_hash,
+                'expires_at': now + self._timeout_seconds,
+            }
+            self._requests[request_id] = {
+                'request': payload,
+                'session_token': session_token,
+                'terminal_id': terminal_id,
+                'sid': sid,
+                'browser_id': browser_id,
+                'expires_at': payload['expires_at'],
+                'event': threading.Event(),
+                'signature': None,
+                'error_code': None,
+            }
+            return dict(payload), None
+
+    def resolve(self, session_token, sid, data):
+        if not isinstance(data, dict):
+            return 'ssh_browser_key_sign_invalid'
+        request_id = data.get('request_id')
+        if not isinstance(request_id, str):
+            return 'ssh_browser_key_sign_invalid'
+        with self._lock:
+            self._trim(time.time())
+            entry = self._requests.get(request_id)
+            if not entry:
+                return 'ssh_browser_key_sign_stale'
+            expected = entry['request']
+            if entry.get('session_token') != session_token or entry.get('sid') != sid:
+                return 'ssh_browser_key_sign_stale'
+            for field_name in ('terminal_id', 'profile_id', 'key_id', 'challenge_sha256'):
+                actual_value = data.get(field_name)
+                expected_value = expected.get(field_name)
+                if (
+                    not isinstance(actual_value, str)
+                    or not isinstance(expected_value, str)
+                    or not secrets.compare_digest(actual_value, expected_value)
+                ):
+                    return 'ssh_browser_key_sign_stale'
+            if entry['event'].is_set():
+                return 'ssh_browser_key_sign_stale'
+            if data.get('status') == 'failed':
+                entry['error_code'] = 'ssh_browser_key_sign_failed'
+                entry['event'].set()
+                return entry['error_code']
+            if data.get('status') != 'ok':
+                return 'ssh_browser_key_sign_invalid'
+            signature_text = data.get('signature')
+            if not isinstance(signature_text, str):
+                return 'ssh_browser_key_sign_invalid'
+            try:
+                signature = base64.b64decode(signature_text.encode('ascii'), validate=True)
+            except Exception:
+                return 'ssh_browser_key_sign_invalid'
+            if len(signature) != 64:
+                return 'ssh_browser_key_sign_invalid'
+            entry['signature'] = signature
+            entry['event'].set()
+            return None
+
+    def wait(self, request_payload):
+        request_id = request_payload.get('request_id') if isinstance(request_payload, dict) else None
+        with self._lock:
+            entry = self._requests.get(request_id)
+        if not entry:
+            return None, 'ssh_browser_key_sign_stale'
+        wait_seconds = max(0, entry['expires_at'] - time.time())
+        if not entry['event'].wait(wait_seconds):
+            with self._lock:
+                self._requests.pop(request_id, None)
+            return None, 'ssh_browser_key_sign_timeout'
+        with self._lock:
+            self._requests.pop(request_id, None)
+        if entry.get('error_code'):
+            return None, entry['error_code']
+        if not isinstance(entry.get('signature'), bytes):
+            return None, 'ssh_browser_key_sign_stale'
+        return entry['signature'], None
+
+    def discard(self, session_token, terminal_id=None, sid=None):
+        with self._lock:
+            for request_id, entry in list(self._requests.items()):
+                if (
+                    entry.get('session_token') == session_token
+                    and (terminal_id is None or entry.get('terminal_id') == terminal_id)
+                    and (sid is None or entry.get('sid') == sid)
+                ):
+                    entry['error_code'] = 'ssh_browser_key_sign_stale'
+                    entry['event'].set()
+                    self._requests.pop(request_id, None)
+
+    def clear(self):
+        with self._lock:
+            for entry in self._requests.values():
+                entry['error_code'] = 'ssh_browser_key_sign_stale'
+                entry['event'].set()
+            self._requests.clear()
+
+    def _trim(self, now):
+        for request_id, entry in list(self._requests.items()):
+            if entry.get('expires_at', 0) <= now:
+                entry['error_code'] = 'ssh_browser_key_sign_timeout'
+                entry['event'].set()
+                self._requests.pop(request_id, None)
+
+
+browser_ssh_sign_request_store = BrowserSSHSignRequestStore()
+
+
+def request_browser_ssh_signature(bridge, signer_sid, browser_key, challenge, algorithm):
+    session_token = bridge.owner_session
+    identity = socket_browser_identities.get(signer_sid) or {}
+    browser_id = identity.get('browser_id')
+    client_ip = socket_client_ips.get(signer_sid, 'unknown')
+    signer_allowed = is_local_client_ip(client_ip) or (
+        HTTPS_ENABLED and socket_browser_authorized.get(signer_sid, False)
+    )
+    if (
+        socket_session_tokens.get(signer_sid) != session_token
+        or not isinstance(browser_id, str)
+        or not signer_allowed
+    ):
+        raise RuntimeError('Browser SSH signer is unavailable.')
+    request_payload, error_code = browser_ssh_sign_request_store.create(
+        session_token,
+        bridge.terminal_id,
+        signer_sid,
+        browser_id,
+        browser_key,
+        challenge,
+        algorithm,
+    )
+    if error_code:
+        raise RuntimeError('Browser SSH signer is busy or unavailable.')
+    socketio.emit(SSH_BROWSER_SIGN_REQUEST_EVENT, request_payload, room=signer_sid)
+    signature, error_code = browser_ssh_sign_request_store.wait(request_payload)
+    current_identity = socket_browser_identities.get(signer_sid) or {}
+    current_client_ip = socket_client_ips.get(signer_sid, 'unknown')
+    signer_still_allowed = is_local_client_ip(current_client_ip) or (
+        HTTPS_ENABLED and socket_browser_authorized.get(signer_sid, False)
+    )
+    if (
+        error_code
+        or socket_session_tokens.get(signer_sid) != session_token
+        or current_identity.get('browser_id') != browser_id
+        or not signer_still_allowed
+    ):
+        raise RuntimeError('Browser SSH signing did not complete.')
+    return signature
+
+
 TERMINAL_BACKEND_REGISTRY = TerminalBackendRegistry([
     SSHBackendPlugin(
         bridge_cls=SSHBridge,
@@ -1879,12 +2059,16 @@ TERMINAL_BACKEND_REGISTRY = TerminalBackendRegistry([
             client_ip,
             browser_authorized=browser_authorized,
         ),
+        is_browser_key_allowed=lambda client_ip, browser_authorized=False: (
+            is_local_client_ip(client_ip) or (HTTPS_ENABLED and browser_authorized)
+        ),
         allowed_action_types=ALLOWED_CONNECTION_ACTION_TYPES,
         backend_action_store=pending_backend_actions,
         bridge_kwargs={
             'get_paramiko': get_paramiko,
             'ssh_term': SSH_TERM,
             'local_public_key_types': LOCAL_PUBLIC_KEY_TYPES,
+            'request_browser_signature': request_browser_ssh_signature,
         },
         low_risk_settings_capability=CAPABILITY_SETTINGS_UPDATE_LOW_RISK,
         high_risk_settings_capability=CAPABILITY_SETTINGS_UPDATE_HIGH_RISK,
@@ -1950,6 +2134,7 @@ TERMINAL_BACKEND_REGISTRY = TerminalBackendRegistry([
 )
 
 bridges = {}
+pending_terminal_starts = {}
 active_sessions = {}
 socket_session_tokens = {}
 socket_client_ips = {}
@@ -1961,6 +2146,7 @@ agent_session_ids = {}
 agent_viewer_ids = {}
 agent_lock = threading.RLock()
 external_agent_lock = threading.RLock()
+terminal_start_lock = threading.RLock()
 session_cleanup_task_started = False
 
 class AgentAuditStore:
@@ -4730,6 +4916,30 @@ def record_agent_terminal_cleanup(session_token, terminal_id, reason):
 def get_bridge(session_token, terminal_id):
     return bridges.get(session_token, {}).get(terminal_id)
 
+def begin_terminal_start(session_token, terminal_id):
+    start_token = secrets.token_urlsafe(18)
+    with terminal_start_lock:
+        pending_terminal_starts[(session_token, terminal_id)] = start_token
+    return start_token
+
+def is_current_terminal_start(session_token, terminal_id, start_token):
+    with terminal_start_lock:
+        return pending_terminal_starts.get((session_token, terminal_id)) == start_token
+
+def finish_terminal_start(session_token, terminal_id, start_token):
+    with terminal_start_lock:
+        key = (session_token, terminal_id)
+        if pending_terminal_starts.get(key) != start_token:
+            return False
+        pending_terminal_starts.pop(key, None)
+        return True
+
+def cancel_terminal_starts(session_token, terminal_id=None):
+    with terminal_start_lock:
+        for key in list(pending_terminal_starts):
+            if key[0] == session_token and (terminal_id is None or key[1] == terminal_id):
+                pending_terminal_starts.pop(key, None)
+
 def set_bridge(session_token, terminal_id, bridge):
     bridges.setdefault(session_token, {})[terminal_id] = bridge
 
@@ -4754,9 +4964,11 @@ def unregister_terminal_bridge(session_token, terminal_id, bridge):
     agent_headless_terminal_mirror_store.discard(session_token, terminal_id)
     agent_viewport_snapshot_store.discard(session_token, terminal_id=terminal_id)
     agent_viewport_render_request_store.discard(session_token, terminal_id=terminal_id)
+    browser_ssh_sign_request_store.discard(session_token, terminal_id=terminal_id)
     close_bridge(bridge)
 
 def close_terminal_bridge(session_token, terminal_id):
+    cancel_terminal_starts(session_token, terminal_id)
     stop_operator_observation(session_token, terminal_id, AGENT_REASON_TERMINAL_CLOSED)
     record_agent_terminal_cleanup(session_token, terminal_id, AGENT_REASON_TERMINAL_CLOSED)
     invalidate_agent_states(session_token, terminal_id=terminal_id, reason=AGENT_REASON_TERMINAL_CLOSED)
@@ -4765,9 +4977,11 @@ def close_terminal_bridge(session_token, terminal_id):
     agent_headless_terminal_mirror_store.discard(session_token, terminal_id)
     agent_viewport_snapshot_store.discard(session_token, terminal_id=terminal_id)
     agent_viewport_render_request_store.discard(session_token, terminal_id=terminal_id)
+    browser_ssh_sign_request_store.discard(session_token, terminal_id=terminal_id)
     close_bridge(pop_bridge(session_token, terminal_id))
 
 def close_all_terminal_bridges(session_token):
+    cancel_terminal_starts(session_token)
     for terminal_id in list(bridges.get(session_token, {})):
         stop_operator_observation(session_token, terminal_id, AGENT_REASON_TERMINAL_CLOSED)
         record_agent_terminal_cleanup(session_token, terminal_id, AGENT_REASON_TERMINAL_CLOSED)
@@ -4777,6 +4991,7 @@ def close_all_terminal_bridges(session_token):
     agent_headless_terminal_mirror_store.discard(session_token)
     agent_viewport_snapshot_store.discard(session_token)
     agent_viewport_render_request_store.discard(session_token)
+    browser_ssh_sign_request_store.discard(session_token)
     terminals = bridges.pop(session_token, {})
     for bridge in list(terminals.values()):
         close_bridge(bridge)
@@ -7649,6 +7864,108 @@ def on_agent_viewport_render_result(data):
     )
 
 
+def start_terminal_backend(sid, session_token, payload, start_token):
+    terminal_id = payload['terminal_id']
+    if not is_current_terminal_start(session_token, terminal_id, start_token):
+        return
+    pending_backend_actions.discard(sid)
+    replacing_existing = get_bridge(session_token, terminal_id) is not None
+    if not replacing_existing and len(bridges.get(session_token, {})) >= MAX_TERMINALS_PER_CLIENT:
+        emit_connection_error(
+            sid,
+            'Terminal limit reached.',
+            error_code='terminal_limit_reached',
+            terminal_id=terminal_id,
+        )
+        finish_terminal_start(session_token, terminal_id, start_token)
+        return
+
+    connection_type = payload['connection_type']
+    plugin = TERMINAL_BACKEND_REGISTRY.get(connection_type)
+    if not plugin:
+        emit_connection_error(
+            sid,
+            'Connection type must be ssh, local_shell, or uart.',
+            error_code='invalid_start_ssh_payload',
+            terminal_id=terminal_id,
+        )
+        finish_terminal_start(session_token, terminal_id, start_token)
+        return
+    cols = 80
+    rows = 24
+    bridge = None
+    try:
+        bridge = plugin.create_bridge(session_token, terminal_id, payload)
+        if not isinstance(bridge, TerminalBridge):
+            raise TypeError('Backend did not return a terminal bridge.')
+        if bridge.connection_type != connection_type:
+            raise ValueError('Backend returned a bridge with a mismatched connection type.')
+        if payload.get('browser_key') and isinstance(bridge, SSHBridge):
+            bridge.set_browser_signer_sid(sid)
+        bridge.attach(sid)
+        success, result = plugin.connect_bridge(bridge, payload, cols, rows)
+    except Exception as exc:
+        log_message(f"[!] Backend start error for {connection_type}: {exc}")
+        close_bridge(bridge)
+        if finish_terminal_start(session_token, terminal_id, start_token):
+            emit_connection_error(
+                sid,
+                'Connection failed.',
+                error_code='backend_start_failed',
+                terminal_id=terminal_id,
+            )
+        return
+
+    if success:
+        if (
+            socket_session_tokens.get(sid) != session_token
+            or not finish_terminal_start(session_token, terminal_id, start_token)
+        ):
+            close_bridge(bridge)
+            return
+        close_terminal_bridge(session_token, terminal_id)
+        bridge.update_terminal_size(cols, rows)
+        set_bridge(session_token, terminal_id, bridge)
+        connected_payload = {'message_type': 'ssh_connected'}
+        connected_payload.update(bridge.metadata())
+        bridge.emit_output(connected_payload)
+        socketio.start_background_task(target=bridge.read_loop)
+        return
+
+    failure = plugin.build_connection_failure(sid, bridge, payload, result)
+    close_bridge(bridge)
+    if not finish_terminal_start(session_token, terminal_id, start_token):
+        return
+    emit_connection_error(
+        sid,
+        failure['message'],
+        error_code=failure.get('error_code'),
+        action_type=failure.get('action_type'),
+        action_message=failure.get('action_message'),
+        action_question=failure.get('action_question'),
+        action_id=failure.get('action_id'),
+        terminal_id=terminal_id,
+    )
+
+
+@socketio.on(SSH_BROWSER_SIGN_RESPONSE_EVENT)
+def on_ssh_browser_sign_response(data):
+    session_token = socket_session_tokens.get(request.sid)
+    if not session_token:
+        return
+    error_code = browser_ssh_sign_request_store.resolve(session_token, request.sid, data)
+    if error_code:
+        socketio.emit(
+            'ssh_browser_sign_status',
+            {
+                'status': 'failed',
+                'request_id': data.get('request_id') if isinstance(data, dict) else None,
+                'error_code': error_code,
+            },
+            room=request.sid,
+        )
+
+
 @socketio.on('start_ssh')
 def on_start_ssh(data):
     cleanup_expired_sessions()
@@ -7672,72 +7989,12 @@ def on_start_ssh(data):
         emit_connection_error(request.sid, message, error_code=error_code, terminal_id=terminal_id)
         return
 
-    pending_backend_actions.discard(request.sid)
-    terminal_id = payload['terminal_id']
-    replacing_existing = get_bridge(session_token, terminal_id) is not None
-    if not replacing_existing and len(bridges.get(session_token, {})) >= MAX_TERMINALS_PER_CLIENT:
-        emit_connection_error(
-            request.sid,
-            'Terminal limit reached.',
-            error_code='terminal_limit_reached',
-            terminal_id=terminal_id,
-        )
+    browser_ssh_sign_request_store.discard(session_token, terminal_id=payload['terminal_id'])
+    start_token = begin_terminal_start(session_token, payload['terminal_id'])
+    if payload.get('browser_key'):
+        socketio.start_background_task(start_terminal_backend, request.sid, session_token, payload, start_token)
         return
-
-    connection_type = payload['connection_type']
-    plugin = TERMINAL_BACKEND_REGISTRY.get(connection_type)
-    if not plugin:
-        emit_connection_error(
-            request.sid,
-            'Connection type must be ssh, local_shell, or uart.',
-            error_code='invalid_start_ssh_payload',
-            terminal_id=terminal_id,
-        )
-        return
-    cols = 80
-    rows = 24
-    bridge = None
-    try:
-        bridge = plugin.create_bridge(session_token, terminal_id, payload)
-        if not isinstance(bridge, TerminalBridge):
-            raise TypeError('Backend did not return a terminal bridge.')
-        if bridge.connection_type != connection_type:
-            raise ValueError('Backend returned a bridge with a mismatched connection type.')
-        bridge.attach(request.sid)
-        success, result = plugin.connect_bridge(bridge, payload, cols, rows)
-    except Exception as exc:
-        log_message(f"[!] Backend start error for {connection_type}: {exc}")
-        close_bridge(bridge)
-        emit_connection_error(
-            request.sid,
-            'Connection failed.',
-            error_code='backend_start_failed',
-            terminal_id=terminal_id,
-        )
-        return
-
-    if success:
-        close_terminal_bridge(session_token, terminal_id)
-        bridge.update_terminal_size(cols, rows)
-        set_bridge(session_token, terminal_id, bridge)
-        connected_payload = {'message_type': 'ssh_connected'}
-        connected_payload.update(bridge.metadata())
-        bridge.emit_output(connected_payload)
-        socketio.start_background_task(target=bridge.read_loop)
-        return
-
-    failure = plugin.build_connection_failure(request.sid, bridge, payload, result)
-    close_bridge(bridge)
-    emit_connection_error(
-        request.sid,
-        failure['message'],
-        error_code=failure.get('error_code'),
-        action_type=failure.get('action_type'),
-        action_message=failure.get('action_message'),
-        action_question=failure.get('action_question'),
-        action_id=failure.get('action_id'),
-        terminal_id=terminal_id,
-    )
+    start_terminal_backend(request.sid, session_token, payload, start_token)
 
 @socketio.on('setup_localhost_key_access')
 def on_setup_localhost_key_access(data):
@@ -7879,6 +8136,7 @@ def on_disconnect(reason=None):
     socket_settings_admin_grant_ids.pop(request.sid, None)
     agent_viewer_ids.pop(request.sid, None)
     if session_token:
+        browser_ssh_sign_request_store.discard(session_token, sid=request.sid)
         with agent_lock:
             for state in [
                 state for state in agent_states.values()

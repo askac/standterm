@@ -177,6 +177,14 @@
         .ssh-profile-actions button.primary { background: #0a84ff; }
         .ssh-profile-actions button.danger { background: #7d302b; }
         .ssh-profile-actions button:disabled { color: #777; cursor: default; opacity: 0.7; }
+        .ssh-key-controls { display: grid; gap: 8px; padding: 9px; border: 1px solid #3a3a3c; border-radius: 6px; background: #171717; }
+        .ssh-key-controls > label { display: flex; grid-template-columns: none; align-items: center; gap: 8px; color: #ddd; }
+        .ssh-key-controls input[type="checkbox"] { width: auto; }
+        .ssh-key-public { min-height: 62px; width: 100%; box-sizing: border-box; resize: vertical; padding: 7px 8px; background: #111; border: 1px solid #444; border-radius: 4px; color: #aaa; font: 11px/1.4 monospace; }
+        .ssh-key-public-actions { display: flex; gap: 8px; align-items: center; }
+        .ssh-key-public-actions button { padding: 6px 9px; border: none; border-radius: 4px; background: #3a3a3c; color: #fff; cursor: pointer; }
+        .settings-transfer-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+        .settings-transfer-actions button { padding: 7px 10px; border: none; border-radius: 4px; background: #3a3a3c; color: #fff; cursor: pointer; }
         .diagnostics-actions { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 10px; }
         .diagnostics-actions button { padding: 6px 12px; background: #3a3a3c; border: none; border-radius: 4px; color: #fff; cursor: pointer; }
         #connection-diagnostics-log {
@@ -201,6 +209,7 @@
             color: #ffd7a8; font-size: 13px; line-height: 1.45;
         }
         #server-availability-message strong { display: block; margin-bottom: 4px; color: #ff9f0a; }
+        #server-retry-now { margin-top: 9px; padding: 6px 10px; border: none; border-radius: 4px; background: #b56a00; color: #fff; cursor: pointer; }
         .mode-selector { display: flex; border: 1px solid #555; border-radius: 6px; overflow: hidden; margin-bottom: 15px; background: #161616; }
         .mode-selector label { flex: 1; padding: 9px 8px; text-align: center; cursor: pointer; font-size: 13px; color: #aaa; border-right: 1px solid #444; user-select: none; }
         .mode-selector label:last-child { border-right: none; }
@@ -645,6 +654,15 @@
                                 <select id="pref-urlClickAction"><option value="overlay">Overlay</option><option value="popup">Popup Window</option><option value="newtab">New Tab</option></select>
                             </div>
                         </fieldset>
+                        <fieldset class="settings-fieldset">
+                            <legend>Import &amp; Export</legend>
+                            <div class="settings-status" id="settings-transfer-status">Exports include browser preferences, SSH profiles, and SSH history. SSH keys are never included.</div>
+                            <div class="settings-transfer-actions">
+                                <button type="button" id="settings-export">Export Settings</button>
+                                <button type="button" id="settings-import">Import Settings</button>
+                                <input type="file" id="settings-import-file" accept="application/json,.json" hidden>
+                            </div>
+                        </fieldset>
                     </div>
                     <div class="settings-tab" id="tab-appearance">
                         <fieldset class="settings-fieldset">
@@ -695,6 +713,14 @@
                                     <label>Host<input type="text" id="ssh-profile-host" autocomplete="off"></label>
                                     <label>Port<input type="number" id="ssh-profile-port" min="1" max="65535" value="22"></label>
                                     <label>Username<input type="text" id="ssh-profile-username" autocomplete="off"></label>
+                                    <div class="ssh-key-controls">
+                                        <label><input type="checkbox" id="ssh-profile-key-enabled">Use browser key authentication</label>
+                                        <div class="settings-status" id="ssh-profile-key-status">No browser key is linked.</div>
+                                        <textarea class="ssh-key-public" id="ssh-profile-key-public" readonly spellcheck="false" aria-label="SSH public key" hidden></textarea>
+                                        <div class="ssh-key-public-actions" id="ssh-profile-key-actions" hidden>
+                                            <button type="button" id="ssh-profile-key-copy">Copy Public Key</button>
+                                        </div>
+                                    </div>
                                     <div class="settings-status">Create always saves a new profile. Save updates only the loaded profile.</div>
                                     <div class="ssh-profile-actions">
                                         <button type="button" id="ssh-profile-create">Create</button>
@@ -794,7 +820,8 @@
         </div>
         <div id="server-availability-message" role="status" aria-live="polite">
             <strong>Server not available</strong>
-            StandTerm is not running or cannot be reached. This page will keep checking and reconnect automatically. If the server restarted, you may be asked for the current access token.
+            <div>StandTerm is not running or cannot be reached. This page will keep checking and reconnect automatically. If the server restarted, you may be asked for the current access token.</div>
+            <button type="button" id="server-retry-now">Retry Now</button>
         </div>
         <div id="errorBox" class="error-msg"></div>
         <div id="actionBox" class="action-box">
@@ -837,6 +864,7 @@
                 <div class="ssh-save-options">
                     <label><input type="checkbox" id="ssh-save-history" checked>Save history</label>
                     <label><input type="checkbox" id="ssh-save-session">Save session</label>
+                    <label id="ssh-use-browser-key-label" hidden><input type="checkbox" id="ssh-use-browser-key">Use key</label>
                 </div>
                 <div class="ssh-session-picker">
                     <button type="button" id="ssh-session-picker-toggle" aria-expanded="false" aria-controls="ssh-session-picker-panel">History &amp; Profiles</button>
@@ -1282,9 +1310,11 @@
 
         const SSH_SESSIONS_DB = 'standterm-ssh-sessions-v1';
         const SSH_SESSIONS_STORE = 'state';
+        const SSH_KEYS_STORE = 'keys';
         const SSH_SESSIONS_KEY = 'current';
         const SSH_HISTORY_LIMIT = 6;
         const SSH_PROFILE_NAME_MAX_LENGTH = 64;
+        const SSH_KEY_ALGORITHM = 'Ed25519';
 
         function createSshSessionId(prefix) {
             if (window.crypto && typeof crypto.randomUUID === 'function') {
@@ -1360,10 +1390,13 @@
 
         function openSshSessionsDb() {
             return new Promise((resolve, reject) => {
-                const request = indexedDB.open(SSH_SESSIONS_DB, 1);
+                const request = indexedDB.open(SSH_SESSIONS_DB, 2);
                 request.onupgradeneeded = () => {
                     if (!request.result.objectStoreNames.contains(SSH_SESSIONS_STORE)) {
                         request.result.createObjectStore(SSH_SESSIONS_STORE);
+                    }
+                    if (!request.result.objectStoreNames.contains(SSH_KEYS_STORE)) {
+                        request.result.createObjectStore(SSH_KEYS_STORE, { keyPath: 'keyId' });
                     }
                 };
                 request.onsuccess = () => resolve(request.result);
@@ -1402,6 +1435,137 @@
                     reject(tx.error || new Error('SSH Sessions storage was aborted.'));
                 };
             });
+        }
+
+        async function saveSshSessionStateWithKeyChanges(value, keyChanges = []) {
+            const normalized = normalizeSshSessionState(value);
+            const db = await openSshSessionsDb();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction([SSH_SESSIONS_STORE, SSH_KEYS_STORE], 'readwrite');
+                tx.objectStore(SSH_SESSIONS_STORE).put(normalized, SSH_SESSIONS_KEY);
+                const keyStore = tx.objectStore(SSH_KEYS_STORE);
+                keyChanges.forEach(change => {
+                    if (change && change.type === 'put' && change.record) keyStore.put(change.record);
+                    if (change && change.type === 'delete' && change.keyId) keyStore.delete(change.keyId);
+                });
+                tx.oncomplete = () => {
+                    db.close();
+                    resolve(normalized);
+                };
+                tx.onerror = () => {
+                    db.close();
+                    reject(tx.error);
+                };
+                tx.onabort = () => {
+                    db.close();
+                    reject(tx.error || new Error('SSH key storage was aborted.'));
+                };
+            });
+        }
+
+        async function loadSshKeyRecord(keyId) {
+            if (!keyId) return null;
+            const db = await openSshSessionsDb();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(SSH_KEYS_STORE, 'readonly');
+                const request = tx.objectStore(SSH_KEYS_STORE).get(keyId);
+                request.onsuccess = () => resolve(request.result || null);
+                request.onerror = () => reject(request.error);
+                tx.oncomplete = () => db.close();
+            });
+        }
+
+        function base64ToUint8Array(value) {
+            const binary = atob(String(value || ''));
+            return Uint8Array.from(binary, char => char.charCodeAt(0));
+        }
+
+        function buildSshEd25519PublicBlob(rawPublicKey) {
+            const keyType = new TextEncoder().encode('ssh-ed25519');
+            const raw = rawPublicKey instanceof Uint8Array ? rawPublicKey : new Uint8Array(rawPublicKey);
+            const blob = new Uint8Array(4 + keyType.length + 4 + raw.length);
+            const view = new DataView(blob.buffer);
+            view.setUint32(0, keyType.length);
+            blob.set(keyType, 4);
+            view.setUint32(4 + keyType.length, raw.length);
+            blob.set(raw, 4 + keyType.length + 4);
+            return blob;
+        }
+
+        async function getSshPublicKeyFingerprint(publicKeyBlob) {
+            const digest = await crypto.subtle.digest('SHA-256', publicKeyBlob);
+            return `SHA256:${arrayBufferToBase64(digest).replace(/=+$/, '')}`;
+        }
+
+        async function createBrowserSshKeyRecord(ownerProfileId) {
+            if (!window.isSecureContext || !window.crypto || !crypto.subtle) {
+                throw new Error('Browser SSH keys require a secure browser context.');
+            }
+            let keyPair;
+            try {
+                keyPair = await crypto.subtle.generateKey({ name: SSH_KEY_ALGORITHM }, false, ['sign', 'verify']);
+            } catch (err) {
+                throw new Error('This browser does not support non-extractable Ed25519 SSH keys.');
+            }
+            if (!keyPair.privateKey || keyPair.privateKey.extractable) {
+                throw new Error('The browser did not create a non-extractable SSH private key.');
+            }
+            const publicRaw = new Uint8Array(await crypto.subtle.exportKey('raw', keyPair.publicKey));
+            if (publicRaw.byteLength !== 32) throw new Error('The browser returned an invalid Ed25519 public key.');
+            const probe = crypto.getRandomValues(new Uint8Array(32));
+            const signature = await crypto.subtle.sign({ name: SSH_KEY_ALGORITHM }, keyPair.privateKey, probe);
+            if (!(await crypto.subtle.verify({ name: SSH_KEY_ALGORITHM }, keyPair.publicKey, signature, probe))) {
+                throw new Error('The browser could not verify the generated SSH key.');
+            }
+            const publicKeyRawB64 = arrayBufferToBase64(publicRaw);
+            const publicKeyBlob = buildSshEd25519PublicBlob(publicRaw);
+            return {
+                version: 1,
+                keyId: createSshSessionId('sshkey'),
+                ownerProfileId,
+                targetKey: null,
+                algorithm: SSH_KEY_ALGORITHM,
+                privateKey: keyPair.privateKey,
+                publicKey: keyPair.publicKey,
+                publicKeyRawB64,
+                publicKeyOpenSsh: `ssh-ed25519 ${arrayBufferToBase64(publicKeyBlob)}`,
+                fingerprint: await getSshPublicKeyFingerprint(publicKeyBlob),
+                publicKeyFingerprintHex: await arrayBufferToHex(publicRaw),
+                createdAt: new Date().toISOString()
+            };
+        }
+
+        async function validateBrowserSshKeyRecord(record, profile) {
+            if (
+                !record || !profile
+                || record.keyId !== profile.keyId
+                || record.ownerProfileId !== profile.id
+                || record.targetKey !== getSshTargetKey(profile)
+            ) {
+                throw new Error('The browser SSH key is missing or is linked to another profile.');
+            }
+            if (record.algorithm !== SSH_KEY_ALGORITHM || !record.privateKey || !record.publicKey) {
+                throw new Error('The browser SSH key record is invalid.');
+            }
+            if (record.privateKey.type !== 'private' || record.privateKey.extractable) {
+                throw new Error('The browser SSH private key is not non-extractable.');
+            }
+            const publicRaw = new Uint8Array(await crypto.subtle.exportKey('raw', record.publicKey));
+            const publicKeyRawB64 = arrayBufferToBase64(publicRaw);
+            const publicKeyBlob = buildSshEd25519PublicBlob(publicRaw);
+            const publicKeyOpenSsh = `ssh-ed25519 ${arrayBufferToBase64(publicKeyBlob)}`;
+            const fingerprint = await getSshPublicKeyFingerprint(publicKeyBlob);
+            const publicKeyFingerprintHex = await arrayBufferToHex(publicRaw);
+            if (
+                publicRaw.byteLength !== 32
+                || publicKeyRawB64 !== record.publicKeyRawB64
+                || publicKeyOpenSsh !== record.publicKeyOpenSsh
+                || fingerprint !== record.fingerprint
+                || publicKeyFingerprintHex !== record.publicKeyFingerprintHex
+            ) {
+                throw new Error('The browser SSH key record failed integrity validation.');
+            }
+            return record;
         }
 
         async function buildBrowserIdentityFromKeys(privateKey, publicKey) {
@@ -1528,6 +1692,8 @@
             const sshPasswordInput = document.getElementById('password');
             const sshSaveHistoryInput = document.getElementById('ssh-save-history');
             const sshSaveSessionInput = document.getElementById('ssh-save-session');
+            const sshUseBrowserKeyLabel = document.getElementById('ssh-use-browser-key-label');
+            const sshUseBrowserKeyInput = document.getElementById('ssh-use-browser-key');
             const sshProfileIndicator = document.getElementById('ssh-profile-indicator');
             const sshSessionPickerToggle = document.getElementById('ssh-session-picker-toggle');
             const sshSessionPickerPanel = document.getElementById('ssh-session-picker-panel');
@@ -1538,6 +1704,11 @@
             const sshProfileHostInput = document.getElementById('ssh-profile-host');
             const sshProfilePortInput = document.getElementById('ssh-profile-port');
             const sshProfileUsernameInput = document.getElementById('ssh-profile-username');
+            const sshProfileKeyEnabledInput = document.getElementById('ssh-profile-key-enabled');
+            const sshProfileKeyStatus = document.getElementById('ssh-profile-key-status');
+            const sshProfileKeyPublic = document.getElementById('ssh-profile-key-public');
+            const sshProfileKeyActions = document.getElementById('ssh-profile-key-actions');
+            const sshProfileKeyCopyBtn = document.getElementById('ssh-profile-key-copy');
             const sshProfileCreateBtn = document.getElementById('ssh-profile-create');
             const sshProfileSaveBtn = document.getElementById('ssh-profile-save');
             const sshProfileDeleteBtn = document.getElementById('ssh-profile-delete');
@@ -1635,6 +1806,11 @@
             const connectionDiagnosticsCopyBtn = document.getElementById('connection-diagnostics-copy');
             const connectionDiagnosticsClearBtn = document.getElementById('connection-diagnostics-clear');
             const serverAvailabilityMessage = document.getElementById('server-availability-message');
+            const serverRetryNowBtn = document.getElementById('server-retry-now');
+            const settingsTransferStatus = document.getElementById('settings-transfer-status');
+            const settingsExportBtn = document.getElementById('settings-export');
+            const settingsImportBtn = document.getElementById('settings-import');
+            const settingsImportFile = document.getElementById('settings-import-file');
             const debugEnabled = (new URLSearchParams(window.location.search)).get('debug') === '1';
             const CONNECTION_DIAGNOSTICS_STORAGE_KEY = 'standterm-connection-diagnostics-v1';
             const CONNECTION_DIAGNOSTICS_LIMIT = 100;
@@ -1666,6 +1842,10 @@
             let sshSessionWriteQueue = Promise.resolve();
             let selectedSshPickerEntry = null;
             let editingSshProfileId = null;
+            let editingSshKeyRecord = null;
+            let quickConnectSshKeyRecord = null;
+            let quickConnectKeyLoadVersion = 0;
+            const handledSshSignRequestIds = new Set();
             const UART_MANUAL_PORT_VALUE = '__manual__';
             const UART_PORT_REFRESH_MIN_INTERVAL_MS = 3000;
             let lastUartPortRefreshAt = 0;
@@ -3413,6 +3593,11 @@
                 return sshSessionState.profiles.find(profile => getSshTargetKey(profile) === targetKey) || null;
             }
 
+            function isBrowserSshKeyAllowedByPolicy() {
+                const option = terminalPolicy.connection_options.find(item => item.connection_type === 'ssh');
+                return !!(option && option.allowed && option.browser_key_allowed);
+            }
+
             function closeSshSessionPicker() {
                 sshSessionPickerPanel.classList.remove('open');
                 sshSessionPickerToggle.setAttribute('aria-expanded', 'false');
@@ -3422,6 +3607,7 @@
                 if (!selectedSshPickerEntry || selectedSshPickerEntry.type !== 'profile') {
                     sshProfileIndicator.style.display = 'none';
                     sshProfileIndicator.innerText = '';
+                    refreshQuickConnectSshKey(false);
                     return;
                 }
                 const profile = findSshProfile(selectedSshPickerEntry.id);
@@ -3429,6 +3615,7 @@
                     selectedSshPickerEntry = null;
                     sshProfileIndicator.style.display = 'none';
                     sshProfileIndicator.innerText = '';
+                    refreshQuickConnectSshKey(false);
                     return;
                 }
                 const modified = getSshTargetKey(profile) !== getSshTargetKey(getCurrentSshTarget());
@@ -3436,6 +3623,44 @@
                     ? `Based on: ${profile.name} (modified)`
                     : `Profile: ${profile.name}`;
                 sshProfileIndicator.style.display = 'block';
+                refreshQuickConnectSshKey(false);
+            }
+
+            function applyQuickConnectKeySelection() {
+                const useKey = !!(quickConnectSshKeyRecord && sshUseBrowserKeyInput.checked);
+                sshPasswordInput.disabled = useKey;
+                if (useKey) sshPasswordInput.value = '';
+            }
+
+            async function refreshQuickConnectSshKey(preferKey) {
+                const version = ++quickConnectKeyLoadVersion;
+                const profile = selectedSshPickerEntry && selectedSshPickerEntry.type === 'profile'
+                    ? findSshProfile(selectedSshPickerEntry.id)
+                    : null;
+                const exactMatch = profile && getSshTargetKey(profile) === getSshTargetKey(getCurrentSshTarget());
+                if (!isBrowserSshKeyAllowedByPolicy() || !exactMatch || !profile.keyId) {
+                    quickConnectSshKeyRecord = null;
+                    sshUseBrowserKeyInput.checked = false;
+                    sshUseBrowserKeyLabel.hidden = true;
+                    applyQuickConnectKeySelection();
+                    return;
+                }
+                try {
+                    const record = await validateBrowserSshKeyRecord(await loadSshKeyRecord(profile.keyId), profile);
+                    if (version !== quickConnectKeyLoadVersion) return;
+                    const changedKey = !quickConnectSshKeyRecord || quickConnectSshKeyRecord.keyId !== record.keyId;
+                    quickConnectSshKeyRecord = record;
+                    sshUseBrowserKeyLabel.hidden = false;
+                    if (preferKey || changedKey) sshUseBrowserKeyInput.checked = true;
+                    applyQuickConnectKeySelection();
+                } catch (err) {
+                    if (version !== quickConnectKeyLoadVersion) return;
+                    quickConnectSshKeyRecord = null;
+                    sshUseBrowserKeyInput.checked = false;
+                    sshUseBrowserKeyLabel.hidden = true;
+                    applyQuickConnectKeySelection();
+                    setSshSessionMessage(err.message || 'The browser SSH key is unavailable.', true);
+                }
             }
 
             function applySshPickerEntry(entryType, entryId) {
@@ -3451,6 +3676,7 @@
                 });
                 clearConnectionFieldEdited('ssh', 'password');
                 updateSshProfileIndicator();
+                refreshQuickConnectSshKey(entryType === 'profile');
                 setSshSessionMessage('');
                 closeSshSessionPicker();
             }
@@ -3493,6 +3719,7 @@
 
             function clearSshProfileEditor(useQuickConnectValues = false) {
                 editingSshProfileId = null;
+                editingSshKeyRecord = null;
                 const quickTarget = useQuickConnectValues ? getCurrentSshTarget() : { host: '', port: '22', username: '' };
                 sshProfileNameInput.value = useQuickConnectValues && quickTarget.host
                     ? normalizeSshProfileName(`${quickTarget.username}@${quickTarget.host}`)
@@ -3500,19 +3727,74 @@
                 sshProfileHostInput.value = quickTarget.host;
                 sshProfilePortInput.value = quickTarget.port;
                 sshProfileUsernameInput.value = quickTarget.username;
+                sshProfileKeyEnabledInput.checked = false;
+                renderSshProfileKeyEditor();
                 renderSshProfileManager();
             }
 
-            function loadSshProfileEditor(profileId) {
+            async function loadSshProfileEditor(profileId) {
                 const profile = findSshProfile(profileId);
                 if (!profile) return;
                 editingSshProfileId = profile.id;
+                editingSshKeyRecord = null;
                 sshProfileNameInput.value = profile.name;
                 sshProfileHostInput.value = profile.host;
                 sshProfilePortInput.value = profile.port;
                 sshProfileUsernameInput.value = profile.username;
                 setSshProfileStatus(`Loaded ${profile.name}. Save will update this entry; Create will make a copy.`);
+                if (profile.keyId) {
+                    try {
+                        editingSshKeyRecord = await validateBrowserSshKeyRecord(await loadSshKeyRecord(profile.keyId), profile);
+                        sshProfileKeyEnabledInput.checked = true;
+                    } catch (err) {
+                        sshProfileKeyEnabledInput.checked = false;
+                        setSshProfileStatus(err.message || 'The linked browser SSH key is unavailable.', true);
+                    }
+                } else {
+                    sshProfileKeyEnabledInput.checked = false;
+                }
+                renderSshProfileKeyEditor();
                 renderSshProfileManager();
+            }
+
+            function renderSshProfileKeyEditor() {
+                const enabled = sshProfileKeyEnabledInput.checked;
+                const record = editingSshKeyRecord;
+                sshProfileKeyPublic.hidden = !record;
+                sshProfileKeyActions.hidden = !record;
+                sshProfileKeyPublic.value = record ? record.publicKeyOpenSsh : '';
+                if (record && enabled) {
+                    sshProfileKeyStatus.innerText = `${record.fingerprint} · private key stays non-extractable in this browser`;
+                } else if (record) {
+                    sshProfileKeyStatus.innerText = 'This key will be removed only when the loaded profile is saved.';
+                } else if (enabled) {
+                    sshProfileKeyStatus.innerText = 'Generating a non-extractable Ed25519 key...';
+                } else {
+                    sshProfileKeyStatus.innerText = 'No browser key is linked.';
+                }
+            }
+
+            async function toggleSshProfileKey() {
+                if (!sshProfileKeyEnabledInput.checked) {
+                    renderSshProfileKeyEditor();
+                    return;
+                }
+                if (!editingSshKeyRecord) {
+                    if (!isBrowserSshKeyAllowedByPolicy()) {
+                        sshProfileKeyEnabledInput.checked = false;
+                        renderSshProfileKeyEditor();
+                        throw new Error('Browser SSH keys are not allowed for this browser connection.');
+                    }
+                    renderSshProfileKeyEditor();
+                    try {
+                        editingSshKeyRecord = await createBrowserSshKeyRecord(editingSshProfileId || '');
+                    } catch (err) {
+                        sshProfileKeyEnabledInput.checked = false;
+                        renderSshProfileKeyEditor();
+                        throw err;
+                    }
+                }
+                renderSshProfileKeyEditor();
             }
 
             function renderSshProfileManager() {
@@ -3535,7 +3817,10 @@
                         target.className = 'ssh-profile-list-target';
                         target.innerText = `${profile.username}@${profile.host}:${profile.port}`;
                         button.append(name, target);
-                        button.onclick = () => loadSshProfileEditor(profile.id);
+                        button.onclick = () => {
+                            loadSshProfileEditor(profile.id)
+                                .catch(err => setSshProfileStatus(err.message || 'Profile could not be loaded.', true));
+                        };
                         sshProfileList.appendChild(button);
                     });
                 }
@@ -3561,6 +3846,21 @@
                         const nextState = normalizeSshSessionState(sshSessionState);
                         const result = mutator(nextState);
                         sshSessionState = await saveSshSessionState(nextState);
+                        renderSshSessionState();
+                        return result;
+                    });
+                sshSessionWriteQueue = operation;
+                return operation;
+            }
+
+            function updateSshSessionStateWithKeyChanges(mutator, keyChanges) {
+                const operation = sshSessionWriteQueue
+                    .catch(() => {})
+                    .then(() => sshSessionReady)
+                    .then(async () => {
+                        const nextState = normalizeSshSessionState(sshSessionState);
+                        const result = mutator(nextState);
+                        sshSessionState = await saveSshSessionStateWithKeyChanges(nextState, keyChanges);
                         renderSshSessionState();
                         return result;
                     });
@@ -3658,17 +3958,33 @@
                 const editorValue = validateSshProfileEditor();
                 if (!editorValue) return;
                 const profileId = createSshSessionId('profile');
-                await updateSshSessionState(nextState => {
+                const skippedLoadedKey = !!(editingSshKeyRecord && editingSshProfileId);
+                const mayAttachDraftKey = editingSshKeyRecord
+                    && sshProfileKeyEnabledInput.checked
+                    && !editingSshProfileId;
+                const keyRecord = mayAttachDraftKey
+                    ? { ...editingSshKeyRecord, ownerProfileId: profileId, targetKey: getSshTargetKey(editorValue) }
+                    : null;
+                await updateSshSessionStateWithKeyChanges(nextState => {
                     nextState.profiles.push({
                         id: profileId,
                         sortOrder: nextState.profiles.length,
                         ...editorValue,
-                        keyId: null
+                        keyId: keyRecord ? keyRecord.keyId : null
                     });
-                });
+                }, keyRecord ? [{ type: 'put', record: keyRecord }] : []);
                 editingSshProfileId = profileId;
+                editingSshKeyRecord = keyRecord;
+                sshProfileKeyEnabledInput.checked = !!keyRecord;
+                renderSshProfileKeyEditor();
                 renderSshSessionState();
-                setSshProfileStatus(`Created ${editorValue.name}.`);
+                setSshProfileStatus(
+                    mayAttachDraftKey
+                        ? `Created ${editorValue.name} with a browser SSH key.`
+                        : skippedLoadedKey
+                        ? `Created ${editorValue.name}. Browser keys from loaded profiles are not copied.`
+                        : `Created ${editorValue.name}.`
+                );
             }
 
             async function saveSshProfileEditor() {
@@ -3679,20 +3995,53 @@
                 }
                 const editorValue = validateSshProfileEditor();
                 if (!editorValue) return;
-                await updateSshSessionState(nextState => {
+                const wantsKey = sshProfileKeyEnabledInput.checked;
+                if (wantsKey && !editingSshKeyRecord) {
+                    setSshProfileStatus('Generate the browser SSH key before saving.', true);
+                    return;
+                }
+                if (!wantsKey && existingProfile.keyId && !window.confirm(
+                    `Remove the browser SSH key from ${existingProfile.name}? The private key cannot be recovered.`
+                )) return;
+                const keyRecord = wantsKey
+                    ? {
+                        ...editingSshKeyRecord,
+                        ownerProfileId: existingProfile.id,
+                        targetKey: getSshTargetKey(editorValue)
+                    }
+                    : null;
+                const keyChanges = [];
+                if (keyRecord) keyChanges.push({ type: 'put', record: keyRecord });
+                if (existingProfile.keyId && (!keyRecord || existingProfile.keyId !== keyRecord.keyId)) {
+                    const oldKeyRecord = await loadSshKeyRecord(existingProfile.keyId);
+                    if (oldKeyRecord && oldKeyRecord.ownerProfileId === existingProfile.id) {
+                        keyChanges.push({ type: 'delete', keyId: existingProfile.keyId });
+                    }
+                }
+                await updateSshSessionStateWithKeyChanges(nextState => {
                     const existing = nextState.profiles.find(profile => profile.id === existingProfile.id);
-                    if (existing) Object.assign(existing, editorValue);
-                });
+                    if (existing) Object.assign(existing, editorValue, { keyId: keyRecord ? keyRecord.keyId : null });
+                }, keyChanges);
+                editingSshKeyRecord = keyRecord;
+                renderSshProfileKeyEditor();
                 renderSshSessionState();
                 setSshProfileStatus(`Saved ${editorValue.name}.`);
             }
 
             async function deleteEditingSshProfile() {
                 const profile = findSshProfile(editingSshProfileId);
-                if (!profile || !window.confirm(`Delete SSH profile ${profile.name}?`)) return;
-                await updateSshSessionState(nextState => {
+                if (!profile) return;
+                const prompt = profile.keyId
+                    ? `Delete SSH profile ${profile.name} and its non-recoverable browser private key?`
+                    : `Delete SSH profile ${profile.name}?`;
+                if (!window.confirm(prompt)) return;
+                const keyRecord = profile.keyId ? await loadSshKeyRecord(profile.keyId) : null;
+                const keyChanges = keyRecord && keyRecord.ownerProfileId === profile.id
+                    ? [{ type: 'delete', keyId: profile.keyId }]
+                    : [];
+                await updateSshSessionStateWithKeyChanges(nextState => {
                     nextState.profiles = nextState.profiles.filter(item => item.id !== profile.id);
-                });
+                }, keyChanges);
                 if (selectedSshPickerEntry && selectedSshPickerEntry.type === 'profile' && selectedSshPickerEntry.id === profile.id) {
                     selectedSshPickerEntry = null;
                 }
@@ -3896,6 +4245,7 @@
                     ? userSelectedConnectionType
                     : (forcedConnectionType || defaultConnectionType);
                 setConnectionType(nextConnection);
+                refreshQuickConnectSshKey(false);
                 updateDebugHud(
                     'policy.apply',
                     `default=${defaultConnectionType} next=${nextConnection} local_allowed=${!!nextLocalShellOption.allowed} user_selected=${userSelectedConnectionType || ''}`
@@ -4122,6 +4472,270 @@
                 link.click();
                 link.remove();
                 URL.revokeObjectURL(url);
+            }
+
+            function crc32(bytes) {
+                let crc = 0xffffffff;
+                for (const byte of bytes) {
+                    crc ^= byte;
+                    for (let bit = 0; bit < 8; bit += 1) {
+                        crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+                    }
+                }
+                return (crc ^ 0xffffffff) >>> 0;
+            }
+
+            function createStoredZip(filename, contentBytes) {
+                const nameBytes = new TextEncoder().encode(filename);
+                const localSize = 30 + nameBytes.length + contentBytes.length;
+                const centralSize = 46 + nameBytes.length;
+                const bytes = new Uint8Array(localSize + centralSize + 22);
+                const view = new DataView(bytes.buffer);
+                const checksum = crc32(contentBytes);
+                let offset = 0;
+                view.setUint32(offset, 0x04034b50, true); offset += 4;
+                view.setUint16(offset, 20, true); offset += 2;
+                view.setUint16(offset, 0x0800, true); offset += 2;
+                view.setUint16(offset, 0, true); offset += 2;
+                view.setUint32(offset, 0, true); offset += 4;
+                view.setUint32(offset, checksum, true); offset += 4;
+                view.setUint32(offset, contentBytes.length, true); offset += 4;
+                view.setUint32(offset, contentBytes.length, true); offset += 4;
+                view.setUint16(offset, nameBytes.length, true); offset += 2;
+                view.setUint16(offset, 0, true); offset += 2;
+                bytes.set(nameBytes, offset); offset += nameBytes.length;
+                bytes.set(contentBytes, offset); offset += contentBytes.length;
+                const centralOffset = offset;
+                view.setUint32(offset, 0x02014b50, true); offset += 4;
+                view.setUint16(offset, 20, true); offset += 2;
+                view.setUint16(offset, 20, true); offset += 2;
+                view.setUint16(offset, 0x0800, true); offset += 2;
+                view.setUint16(offset, 0, true); offset += 2;
+                view.setUint32(offset, 0, true); offset += 4;
+                view.setUint32(offset, checksum, true); offset += 4;
+                view.setUint32(offset, contentBytes.length, true); offset += 4;
+                view.setUint32(offset, contentBytes.length, true); offset += 4;
+                view.setUint16(offset, nameBytes.length, true); offset += 2;
+                view.setUint16(offset, 0, true); offset += 2;
+                view.setUint16(offset, 0, true); offset += 2;
+                view.setUint16(offset, 0, true); offset += 2;
+                view.setUint16(offset, 0, true); offset += 2;
+                view.setUint32(offset, 0, true); offset += 4;
+                view.setUint32(offset, 0, true); offset += 4;
+                bytes.set(nameBytes, offset); offset += nameBytes.length;
+                view.setUint32(offset, 0x06054b50, true); offset += 4;
+                view.setUint16(offset, 0, true); offset += 2;
+                view.setUint16(offset, 0, true); offset += 2;
+                view.setUint16(offset, 1, true); offset += 2;
+                view.setUint16(offset, 1, true); offset += 2;
+                view.setUint32(offset, centralSize, true); offset += 4;
+                view.setUint32(offset, centralOffset, true); offset += 4;
+                view.setUint16(offset, 0, true);
+                return bytes;
+            }
+
+            function readStoredSettingsZip(bytes) {
+                if (!(bytes instanceof Uint8Array) || bytes.byteLength < 22 || bytes.byteLength > 524288) {
+                    throw new Error('Settings archive is too large.');
+                }
+                const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+                let eocdOffset = -1;
+                for (let offset = bytes.length - 22; offset >= Math.max(0, bytes.length - 65557); offset -= 1) {
+                    if (view.getUint32(offset, true) === 0x06054b50) { eocdOffset = offset; break; }
+                }
+                if (eocdOffset < 0 || view.getUint16(eocdOffset + 10, true) !== 1) {
+                    throw new Error('Settings archive must contain exactly one file.');
+                }
+                const centralOffset = view.getUint32(eocdOffset + 16, true);
+                if (centralOffset + 46 > bytes.length || view.getUint32(centralOffset, true) !== 0x02014b50) {
+                    throw new Error('Settings archive directory is invalid.');
+                }
+                const method = view.getUint16(centralOffset + 10, true);
+                const checksum = view.getUint32(centralOffset + 16, true);
+                const compressedSize = view.getUint32(centralOffset + 20, true);
+                const contentSize = view.getUint32(centralOffset + 24, true);
+                const nameLength = view.getUint16(centralOffset + 28, true);
+                if (centralOffset + 46 + nameLength > eocdOffset) throw new Error('Settings archive directory is truncated.');
+                const name = new TextDecoder().decode(bytes.slice(centralOffset + 46, centralOffset + 46 + nameLength));
+                if (method !== 0 || compressedSize !== contentSize || contentSize > 262144 || name !== 'standterm-settings.json') {
+                    throw new Error('Settings archive uses an unsupported format.');
+                }
+                if (
+                    view.getUint32(0, true) !== 0x04034b50
+                    || view.getUint16(8, true) !== 0
+                    || view.getUint32(14, true) !== checksum
+                    || view.getUint32(18, true) !== contentSize
+                    || view.getUint32(22, true) !== contentSize
+                ) throw new Error('Settings archive entry is invalid.');
+                const localNameLength = view.getUint16(26, true);
+                const localExtraLength = view.getUint16(28, true);
+                const contentOffset = 30 + localNameLength + localExtraLength;
+                if (contentOffset + contentSize > bytes.length) throw new Error('Settings archive is truncated.');
+                const localName = new TextDecoder().decode(bytes.slice(30, 30 + localNameLength));
+                if (localName !== name) throw new Error('Settings archive entry name is invalid.');
+                const content = bytes.slice(contentOffset, contentOffset + contentSize);
+                if (crc32(content) !== checksum) throw new Error('Settings archive checksum failed.');
+                return content;
+            }
+
+            function getExportablePreferences() {
+                return Object.fromEntries(Object.keys(PREF_DEFAULTS).map(key => [key, prefs[key]]));
+            }
+
+            function buildBrowserSettingsPayload() {
+                return {
+                    format: 'standterm-browser-settings',
+                    version: 1,
+                    exportedAt: new Date().toISOString(),
+                    preferences: getExportablePreferences(),
+                    ui: {
+                        agentPanelPosition: loadAgentPanelPosition()
+                    },
+                    ssh: {
+                        profiles: sshSessionState.profiles.map(({ keyId, ...profile }) => ({ ...profile })),
+                        history: sshSessionState.history.map(entry => ({ ...entry }))
+                    }
+                };
+            }
+
+            async function createBrowserSettingsEnvelope() {
+                await sshSessionReady;
+                await sshSessionWriteQueue.catch(() => {});
+                const innerBytes = new TextEncoder().encode(JSON.stringify(buildBrowserSettingsPayload(), null, 2));
+                const zipBytes = createStoredZip('standterm-settings.json', innerBytes);
+                return {
+                    format: 'standterm-settings-envelope',
+                    version: 1,
+                    contentType: 'application/zip',
+                    encoding: 'base64',
+                    content: arrayBufferToBase64(zipBytes)
+                };
+            }
+
+            async function exportBrowserSettings() {
+                const envelope = await createBrowserSettingsEnvelope();
+                const date = new Date().toISOString().slice(0, 10).replaceAll('-', '');
+                downloadTextFile(`standterm-settings-${date}.json`, JSON.stringify(envelope, null, 2));
+                settingsTransferStatus.textContent = 'Settings exported. SSH keys were not included.';
+                return envelope;
+            }
+
+            function normalizeImportedPreferences(value) {
+                const source = value && typeof value === 'object' ? value : {};
+                const result = {};
+                Object.entries(PREF_DEFAULTS).forEach(([key, defaultValue]) => {
+                    if (typeof source[key] === typeof defaultValue) result[key] = source[key];
+                });
+                if (result.urlClickAction && !['overlay', 'popup', 'newtab'].includes(result.urlClickAction)) delete result.urlClickAction;
+                if (result.colorScheme && !SCHEMES[result.colorScheme]) delete result.colorScheme;
+                if (result.fontFace) result.fontFace = result.fontFace.slice(0, 240);
+                if ('fontSize' in result) result.fontSize = normalizeFontSize(result.fontSize);
+                if ('fontWeight' in result) result.fontWeight = normalizeFontWeight(result.fontWeight);
+                if ('cursorStyle' in result) result.cursorStyle = normalizeCursorStyle(result.cursorStyle);
+                return result;
+            }
+
+            function normalizeImportedSshState(value) {
+                const source = value && typeof value === 'object' ? value : {};
+                const validId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+                const profiles = (Array.isArray(source.profiles) ? source.profiles : [])
+                    .filter(profile => profile && validId(profile.id))
+                    .map((profile, index) => ({
+                        id: profile.id,
+                        sortOrder: index,
+                        name: normalizeSshProfileName(profile.name),
+                        ...normalizeSshTarget(profile),
+                        keyId: null
+                    }))
+                    .filter(profile => profile.name && profile.host && profile.host.length <= 255 && profile.username && profile.username.length <= 128);
+                const history = (Array.isArray(source.history) ? source.history : [])
+                    .filter(entry => entry && validId(entry.id))
+                    .map(entry => ({
+                        id: entry.id,
+                        ...normalizeSshTarget(entry),
+                        lastUsedAt: typeof entry.lastUsedAt === 'string' ? entry.lastUsedAt : new Date(0).toISOString()
+                    }))
+                    .filter(entry => entry.host && entry.host.length <= 255 && entry.username && entry.username.length <= 128);
+                return normalizeSshSessionState({ profiles, history });
+            }
+
+            function normalizeImportedUiSettings(value) {
+                const source = value && typeof value === 'object' ? value : {};
+                if (!Object.prototype.hasOwnProperty.call(source, 'agentPanelPosition')) return {};
+                const position = source.agentPanelPosition;
+                if (position === null) return { agentPanelPosition: null };
+                if (
+                    !position || !Number.isFinite(position.left) || !Number.isFinite(position.top)
+                    || Math.abs(position.left) > 100000 || Math.abs(position.top) > 100000
+                ) return {};
+                return { agentPanelPosition: { left: position.left, top: position.top } };
+            }
+
+            function parseBrowserSettingsEnvelope(text) {
+                if (typeof text !== 'string' || text.length > 1048576) throw new Error('Settings file is too large.');
+                const envelope = JSON.parse(text);
+                if (
+                    !envelope || envelope.format !== 'standterm-settings-envelope' || envelope.version !== 1
+                    || envelope.contentType !== 'application/zip' || envelope.encoding !== 'base64'
+                    || typeof envelope.content !== 'string'
+                ) throw new Error('Settings envelope is not supported.');
+                const inner = JSON.parse(new TextDecoder().decode(readStoredSettingsZip(base64ToUint8Array(envelope.content))));
+                if (!inner || inner.format !== 'standterm-browser-settings' || inner.version !== 1 || inner.keys) {
+                    throw new Error('Settings payload is not supported.');
+                }
+                return {
+                    preferences: normalizeImportedPreferences(inner.preferences),
+                    ui: normalizeImportedUiSettings(inner.ui),
+                    ssh: normalizeImportedSshState(inner.ssh)
+                };
+            }
+
+            async function importBrowserSettingsText(text) {
+                const imported = parseBrowserSettingsEnvelope(text);
+                const preferenceCount = Object.keys(imported.preferences).length;
+                if (!window.confirm(
+                    `Import ${preferenceCount} preferences, ${imported.ssh.profiles.length} SSH profiles, and ${imported.ssh.history.length} history entries? Existing browser SSH keys will not change.`
+                )) return false;
+                await sshSessionReady;
+                await updateSshSessionState(nextState => {
+                    const importedProfiles = new Map(imported.ssh.profiles.map(profile => [profile.id, profile]));
+                    nextState.profiles = nextState.profiles.map(profile => {
+                        const replacement = importedProfiles.get(profile.id);
+                        if (!replacement) return profile;
+                        importedProfiles.delete(profile.id);
+                        const protectedTarget = profile.keyId ? normalizeSshTarget(profile) : null;
+                        return {
+                            ...profile,
+                            ...replacement,
+                            ...(protectedTarget || {}),
+                            sortOrder: profile.sortOrder,
+                            keyId: profile.keyId
+                        };
+                    });
+                    importedProfiles.forEach(profile => {
+                        nextState.profiles.push({ ...profile, sortOrder: nextState.profiles.length, keyId: null });
+                    });
+                    const history = [...imported.ssh.history, ...nextState.history];
+                    const seen = new Set();
+                    nextState.history = history.filter(entry => {
+                        const key = getSshTargetKey(entry);
+                        if (seen.has(key)) return false;
+                        seen.add(key);
+                        return true;
+                    }).slice(0, SSH_HISTORY_LIMIT);
+                });
+                prefs = { ...prefs, ...imported.preferences };
+                savePrefs(prefs);
+                if (Object.prototype.hasOwnProperty.call(imported.ui, 'agentPanelPosition')) {
+                    if (imported.ui.agentPanelPosition) {
+                        saveAgentPanelPosition(imported.ui.agentPanelPosition);
+                    } else {
+                        localStorage.removeItem('agentPanelPosition.v1');
+                    }
+                }
+                settingsTransferStatus.textContent = 'Settings imported. Reloading to apply browser preferences...';
+                setTimeout(() => location.reload(), 50);
+                return true;
             }
 
             function startBrowserPairingResponseTimer() {
@@ -4678,6 +5292,9 @@
                         socket.connect();
                         return true;
                     },
+                    retryServerConnectionNowForTest() {
+                        return retryServerConnectionNow();
+                    },
                     getActiveAgentState() {
                         return serializeAgentForTest(getActiveTerminalState());
                     },
@@ -4865,13 +5482,93 @@
                         renderSshSessionState();
                         return cloneForTest(sshSessionState);
                     },
+                    async createBrowserSshKeyForProfileForTest(profileId) {
+                        await sshSessionReady;
+                        const profile = findSshProfile(profileId);
+                        if (!profile) throw new Error('SSH profile was not found.');
+                        const generatedRecord = await createBrowserSshKeyRecord(profile.id);
+                        const record = { ...generatedRecord, targetKey: getSshTargetKey(profile) };
+                        await updateSshSessionStateWithKeyChanges(nextState => {
+                            const nextProfile = nextState.profiles.find(item => item.id === profile.id);
+                            if (nextProfile) nextProfile.keyId = record.keyId;
+                        }, [{ type: 'put', record }]);
+                        return {
+                            keyId: record.keyId,
+                            ownerProfileId: record.ownerProfileId,
+                            algorithm: record.algorithm,
+                            privateKeyExtractable: record.privateKey.extractable,
+                            publicKeyRawB64: record.publicKeyRawB64,
+                            publicKeyOpenSsh: record.publicKeyOpenSsh,
+                            fingerprint: record.fingerprint,
+                            publicKeyFingerprintHex: record.publicKeyFingerprintHex
+                        };
+                    },
+                    async getBrowserSshKeyMetadataForTest(profileId) {
+                        await sshSessionReady;
+                        const profile = findSshProfile(profileId);
+                        if (!profile || !profile.keyId) return null;
+                        const record = await validateBrowserSshKeyRecord(await loadSshKeyRecord(profile.keyId), profile);
+                        return {
+                            keyId: record.keyId,
+                            ownerProfileId: record.ownerProfileId,
+                            algorithm: record.algorithm,
+                            privateKeyExtractable: record.privateKey.extractable,
+                            publicKeyRawB64: record.publicKeyRawB64,
+                            publicKeyOpenSsh: record.publicKeyOpenSsh,
+                            fingerprint: record.fingerprint,
+                            publicKeyFingerprintHex: record.publicKeyFingerprintHex
+                        };
+                    },
+                    async browserSshKeyRecordExistsForTest(keyId) {
+                        return !!(await loadSshKeyRecord(keyId));
+                    },
+                    async signBrowserSshChallengeForTest(profileId, challengeB64) {
+                        const profile = findSshProfile(profileId);
+                        if (!profile || !profile.keyId) throw new Error('SSH profile key was not found.');
+                        const record = await validateBrowserSshKeyRecord(await loadSshKeyRecord(profile.keyId), profile);
+                        const challenge = base64ToUint8Array(challengeB64);
+                        return arrayBufferToBase64(await crypto.subtle.sign(
+                            { name: SSH_KEY_ALGORITHM }, record.privateKey, challenge
+                        ));
+                    },
+                    async createBrowserSettingsEnvelopeForTest() {
+                        return createBrowserSettingsEnvelope();
+                    },
+                    decodeBrowserSettingsEnvelopeForTest(envelope) {
+                        const parsed = typeof envelope === 'string' ? JSON.parse(envelope) : envelope;
+                        const bytes = base64ToUint8Array(parsed.content);
+                        return JSON.parse(new TextDecoder().decode(readStoredSettingsZip(bytes)));
+                    },
+                    parseBrowserSettingsEnvelopeForTest(envelope) {
+                        return parseBrowserSettingsEnvelope(typeof envelope === 'string' ? envelope : JSON.stringify(envelope));
+                    },
+                    async importBrowserSettingsEnvelopeForTest(envelope) {
+                        return importBrowserSettingsText(typeof envelope === 'string' ? envelope : JSON.stringify(envelope));
+                    },
+                    getConnectionFormDataForTest() {
+                        return cloneForTest(getConnectionFormData());
+                    },
+                    setConnectionTypeForTest(connectionType) {
+                        setConnectionType(connectionType);
+                        forcedConnectionType = null;
+                        selectedConnectionType = normalizeConnectionType(connectionType);
+                        return getSelectedConnectionType();
+                    },
+                    async handleBrowserSshSignRequestForTest(payload) {
+                        await handleBrowserSshSignRequest(cloneForTest(payload));
+                    },
                     stageSshConnectionForTest(value) {
                         pendingSshConnectionDrafts.set(activeTerminalId, {
                             ...normalizeSshTarget(value),
                             saveHistory: !(value && value.saveHistory === false),
                             saveSession: !!(value && value.saveSession),
                             profileName: normalizeSshProfileName(value && value.profileName),
-                            useKey: false
+                            useKey: !!(value && value.useKey),
+                            profileId: value && value.profileId ? value.profileId : null,
+                            keyId: value && value.keyId ? value.keyId : null,
+                            publicKeyFingerprintHex: value && value.publicKeyFingerprintHex
+                                ? value.publicKeyFingerprintHex
+                                : null
                         });
                     },
                     getMatchingSshProfileNameForTest() {
@@ -4944,6 +5641,7 @@
                 reconnection: true,
                 reconnectionAttempts: Infinity
             });
+            if (serverRetryNowBtn) serverRetryNowBtn.onclick = retryServerConnectionNow;
             setServerConnectionState('connecting');
             installBrowserTestHook();
             socket.io.on('reconnect_attempt', attempt => {
@@ -5038,6 +5736,86 @@
                     })
                     .catch(err => updateBrowserAuthUi(err.message));
             });
+            async function handleBrowserSshSignRequest(data) {
+                const responseBase = {
+                    request_id: data && data.request_id,
+                    terminal_id: data && data.terminal_id,
+                    profile_id: data && data.profile_id,
+                    key_id: data && data.key_id,
+                    challenge_sha256: data && data.challenge_sha256
+                };
+                const fail = message => {
+                    if (socket && socket.connected) {
+                        socket.emit('ssh_browser_sign_response', {
+                            ...responseBase,
+                            status: 'failed',
+                            message: String(message || 'Browser SSH signing failed.').slice(0, 160)
+                        });
+                    }
+                };
+                try {
+                    if (!data || typeof data !== 'object') throw new Error('Invalid SSH signing request.');
+                    const stringFields = [
+                        'request_id', 'terminal_id', 'profile_id', 'key_id',
+                        'public_key_fingerprint', 'algorithm', 'challenge', 'challenge_sha256'
+                    ];
+                    if (stringFields.some(field => typeof data[field] !== 'string' || !data[field])) {
+                        throw new Error('Incomplete SSH signing request.');
+                    }
+                    if (
+                        data.request_id.length > 128
+                        || data.profile_id.length > 128
+                        || data.key_id.length > 128
+                        || data.challenge.length > 8192
+                        || !/^[0-9a-f]{64}$/.test(data.challenge_sha256)
+                        || !/^[0-9a-f]{64}$/.test(data.public_key_fingerprint)
+                    ) throw new Error('Invalid SSH signing request fields.');
+                    if (data.algorithm !== 'ssh-ed25519') throw new Error('Unsupported SSH signing algorithm.');
+                    if (
+                        !Number.isFinite(data.expires_at)
+                        || data.expires_at <= Date.now() / 1000
+                        || data.expires_at > Date.now() / 1000 + 20
+                    ) {
+                        throw new Error('SSH signing request expired.');
+                    }
+                    if (handledSshSignRequestIds.has(data.request_id)) throw new Error('SSH signing request was already handled.');
+                    const draft = pendingSshConnectionDrafts.get(data.terminal_id);
+                    if (
+                        !draft
+                        || !draft.useKey
+                        || draft.profileId !== data.profile_id
+                        || draft.keyId !== data.key_id
+                        || draft.publicKeyFingerprintHex !== data.public_key_fingerprint
+                    ) {
+                        throw new Error('SSH signing request does not match the active connection.');
+                    }
+                    const profile = findSshProfile(data.profile_id);
+                    const record = await validateBrowserSshKeyRecord(await loadSshKeyRecord(data.key_id), profile);
+                    const challenge = base64ToUint8Array(data.challenge);
+                    if (!challenge.byteLength || challenge.byteLength > 4096) throw new Error('Invalid SSH signing challenge.');
+                    if ((await arrayBufferToHex(challenge)) !== data.challenge_sha256) {
+                        throw new Error('SSH signing challenge hash mismatch.');
+                    }
+                    handledSshSignRequestIds.add(data.request_id);
+                    if (handledSshSignRequestIds.size > 256) {
+                        handledSshSignRequestIds.delete(handledSshSignRequestIds.values().next().value);
+                    }
+                    const signature = await crypto.subtle.sign(
+                        { name: SSH_KEY_ALGORITHM },
+                        record.privateKey,
+                        challenge
+                    );
+                    if (new Uint8Array(signature).byteLength !== 64) throw new Error('Invalid Ed25519 signature length.');
+                    socket.emit('ssh_browser_sign_response', {
+                        ...responseBase,
+                        status: 'ok',
+                        signature: arrayBufferToBase64(signature)
+                    });
+                } catch (err) {
+                    fail(err && err.message ? err.message : 'Browser SSH signing failed.');
+                }
+            }
+            socket.on('ssh_browser_sign_request', handleBrowserSshSignRequest);
             socket.on('browser_pairing_file', data => {
                 clearBrowserPairingResponseTimer();
                 setBrowserAuthBusy(false);
@@ -5100,6 +5878,8 @@
                 });
                 clearBrowserPairingResponseTimer();
                 setBrowserAuthBusy(false);
+                pendingSshConnectionDrafts.clear();
+                handledSshSignRequestIds.clear();
                 clearSessionRenewTimer();
                 setServerConnectionState('unavailable');
                 terminals.forEach(state => {
@@ -5151,6 +5931,38 @@
                     socketStatusEl.style.color = '#ffcc00';
                 }
                 connectBtn.disabled = state !== 'available';
+            }
+
+            function retryServerConnectionNow() {
+                if (!socket || socket.connected || serverConnectionState !== 'unavailable') return false;
+                recordConnectionDiagnostic('socket.retry_now', {
+                    online: navigator.onLine,
+                    visibility: document.visibilityState
+                });
+                if (serverRetryNowBtn) {
+                    serverRetryNowBtn.disabled = true;
+                    serverRetryNowBtn.innerText = 'Retrying...';
+                    setTimeout(() => {
+                        serverRetryNowBtn.disabled = false;
+                        serverRetryNowBtn.innerText = 'Retry Now';
+                    }, 1000);
+                }
+                const manager = socket.io;
+                if (manager && manager._readyState === 'closed' && manager._reconnecting) {
+                    manager.cleanup();
+                    manager._reconnecting = false;
+                    if (manager.backoff) manager.backoff.reset();
+                }
+                if (manager && manager._readyState === 'closed') {
+                    manager.open(err => {
+                        if (!err) return;
+                        manager._reconnecting = false;
+                        manager.reconnect();
+                    });
+                } else {
+                    socket.connect();
+                }
+                return true;
             }
 
             function isSessionRequiredConnectError(err) {
@@ -5342,6 +6154,17 @@
                     formData.password = sshPasswordInput.value;
                     const matchingProfile = findSshProfileForTarget(formData);
                     if (matchingProfile) formData.profile_name = matchingProfile.name;
+                    if (
+                        isBrowserSshKeyAllowedByPolicy()
+                        && quickConnectSshKeyRecord
+                        && sshUseBrowserKeyInput.checked
+                    ) {
+                        formData.password = '';
+                        formData.use_browser_key = true;
+                        formData.profile_id = quickConnectSshKeyRecord.ownerProfileId;
+                        formData.key_id = quickConnectSshKeyRecord.keyId;
+                        formData.browser_public_key = quickConnectSshKeyRecord.publicKeyRawB64;
+                    }
                 } else if (connectionType === 'local_shell' && localShellKindSelect.value) {
                     formData.local_shell_kind = localShellKindSelect.value;
                 } else if (connectionType === 'uart') {
@@ -5359,6 +6182,10 @@
                 });
                 sshSaveHistoryInput.checked = prefs.saveSshHistory;
                 sshSaveSessionInput.checked = false;
+                sshUseBrowserKeyInput.checked = false;
+                sshUseBrowserKeyLabel.hidden = true;
+                quickConnectSshKeyRecord = null;
+                applyQuickConnectKeySelection();
                 selectedSshPickerEntry = null;
                 updateSshProfileIndicator();
                 setSshSessionMessage('');
@@ -5385,7 +6212,12 @@
                         saveHistory: !!sshSaveHistoryInput.checked,
                         saveSession: !!sshSaveSessionInput.checked,
                         profileName: normalizeSshProfileName(formData.profile_name),
-                        useKey: false
+                        useKey: formData.use_browser_key === true,
+                        profileId: typeof formData.profile_id === 'string' ? formData.profile_id : null,
+                        keyId: typeof formData.key_id === 'string' ? formData.key_id : null,
+                        publicKeyFingerprintHex: quickConnectSshKeyRecord
+                            ? quickConnectSshKeyRecord.publicKeyFingerprintHex
+                            : null
                     });
                 } else {
                     pendingSshConnectionDrafts.delete(formData.terminal_id);
@@ -5411,6 +6243,7 @@
             [sshHostInput, sshPortInput, sshUsernameInput].forEach(input => {
                 input.addEventListener('input', updateSshProfileIndicator);
             });
+            sshUseBrowserKeyInput.onchange = applyQuickConnectKeySelection;
             document.addEventListener('click', event => {
                 if (!event.target.closest('.ssh-session-picker')) closeSshSessionPicker();
             });
@@ -5420,6 +6253,15 @@
             };
             sshProfileCreateBtn.onclick = () => {
                 createSshProfileEditor().catch(err => setSshProfileStatus(err.message || 'Profile could not be created.', true));
+            };
+            sshProfileKeyEnabledInput.onchange = () => {
+                toggleSshProfileKey()
+                    .catch(err => setSshProfileStatus(err.message || 'Browser SSH key could not be generated.', true));
+            };
+            sshProfileKeyCopyBtn.onclick = () => {
+                if (!editingSshKeyRecord) return;
+                copyToClipboard(editingSshKeyRecord.publicKeyOpenSsh);
+                setSshProfileStatus('SSH public key copied.');
             };
             sshProfileSaveBtn.onclick = () => {
                 saveSshProfileEditor().catch(err => setSshProfileStatus(err.message || 'Profile could not be saved.', true));
@@ -5436,6 +6278,29 @@
             sshHistoryClearBtn.onclick = () => {
                 clearSshHistory().catch(err => setSshProfileStatus(err.message || 'SSH history could not be cleared.', true));
             };
+            if (settingsExportBtn) {
+                settingsExportBtn.onclick = () => {
+                    settingsExportBtn.disabled = true;
+                    exportBrowserSettings()
+                        .catch(err => { settingsTransferStatus.textContent = err.message || 'Settings could not be exported.'; })
+                        .finally(() => { settingsExportBtn.disabled = false; });
+                };
+            }
+            if (settingsImportBtn && settingsImportFile) {
+                settingsImportBtn.onclick = () => settingsImportFile.click();
+                settingsImportFile.onchange = () => {
+                    const file = settingsImportFile.files && settingsImportFile.files[0];
+                    settingsImportFile.value = '';
+                    if (!file) return;
+                    if (file.size > 1048576) {
+                        settingsTransferStatus.textContent = 'Settings file is too large.';
+                        return;
+                    }
+                    file.text()
+                        .then(importBrowserSettingsText)
+                        .catch(err => { settingsTransferStatus.textContent = err.message || 'Settings could not be imported.'; });
+                };
+            }
             browserAuthUrlForm.onsubmit = event => {
                 event.preventDefault();
                 setBrowserAuthUrlError('');
