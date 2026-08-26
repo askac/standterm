@@ -5953,15 +5953,7 @@
                     manager._reconnecting = false;
                     if (manager.backoff) manager.backoff.reset();
                 }
-                if (manager && manager._readyState === 'closed') {
-                    manager.open(err => {
-                        if (!err) return;
-                        manager._reconnecting = false;
-                        manager.reconnect();
-                    });
-                } else {
-                    socket.connect();
-                }
+                socket.connect();
                 return true;
             }
 

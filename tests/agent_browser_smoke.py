@@ -329,6 +329,35 @@ def test_server_unavailable_waits_for_reconnect(browser, access_url):
         close_context(context)
 
 
+def test_retry_now_resubscribes_after_socket_disconnect(browser, access_url):
+    context = browser.new_context(viewport={'width': 1280, 'height': 800})
+    page = context.new_page()
+    try:
+        page.goto(debug_url(access_url), wait_until='domcontentloaded')
+        page.wait_for_function('() => !!window.terminalTest', timeout=10000)
+        page.wait_for_function(
+            "() => window.terminalTest.getSocketState().connected === true",
+            timeout=10000,
+        )
+
+        page.evaluate("() => window.terminalTest.disconnectSocketForTest()")
+        page.wait_for_function(
+            "() => window.terminalTest.getSocketState().serverConnectionState === 'unavailable'",
+            timeout=5000,
+        )
+        page.click('#server-retry-now')
+        page.wait_for_function(
+            "() => window.terminalTest.getSocketState().connected === true",
+            timeout=5000,
+        )
+        check(
+            page.evaluate("() => window.terminalTest.getSocketState().serverConnectionState") == 'available',
+            'Retry Now did not restore the Socket.IO namespace subscription',
+        )
+    finally:
+        close_context(context)
+
+
 def test_invalid_session_reconnect_prompts_for_current_token(browser, access_url):
     parsed = urllib.parse.urlparse(access_url)
     token = urllib.parse.parse_qs(parsed.query)['token'][0]
@@ -2531,6 +2560,7 @@ def main():
         test_access_required_page_accepts_token_login,
         test_browser_authorization_gate_hides_connection_controls,
         test_server_unavailable_waits_for_reconnect,
+        test_retry_now_resubscribes_after_socket_disconnect,
         test_invalid_session_reconnect_prompts_for_current_token,
         test_agent_panel_can_be_dragged,
         test_terminal_pip_hides_selected_tab_and_keeps_background_tab,
