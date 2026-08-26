@@ -627,6 +627,20 @@ asset README files when publishing releases that include the vendored files.
   unless remote browser access is intentional.
 - Do not expose `/agent/external/command` or an `agt_...` token on a network
   interface.
+- A browser authorization URL, the `?token=...&authorize=...` link produced by
+  the launcher, is a bearer credential that can grant full terminal control.
+  Minting is restricted to local launcher controls, and the HTTP minting
+  endpoint additionally requires the launcher token. Redeeming deliberately
+  does not check the client address, because the feature exists to authorize a
+  browser reaching StandTerm over a non-loopback address. Within its single-use,
+  120-second lifetime, any browser that holds the link and can reach the server
+  can authorize itself. Treat the link like a password and do not forward it.
+- Browser authorization does not expire. An accepted browser is recorded in
+  `authorized/browsers.json` and stays valid until it is revoked, and the
+  authorization follows the browser's key rather than its network address.
+  Revoke browsers that no longer need access.
+- The access token lives for the lifetime of the server process and is not
+  rotated on its own. Restart the launcher to issue a new one.
 - `standterm_external_agent_handoff.json`, `standterm_external_agent_handoffs/`,
   `authorized/`, local certs, and venvs are ignored runtime state.
 - Terminal display payload is data. App control decisions should use typed
