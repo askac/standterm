@@ -1027,6 +1027,7 @@
         prefs.fontWeight = normalizeFontWeight(prefs.fontWeight);
         prefs.cursorStyle = normalizeCursorStyle(prefs.cursorStyle);
 
+        const UNICODE11_WIDTH_PROVIDER_VERSION = '11';
         const CJK_WIDTH_PROVIDER_VERSION = 'ptt-cjk';
         const EAST_ASIAN_AMBIGUOUS_WIDTH_RANGES = [
             [0x00a1, 0x00a1], [0x00a4, 0x00a4], [0x00a7, 0x00a8], [0x00aa, 0x00aa],
@@ -1083,6 +1084,20 @@
                 else return true;
             }
             return false;
+        }
+        function enableUnicode11WidthProvider(term) {
+            if (!term || typeof Unicode11Addon === 'undefined') return;
+            try {
+                const unicode = term.unicode;
+                if (!unicode || !Array.isArray(unicode.versions)) return;
+                if (!unicode.versions.includes(UNICODE11_WIDTH_PROVIDER_VERSION)) {
+                    term.loadAddon(new Unicode11Addon.Unicode11Addon());
+                }
+                if (unicode.versions.includes(UNICODE11_WIDTH_PROVIDER_VERSION)) {
+                    unicode.activeVersion = UNICODE11_WIDTH_PROVIDER_VERSION;
+                    term.__baseUnicodeVersion = UNICODE11_WIDTH_PROVIDER_VERSION;
+                }
+            } catch (e) {}
         }
         function applyCjkWidthPreference(term) {
             if (!term) return;
@@ -1263,8 +1278,10 @@
             try {
                 await loadScript('/static/js/xterm.js');
                 document.getElementById('progress-bar').style.width = '20%';
+                await loadScript('/static/js/xterm-addon-unicode11.js');
+                document.getElementById('progress-bar').style.width = '30%';
                 await loadScript('/static/js/xterm-addon-webgl.js');
-                document.getElementById('progress-bar').style.width = '40%';
+                document.getElementById('progress-bar').style.width = '45%';
                 await loadScript('/static/js/socket.io.min.js');
                 document.getElementById('progress-bar').style.width = '60%';
                 await loadScript('/static/js/xterm-addon-fit.js');
@@ -2370,6 +2387,7 @@
                     scrollback: 1000,
                     theme: SCHEMES[prefs.colorScheme] || SCHEMES.vintage
                 });
+                enableUnicode11WidthProvider(term);
                 applyCjkWidthPreference(term);
                 return term;
             }
@@ -2641,6 +2659,19 @@
                 };
             }
 
+            const AGENT_MIRROR_QUADRANT_BLOCKS = {
+                '▖': [[0, 4, 4, 4]],
+                '▗': [[4, 4, 4, 4]],
+                '▘': [[0, 0, 4, 4]],
+                '▙': [[0, 0, 4, 8], [0, 4, 8, 4]],
+                '▚': [[0, 0, 4, 4], [4, 4, 4, 4]],
+                '▛': [[0, 0, 4, 8], [4, 0, 4, 4]],
+                '▜': [[0, 0, 8, 4], [4, 0, 4, 8]],
+                '▝': [[4, 0, 4, 4]],
+                '▞': [[4, 0, 4, 4], [0, 4, 4, 4]],
+                '▟': [[4, 0, 4, 8], [0, 4, 8, 4]]
+            };
+
             function drawAgentMirrorBlockGlyph(context, chars, x, y, cellWidth, cellHeight) {
                 const left = Math.floor(x);
                 const top = Math.floor(y);
@@ -2648,6 +2679,22 @@
                 const bottom = Math.ceil(y + cellHeight);
                 const width = Math.max(1, right - left);
                 const height = Math.max(1, bottom - top);
+                const quadrantRects = AGENT_MIRROR_QUADRANT_BLOCKS[chars];
+                if (quadrantRects) {
+                    quadrantRects.forEach(rect => {
+                        const blockLeft = Math.floor(left + rect[0] * width / 8);
+                        const blockTop = Math.floor(top + rect[1] * height / 8);
+                        const blockRight = Math.ceil(left + (rect[0] + rect[2]) * width / 8);
+                        const blockBottom = Math.ceil(top + (rect[1] + rect[3]) * height / 8);
+                        context.fillRect(
+                            blockLeft,
+                            blockTop,
+                            Math.max(1, blockRight - blockLeft),
+                            Math.max(1, blockBottom - blockTop)
+                        );
+                    });
+                    return true;
+                }
                 let blockLeft = left;
                 let blockTop = top;
                 let blockWidth = width;
@@ -3782,6 +3829,7 @@
                     fontWeight: prefs.fontWeight,
                     theme: SCHEMES[prefs.colorScheme] || SCHEMES.vintage
                 });
+                enableUnicode11WidthProvider(term);
                 applyCjkWidthPreference(term);
                 const fitAddon = (typeof FitAddon !== 'undefined') ? new FitAddon.FitAddon() : null;
                 if (fitAddon) term.loadAddon(fitAddon);
@@ -4071,6 +4119,28 @@
                                 ? state.agentTerminalMirror.options.fontFamily
                                 : null
                         });
+                    },
+                    setActiveTerminalFontSizeForTest(fontSize) {
+                        const state = getActiveTerminalState();
+                        if (!state || !state.term || !Number.isFinite(Number(fontSize))) return false;
+                        state.term.options.fontSize = Number(fontSize);
+                        if (state.agentTerminalMirror) state.agentTerminalMirror.options.fontSize = Number(fontSize);
+                        return true;
+                    },
+                    getActiveTerminalBufferCellsForTest(row, useMirror = false) {
+                        const state = getActiveTerminalState();
+                        const term = state && useMirror ? state.agentTerminalMirror : (state && state.term);
+                        const activeBuffer = term && term.buffer && term.buffer.active;
+                        if (!activeBuffer || typeof activeBuffer.getLine !== 'function') return null;
+                        const baseY = Number.isFinite(Number(activeBuffer.baseY)) ? Number(activeBuffer.baseY) : 0;
+                        const line = activeBuffer.getLine(baseY + Math.max(0, Number(row) || 0));
+                        if (!line) return null;
+                        const cells = [];
+                        for (let column = 0; column < term.cols; column += 1) {
+                            const cell = line.getCell(column);
+                            cells.push(cell ? { chars: cell.getChars(), width: cell.getWidth() } : null);
+                        }
+                        return cloneForTest(cells);
                     },
                     getTerminalTabsState() {
                         return {

@@ -128,6 +128,7 @@ blue=$'\033[38;5;33m'
 green=$'\033[38;5;82m'
 yellow=$'\033[38;5;226m'
 magenta=$'\033[38;5;201m'
+coral=$'\033[38;2;215;135;135m'
 blue_bg=$'\033[48;5;33m'
 yellow_on_blue=$'\033[38;5;226;48;5;33m'
 yellow_on_yellow=$'\033[38;5;226;48;5;226m'
@@ -171,6 +172,8 @@ printf '%s[5] Progress and fractional-width glyphs%s\n' "$bold" "$reset"
 draw_progress 'progress 25%' 25
 draw_progress 'progress 50%' 50
 draw_progress 'progress 75%' 75
+printf 'Status-style squares are discrete glyphs; regular gaps between them are expected.\n'
+draw_glyph_row 'status squares (gaps)' "$dim" '■'
 printf '%-22s%s' 'fraction ramp' "$blue"
 repeat_text '▏▎▍▌▋▊▉█' "$((bar_width / 8))"
 repeat_text '█' "$((bar_width % 8))"
@@ -179,11 +182,19 @@ draw_glyph_row 'lower half only' "$green" '▄'
 draw_glyph_row 'upper half only' "$green" '▀'
 printf '\n'
 
-printf '%s[6] Box drawing, wide text, and ANSI colors%s\n' "$bold" "$reset"
+printf '%s[6] Quadrant-block composition%s\n' "$bold" "$reset"
+printf 'The two lower-right cutouts in the top row are intentional; touching colored edges should not gain extra seams.\n'
+printf '%-22s%s%s%s\n' 'quadrant logo row 1' "$coral" ' ▐▛███▛█' "$reset"
+printf '%-22s%s%s%s\n' 'quadrant logo row 2' "$coral" '▝▜██████▀' "$reset"
+printf '%-22s%s  %s%s\n' 'quadrant logo row 3' "$coral" '▝▝ ▝▝' "$reset"
+printf '\n'
+
+printf '%s[7] Box drawing, wide text, emoji adjacency, and ANSI colors%s\n' "$bold" "$reset"
 printf 'single: ╭──────────────╮  double: ╔══════════════╗  heavy: ┏━━━━━━━━━━━━━━┓\n'
 printf '        │ StandTerm    │          ║ StandTerm    ║         ┃ StandTerm    ┃\n'
 printf '        ╰──────────────╯          ╚══════════════╝         ┗━━━━━━━━━━━━━━┛\n'
 printf 'wide:   中文測試  日本語  한글  ＡＢＣ  emoji: 🟩🟨🟥\n'
+printf 'emoji/text adjacency: [📁codex] [A🟩B] [🟩🟨🟥END]\n'
 printf 'colors: '
 for color_index in 196 202 226 46 51 33 93 201; do
     printf '\033[48;5;%sm      %s' "$color_index" "$reset"
