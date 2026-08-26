@@ -238,6 +238,26 @@ key binding. Deleting or unlinking a keyed profile permanently deletes that
 browser key. These keys are protected from export, but they are not hardware
 keys: script running in the same browser origin could still request signatures.
 
+### Why This SSH Architecture Matters
+
+| Design choice | Practical advantage |
+| --- | --- |
+| Non-extractable browser-owned private key | Private key bytes do not cross the browser boundary or enter Python memory, configuration files, settings exports, or terminal payloads. |
+| Explicit key creation and per-connection **Use key** control | A key exists only after the user opts in for a saved profile, and password or host-side authentication remains available when key use is off. |
+| Typed, short-lived signing requests | Each request is bound to the initiating browser connection, terminal, profile, key, public-key fingerprint, and challenge hash. Expired, replayed, stale, or mismatched responses fail closed. |
+| Exact host, port, and username binding | Editing a Quick Connect target cannot silently reuse a profile key for another SSH account or endpoint. |
+| Standard OpenSSH Ed25519 public key | The remote host only needs the copied key in `authorized_keys`; it does not need StandTerm, a browser component, or an agent. |
+| Separate settings and key stores | Profiles, history, and browser preferences remain portable while private keys and key identifiers stay local to the browser that created them. |
+
+The signing path keeps authentication authority narrow. Paramiko passes an SSH
+challenge to StandTerm's browser-key adapter. StandTerm emits a structured
+request only to the browser connection that started that terminal. The browser
+validates the active connection and exact profile binding before signing, then
+returns a 64-byte Ed25519 signature. Python verifies that signature against the
+profile's public key before returning it to Paramiko. A browser disconnect,
+timeout, changed connection draft, or stale terminal start cancels the path
+without falling back to a password automatically.
+
 **Settings > General > Import & Export** transfers browser preferences, SSH
 profiles and order, SSH history, and persistent UI layout in a versioned JSON
 envelope containing a Base64 ZIP archive. Import merges profiles by stable ID,
