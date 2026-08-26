@@ -192,6 +192,7 @@ def test_browser_authorization_gate_hides_connection_controls(browser, access_ur
             timeout=10000,
         )
         page.wait_for_selector('#connectBtn:not([disabled])', timeout=10000)
+        page.wait_for_timeout(500)
         page.evaluate(
             """() => {
                 const policy = window.terminalTest.getTerminalPolicy();
@@ -980,7 +981,8 @@ def test_background_terminal_render_uses_mirror_canvas_png(browser, access_url):
                 'data': (
                     '\x1b[2J\x1b[H\x1b[38;5;45m'
                     '████████\r\n████████\r\n████████\r\n'
-                    '\x1b[38;5;226;48;5;33m▄▄▄▄▄▄▄▄\r\n▀▀▀▀▀▀▀▀\x1b[0m'
+                    '\x1b[38;5;226;48;5;33m▄▄▄▄▄▄▄▄\r\n▀▀▀▀▀▀▀▀\x1b[0m\r\n'
+                    '\x1b[38;2;215;135;135m ▐▛███▛█\r\n▝▜██████▀\x1b[0m'
                 ),
                 'output_seq': 322,
             },
@@ -1023,6 +1025,8 @@ def test_background_terminal_render_uses_mirror_canvas_png(browser, access_url):
                 context.drawImage(image, 0, 0);
                 const pixels = context.getImageData(0, 0, image.width, image.height).data;
                 let nonBackgroundPixels = 0;
+                let coralPixelCount = 0;
+                let partialCoralPixels = 0;
                 const cyanRows = [];
                 const yellowRows = [];
                 const cyanColumns = [];
@@ -1041,6 +1045,12 @@ def test_background_terminal_render_uses_mirror_canvas_png(browser, access_url):
                         const blue = pixels[offset + 2];
                         if (red < 40 && green >= 190 && blue >= 220) cyanCount += 1;
                         if (red >= 220 && green >= 220 && blue < 40) yellowCount += 1;
+                        const coralLike = red > 40 && green > 20 && blue > 20
+                            && red > green && Math.abs(green - blue) <= 2;
+                        const exactCoral = Math.abs(red - 215) <= 2
+                            && Math.abs(green - 135) <= 2 && Math.abs(blue - 135) <= 2;
+                        if (coralLike) coralPixelCount += 1;
+                        if (coralLike && !exactCoral) partialCoralPixels += 1;
                     }
                     if (cyanCount >= 20) cyanRows.push(y);
                     if (yellowCount >= 20) yellowRows.push(y);
@@ -1066,6 +1076,8 @@ def test_background_terminal_render_uses_mirror_canvas_png(browser, access_url):
                     width: image.width,
                     height: image.height,
                     nonBackgroundPixels,
+                    coralPixelCount,
+                    partialCoralPixels,
                     cyanRowCount: cyanRows.length,
                     cyanRowMaxStep: maxStep(cyanRows),
                     cyanColumnCount: cyanColumns.length,
@@ -1085,6 +1097,8 @@ def test_background_terminal_render_uses_mirror_canvas_png(browser, access_url):
         check(decoded['cyanColumnMaxStep'] == 1, 'background PNG retained vertical full-block seams')
         check(decoded['yellowRowCount'] > 8, 'background PNG did not render enough half-block rows')
         check(decoded['yellowRowMaxStep'] == 1, 'background PNG retained a half-block boundary seam')
+        check(decoded['coralPixelCount'] > 20, 'background PNG did not render enough quadrant pixels')
+        check(decoded['partialCoralPixels'] == 0, 'background PNG retained blended quadrant seams')
     finally:
         close_context(context)
 
@@ -1316,10 +1330,36 @@ def test_webgl_renderer_closes_block_glyph_row_gaps(browser, access_url):
         options = page.evaluate("() => window.terminalTest.getActiveTerminalOptions()")
         check(options['renderer'] == 'webgl', 'terminal did not activate the WebGL renderer')
 
+        odd_metrics = None
+        for font_size in range(8, 33):
+            page.evaluate(
+                "size => window.terminalTest.setActiveTerminalFontSizeForTest(size)",
+                font_size,
+            )
+            page.wait_for_timeout(50)
+            metrics = page.evaluate(
+                """() => {
+                    const canvas = Array.from(document.querySelectorAll(
+                        '.terminal-pane.active .xterm-screen canvas'
+                    )).at(-1);
+                    const options = window.terminalTest.getActiveTerminalOptions();
+                    const cells = window.terminalTest.getActiveTerminalBufferCellsForTest(0);
+                    if (!canvas || !options || !cells || !cells.length) return null;
+                    return {
+                        fontSize: options.fontSize,
+                        cellWidth: Math.round(canvas.width / cells.length)
+                    };
+                }"""
+            )
+            if metrics and metrics['cellWidth'] % 2 == 1:
+                odd_metrics = metrics
+                break
+        check(odd_metrics is not None, 'could not create an odd-pixel WebGL cell width fixture')
+
         page.evaluate(
             """() => window.terminalTest.writeTerminalOutput(
-                '\\x1b[2J\\x1b[H\\x1b[38;2;215;135;135m'
-                + '████████\\r\\n████████\\r\\n████████'
+                '\\x1b[2J\\x1b[H\\x1b[?25l\\x1b[38;2;215;135;135m'
+                + '████████\\r\\n████████\\r\\n████████\\r\\n▛███▛'
                 + '\\x1b[0m'
             )"""
         )
@@ -1336,6 +1376,7 @@ def test_webgl_renderer_closes_block_glyph_row_gaps(browser, access_url):
                 const rgba = new Uint8Array(canvas.width * canvas.height * 4);
                 gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
                 const coloredRows = [];
+                let partialCoralPixels = 0;
                 for (let y = 0; y < canvas.height; y += 1) {
                     let count = 0;
                     for (let x = 0; x < canvas.width; x += 1) {
@@ -1346,6 +1387,11 @@ def test_webgl_renderer_closes_block_glyph_row_gaps(browser, access_url):
                         if (red > 180 && green >= 100 && green <= 170 && blue >= 100 && blue <= 170) {
                             count += 1;
                         }
+                        const coralLike = red > 40 && green > 20 && blue > 20
+                            && red > green && Math.abs(green - blue) <= 2;
+                        const exactCoral = Math.abs(red - 215) <= 2
+                            && Math.abs(green - 135) <= 2 && Math.abs(blue - 135) <= 2;
+                        if (coralLike && !exactCoral) partialCoralPixels += 1;
                     }
                     if (count >= 20) coloredRows.push(y);
                 }
@@ -1353,12 +1399,47 @@ def test_webgl_renderer_closes_block_glyph_row_gaps(browser, access_url):
                 for (let index = 1; index < coloredRows.length; index += 1) {
                     maxStep = Math.max(maxStep, coloredRows[index] - coloredRows[index - 1]);
                 }
-                return { coloredRowCount: coloredRows.length, maxStep };
+                return { coloredRowCount: coloredRows.length, maxStep, partialCoralPixels };
             }"""
         )
         check(not pixels.get('error'), f"could not inspect WebGL terminal pixels: {pixels.get('error')}")
         check(pixels['coloredRowCount'] > 20, 'block glyph fixture did not render enough colored rows')
         check(pixels['maxStep'] == 1, 'block glyphs retained a blank pixel row between terminal cells')
+        check(
+            pixels['partialCoralPixels'] == 0,
+            f"quadrant glyphs retained blended seams at {odd_metrics}: {pixels['partialCoralPixels']} pixels",
+        )
+    finally:
+        close_context(context)
+
+
+def test_unicode_provider_keeps_emoji_text_in_separate_cells(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        page.evaluate(
+            """() => window.terminalTest.writeTerminalOutput(
+                '\\x1b[2J\\x1b[HA🟩B\\r\\n📁C',
+                611
+            )"""
+        )
+        page.wait_for_timeout(100)
+        for use_mirror, label in [(False, 'visible'), (True, 'mirror')]:
+            first = page.evaluate(
+                "([row, mirror]) => window.terminalTest.getActiveTerminalBufferCellsForTest(row, mirror)",
+                [0, use_mirror],
+            )
+            second = page.evaluate(
+                "([row, mirror]) => window.terminalTest.getActiveTerminalBufferCellsForTest(row, mirror)",
+                [1, use_mirror],
+            )
+            check(first is not None and second is not None, f'{label} emoji fixture did not reach the buffer')
+            check(first[0] == {'chars': 'A', 'width': 1}, f'{label} ASCII prefix moved unexpectedly')
+            check(first[1] == {'chars': '🟩', 'width': 2}, f'{label} colored emoji was not two cells wide')
+            check(first[2] == {'chars': '', 'width': 0}, f'{label} colored emoji omitted its trailing cell')
+            check(first[3] == {'chars': 'B', 'width': 1}, f'{label} text overlapped the colored emoji')
+            check(second[0] == {'chars': '📁', 'width': 2}, f'{label} folder emoji was not two cells wide')
+            check(second[1] == {'chars': '', 'width': 0}, f'{label} folder emoji omitted its trailing cell')
+            check(second[2] == {'chars': 'C', 'width': 1}, f'{label} text overlapped the folder emoji')
     finally:
         close_context(context)
 
@@ -1840,6 +1921,7 @@ def main():
         test_windows_font_fallback_defaults_and_migrates_legacy,
         test_powerline_symbol_fallback_is_optional_and_applies_immediately,
         test_webgl_renderer_closes_block_glyph_row_gaps,
+        test_unicode_provider_keeps_emoji_text_in_separate_cells,
         test_cursor_type_setting_updates_existing_and_new_terminals,
         test_settings_server_tab_loads_readonly_snapshot,
         test_connection_diagnostics_are_session_scoped_and_redacted,

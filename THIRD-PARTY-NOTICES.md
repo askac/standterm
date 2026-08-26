@@ -6,8 +6,9 @@ This project incorporates components from the following projects:
 - **License**: MIT
 - **Copyright**: (c) 2017-2026 The xterm.js authors
 - **Project**: https://github.com/xtermjs/xterm.js
-- **Vendored files**: `static/js/xterm.js`, `static/js/xterm-addon-webgl.js`, `static/js/xterm-addon-fit.js`, `static/js/xterm-addon-web-links.js`, `static/css/xterm.css`
-- **Versions**: `@xterm/xterm` 6.0.0, `@xterm/addon-webgl` 0.19.0, `@xterm/addon-fit` 0.11.0, `@xterm/addon-web-links` 0.12.0
+- **Vendored files**: `static/js/xterm.js`, `static/js/xterm-addon-unicode11.js`, `static/js/xterm-addon-webgl.js`, `static/js/xterm-addon-fit.js`, `static/js/xterm-addon-web-links.js`, `static/css/xterm.css`
+- **Versions**: `@xterm/xterm` 6.0.0, `@xterm/addon-unicode11` 0.9.0, `@xterm/addon-webgl` 0.19.0, `@xterm/addon-fit` 0.11.0, `@xterm/addon-web-links` 0.12.0
+- **Modification**: StandTerm pixel-aligns custom WebGL Block Element rectangles to avoid seams at odd device-cell widths.
 - **License texts**: `static/licenses/xtermjs-MIT-LICENSE.txt`, `static/licenses/xterm-addon-webgl-MIT-LICENSE.txt`
 
 ## Socket.IO
