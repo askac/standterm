@@ -3,10 +3,11 @@ set -euo pipefail
 
 bar_width=""
 clear_screen=1
+cursor_edge_test=0
 
 usage() {
     cat <<'USAGE'
-Usage: scripts/draw_terminal_patterns.sh [--width N] [--no-clear]
+Usage: scripts/draw_terminal_patterns.sh [--width N] [--no-clear] [--cursor-edge]
 
 Draw a static ANSI terminal-rendering test card. The paired lower-half and
 upper-half block rows are intended to reveal unintended horizontal seams.
@@ -14,6 +15,7 @@ upper-half block rows are intended to reveal unintended horizontal seams.
 Options:
   --width N     Set the test bar width. Default: fit the terminal, up to 96.
   --no-clear    Keep the existing terminal contents above the test card.
+  --cursor-edge Draw an interactive steady-bar cursor test at column 0.
   -h, --help    Show this help.
 USAGE
 }
@@ -102,6 +104,10 @@ while [ "$#" -gt 0 ]; do
             clear_screen=0
             shift
             ;;
+        --cursor-edge)
+            cursor_edge_test=1
+            shift
+            ;;
         -h|--help)
             usage
             exit 0
@@ -132,6 +138,31 @@ coral=$'\033[38;2;215;135;135m'
 blue_bg=$'\033[48;5;33m'
 yellow_on_blue=$'\033[38;5;226;48;5;33m'
 yellow_on_yellow=$'\033[38;5;226;48;5;226m'
+
+draw_cursor_edge_test() {
+    if [ "$clear_screen" -eq 1 ]; then
+        printf '\033[2J\033[H'
+    fi
+    printf '%s●%s TOP-LEFT marker begins at row 1, column 0\n' "$bold" "$reset"
+    printf '%sStandTerm terminal-edge and bar cursor test%s\n' "$bold" "$reset"
+    printf 'The cursor is steady, not blinking. A vertical bar must remain visible at column 0\n'
+    printf 'of the TARGET row. The text begins at column 3 to keep the cursor cell empty.\n'
+    printf 'Press any key to finish and restore the configured cursor style.\n\n'
+    printf 'REFERENCE: text begins at column 0\n'
+    printf '   TARGET: text begins at column 3'
+    printf '\033[1G\033[6 q\033[?25h'
+    if [ -t 0 ]; then
+        IFS= read -r -n 1 -s || true
+    else
+        sleep 5
+    fi
+    printf '\033[0 q\n'
+}
+
+if [ "$cursor_edge_test" -eq 1 ]; then
+    draw_cursor_edge_test
+    exit 0
+fi
 
 if [ "$clear_screen" -eq 1 ]; then
     printf '\033[2J\033[H'

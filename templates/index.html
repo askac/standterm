@@ -45,6 +45,16 @@
         body.has-terminal-tabs #terminal { top: var(--tab-bar-height); height: calc(100vh - var(--status-bar-height) - var(--tab-bar-height)); }
         .terminal-pane { height: 100%; width: 100%; display: none; }
         .terminal-pane.active { display: block; }
+        .terminal-pane > .xterm { box-sizing: border-box; padding: 2px; }
+        .xterm .xterm-viewport { scrollbar-color: #444 transparent; }
+        .xterm .xterm-viewport::-webkit-scrollbar { width: 14px; }
+        .xterm .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
+        .xterm .xterm-viewport::-webkit-scrollbar-thumb {
+            background: #444;
+            background-clip: content-box;
+            border: 3px solid transparent;
+            border-radius: 7px;
+        }
         
         /* Loading Screen */
         #loader-screen {
@@ -483,6 +493,7 @@
         /* Status Bar */
         #status-bar { position: absolute; bottom: 0; left: 0; right: 0; height: var(--status-bar-height); box-sizing: border-box; background: #111; color: #888; font-size: 12px; padding: 2px 10px; z-index: 50; border-top: 1px solid #222; display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
         .sb-item { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+        #terminal-title-item { flex: 0 0 220px; width: 220px; }
         .sb-sep { color: #444; user-select: none; }
         .error-msg { color: #ff453a; font-size: 13px; margin-bottom: 10px; display: none; }
         
@@ -694,6 +705,7 @@
                             <div class="settings-row"><label for="pref-cursorStyle">Cursor type</label>
                                 <select id="pref-cursorStyle"><option value="block">Block</option><option value="underline">Underline</option><option value="bar">Bar</option></select>
                             </div>
+                            <div class="settings-row"><label for="pref-showTerminalTitleInStatusBar">Show terminal title in status bar</label><input type="checkbox" id="pref-showTerminalTitleInStatusBar"></div>
                         </fieldset>
                     </div>
                     <div class="settings-tab" id="tab-ssh-sessions">
@@ -910,6 +922,8 @@
         <span class="sb-item">Socket:&nbsp;<span id="socketStatus">Disconnected</span></span>
         <span class="sb-sep">|</span>
         <span class="sb-item">Session:&nbsp;<span id="sshStatus">Disconnected</span></span>
+        <span class="sb-sep" id="terminal-title-separator" hidden>|</span>
+        <span class="sb-item" id="terminal-title-item" hidden><span id="terminal-title"></span></span>
         <span class="sb-sep">|</span>
         <span class="sb-item">size:&nbsp;<span id="terminal-size">--x--</span></span>
         <span class="sb-sep">|</span>
@@ -1063,6 +1077,7 @@
 
         // --- Preferences ---
         const PREF_KEY = 'terminal.pref.v1';
+        const TERMINAL_APPLICATION_TITLE_MAX_LENGTH = 160;
         const LEGACY_DEFAULT_FONT_FACE = 'Consolas, "Courier New", monospace';
         const WINDOWS_TERMINAL_FONT_FACE = 'Consolas, "Cascadia Mono", "Courier New", monospace';
         const LEGACY_MAC_DEFAULT_FONT_FACE = 'Menlo, Monaco, "Noto Sans Mono CJK TC", "PingFang TC", "Apple LiGothic", monospace';
@@ -1091,6 +1106,7 @@
             fontWeight: isApplePlatform() ? '500' : 'normal',
             colorScheme: 'vintage',
             cursorStyle: 'block',
+            showTerminalTitleInStatusBar: true,
             // Render East Asian Ambiguous characters (box drawing, symbols)
             // as wide cells. Keep this off by default; enable it only for
             // legacy BBS/screen setups that require wide ambiguous width.
@@ -1738,6 +1754,9 @@
             const browserAuthCaLink = document.getElementById('browser-auth-ca-link');
             const connectionForm = document.getElementById('connection-form');
             const modeInputs = [...document.querySelectorAll('input[name="connection_type"]')];
+            const terminalTitleSeparator = document.getElementById('terminal-title-separator');
+            const terminalTitleItem = document.getElementById('terminal-title-item');
+            const terminalTitleEl = document.getElementById('terminal-title');
             const terminalSizeEl = document.getElementById('terminal-size');
             const debugHud = document.getElementById('debug-hud');
             const policyDebugPanel = document.getElementById('policy-debug-panel');
@@ -4860,6 +4879,23 @@
                 return label || (state && state.id) || 'Terminal';
             }
 
+            function normalizeTerminalApplicationTitle(value) {
+                const normalized = String(value || '')
+                    .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+                return Array.from(normalized).slice(0, TERMINAL_APPLICATION_TITLE_MAX_LENGTH).join('');
+            }
+
+            function updateTerminalApplicationTitleStatus(state = getActiveTerminalState()) {
+                const title = state ? state.applicationTitle : '';
+                const visible = prefs.showTerminalTitleInStatusBar && !!title;
+                terminalTitleSeparator.hidden = !visible;
+                terminalTitleItem.hidden = !visible;
+                terminalTitleEl.innerText = title;
+                terminalTitleItem.title = title;
+            }
+
             function updateTabState(state) {
                 state.tabEl.classList.toggle('active', state.id === activeTerminalId);
                 state.tabEl.classList.toggle('connected', state.connected);
@@ -4932,6 +4968,7 @@
                 updateTerminalActions();
                 updateAgentPauseButton();
                 updateAgentPanel();
+                updateTerminalApplicationTitleStatus(state);
                 if (!state) return;
                 sshStatusEl.innerText = state.connected ? getTerminalDisplayLabel(state) : (state.connecting ? 'Connecting' : 'Disconnected');
                 sshStatusEl.style.color = state.connected ? '#34c759' : (state.connecting ? '#ffcc00' : '#ff9f0a');
@@ -5043,6 +5080,7 @@
                     instanceId,
                     title,
                     label: 'Disconnected',
+                    applicationTitle: '',
                     connectionType: null,
                     connected: false,
                     connecting: false,
@@ -5077,6 +5115,13 @@
                 };
                 enableWebglRenderer(state);
                 terminals.set(terminalId, state);
+                term.onTitleChange(value => {
+                    if (!isCurrentTerminalState(state)) return;
+                    const title = normalizeTerminalApplicationTitle(value);
+                    if (title === state.applicationTitle) return;
+                    state.applicationTitle = title;
+                    if (state.id === activeTerminalId) updateTerminalApplicationTitleStatus(state);
+                });
                 configureWebLinks(state);
                 syncAgentTerminalMirrorSize(state);
                 term.onResize(() => notifyTerminalResize(state));
@@ -6196,6 +6241,7 @@
                     ? getSshProfileTabLabel(formData.profile_name)
                     : (CONNECTION_LABELS[state.connectionType] || 'Terminal');
                 state.title = state.label;
+                state.applicationTitle = '';
                 state.connectedAt = null;
                 state.lastNotifiedSize = { cols: null, rows: null };
                 if (formData.connection_type === 'ssh') {
@@ -7444,6 +7490,7 @@
                 document.getElementById('pref-fontSize').value = prefs.fontSize;
                 document.getElementById('pref-fontWeight').value = prefs.fontWeight;
                 document.getElementById('pref-cursorStyle').value = prefs.cursorStyle;
+                document.getElementById('pref-showTerminalTitleInStatusBar').checked = prefs.showTerminalTitleInStatusBar;
                 if (editingSshProfileId) {
                     renderSshProfileManager();
                 } else {
@@ -7537,6 +7584,7 @@
                 prefs.fontSize = normalizeFontSize(document.getElementById('pref-fontSize').value, prefs.fontSize);
                 prefs.fontWeight = normalizeFontWeight(document.getElementById('pref-fontWeight').value, prefs.fontWeight);
                 prefs.cursorStyle = normalizeCursorStyle(document.getElementById('pref-cursorStyle').value, prefs.cursorStyle);
+                prefs.showTerminalTitleInStatusBar = document.getElementById('pref-showTerminalTitleInStatusBar').checked;
                 savePrefs(prefs);
                 terminals.forEach(state => {
                     state.term.options.cursorStyle = prefs.cursorStyle;
