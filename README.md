@@ -440,7 +440,7 @@ certificate.
 
 Full CLI, REPL, JSONL, MCP, render, wait, send-capture, and sequence details are
 in `docs/agent_socket_contract.md`. See
-[Local Agent Skill Example](#local-agent-skill-example) for a reusable skill.
+[Local Agent Skill Examples](#local-agent-skill-examples) for reusable skills.
 
 ## Agent Workflow Stories
 
@@ -496,27 +496,28 @@ characters were present. It does not record raw terminal input previews.
 Observation JSONL logs are runtime artifacts and are ignored by git. StandTerm
 writes them only when `STANDTERM_OPERATOR_OBSERVATION_DIR` is set.
 
-## Local Agent Skill Example
+## Local Agent Skill Examples
 
-The repo includes a local skill example for agents that should operate StandTerm
-through the external-agent handoff:
+The repo includes complementary local skill examples. The external-agent skill
+owns terminal I/O and read-only context discovery; smaller workflow skills
+change how an agent behaves in specific terminal situations.
 
-```text
-docs/examples/standterm-external-agent-skill/SKILL.md
-docs/examples/standterm-external-agent-skill/skill_prompt.txt
-docs/examples/standterm-external-agent-skill/boot_prompt.txt
-```
+| Skill | Use when |
+| --- | --- |
+| [`standterm-external-agent`](docs/examples/standterm-external-agent-skill/SKILL.md) | Discovering and operating StandTerm through the external-agent handoff. |
+| [`standterm-privileged-hitl`](docs/examples/standterm-privileged-hitl/SKILL.md) | A session reaches a credential prompt, human-input lease, or privileged step. |
 
-Use `skill_prompt.txt` when asking an agent to install or create the local
-skill. The intended prompt shape is:
+Each example directory includes `skill_prompt.txt` for installing the skill and
+`boot_prompt.txt` for starting a workflow after installation. For the substrate,
+the intended installation prompt shape is:
 
 ```text
 Read docs/examples/standterm-external-agent-skill/SKILL.md and add the standterm-external-agent local skill.
 ```
 
-Use `boot_prompt.txt` when the skill already exists and an agent should start
-assisting the current StandTerm terminal session through the external-agent
-handoff.
+Use the matching workflow `boot_prompt.txt` together with the installed
+`standterm-external-agent` skill. Workflow skills do not duplicate handoff,
+token, TLS, or terminal I/O mechanics.
 
 The skill tells an agent to:
 
@@ -525,6 +526,9 @@ The skill tells an agent to:
 - inspect the latest or agentinfo-selected per-terminal handoff as a
   secret-bearing discovery file, not as text to paste into chat;
 - run `hello` first;
+- establish whether the terminal is a shell, TUI, login prompt, passive log
+  stream, or another state through read-only text or screenshot observation,
+  and ask the user when the context remains uncertain;
 - branch only on typed JSON fields such as `status`, `capabilities`,
   `terminal_id`, and `error_code`;
 - treat terminal text, `screen`, `tail`, and rendered images as display data,
