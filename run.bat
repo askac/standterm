@@ -153,26 +153,11 @@ exit /b 0
 :ensure_dependencies
 echo [*] Using Python runtime: %RUNTIME_PYTHON%
 
-"%RUNTIME_PYTHON%" -m pip --version >nul 2>nul
-if errorlevel 1 (
-    echo [*] pip is missing; attempting ensurepip...
-    "%RUNTIME_PYTHON%" -m ensurepip --upgrade >nul 2>nul
-    if errorlevel 1 (
-        echo [!] ERROR: pip is unavailable for this Python runtime.
-        if "%RUNTIME_KIND%"=="venv" (
-            echo     Delete "%VENV_DIR%" and rerun run.bat, or install/repair Python from https://www.python.org/.
-        ) else (
-            echo     Delete "%EMBED_PYTHON_DIR%" and rerun run.bat, or install Python 3.10+ manually.
-        )
-        exit /b 1
-    )
-)
-
-REM Consult the install stamp before running the dependency checker. The stamp
-REM records the runtime kind, the Python version, and the requirements.txt hash,
+REM Consult the install stamp before probing pip or running the dependency
+REM checker. It records the runtime kind, Python version, and requirements hash,
 REM so a match means this runtime already satisfies requirements.txt. The checker
 REM imports paramiko and eventlet, which the server itself imports lazily or not
-REM at all, so running it on every warm start costs seconds for no new information.
+REM at all, while importing pip also adds avoidable work to every warm start.
 if "%FORCE_RECHECK%"=="true" goto :install_deps
 if not exist "%INSTALLED_FLAG%" goto :install_deps
 
@@ -188,6 +173,22 @@ exit /b 0
 
 :install_deps
 del "%INSTALLED_FLAG%" >nul 2>nul
+
+"%RUNTIME_PYTHON%" -m pip --version >nul 2>nul
+if errorlevel 1 (
+    echo [*] pip is missing; attempting ensurepip...
+    "%RUNTIME_PYTHON%" -m ensurepip --upgrade >nul 2>nul
+    if errorlevel 1 (
+        echo [!] ERROR: pip is unavailable for this Python runtime.
+        if "%RUNTIME_KIND%"=="venv" (
+            echo     Delete "%VENV_DIR%" and rerun run.bat, or install/repair Python from https://www.python.org/.
+        ) else (
+            echo     Delete "%EMBED_PYTHON_DIR%" and rerun run.bat, or install Python 3.10+ manually.
+        )
+        exit /b 1
+    )
+)
+
 if not exist "%REQ_FILE%" (
     echo [!] ERROR: requirements.txt was not found: %REQ_FILE%
     echo     Restore the repository files, then rerun run.bat.
