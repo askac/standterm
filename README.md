@@ -611,11 +611,14 @@ without a CDN:
 - Powerline Symbols: `static/fonts/PowerlineSymbols.otf` (optional prompt-symbol fallback)
 
 The browser bundles are copied from official npm release packages. StandTerm
-pixel-aligns the WebGL addon's custom Block Element rectangles so composite
-quadrant glyphs remain seamless at odd device-cell widths. A matching
-source checkout is kept at `/mnt/d/workspace/github/xterm.js`, tag `6.0.0` /
-commit `f447274f430fd22513f6adbf9862d19524471c04`, for auditing and future
-upgrades.
+pixel-aligns shared WebGL Block Element boundaries whenever the glyph's used
+octant boundaries remain distinct, while preserving fractional coverage on
+unsafe axes. This keeps composite quadrant glyphs seamless without collapsing
+thin strokes or expanding intentional gaps.
+The change is proposed upstream in xterm.js PR
+[#6138](https://github.com/xtermjs/xterm.js/pull/6138). A matching source checkout
+is kept at `/mnt/d/workspace/github/xterm.js`, tag `6.0.0` / commit
+`f447274f430fd22513f6adbf9862d19524471c04`, for auditing and future upgrades.
 
 xterm.js, these addons, and Powerline Symbols are MIT licensed. Keep
 `THIRD-PARTY-NOTICES.md`, the matching files under `static/licenses/`, and the

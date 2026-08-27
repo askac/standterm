@@ -1395,10 +1395,10 @@ def test_webgl_renderer_closes_block_glyph_row_gaps(browser, access_url):
                     };
                 }"""
             )
-            if metrics and metrics['cellWidth'] % 2 == 1:
+            if metrics and metrics['cellWidth'] == 7:
                 odd_metrics = metrics
                 break
-        check(odd_metrics is not None, 'could not create an odd-pixel WebGL cell width fixture')
+        check(odd_metrics is not None, 'could not create a 7-pixel WebGL cell width fixture')
 
         page.evaluate(
             """() => window.terminalTest.writeTerminalOutput(
@@ -1453,6 +1453,39 @@ def test_webgl_renderer_closes_block_glyph_row_gaps(browser, access_url):
             pixels['partialCoralPixels'] == 0,
             f"quadrant glyphs retained blended seams at {odd_metrics}: {pixels['partialCoralPixels']} pixels",
         )
+        page.evaluate(
+            """() => window.terminalTest.writeTerminalOutput(
+                '\\x1b[2J\\x1b[H\\x1b[38;2;215;135;135m'
+                + String.fromCodePoint(0x1FB73).repeat(8)
+                + '\\x1b[0m'
+            )"""
+        )
+        page.wait_for_timeout(200)
+        narrow_stripe_pixels = page.evaluate(
+            """() => {
+                const canvases = Array.from(document.querySelectorAll(
+                    '.terminal-pane.active .xterm-screen canvas'
+                ));
+                const canvas = canvases[canvases.length - 1];
+                if (!canvas) return 0;
+                const gl = canvas.getContext('webgl2');
+                if (!gl) return 0;
+                const rgba = new Uint8Array(canvas.width * canvas.height * 4);
+                gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+                let count = 0;
+                for (let offset = 0; offset < rgba.length; offset += 4) {
+                    const red = rgba[offset];
+                    const green = rgba[offset + 1];
+                    const blue = rgba[offset + 2];
+                    if (red > 40 && green > 20 && blue > 20
+                        && red > green && Math.abs(green - blue) <= 2) {
+                        count += 1;
+                    }
+                }
+                return count;
+            }"""
+        )
+        check(narrow_stripe_pixels > 0, 'narrow one-eighth glyph collapsed at 7 pixels')
     finally:
         close_context(context)
 

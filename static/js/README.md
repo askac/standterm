@@ -18,10 +18,13 @@ Source checkout:
 - commit: `f447274f430fd22513f6adbf9862d19524471c04`
 
 StandTerm carries one downstream change in `xterm-addon-webgl.js`: custom
-Block Element rectangles snap their outer edges to integer device pixels. This
-keeps composite quadrant glyphs seamless when a font size produces an odd
-device-cell width; all other addon behavior remains from the official 0.19.0
-bundle.
+Block Elements snap shared absolute octant boundaries to integer device pixels
+when the glyph's used boundaries remain distinct, while unsafe axes retain
+fractional coverage. This keeps composite quadrant glyphs seamless without
+collapsing thin strokes or expanding intentional gaps. The change is proposed
+upstream in xterm.js PR
+[#6138](https://github.com/xtermjs/xterm.js/pull/6138); all other addon behavior
+remains from the official 0.19.0 bundle.
 
 The JavaScript bundles are copied from the npm package `lib/` output. The
 matching stylesheet is copied to `../css/xterm.css` from `@xterm/xterm`.
