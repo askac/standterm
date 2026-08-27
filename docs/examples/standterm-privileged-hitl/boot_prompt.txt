@@ -1,0 +1,1 @@
+Use the installed `standterm-external-agent` and `standterm-privileged-hitl` skills for the current StandTerm session. Stop for credentials or human-input leases, and have the operator enter secrets only in the browser terminal.

@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PYTHON = ROOT / 'tools' / '.venv_wsl' / 'bin' / 'python'
+PYTHON = Path(sys.executable)
 PLAYWRIGHT_BROWSERS_DIR = ROOT / 'tools' / '.ms-playwright'
 TERMINAL_ID = 'main'
 SETUP_HINT = (
@@ -69,6 +69,7 @@ def start_server():
         'STANDTERM_HOST': '127.0.0.1',
         'STANDTERM_PORT': str(port),
         'STANDTERM_DISABLE_AUTO_HTTPS': '1',
+        'STANDTERM_DISABLE_AGENTINFO_CURRENT': '1',
         'STANDTERM_ASYNC_MODE': 'threading',
         'STANDTERM_ACCESS_UI': 'off',
         'STANDTERM_OPERATOR_OBSERVATION_DIR': tempfile.mkdtemp(prefix='standterm-observation-smoke-'),
@@ -1395,10 +1396,10 @@ def test_webgl_renderer_closes_block_glyph_row_gaps(browser, access_url):
                     };
                 }"""
             )
-            if metrics and metrics['cellWidth'] % 2 == 1:
+            if metrics and metrics['cellWidth'] == 7:
                 odd_metrics = metrics
                 break
-        check(odd_metrics is not None, 'could not create an odd-pixel WebGL cell width fixture')
+        check(odd_metrics is not None, 'could not create a 7-pixel WebGL cell width fixture')
 
         page.evaluate(
             """() => window.terminalTest.writeTerminalOutput(
@@ -1453,6 +1454,39 @@ def test_webgl_renderer_closes_block_glyph_row_gaps(browser, access_url):
             pixels['partialCoralPixels'] == 0,
             f"quadrant glyphs retained blended seams at {odd_metrics}: {pixels['partialCoralPixels']} pixels",
         )
+        page.evaluate(
+            """() => window.terminalTest.writeTerminalOutput(
+                '\\x1b[2J\\x1b[H\\x1b[38;2;215;135;135m'
+                + String.fromCodePoint(0x1FB73).repeat(8)
+                + '\\x1b[0m'
+            )"""
+        )
+        page.wait_for_timeout(200)
+        narrow_stripe_pixels = page.evaluate(
+            """() => {
+                const canvases = Array.from(document.querySelectorAll(
+                    '.terminal-pane.active .xterm-screen canvas'
+                ));
+                const canvas = canvases[canvases.length - 1];
+                if (!canvas) return 0;
+                const gl = canvas.getContext('webgl2');
+                if (!gl) return 0;
+                const rgba = new Uint8Array(canvas.width * canvas.height * 4);
+                gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+                let count = 0;
+                for (let offset = 0; offset < rgba.length; offset += 4) {
+                    const red = rgba[offset];
+                    const green = rgba[offset + 1];
+                    const blue = rgba[offset + 2];
+                    if (red > 40 && green > 20 && blue > 20
+                        && red > green && Math.abs(green - blue) <= 2) {
+                        count += 1;
+                    }
+                }
+                return count;
+            }"""
+        )
+        check(narrow_stripe_pixels > 0, 'narrow one-eighth glyph collapsed at 7 pixels')
     finally:
         close_context(context)
 
@@ -1527,6 +1561,257 @@ def test_cursor_type_setting_updates_existing_and_new_terminals(browser, access_
         new_tab = page.evaluate("() => window.terminalTest.getActiveTerminalOptions()")
         check(new_tab['cursorStyle'] == 'underline', 'new terminal did not use saved cursor type')
         check(new_tab['mirrorCursorStyle'] == 'underline', 'new mirror terminal did not use saved cursor type')
+        tabbed_padding_top = page.evaluate(
+            """() => parseFloat(getComputedStyle(
+                document.querySelector('.terminal-pane.active .xterm')
+            ).paddingTop)"""
+        )
+        check(tabbed_padding_top == 2, 'tabbed terminal did not keep compact top padding')
+    finally:
+        close_context(context)
+
+
+def test_webgl_bar_cursor_is_visible_at_first_column(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        options = page.evaluate("() => window.terminalTest.getActiveTerminalOptions()")
+        check(options['renderer'] == 'webgl', 'terminal did not activate the WebGL renderer')
+
+        page.click('#quick-settings')
+        page.wait_for_selector('#settings-modal.open', timeout=5000)
+        page.click('.settings-nav-item[data-tab="appearance"]')
+        page.select_option('#pref-cursorStyle', 'bar')
+        page.click('#settings-save')
+        page.wait_for_function(
+            "() => window.terminalTest.getActiveTerminalOptions()?.cursorStyle === 'bar'",
+            timeout=5000,
+        )
+        page.evaluate(
+            "() => document.querySelector('.terminal-pane.active .xterm-helper-textarea')?.focus()"
+        )
+        page.wait_for_function("() => window.terminalTest.activeTerminalHasFocus()", timeout=5000)
+
+        edge_spacing = page.evaluate(
+            """() => {
+                const pane = document.querySelector('.terminal-pane.active');
+                const terminal = pane?.querySelector('.xterm');
+                const screen = terminal?.querySelector('.xterm-screen');
+                if (!pane || !terminal || !screen) return null;
+                const paneRect = pane.getBoundingClientRect();
+                const screenRect = screen.getBoundingClientRect();
+                const style = getComputedStyle(terminal);
+                const viewport = terminal.querySelector('.xterm-viewport');
+                const scrollbar = getComputedStyle(viewport, '::-webkit-scrollbar');
+                const scrollbarTrack = getComputedStyle(viewport, '::-webkit-scrollbar-track');
+                const scrollbarThumb = getComputedStyle(viewport, '::-webkit-scrollbar-thumb');
+                return {
+                    left: screenRect.left - paneRect.left,
+                    top: screenRect.top - paneRect.top,
+                    paddingLeft: parseFloat(style.paddingLeft),
+                    paddingTop: parseFloat(style.paddingTop),
+                    scrollbarWidth: parseFloat(scrollbar.width),
+                    scrollbarTrackBackground: scrollbarTrack.backgroundColor,
+                    scrollbarThumbBackground: scrollbarThumb.backgroundColor
+                };
+            }"""
+        )
+        check(edge_spacing is not None, 'terminal edge spacing could not be measured')
+        check(edge_spacing['paddingLeft'] == 2, f'terminal left padding changed: {edge_spacing}')
+        check(edge_spacing['paddingTop'] == 2, f'terminal top padding changed: {edge_spacing}')
+        check(edge_spacing['left'] >= 2, f'terminal screen still touches the left edge: {edge_spacing}')
+        check(edge_spacing['top'] >= 2, f'terminal screen still touches the top edge: {edge_spacing}')
+        check(edge_spacing['scrollbarWidth'] == 14, f'terminal scrollbar width changed: {edge_spacing}')
+        check(
+            edge_spacing['scrollbarTrackBackground'] == 'rgba(0, 0, 0, 0)',
+            f'terminal scrollbar track is not transparent: {edge_spacing}',
+        )
+        check(
+            edge_spacing['scrollbarThumbBackground'] == 'rgb(68, 68, 68)',
+            f'terminal scrollbar thumb color changed: {edge_spacing}',
+        )
+
+        def count_cursor_pixels(cursor_column):
+            cursor_move = '' if cursor_column == 0 else f'\x1b[{cursor_column}C'
+            page.evaluate(
+                "payload => window.terminalTest.writeTerminalOutput(payload)",
+                f'\x1b[6 q\x1b[2J\x1b[H\x1b[?25h{cursor_move}',
+            )
+            page.wait_for_timeout(100)
+            return page.evaluate(
+                """column => {
+                    const canvases = Array.from(document.querySelectorAll(
+                        '.terminal-pane.active .xterm-screen canvas'
+                    ));
+                    const canvas = canvases[canvases.length - 1];
+                    const cells = window.terminalTest.getActiveTerminalBufferCellsForTest(0);
+                    if (!canvas || !cells || !cells.length) return { error: 'missing_canvas' };
+                    const gl = canvas.getContext('webgl2');
+                    if (!gl) return { error: 'missing_webgl_context' };
+                    const rgba = new Uint8Array(canvas.width * canvas.height * 4);
+                    gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+                    const cellWidth = canvas.width / cells.length;
+                    const startX = Math.floor(column * cellWidth);
+                    const endX = Math.min(canvas.width, Math.ceil(startX + 4));
+                    let count = 0;
+                    const brightColumns = new Set();
+                    for (let y = 0; y < canvas.height; y += 1) {
+                        for (let x = startX; x < endX; x += 1) {
+                            const offset = (y * canvas.width + x) * 4;
+                            if (rgba[offset] > 200 && rgba[offset + 1] > 200
+                                && rgba[offset + 2] > 200 && rgba[offset + 3] > 0) {
+                                count += 1;
+                                brightColumns.add(x);
+                            }
+                        }
+                    }
+                    return {
+                        count,
+                        brightColumnCount: brightColumns.size,
+                        cellWidth,
+                        canvasWidth: canvas.width,
+                        canvasHeight: canvas.height
+                    };
+                }""",
+                cursor_column,
+            )
+
+        first_column = count_cursor_pixels(0)
+        second_column = count_cursor_pixels(1)
+        check(not first_column.get('error'), f"could not inspect first-column cursor: {first_column}")
+        check(not second_column.get('error'), f"could not inspect second-column cursor: {second_column}")
+        check(second_column['count'] > 0, f"bar cursor fixture was not visible at column 1: {second_column}")
+        check(first_column['count'] > 0, f"bar cursor was invisible at column 0: {first_column}")
+    finally:
+        close_context(context)
+
+
+def test_osc_title_updates_fixed_status_column(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        initial_tab_title = page.evaluate(
+            """() => window.terminalTest.getTerminalTabsState().tabs
+                .find(tab => tab.active)?.title"""
+        )
+        initial_status = page.evaluate(
+            """() => ({
+                itemHidden: document.getElementById('terminal-title-item').hidden,
+                separatorHidden: document.getElementById('terminal-title-separator').hidden
+            })"""
+        )
+        check(initial_status['itemHidden'] is True, 'empty OSC title column remained visible')
+        check(initial_status['separatorHidden'] is True, 'empty OSC title separator remained visible')
+
+        page.evaluate(
+            "payload => window.terminalTest.writeTerminalOutput(payload)",
+            '\x1b]2;Codex - standterm\x07',
+        )
+        page.wait_for_function(
+            "() => document.getElementById('terminal-title').innerText === 'Codex - standterm'",
+            timeout=5000,
+        )
+        status_layout = page.evaluate(
+            """() => {
+                const item = document.getElementById('terminal-title-item');
+                const style = getComputedStyle(item);
+                const size = document.getElementById('terminal-size').closest('.sb-item');
+                return {
+                    width: style.width,
+                    flexBasis: style.flexBasis,
+                    beforeSize: item.nextElementSibling?.nextElementSibling === size
+                };
+            }"""
+        )
+        check(status_layout['width'] == '220px', f"OSC title column width changed: {status_layout}")
+        check(status_layout['flexBasis'] == '220px', f"OSC title column is not fixed: {status_layout}")
+        check(status_layout['beforeSize'] is True, 'OSC title column is not immediately before size')
+
+        title_state = page.evaluate(
+            """() => ({
+                text: document.getElementById('terminal-title').innerText,
+                tooltip: document.getElementById('terminal-title-item').title,
+                itemHidden: document.getElementById('terminal-title-item').hidden,
+                separatorHidden: document.getElementById('terminal-title-separator').hidden,
+                tabTitle: window.terminalTest.getTerminalTabsState().tabs.find(tab => tab.active)?.title
+            })"""
+        )
+        check(title_state['tooltip'] == 'Codex - standterm', 'OSC 2 title tooltip did not preserve the full title')
+        check(title_state['itemHidden'] is False, 'non-empty OSC title column remained hidden')
+        check(title_state['separatorHidden'] is False, 'non-empty OSC title separator remained hidden')
+        check(title_state['tabTitle'] == initial_tab_title, 'OSC 2 unexpectedly changed the StandTerm tab label')
+
+        page.click('#quick-settings')
+        page.wait_for_selector('#settings-modal.open', timeout=5000)
+        page.click('.settings-nav-item[data-tab="appearance"]')
+        check(
+            page.locator('#pref-showTerminalTitleInStatusBar').is_checked() is True,
+            'OSC title status preference did not default on',
+        )
+        page.uncheck('#pref-showTerminalTitleInStatusBar')
+        page.click('#settings-save')
+        page.wait_for_function(
+            """() => document.getElementById('terminal-title-item').hidden
+                && document.getElementById('terminal-title-separator').hidden""",
+            timeout=5000,
+        )
+        stored_preference = page.evaluate(
+            "() => JSON.parse(localStorage.getItem('terminal.pref.v1')).showTerminalTitleInStatusBar"
+        )
+        check(stored_preference is False, 'OSC title status preference was not persisted off')
+
+        page.click('#quick-settings')
+        page.wait_for_selector('#settings-modal.open', timeout=5000)
+        page.click('.settings-nav-item[data-tab="appearance"]')
+        page.check('#pref-showTerminalTitleInStatusBar')
+        page.click('#settings-save')
+        page.wait_for_function(
+            """() => !document.getElementById('terminal-title-item').hidden
+                && document.getElementById('terminal-title').innerText === 'Codex - standterm'""",
+            timeout=5000,
+        )
+
+        long_title = 'This is a very very long terminal title that must be truncated in the fixed status column'
+        page.evaluate(
+            "payload => window.terminalTest.writeTerminalOutput(payload)",
+            f'\x1b]2;{long_title}\x07',
+        )
+        page.wait_for_function(
+            "expected => document.getElementById('terminal-title').innerText === expected",
+            arg=long_title,
+            timeout=5000,
+        )
+        overflow_state = page.evaluate(
+            """() => {
+                const item = document.getElementById('terminal-title-item');
+                const style = getComputedStyle(item);
+                return {
+                    overflowed: item.scrollWidth > item.clientWidth,
+                    textOverflow: style.textOverflow,
+                    tooltip: item.title
+                };
+            }"""
+        )
+        check(overflow_state['overflowed'] is True, 'long OSC title did not overflow the fixed column')
+        check(overflow_state['textOverflow'] == 'ellipsis', 'long OSC title did not use ellipsis')
+        check(overflow_state['tooltip'] == long_title, 'long OSC title tooltip was truncated')
+
+        page.evaluate(
+            "payload => window.terminalTest.writeTerminalOutput(payload)",
+            '\x1b]0;Vim workspace\x1b\\',
+        )
+        page.wait_for_function(
+            "() => document.getElementById('terminal-title').innerText === 'Vim workspace'",
+            timeout=5000,
+        )
+        page.evaluate(
+            "payload => window.terminalTest.writeTerminalOutput(payload)",
+            '\x1b]2;\x07',
+        )
+        page.wait_for_function(
+            """() => document.getElementById('terminal-title').innerText === ''
+                && document.getElementById('terminal-title-item').hidden
+                && document.getElementById('terminal-title-separator').hidden""",
+            timeout=5000,
+        )
     finally:
         close_context(context)
 
@@ -2580,6 +2865,8 @@ def main():
         test_webgl_renderer_closes_block_glyph_row_gaps,
         test_unicode_provider_keeps_emoji_text_in_separate_cells,
         test_cursor_type_setting_updates_existing_and_new_terminals,
+        test_webgl_bar_cursor_is_visible_at_first_column,
+        test_osc_title_updates_fixed_status_column,
         test_settings_server_tab_loads_readonly_snapshot,
         test_connection_diagnostics_are_session_scoped_and_redacted,
         test_settings_access_recovery_fetches_access_url_on_demand,

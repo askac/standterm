@@ -1,0 +1,1 @@
+Read `docs/examples/standterm-privileged-hitl/SKILL.md` and add the `standterm-privileged-hitl` local skill. It pairs with `standterm-external-agent`; keep terminal I/O mechanics in that substrate skill.
