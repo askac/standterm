@@ -20,7 +20,7 @@ import urllib.parse
 import atexit
 from collections import deque
 from pathlib import Path
-from flask import Flask, render_template, request, abort, make_response, redirect, send_file, jsonify
+from flask import Flask, Response, render_template, request, abort, make_response, redirect, send_file, jsonify, stream_with_context
 from flask_socketio import SocketIO, ConnectionRefusedError
 from external_agent_dispatch import ExternalAgentCommandDispatcher
 from external_agent_handlers import (
@@ -62,6 +62,7 @@ from terminal_backends import (
     BackendStartFieldSchema,
     LocalShellBackendPlugin,
     LocalShellBridge,
+    SFTPTransferError,
     SSHBackendPlugin,
     SSHBridge,
     TerminalBackendPlugin,
@@ -146,6 +147,21 @@ def parse_optional_seconds_env(name, default=None):
         return default
     return seconds
 
+def parse_positive_int_env(name, default):
+    raw_value = get_prefixed_env(name).strip()
+    env_name = get_prefixed_env_name(name)
+    if not raw_value:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError:
+        log_message(f"[!] Ignoring invalid {env_name}={raw_value!r}; expected a positive integer.", file=sys.stderr)
+        return default
+    if value <= 0:
+        log_message(f"[!] Ignoring invalid {env_name}={raw_value!r}; expected a positive integer.", file=sys.stderr)
+        return default
+    return value
+
 SSH_TERM = 'xterm-256color'
 MAX_SSH_INPUT_BYTES = 65536
 MAX_PASSWORD_BYTES = 4096
@@ -159,6 +175,17 @@ LOCALHOST_KEY_SETUP_TTL_SECONDS = 120
 SSH_BROWSER_SIGN_TIMEOUT_SECONDS = 15
 SSH_BROWSER_SIGN_REQUEST_EVENT = 'ssh_browser_sign_request'
 SSH_BROWSER_SIGN_RESPONSE_EVENT = 'ssh_browser_sign_response'
+SFTP_BROWSE_REQUEST_EVENT = 'sftp_browse_request'
+SFTP_BROWSE_RESULT_EVENT = 'sftp_browse_result'
+SFTP_UPLOAD_TICKET_REQUEST_EVENT = 'sftp_upload_ticket_request'
+SFTP_UPLOAD_TICKET_RESULT_EVENT = 'sftp_upload_ticket_result'
+SFTP_DOWNLOAD_TICKET_REQUEST_EVENT = 'sftp_download_ticket_request'
+SFTP_DOWNLOAD_TICKET_RESULT_EVENT = 'sftp_download_ticket_result'
+SFTP_FILE_ACTION_REQUEST_EVENT = 'sftp_file_action_request'
+SFTP_FILE_ACTION_RESULT_EVENT = 'sftp_file_action_result'
+SFTP_UPLOAD_TICKET_TTL_SECONDS = 60
+SFTP_DOWNLOAD_TICKET_TTL_SECONDS = 60
+SFTP_MAX_UPLOAD_BYTES = parse_positive_int_env('SFTP_MAX_UPLOAD_BYTES', 512 * 1024 * 1024)
 MIN_TERMINAL_COLS = 2
 MAX_TERMINAL_COLS = 500
 MIN_TERMINAL_ROWS = 2
@@ -2001,6 +2028,127 @@ class BrowserSSHSignRequestStore:
 
 
 browser_ssh_sign_request_store = BrowserSSHSignRequestStore()
+
+
+class SFTPUploadTicketStore:
+    def __init__(self, time_func=None):
+        self._records = {}
+        self._lock = threading.Lock()
+        self._time_func = time_func or time.time
+
+    def clear(self):
+        with self._lock:
+            self._records.clear()
+
+    def _discard_expired_locked(self):
+        now = self._time_func()
+        for token, record in list(self._records.items()):
+            if now > record['expires_at']:
+                self._records.pop(token, None)
+
+    def create(self, session_token, terminal_id, sid, bridge, upload, expected_size):
+        token = secrets.token_urlsafe(32)
+        upload_id = 'sftpu_' + secrets.token_urlsafe(12)
+        record = {
+            'session_token': session_token,
+            'terminal_id': terminal_id,
+            'sid': sid,
+            'bridge': bridge,
+            'upload': dict(upload),
+            'expected_size': expected_size,
+            'upload_id': upload_id,
+            'expires_at': self._time_func() + SFTP_UPLOAD_TICKET_TTL_SECONDS,
+        }
+        with self._lock:
+            self._discard_expired_locked()
+            self._records[token] = record
+        return token, dict(record)
+
+    def consume(self, token, session_token):
+        if not isinstance(token, str) or not isinstance(session_token, str):
+            return None, 'sftp_upload_ticket_invalid'
+        with self._lock:
+            record = self._records.get(token)
+            if not record or not secrets.compare_digest(record['session_token'], session_token):
+                return None, 'sftp_upload_ticket_invalid'
+            self._records.pop(token, None)
+        if self._time_func() > record['expires_at']:
+            return None, 'sftp_upload_ticket_expired'
+        return record, None
+
+    def discard(self, session_token, terminal_id=None, sid=None):
+        with self._lock:
+            for token, record in list(self._records.items()):
+                if record['session_token'] != session_token:
+                    continue
+                if terminal_id is not None and record['terminal_id'] != terminal_id:
+                    continue
+                if sid is not None and record['sid'] != sid:
+                    continue
+                self._records.pop(token, None)
+
+
+sftp_upload_ticket_store = SFTPUploadTicketStore()
+
+
+class SFTPDownloadTicketStore:
+    def __init__(self, time_func=None):
+        self._records = {}
+        self._lock = threading.Lock()
+        self._time_func = time_func or time.time
+
+    def clear(self):
+        with self._lock:
+            self._records.clear()
+
+    def _discard_expired_locked(self):
+        now = self._time_func()
+        for token, record in list(self._records.items()):
+            if now > record['expires_at']:
+                self._records.pop(token, None)
+
+    def create(self, session_token, terminal_id, sid, bridge, file_snapshot):
+        token = secrets.token_urlsafe(32)
+        download_id = 'sftpd_' + secrets.token_urlsafe(6)
+        record = {
+            'session_token': session_token,
+            'terminal_id': terminal_id,
+            'sid': sid,
+            'bridge': bridge,
+            'file': dict(file_snapshot),
+            'download_id': download_id,
+            'expires_at': self._time_func() + SFTP_DOWNLOAD_TICKET_TTL_SECONDS,
+        }
+        with self._lock:
+            self._discard_expired_locked()
+            self._records[token] = record
+        return token, dict(record)
+
+    def consume(self, token, session_token):
+        if not isinstance(token, str) or not isinstance(session_token, str):
+            return None, 'sftp_download_ticket_invalid'
+        with self._lock:
+            record = self._records.get(token)
+            if not record or not secrets.compare_digest(record['session_token'], session_token):
+                return None, 'sftp_download_ticket_invalid'
+            self._records.pop(token, None)
+        if self._time_func() > record['expires_at']:
+            return None, 'sftp_download_ticket_expired'
+        return record, None
+
+    def discard(self, session_token, terminal_id=None, sid=None):
+        with self._lock:
+            for token, record in list(self._records.items()):
+                if record['session_token'] != session_token:
+                    continue
+                if terminal_id is not None and record['terminal_id'] != terminal_id:
+                    continue
+                if sid is not None and record['sid'] != sid:
+                    continue
+                self._records.pop(token, None)
+
+
+sftp_download_ticket_store = SFTPDownloadTicketStore()
 
 
 def request_browser_ssh_signature(bridge, signer_sid, browser_key, challenge, algorithm):
@@ -4965,6 +5113,8 @@ def unregister_terminal_bridge(session_token, terminal_id, bridge):
     agent_viewport_snapshot_store.discard(session_token, terminal_id=terminal_id)
     agent_viewport_render_request_store.discard(session_token, terminal_id=terminal_id)
     browser_ssh_sign_request_store.discard(session_token, terminal_id=terminal_id)
+    sftp_upload_ticket_store.discard(session_token, terminal_id=terminal_id)
+    sftp_download_ticket_store.discard(session_token, terminal_id=terminal_id)
     close_bridge(bridge)
 
 def close_terminal_bridge(session_token, terminal_id):
@@ -4978,6 +5128,8 @@ def close_terminal_bridge(session_token, terminal_id):
     agent_viewport_snapshot_store.discard(session_token, terminal_id=terminal_id)
     agent_viewport_render_request_store.discard(session_token, terminal_id=terminal_id)
     browser_ssh_sign_request_store.discard(session_token, terminal_id=terminal_id)
+    sftp_upload_ticket_store.discard(session_token, terminal_id=terminal_id)
+    sftp_download_ticket_store.discard(session_token, terminal_id=terminal_id)
     close_bridge(pop_bridge(session_token, terminal_id))
 
 def close_all_terminal_bridges(session_token):
@@ -4992,6 +5144,8 @@ def close_all_terminal_bridges(session_token):
     agent_viewport_snapshot_store.discard(session_token)
     agent_viewport_render_request_store.discard(session_token)
     browser_ssh_sign_request_store.discard(session_token)
+    sftp_upload_ticket_store.discard(session_token)
+    sftp_download_ticket_store.discard(session_token)
     terminals = bridges.pop(session_token, {})
     for bridge in list(terminals.values()):
         close_bridge(bridge)
@@ -6255,6 +6409,164 @@ def download_ca():
         mimetype='application/x-x509-ca-cert',
         as_attachment=True,
         download_name='standterm-local-ca.crt',
+    )
+    return add_common_headers(response)
+
+
+@app.route('/sftp/upload/<ticket>', methods=['POST'])
+def upload_sftp_file(ticket):
+    session_token = get_request_session_token()
+    if not session_token:
+        return add_common_headers(jsonify({
+            'status': 'failed',
+            'error_code': 'session_required',
+            'message': 'Session expired. Enter the access token again.',
+        })), 403
+    record, error_code = sftp_upload_ticket_store.consume(ticket, session_token)
+    if not record:
+        status_code = 410 if error_code == 'sftp_upload_ticket_expired' else 404
+        return add_common_headers(jsonify({
+            'status': 'failed',
+            'error_code': error_code,
+            'message': 'The SFTP upload request is invalid or expired.',
+        })), status_code
+    bridge = record['bridge']
+    if (
+        get_bridge(session_token, record['terminal_id']) is not bridge
+        or socket_session_tokens.get(record['sid']) != session_token
+        or not is_terminal_bridge_allowed_for_sid(bridge, record['sid'])
+    ):
+        return add_common_headers(jsonify({
+            'status': 'failed',
+            'error_code': 'sftp_upload_not_authorized',
+            'message': 'The SSH session is no longer available for this upload.',
+        })), 403
+    content_length = request.content_length
+    if content_length is None:
+        return add_common_headers(jsonify({
+            'status': 'failed',
+            'error_code': 'sftp_upload_length_required',
+            'message': 'Upload size is required.',
+        })), 411
+    if content_length != record['expected_size']:
+        return add_common_headers(jsonify({
+            'status': 'failed',
+            'error_code': 'sftp_upload_size_changed',
+            'message': 'The selected file size changed before upload started.',
+        })), 400
+    if content_length > SFTP_MAX_UPLOAD_BYTES:
+        return add_common_headers(jsonify({
+            'status': 'failed',
+            'error_code': 'sftp_upload_too_large',
+            'message': 'The selected file exceeds the configured upload limit.',
+        })), 413
+    try:
+        result = bridge.upload_sftp_stream(
+            request.stream,
+            record['upload'],
+            record['expected_size'],
+        )
+    except SFTPTransferError as exc:
+        status_code = 409 if exc.error_code in {
+            'sftp_atomic_replace_unavailable',
+            'sftp_destination_changed',
+            'sftp_destination_not_file',
+            'sftp_destination_symlink',
+        } else 502
+        return add_common_headers(jsonify({
+            'status': 'failed',
+            'error_code': exc.error_code,
+            'message': str(exc),
+        })), status_code
+    return add_common_headers(jsonify({
+        'status': 'completed',
+        'upload_id': record['upload_id'],
+        **result,
+    }))
+
+
+@app.route('/sftp/download/<ticket>', methods=['GET'])
+def download_sftp_file(ticket):
+    session_token = get_request_session_token()
+    if not session_token:
+        log_message('[sftp] Download rejected: session_required')
+        return add_common_headers(jsonify({
+            'status': 'failed',
+            'error_code': 'session_required',
+            'message': 'Session expired. Enter the access token again.',
+        })), 403
+    record, error_code = sftp_download_ticket_store.consume(ticket, session_token)
+    if not record:
+        log_message(f'[sftp] Download rejected: {error_code}')
+        status_code = 410 if error_code == 'sftp_download_ticket_expired' else 404
+        return add_common_headers(jsonify({
+            'status': 'failed',
+            'error_code': error_code,
+            'message': 'The SFTP download request is invalid or expired.',
+        })), status_code
+    bridge = record['bridge']
+    if (
+        get_bridge(session_token, record['terminal_id']) is not bridge
+        or socket_session_tokens.get(record['sid']) != session_token
+        or not is_terminal_bridge_allowed_for_sid(bridge, record['sid'])
+    ):
+        log_message('[sftp] Download rejected: sftp_download_not_authorized')
+        return add_common_headers(jsonify({
+            'status': 'failed',
+            'error_code': 'sftp_download_not_authorized',
+            'message': 'The SSH session is no longer available for this download.',
+        })), 403
+    file_snapshot = record['file']
+    filename = file_snapshot['filename']
+    terminal_id = record['terminal_id']
+    download_id = record['download_id']
+    expected_size = file_snapshot['size']
+    log_message(
+        f'[sftp] Download accepted: download_id={download_id} method={request.method} '
+        f'terminal={terminal_id} expected_bytes={expected_size}'
+    )
+
+    def stream_download():
+        bytes_sent = 0
+        try:
+            for chunk in bridge.download_sftp_chunks(file_snapshot):
+                bytes_sent += len(chunk)
+                yield chunk
+        except GeneratorExit:
+            log_message(
+                f'[sftp] Download interrupted: download_id={download_id} terminal={terminal_id} '
+                f'bytes_sent={bytes_sent} expected_bytes={expected_size}'
+            )
+            raise
+        except SFTPTransferError as exc:
+            log_message(
+                f'[sftp] Download stream failed: download_id={download_id} terminal={terminal_id} '
+                f'error_code={exc.error_code} bytes_sent={bytes_sent} '
+                f'expected_bytes={expected_size}'
+            )
+            raise
+        except Exception as exc:
+            log_message(
+                f'[sftp] Download stream failed: download_id={download_id} terminal={terminal_id} '
+                f'error={type(exc).__name__} bytes_sent={bytes_sent} '
+                f'expected_bytes={expected_size}'
+            )
+            raise
+        else:
+            log_message(
+                f'[sftp] Download completed: download_id={download_id} terminal={terminal_id} '
+                f'bytes_sent={bytes_sent}'
+            )
+
+    fallback_filename = re.sub(r'[^A-Za-z0-9._ -]', '_', filename).strip() or 'download'
+    encoded_filename = urllib.parse.quote(filename, safe='')
+    response = Response(
+        stream_with_context(stream_download()),
+        mimetype='application/octet-stream',
+    )
+    response.headers['Content-Length'] = str(file_snapshot['size'])
+    response.headers['Content-Disposition'] = (
+        f'attachment; filename="{fallback_filename}"; filename*=UTF-8\'\'{encoded_filename}'
     )
     return add_common_headers(response)
 
@@ -7966,6 +8278,281 @@ def on_ssh_browser_sign_response(data):
         )
 
 
+def emit_sftp_result(event_name, sid, request_id, terminal_id, *, result=None, error=None):
+    payload = {
+        'request_id': request_id,
+        'terminal_id': terminal_id,
+    }
+    if error:
+        payload.update({
+            'status': 'failed',
+            'error_code': error.error_code if isinstance(error, SFTPTransferError) else 'sftp_failed',
+            'message': str(error),
+        })
+    elif result:
+        payload.update(result)
+    socketio.emit(event_name, payload, room=sid)
+
+
+@socketio.on(SFTP_BROWSE_REQUEST_EVENT)
+def on_sftp_browse_request(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    request_id = data.get('request_id') if isinstance(data, dict) else None
+    if not session_token or not terminal_id or not isinstance(request_id, str) or len(request_id) > 128:
+        return
+    bridge = get_allowed_bridge(session_token, terminal_id, request.sid, emit_error=True)
+    if not isinstance(bridge, SSHBridge):
+        emit_sftp_result(
+            SFTP_BROWSE_RESULT_EVENT,
+            request.sid,
+            request_id,
+            terminal_id,
+            error=SFTPTransferError('sftp_not_ssh', 'SFTP is only available for a connected SSH terminal.'),
+        )
+        return
+    path = data.get('path')
+    child = data.get('child')
+    parent = data.get('parent') is True
+    if path is not None and not isinstance(path, str):
+        return
+    if child is not None and not isinstance(child, str):
+        return
+    try:
+        result = bridge.browse_sftp(path, child=child, parent=parent)
+        result.update({
+            'status': 'ready',
+            'max_upload_bytes': SFTP_MAX_UPLOAD_BYTES,
+        })
+        emit_sftp_result(
+            SFTP_BROWSE_RESULT_EVENT,
+            request.sid,
+            request_id,
+            terminal_id,
+            result=result,
+        )
+    except SFTPTransferError as exc:
+        emit_sftp_result(
+            SFTP_BROWSE_RESULT_EVENT,
+            request.sid,
+            request_id,
+            terminal_id,
+            error=exc,
+        )
+
+
+@socketio.on(SFTP_UPLOAD_TICKET_REQUEST_EVENT)
+def on_sftp_upload_ticket_request(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    request_id = data.get('request_id') if isinstance(data, dict) else None
+    if not session_token or not terminal_id or not isinstance(request_id, str) or len(request_id) > 128:
+        return
+    bridge = get_allowed_bridge(session_token, terminal_id, request.sid, emit_error=True)
+    if not isinstance(bridge, SSHBridge):
+        emit_sftp_result(
+            SFTP_UPLOAD_TICKET_RESULT_EVENT,
+            request.sid,
+            request_id,
+            terminal_id,
+            error=SFTPTransferError('sftp_not_ssh', 'SFTP is only available for a connected SSH terminal.'),
+        )
+        return
+    directory = data.get('directory')
+    filename = data.get('filename')
+    conflict_mode = data.get('conflict_mode', 'ask')
+    size = data.get('size')
+    if not isinstance(directory, str) or not isinstance(filename, str) or isinstance(size, bool):
+        return
+    try:
+        size = int(size)
+    except (TypeError, ValueError):
+        return
+    if size < 0 or size > SFTP_MAX_UPLOAD_BYTES:
+        emit_sftp_result(
+            SFTP_UPLOAD_TICKET_RESULT_EVENT,
+            request.sid,
+            request_id,
+            terminal_id,
+            error=SFTPTransferError('sftp_upload_too_large', 'The selected file exceeds the configured upload limit.'),
+        )
+        return
+    try:
+        upload = bridge.prepare_sftp_upload(directory, filename, conflict_mode)
+        if upload['status'] == 'conflict':
+            emit_sftp_result(
+                SFTP_UPLOAD_TICKET_RESULT_EVENT,
+                request.sid,
+                request_id,
+                terminal_id,
+                result=upload,
+            )
+            return
+        ticket, record = sftp_upload_ticket_store.create(
+            session_token,
+            terminal_id,
+            request.sid,
+            bridge,
+            upload,
+            size,
+        )
+        emit_sftp_result(
+            SFTP_UPLOAD_TICKET_RESULT_EVENT,
+            request.sid,
+            request_id,
+            terminal_id,
+            result={
+                'status': 'ready',
+                'upload_id': record['upload_id'],
+                'upload_url': f'/sftp/upload/{ticket}',
+                'destination_path': upload['destination_path'],
+                'filename': upload['filename'],
+                'endpoint': upload['endpoint'],
+                'expires_in_seconds': SFTP_UPLOAD_TICKET_TTL_SECONDS,
+            },
+        )
+    except SFTPTransferError as exc:
+        emit_sftp_result(
+            SFTP_UPLOAD_TICKET_RESULT_EVENT,
+            request.sid,
+            request_id,
+            terminal_id,
+            error=exc,
+        )
+
+
+def parse_sftp_file_reference_id(data):
+    if not isinstance(data, dict) or not isinstance(data.get('file_id'), str) or len(data['file_id']) > 128:
+        raise SFTPTransferError('sftp_invalid_file_request', 'Remote file request is invalid.')
+    return data['file_id']
+
+
+@socketio.on(SFTP_DOWNLOAD_TICKET_REQUEST_EVENT)
+def on_sftp_download_ticket_request(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    request_id = data.get('request_id') if isinstance(data, dict) else None
+    if not session_token or not terminal_id or not isinstance(request_id, str) or len(request_id) > 128:
+        return
+    bridge = get_allowed_bridge(session_token, terminal_id, request.sid, emit_error=True)
+    if not isinstance(bridge, SSHBridge):
+        emit_sftp_result(
+            SFTP_DOWNLOAD_TICKET_RESULT_EVENT,
+            request.sid,
+            request_id,
+            terminal_id,
+            error=SFTPTransferError('sftp_not_ssh', 'SFTP is only available for a connected SSH terminal.'),
+        )
+        return
+    try:
+        file_snapshot = bridge.resolve_sftp_file_reference(parse_sftp_file_reference_id(data))
+        current_file = bridge.prepare_sftp_file(file_snapshot['directory'], file_snapshot['filename'])
+        if current_file['size'] != file_snapshot['size'] or current_file['mtime'] != file_snapshot['mtime']:
+            raise SFTPTransferError('sftp_file_changed', 'The remote file changed after the directory was listed.')
+        ticket, record = sftp_download_ticket_store.create(
+            session_token,
+            terminal_id,
+            request.sid,
+            bridge,
+            file_snapshot,
+        )
+        log_message(
+            f'[sftp] Download ticket ready: download_id={record["download_id"]} terminal={terminal_id} '
+            f'expected_bytes={file_snapshot["size"]}'
+        )
+        emit_sftp_result(
+            SFTP_DOWNLOAD_TICKET_RESULT_EVENT,
+            request.sid,
+            request_id,
+            terminal_id,
+            result={
+                'status': 'ready',
+                'download_url': f'/sftp/download/{ticket}',
+                'download_id': record['download_id'],
+                'path': file_snapshot['path'],
+                'filename': file_snapshot['filename'],
+                'size': file_snapshot['size'],
+                'expires_in_seconds': SFTP_DOWNLOAD_TICKET_TTL_SECONDS,
+                'endpoint': record['file']['endpoint'],
+            },
+        )
+    except SFTPTransferError as exc:
+        log_message(
+            f'[sftp] Download ticket failed: terminal={terminal_id} '
+            f'error_code={exc.error_code}'
+        )
+        emit_sftp_result(
+            SFTP_DOWNLOAD_TICKET_RESULT_EVENT,
+            request.sid,
+            request_id,
+            terminal_id,
+            error=exc,
+        )
+
+
+@socketio.on(SFTP_FILE_ACTION_REQUEST_EVENT)
+def on_sftp_file_action_request(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    request_id = data.get('request_id') if isinstance(data, dict) else None
+    if not session_token or not terminal_id or not isinstance(request_id, str) or len(request_id) > 128:
+        return
+    bridge = get_allowed_bridge(session_token, terminal_id, request.sid, emit_error=True)
+    if not isinstance(bridge, SSHBridge):
+        emit_sftp_result(
+            SFTP_FILE_ACTION_RESULT_EVENT,
+            request.sid,
+            request_id,
+            terminal_id,
+            error=SFTPTransferError('sftp_not_ssh', 'SFTP is only available for a connected SSH terminal.'),
+        )
+        return
+    action = data.get('action') if isinstance(data, dict) else None
+    if action not in {'rename', 'delete'}:
+        emit_sftp_result(
+            SFTP_FILE_ACTION_RESULT_EVENT,
+            request.sid,
+            request_id,
+            terminal_id,
+            error=SFTPTransferError('sftp_invalid_file_action', 'Remote file action is invalid.'),
+        )
+        return
+    try:
+        file_snapshot = bridge.resolve_sftp_file_reference(parse_sftp_file_reference_id(data))
+        if action == 'rename':
+            result = bridge.rename_sftp_file(
+                file_snapshot['directory'],
+                file_snapshot['filename'],
+                data.get('new_filename'),
+                file_snapshot['size'],
+                file_snapshot['mtime'],
+            )
+        else:
+            if data.get('delete_confirmation') != 'permanent_delete_confirmed':
+                raise SFTPTransferError('sftp_delete_confirmation_required', 'Permanent deletion was not confirmed.')
+            result = bridge.delete_sftp_file(
+                file_snapshot['directory'],
+                file_snapshot['filename'],
+                file_snapshot['size'],
+                file_snapshot['mtime'],
+            )
+        emit_sftp_result(
+            SFTP_FILE_ACTION_RESULT_EVENT,
+            request.sid,
+            request_id,
+            terminal_id,
+            result=result,
+        )
+    except SFTPTransferError as exc:
+        emit_sftp_result(
+            SFTP_FILE_ACTION_RESULT_EVENT,
+            request.sid,
+            request_id,
+            terminal_id,
+            error=exc,
+        )
+
+
 @socketio.on('start_ssh')
 def on_start_ssh(data):
     cleanup_expired_sessions()
@@ -8137,6 +8724,8 @@ def on_disconnect(reason=None):
     agent_viewer_ids.pop(request.sid, None)
     if session_token:
         browser_ssh_sign_request_store.discard(session_token, sid=request.sid)
+        sftp_upload_ticket_store.discard(session_token, sid=request.sid)
+        sftp_download_ticket_store.discard(session_token, sid=request.sid)
         with agent_lock:
             for state in [
                 state for state in agent_states.values()

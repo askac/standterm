@@ -522,8 +522,50 @@ def test_terminal_pip_hides_selected_tab_and_keeps_background_tab(browser, acces
         active_id = before_pip['tabs']['activeTerminalId']
         background_id = next(item['id'] for item in before_pip['tabs']['tabs'] if item['id'] != active_id)
 
-        moved = page.evaluate("terminalId => window.terminalTest.setTerminalPipModeForTest(terminalId, true)", active_id)
-        check(moved is True, 'test hook could not move terminal into PiP mode')
+        attach_agent(page)
+        page.evaluate(
+            "payload => window.terminalTest.writeTerminalOutput(payload)",
+            '\x1b]2;PiP workspace title\x07',
+        )
+        page.wait_for_function(
+            "() => document.getElementById('terminal-title').innerText === 'PiP workspace title'",
+            timeout=5000,
+        )
+        check(page.evaluate('() => !!window.documentPictureInPicture'), 'Document PiP is unavailable in the test browser')
+        page.evaluate("terminalId => window.terminalTest.showContextMenuForTest(terminalId)", active_id)
+        page.click('#pip-option')
+        page.wait_for_function('() => !!window.documentPictureInPicture.window', timeout=5000)
+
+        pip_status = page.evaluate(
+            """() => {
+                const pipDocument = documentPictureInPicture.window.document;
+                return {
+                    applicationTitle: pipDocument.querySelector('.pip-application-title')?.innerText,
+                    applicationTitleHidden: pipDocument.querySelector('.pip-application-title-item')?.hidden,
+                    mintText: pipDocument.querySelector('.pip-agent-mint:not(.pip-agent-mint-3x)')?.innerText,
+                    mintHidden: pipDocument.querySelector('.pip-agent-mint:not(.pip-agent-mint-3x)')?.hidden,
+                    mint3xText: pipDocument.querySelector('.pip-agent-mint-3x')?.innerText,
+                    mint3xHidden: pipDocument.querySelector('.pip-agent-mint-3x')?.hidden,
+                    agentPanelText: pipDocument.querySelector('.pip-agent-panel')?.innerText
+                };
+            }"""
+        )
+        check(pip_status['applicationTitle'] == 'PiP workspace title', 'Terminal PiP did not show the OSC title')
+        check(pip_status['applicationTitleHidden'] is False, 'Terminal PiP hid a non-empty OSC title')
+        check(pip_status['mintText'] == 'Mint' and pip_status['mintHidden'] is False, 'Terminal PiP did not show Mint')
+        check(pip_status['mint3xText'] == 'Mint+' and pip_status['mint3xHidden'] is False, 'Terminal PiP did not show Mint+')
+        check(pip_status['agentPanelText'] == 'Show Agent Panel', 'Terminal PiP Agent panel control was incorrect')
+
+        page.click('#quick-settings')
+        page.wait_for_selector('#settings-modal.open', timeout=5000)
+        page.click('.settings-nav-item[data-tab="appearance"]')
+        page.uncheck('#pref-showTerminalTitleInStatusBar')
+        page.click('#settings-save')
+        page.wait_for_function(
+            "() => documentPictureInPicture.window.document.querySelector('.pip-application-title-item').hidden",
+            timeout=5000,
+        )
+
         in_pip = page.evaluate(
             """() => ({
                 canPip: window.terminalTest.canMoveActiveTerminalToPip(),
@@ -537,15 +579,455 @@ def test_terminal_pip_hides_selected_tab_and_keeps_background_tab(browser, acces
         check(moved_tab['inPip'] is True and moved_tab['hidden'] is True, 'PiP tab did not disappear from tab list')
         check(background_tab['active'] is True and background_tab['hidden'] is False, 'remaining tab was not active and visible')
 
-        target_set = page.evaluate("terminalId => window.terminalTest.setAgentPanelTargetForTest(terminalId)", active_id)
-        check(target_set is True, 'test hook could not target Agent panel at PiP terminal')
-        agent_target = page.evaluate("() => window.terminalTest.getTerminalTabsState()")
-        check(agent_target['agentPanelTerminalId'] == active_id, 'Agent panel did not target PiP terminal')
+        page.evaluate("() => documentPictureInPicture.window.document.querySelector('.pip-agent-mint-3x').click()")
+        page.wait_for_function(
+            """terminalId => {
+                const token = window.terminalTest.getAgentStateForTest(terminalId)?.external_token;
+                return token && (token.status === 'active' || token.status === 'error');
+            }""",
+            arg=active_id,
+            timeout=5000,
+        )
+        token_state = page.evaluate(
+            """terminalId => ({
+                token: window.terminalTest.getAgentStateForTest(terminalId)?.external_token,
+                activeTerminalId: window.terminalTest.getTerminalTabsState().activeTerminalId
+            })""",
+            active_id,
+        )
+        check(token_state['token']['status'] == 'active', 'Terminal PiP Mint+ did not mint an active token')
+        check(token_state['token']['idleTimeoutMultiplier'] == 3, 'Terminal PiP Mint+ did not request the 3x lifetime')
+        check(token_state['activeTerminalId'] == background_id, 'Terminal PiP Mint+ changed the main active terminal')
 
-        page.evaluate("terminalId => window.terminalTest.setTerminalPipModeForTest(terminalId, false)", active_id)
+        page.evaluate("() => documentPictureInPicture.window.document.querySelector('.pip-agent-panel').click()")
+        page.wait_for_function(
+            """() => {
+                const pipDocument = documentPictureInPicture.window.document;
+                return !!pipDocument.querySelector('#agent-panel.visible')
+                    && pipDocument.querySelector('.pip-agent-mint').hidden
+                    && pipDocument.querySelector('.pip-agent-mint-3x').hidden;
+            }""",
+            timeout=5000,
+        )
+        page.evaluate("() => documentPictureInPicture.window.document.querySelector('#agent-panel-close-btn').click()")
+        page.wait_for_function(
+            """() => {
+                const pipDocument = documentPictureInPicture.window.document;
+                return !pipDocument.querySelector('.pip-agent-mint').hidden
+                    && !pipDocument.querySelector('.pip-agent-mint-3x').hidden;
+            }""",
+            timeout=5000,
+        )
+
+        page.evaluate('() => documentPictureInPicture.window.close()')
+        page.wait_for_function('() => !window.documentPictureInPicture.window', timeout=5000)
         restored = page.evaluate("() => window.terminalTest.getTerminalTabsState()")
         restored_tab = next(item for item in restored['tabs'] if item['id'] == active_id)
         check(restored_tab['inPip'] is False and restored_tab['hidden'] is False, 'restored PiP tab did not return to tab list')
+    finally:
+        close_context(context)
+
+
+def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        page.evaluate(
+            """() => window.terminalTest.applyTerminalListForTest({
+                terminals: [
+                    {
+                        terminal_id: 'main',
+                        connection_type: 'ssh',
+                        terminal_label: 'SSH',
+                        term: 'xterm-256color',
+                        connected: true
+                    },
+                    {
+                        terminal_id: 'term-2',
+                        connection_type: 'local_shell',
+                        terminal_label: 'bash',
+                        term: 'xterm-256color',
+                        connected: true
+                    }
+                ]
+            })"""
+        )
+        page.evaluate("() => window.terminalTest.switchTerminalForTest('main')")
+        available_status = page.evaluate(
+            """() => {
+                const button = document.getElementById('sftp-status-btn');
+                return {
+                    hidden: button.hidden,
+                    disabled: button.disabled,
+                    title: button.title,
+                    text: button.innerText
+                };
+            }"""
+        )
+        check(
+            available_status == {
+                'hidden': False,
+                'disabled': False,
+                'title': 'Open SFTP File Manager',
+                'text': '📁',
+            },
+            'connected SSH status bar did not expose the SFTP action',
+        )
+        page.click('#sftp-status-btn')
+        page.wait_for_function(
+            "() => documentPictureInPicture.window?.document.querySelector('.sftp-pip-title')?.textContent === 'SFTP File Manager'",
+            timeout=5000,
+        )
+        page.evaluate('() => documentPictureInPicture.window.close()')
+        page.wait_for_function('() => !window.documentPictureInPicture.window', timeout=5000)
+
+        page.evaluate("() => window.terminalTest.setSftpAvailabilityForTest('main', false)")
+        unavailable_status = page.evaluate(
+            """() => {
+                const button = document.getElementById('sftp-status-btn');
+                const mark = button.querySelector('.sftp-unavailable-mark');
+                return {
+                    hidden: button.hidden,
+                    disabled: button.disabled,
+                    title: button.title,
+                    text: button.innerText,
+                    markColor: getComputedStyle(mark).color
+                };
+            }"""
+        )
+        check(unavailable_status['hidden'] is False, 'unavailable SFTP status action disappeared')
+        check(unavailable_status['disabled'] is True, 'unavailable SFTP status action remained enabled')
+        check(unavailable_status['title'] == 'SFTP not available', 'unavailable SFTP status hint was unclear')
+        check('×' in unavailable_status['text'], 'unavailable SFTP status action omitted its cross mark')
+        check(unavailable_status['markColor'] == 'rgb(255, 69, 58)', 'unavailable SFTP cross was not red')
+        unavailable_menu = page.evaluate("() => window.terminalTest.showContextMenuForTest('main')")
+        check(unavailable_menu['sftpVisible'] is True, 'unavailable SSH context action disappeared')
+        check(unavailable_menu['sftpDisabled'] is True, 'unavailable SSH context action remained enabled')
+        check('SFTP not available' in unavailable_menu['sftpText'], 'unavailable SSH context action hint was unclear')
+
+        page.evaluate("() => window.terminalTest.setSftpAvailabilityForTest('main', null)")
+        page.evaluate("() => window.terminalTest.showContextMenuForTest('main')")
+        page.click('#pip-option')
+        page.wait_for_function('() => !!window.documentPictureInPicture.window', timeout=5000)
+        pip_action = page.evaluate(
+            """() => {
+                const button = documentPictureInPicture.window.document.querySelector('.pip-sftp-button');
+                return {
+                    hidden: button.hidden,
+                    disabled: button.disabled,
+                    title: button.title,
+                    text: button.innerText
+                };
+            }"""
+        )
+        check(
+            pip_action == {
+                'hidden': False,
+                'disabled': False,
+                'title': 'Open SFTP File Manager',
+                'text': '📁',
+            },
+            'Terminal PiP did not expose the SFTP action',
+        )
+
+        page.evaluate("() => documentPictureInPicture.window.document.querySelector('.pip-sftp-button').click()")
+        page.wait_for_function(
+            "() => documentPictureInPicture.window?.document.querySelector('.sftp-pip-title')?.textContent === 'SFTP File Manager'",
+            timeout=5000,
+        )
+        restored = page.evaluate("() => window.terminalTest.getTerminalTabsState()")
+        restored_main = next(item for item in restored['tabs'] if item['id'] == 'main')
+        check(restored_main['inPip'] is False, 'opening SFTP from Terminal PiP did not restore the terminal')
+        page.evaluate('() => documentPictureInPicture.window.close()')
+        page.wait_for_function('() => !window.documentPictureInPicture.window', timeout=5000)
+    finally:
+        close_context(context)
+
+
+def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, access_url):
+    context, page = new_page(browser, access_url)
+    browser_console = []
+    page.on('console', lambda message: browser_console.append(message.text))
+    try:
+        page.evaluate(
+            """() => window.terminalTest.applyTerminalListForTest({
+                terminals: [{
+                    terminal_id: 'main',
+                    connection_type: 'ssh',
+                    terminal_label: 'SSH',
+                    term: 'xterm-256color',
+                    connected: true
+                }]
+            })"""
+        )
+        ssh_menu = page.evaluate("() => window.terminalTest.showContextMenuForTest('main')")
+        check(ssh_menu['terminalId'] == 'main', 'SFTP context action targeted the wrong terminal')
+        check(ssh_menu['sftpVisible'] is True, 'connected SSH tab did not show SFTP send action')
+        check('SFTP File Manager' in ssh_menu['sftpText'], 'SFTP context action label was unclear')
+        check(page.evaluate('() => !!window.documentPictureInPicture'), 'Document PiP is unavailable in the test browser')
+        page.click('#sftp-send-option')
+        page.wait_for_function('() => !!window.documentPictureInPicture.window', timeout=5000)
+        pip_state = page.evaluate(
+            """() => ({
+                title: documentPictureInPicture.window.document.querySelector('.sftp-pip-title')?.textContent,
+                hint: documentPictureInPicture.window.document.querySelector('.sftp-direct-hint')?.textContent,
+                hasDropZone: !!documentPictureInPicture.window.document.querySelector('.sftp-drop-zone'),
+                hasPathInput: !!documentPictureInPicture.window.document.querySelector('.sftp-path-input')
+            })"""
+        )
+        check(pip_state['title'] == 'SFTP File Manager', 'SFTP PiP title was missing')
+        check('Nested SSH sessions' in pip_state['hint'], 'SFTP PiP did not explain the direct endpoint boundary')
+        check(pip_state['hasDropZone'] is True, 'SFTP PiP did not expose a file drop zone')
+        check(pip_state['hasPathInput'] is True, 'SFTP PiP did not expose destination path navigation')
+
+        page.wait_for_function(
+            "() => documentPictureInPicture.window.document.querySelector('.sftp-transfer-status')?.textContent !== 'Opening SFTP…'",
+            timeout=5000,
+        )
+        rendered = page.evaluate(
+            """() => window.terminalTest.renderSftpEntriesForTest({
+                path: '/home/tester',
+                directories: [{ name: 'docs' }],
+                files: [
+                    { file_id: 'sftpf_random_a', name: 'reference.txt', size: 9, mtime: 25 },
+                    { file_id: 'sftpf_random_b', name: 'existing.txt', size: 4, mtime: 26 }
+                ]
+            })"""
+        )
+        check(rendered is True, 'SFTP PiP test fixture could not render remote files')
+        clear_emitted(page)
+        file_ui = page.evaluate(
+            """() => {
+                const pipDocument = documentPictureInPicture.window.document;
+                const files = [...pipDocument.querySelectorAll('.sftp-file-entry')];
+                files[0].click();
+                const preparing = {
+                    disabled: pipDocument.querySelector('.sftp-file-download').disabled,
+                    text: pipDocument.querySelector('.sftp-file-download').innerText
+                };
+                const request = window.terminalTest.getEmitted()
+                    .find(item => item.event === 'sftp_download_ticket_request');
+                window.terminalTest.handleSftpDownloadTicketResultForTest({
+                    request_id: request.args[0].request_id,
+                    terminal_id: 'main',
+                    status: 'ready',
+                    download_url: '/sftp/download/test-ticket',
+                    download_id: 'sftpd_testlog',
+                    filename: 'reference.txt',
+                    size: 9,
+                    expires_in_seconds: 60
+                });
+                return {
+                    fileCount: files.length,
+                    operationVisible: pipDocument.querySelector('.sftp-file-operation-box').classList.contains('visible'),
+                    actions: [...pipDocument.querySelectorAll('.sftp-file-operation-actions button')].map(button => button.innerText),
+                    preparing,
+                    downloadReady: !pipDocument.querySelector('.sftp-file-download').disabled
+                };
+            }"""
+        )
+        check(file_ui['fileCount'] == 2, 'SFTP PiP did not list regular files')
+        check(file_ui['operationVisible'] is True, 'selecting an SFTP file did not open file actions')
+        check(file_ui['actions'] == ['Download', 'Rename…', 'Delete…', 'Close'], 'SFTP file actions were incomplete')
+        check(file_ui['preparing'] == {'disabled': True, 'text': 'Preparing…'}, 'SFTP Download was enabled before its ticket was ready')
+        check(file_ui['downloadReady'] is True, 'SFTP Download was not enabled after its ticket became ready')
+
+        download_requests = get_emitted(page, 'sftp_download_ticket_request')
+        check(len(download_requests) == 1, 'selecting an SFTP file did not prepare one download ticket')
+        download_payload = download_requests[0]['args'][0]
+        check(download_payload['file_id'] == 'sftpf_random_a', 'SFTP Download did not use the backend file ID')
+        check('filename' not in download_payload and 'directory' not in download_payload, 'SFTP Download used display names as control data')
+        browser_download = page.evaluate(
+            """() => {
+                let clicked = null;
+                const pipWindow = documentPictureInPicture.window;
+                const originalClick = pipWindow.HTMLAnchorElement.prototype.click;
+                pipWindow.HTMLAnchorElement.prototype.click = function () {
+                    clicked = {
+                        href: this.href,
+                        filename: this.download,
+                        target: this.target,
+                        rel: this.rel,
+                        hiddenByStyle: this.style.display === 'none',
+                        ownerIsPipDocument: this.ownerDocument === pipWindow.document
+                    };
+                };
+                try {
+                    documentPictureInPicture.window.document.querySelector('.sftp-file-download').click();
+                    return {
+                        clicked,
+                        remainingLinks: document.querySelectorAll('a[href*="/sftp/download/"]').length,
+                        buttonDisabled: documentPictureInPicture.window.document.querySelector('.sftp-file-download').disabled,
+                        buttonText: documentPictureInPicture.window.document.querySelector('.sftp-file-download').innerText
+                    };
+                } finally {
+                    pipWindow.HTMLAnchorElement.prototype.click = originalClick;
+                }
+            }"""
+        )
+        check(browser_download['clicked'] is not None, 'the ready SFTP Download button did not trigger a browser download')
+        access_parts = urllib.parse.urlsplit(access_url)
+        access_origin = f'{access_parts.scheme}://{access_parts.netloc}'
+        check(browser_download['clicked']['href'].startswith(access_origin + '/sftp/download/'), 'SFTP browser download lost the main page origin')
+        check(browser_download['clicked']['filename'] == '', 'SFTP browser download did not defer the filename to Content-Disposition')
+        check(browser_download['clicked']['target'] == '_blank', 'SFTP browser download tried to navigate the non-navigable PiP window')
+        check(browser_download['clicked']['rel'] == 'noopener', 'SFTP browser download did not isolate the top-level download context')
+        check(browser_download['clicked']['hiddenByStyle'] is True, 'SFTP browser download trigger could become visible')
+        check(browser_download['clicked']['ownerIsPipDocument'] is True, 'SFTP browser download did not preserve the PiP user-activation context')
+        check(browser_download['remainingLinks'] == 0, 'SFTP browser download trigger was not removed')
+        check(browser_download['buttonDisabled'] is True and browser_download['buttonText'] == 'Downloaded', 'used SFTP download ticket remained actionable')
+        check(any(message.startswith('[sftp] Download ticket requested') for message in browser_console), 'SFTP browser log omitted the ticket request')
+        check(any(message.startswith('[sftp] Download ticket ready') for message in browser_console), 'SFTP browser log omitted the ready ticket')
+        check(any(message.startswith('[sftp] Download button clicked') for message in browser_console), 'SFTP browser log omitted the explicit click')
+        check(any(message.startswith('[sftp] Download link dispatched') for message in browser_console), 'SFTP browser log omitted the link dispatch')
+
+        page.evaluate("() => documentPictureInPicture.window.document.querySelector('.sftp-file-rename').click()")
+        rename_initial = page.evaluate(
+            """() => {
+                const pipDocument = documentPictureInPicture.window.document;
+                return {
+                    confirmDisabled: pipDocument.querySelector('.sftp-rename-confirm').disabled,
+                    hint: pipDocument.querySelector('.sftp-rename-hint').innerText,
+                    inputFocused: pipDocument.activeElement === pipDocument.querySelector('.sftp-rename-input')
+                };
+            }"""
+        )
+        check(rename_initial['confirmDisabled'] is True, 'Rename allowed the unchanged file name')
+        check('already exists' in rename_initial['hint'], 'Rename did not explain the duplicate name')
+        check(rename_initial['inputFocused'] is True, 'Rename did not focus the file name input')
+        rename_duplicate = page.evaluate(
+            """() => {
+                const pipDocument = documentPictureInPicture.window.document;
+                const input = pipDocument.querySelector('.sftp-rename-input');
+                input.value = 'existing.txt';
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                return pipDocument.querySelector('.sftp-rename-confirm').disabled;
+            }"""
+        )
+        check(rename_duplicate is True, 'Rename allowed another existing file name')
+        rename_ready = page.evaluate(
+            """() => {
+                const pipDocument = documentPictureInPicture.window.document;
+                const input = pipDocument.querySelector('.sftp-rename-input');
+                input.value = 'renamed.txt';
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                return pipDocument.querySelector('.sftp-rename-confirm').disabled;
+            }"""
+        )
+        check(rename_ready is False, 'Rename kept a unique file name disabled')
+        page.evaluate(
+            """() => documentPictureInPicture.window.document.querySelector('.sftp-rename-input')
+                .dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))"""
+        )
+        rename_cancelled = page.evaluate(
+            """() => {
+                const pipDocument = documentPictureInPicture.window.document;
+                return {
+                    controlsVisible: pipDocument.querySelector('.sftp-rename-controls').classList.contains('visible'),
+                    renameFocused: pipDocument.activeElement === pipDocument.querySelector('.sftp-file-rename')
+                };
+            }"""
+        )
+        check(rename_cancelled == {'controlsVisible': False, 'renameFocused': True}, 'Rename Escape did not return to file actions')
+
+        clear_emitted(page)
+        page.evaluate(
+            """() => {
+                const pipDocument = documentPictureInPicture.window.document;
+                pipDocument.querySelector('.sftp-file-rename').click();
+                const input = pipDocument.querySelector('.sftp-rename-input');
+                input.value = 'renamed.txt';
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                pipDocument.querySelector('.sftp-rename-confirm').click();
+            }"""
+        )
+        rename_requests = get_emitted(page, 'sftp_file_action_request')
+        check(len(rename_requests) == 1, 'SFTP Rename did not emit one action request')
+        rename_payload = rename_requests[0]['args'][0]
+        check(rename_payload['file_id'] == 'sftpf_random_a', 'SFTP Rename did not use the backend file ID')
+        check(rename_payload['new_filename'] == 'renamed.txt', 'SFTP Rename lost the new file name')
+        check('filename' not in rename_payload and 'directory' not in rename_payload, 'SFTP Rename used the old display name as control data')
+        page.wait_for_function(
+            "() => !documentPictureInPicture.window.document.querySelector('.sftp-rename-confirm').disabled",
+            timeout=5000,
+        )
+
+        page.evaluate(
+            """() => {
+                window.terminalTest.renderSftpEntriesForTest({
+                    path: '/home/tester',
+                    files: [{ file_id: 'sftpf_random_a', name: 'reference.txt', size: 9, mtime: 25 }]
+                });
+                const pipDocument = documentPictureInPicture.window.document;
+                pipDocument.querySelector('.sftp-file-entry').click();
+                pipDocument.querySelector('.sftp-file-delete').click();
+            }"""
+        )
+        first_delete = page.evaluate(
+            """() => {
+                const pipDocument = documentPictureInPicture.window.document;
+                const yes = pipDocument.querySelector('.sftp-delete-yes').getBoundingClientRect();
+                return {
+                    question: pipDocument.querySelector('.sftp-delete-phase-one .sftp-delete-question').innerText,
+                    path: pipDocument.querySelector('.sftp-delete-path').innerText,
+                    noFocused: pipDocument.activeElement === pipDocument.querySelector('.sftp-delete-no'),
+                    secondPhaseVisible: pipDocument.querySelector('.sftp-delete-actions.phase-two').getClientRects().length > 0,
+                    yesCenterX: yes.left + yes.width / 2
+                };
+            }"""
+        )
+        check(first_delete['question'] == 'Do you want to delete this file?', 'first delete warning was unclear')
+        check(first_delete['path'] == '/home/tester/reference.txt', 'delete warning did not show the full remote path')
+        check(first_delete['noFocused'] is True, 'first delete warning did not focus No')
+        check(first_delete['secondPhaseVisible'] is False, 'second delete actions were visible during the first phase')
+        page.evaluate("() => documentPictureInPicture.window.document.querySelector('.sftp-delete-yes').click()")
+        second_delete = page.evaluate(
+            """() => {
+                const pipDocument = documentPictureInPicture.window.document;
+                const sure = pipDocument.querySelector('.sftp-delete-sure').getBoundingClientRect();
+                const dont = pipDocument.querySelector('.sftp-delete-dont').getBoundingClientRect();
+                return {
+                    question: pipDocument.querySelector('.sftp-delete-phase-two .sftp-delete-question').innerText,
+                    dontFocused: pipDocument.activeElement === pipDocument.querySelector('.sftp-delete-dont'),
+                    firstPhaseVisible: pipDocument.querySelector('.sftp-delete-actions.phase-one').getClientRects().length > 0,
+                    sure: { left: sure.left, right: sure.right },
+                    dont: { left: dont.left, right: dont.right }
+                };
+            }"""
+        )
+        check('cannot be recovered' in second_delete['question'], 'second delete warning did not state permanent loss')
+        check(second_delete['dontFocused'] is True, 'second delete warning did not focus the safe action')
+        check(second_delete['firstPhaseVisible'] is False, 'first delete actions were visible during the second phase')
+        original_x = first_delete['yesCenterX']
+        check(
+            not (second_delete['sure']['left'] <= original_x <= second_delete['sure']['right'])
+            and not (second_delete['dont']['left'] <= original_x <= second_delete['dont']['right']),
+            'second delete actions overlapped the first Yes click position',
+        )
+
+        clear_emitted(page)
+        page.evaluate("() => documentPictureInPicture.window.document.querySelector('.sftp-delete-sure').click()")
+        delete_requests = get_emitted(page, 'sftp_file_action_request')
+        check(len(delete_requests) == 1, 'SFTP Delete did not emit one action request')
+        delete_payload = delete_requests[0]['args'][0]
+        check(delete_payload['file_id'] == 'sftpf_random_a', 'SFTP Delete did not use the backend file ID')
+        check(delete_payload['delete_confirmation'] == 'permanent_delete_confirmed', 'SFTP Delete omitted structured confirmation')
+        check('filename' not in delete_payload and 'directory' not in delete_payload, 'SFTP Delete used display names as control data')
+        page.evaluate('() => documentPictureInPicture.window.close()')
+        page.wait_for_function('() => !window.documentPictureInPicture.window', timeout=5000)
+
+        page.evaluate(
+            """() => window.terminalTest.applyTerminalListForTest({
+                terminals: [{
+                    terminal_id: 'main',
+                    connection_type: 'local_shell',
+                    terminal_label: 'bash',
+                    term: 'xterm-256color',
+                    connected: true
+                }]
+            })"""
+        )
+        local_menu = page.evaluate("() => window.terminalTest.showContextMenuForTest('main')")
+        check(local_menu['sftpVisible'] is False, 'local shell tab exposed the SFTP send action')
     finally:
         close_context(context)
 
@@ -901,7 +1383,12 @@ def test_session_recovery_new_tab_can_renew_external_agent_token(browser, access
         page.evaluate("() => window.terminalTest.showSessionRecoveryForTest()")
         page.click('#session-recovery-remembered-token')
         page.wait_for_function(
-            "() => window.terminalTest.getSocketState().connected === true",
+            """() => {
+                const socket = window.terminalTest.getSocketState();
+                return !document.getElementById('session-recovery-modal').classList.contains('open')
+                    && socket.connected === true
+                    && socket.serverConnectionState === 'available';
+            }""",
             timeout=10000,
         )
         page.wait_for_function(
@@ -2849,6 +3336,8 @@ def main():
         test_invalid_session_reconnect_prompts_for_current_token,
         test_agent_panel_can_be_dragged,
         test_terminal_pip_hides_selected_tab_and_keeps_background_tab,
+        test_sftp_status_actions_and_terminal_pip_transition,
+        test_sftp_send_context_action_is_limited_to_connected_ssh_tabs,
         test_restored_terminal_list_allocates_next_new_tab_id,
         test_operator_observation_warning_ui,
         test_hidden_mirror_ignores_visible_scroll,

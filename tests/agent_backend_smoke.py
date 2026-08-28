@@ -115,6 +115,8 @@ def reset_state():
     standterm.agent_viewport_snapshot_store.clear()
     standterm.agent_viewport_render_request_store.clear()
     standterm.browser_ssh_sign_request_store.clear()
+    standterm.sftp_upload_ticket_store.clear()
+    standterm.sftp_download_ticket_store.clear()
     standterm.external_agent_attach_store.clear()
     standterm.operator_observations.clear()
     standterm.serial_port_cache['expires_at'] = 0
@@ -3976,6 +3978,388 @@ def test_browser_ssh_sign_request_store_is_sid_bound_and_fail_closed():
     assert wait_error == 'ssh_browser_key_sign_stale'
 
 
+def make_sftp_test_bridge(session_token, terminal_id=standterm.TERMINAL_ID_MAIN):
+    bridge = object.__new__(standterm.SSHBridge)
+    standterm.TerminalBridge.__init__(bridge, session_token, terminal_id)
+    bridge._sftp_endpoint = {
+        'user': 'tester',
+        'host': 'host.example',
+        'port': 22,
+        'route': 'direct',
+    }
+    bridge._sftp_lock = threading.Lock()
+    bridge._sftp_file_refs_lock = threading.Lock()
+    bridge._sftp_file_refs = {}
+    bridge.channel = None
+    bridge.ssh = None
+    bridge.close = lambda: None
+    return bridge
+
+
+def test_sftp_bridge_browses_direct_endpoint_and_replaces_atomically():
+    class Attr:
+        def __init__(self, mode, size=0, mtime=1, filename=None):
+            self.st_mode = mode
+            self.st_size = size
+            self.st_mtime = mtime
+            self.filename = filename
+
+    class RemoteFile:
+        def __init__(self, filesystem, path):
+            self.filesystem = filesystem
+            self.path = path
+            self.buffer = bytearray()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, _exc, _traceback):
+            if exc_type is None:
+                self.filesystem[self.path] = {'data': bytes(self.buffer), 'mtime': 20}
+
+        def write(self, data):
+            self.buffer.extend(data)
+
+        def flush(self):
+            pass
+
+    class RemoteReadFile:
+        def __init__(self, data):
+            self.data = data
+            self.offset = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _traceback):
+            pass
+
+        def read(self, size):
+            chunk = self.data[self.offset:self.offset + size]
+            self.offset += len(chunk)
+            return chunk
+
+    class FakeSFTP:
+        def __init__(self, filesystem):
+            self.filesystem = filesystem
+            self.posix_renames = []
+
+        def normalize(self, path):
+            if path == '.':
+                return 'C:/Users/tester'
+            if path.endswith('/..'):
+                return path.rsplit('/', 2)[0]
+            return path
+
+        def stat(self, path):
+            if path in {'C:/Users/tester', 'C:/Users/tester/docs'}:
+                return Attr(stat.S_IFDIR | 0o755)
+            item = self.filesystem[path]
+            return Attr(stat.S_IFREG | 0o644, len(item['data']), item['mtime'])
+
+        def lstat(self, path):
+            if path not in self.filesystem:
+                raise FileNotFoundError(path)
+            item = self.filesystem[path]
+            return Attr(stat.S_IFREG | 0o644, len(item['data']), item['mtime'])
+
+        def listdir_iter(self, path, read_aheads=10):
+            assert read_aheads == 10
+            if path == 'C:/Users/tester':
+                yield Attr(stat.S_IFDIR | 0o755, filename='docs')
+                prefix = path + '/'
+                for file_path, item in self.filesystem.items():
+                    if file_path.startswith(prefix) and '/' not in file_path[len(prefix):]:
+                        yield Attr(
+                            stat.S_IFREG | 0o644,
+                            size=len(item['data']),
+                            mtime=item['mtime'],
+                            filename=file_path[len(prefix):],
+                        )
+
+        def open(self, path, mode):
+            if mode == 'rb':
+                return RemoteReadFile(self.filesystem[path]['data'])
+            if mode == 'wx':
+                if path in self.filesystem:
+                    raise FileExistsError(path)
+                return RemoteFile(self.filesystem, path)
+            raise AssertionError(f'unexpected mode: {mode}')
+
+        def rename(self, source, destination):
+            if destination in self.filesystem:
+                raise FileExistsError(destination)
+            self.filesystem[destination] = self.filesystem.pop(source)
+
+        def posix_rename(self, source, destination):
+            self.posix_renames.append((source, destination))
+            self.filesystem[destination] = self.filesystem.pop(source)
+
+        def remove(self, path):
+            self.filesystem.pop(path, None)
+
+        def close(self):
+            pass
+
+    filesystem = {
+        'C:/Users/tester/reference.txt': {'data': b'old', 'mtime': 10},
+    }
+    opened_clients = []
+    bridge = make_sftp_test_bridge('session-sftp')
+
+    def open_sftp():
+        client = FakeSFTP(filesystem)
+        opened_clients.append(client)
+        return client
+
+    bridge._open_sftp = open_sftp
+    browse = bridge.browse_sftp()
+    assert browse['path'] == 'C:/Users/tester'
+    assert browse['directories'] == [{'name': 'docs'}]
+    assert len(browse['files']) == 1
+    assert browse['files'][0]['name'] == 'reference.txt'
+    assert browse['files'][0]['file_id'].startswith('sftpf_')
+    assert 'path' not in browse['files'][0]
+    assert browse['endpoint']['route'] == 'direct'
+
+    reference = bridge.resolve_sftp_file_reference(browse['files'][0]['file_id'])
+    assert b''.join(bridge.download_sftp_chunks(reference, chunk_size=2)) == b'old'
+
+    conflict = bridge.prepare_sftp_upload('C:/Users/tester', 'reference.txt')
+    assert conflict['status'] == 'conflict'
+    assert conflict['existing_size'] == 3
+
+    keep_both = bridge.prepare_sftp_upload('C:/Users/tester', 'reference.txt', 'keep_both')
+    assert keep_both['destination_path'] == 'C:/Users/tester/reference (1).txt'
+    result = bridge.upload_sftp_stream(io.BytesIO(b'new copy'), keep_both, 8)
+    assert result['bytes_written'] == 8
+    assert filesystem['C:/Users/tester/reference (1).txt']['data'] == b'new copy'
+    assert filesystem['C:/Users/tester/reference.txt']['data'] == b'old'
+
+    replace = bridge.prepare_sftp_upload('C:/Users/tester', 'reference.txt', 'replace')
+    result = bridge.upload_sftp_stream(io.BytesIO(b'replaced'), replace, 8)
+    assert result['destination_path'] == 'C:/Users/tester/reference.txt'
+    assert filesystem['C:/Users/tester/reference.txt']['data'] == b'replaced'
+    assert opened_clients[-1].posix_renames
+
+    browse = bridge.browse_sftp()
+    reference_entry = next(item for item in browse['files'] if item['name'] == 'reference.txt')
+    reference = bridge.resolve_sftp_file_reference(reference_entry['file_id'])
+    filesystem['C:/Users/tester/existing.txt'] = {'data': b'existing', 'mtime': 30}
+    try:
+        bridge.rename_sftp_file(
+            reference['directory'],
+            reference['filename'],
+            'existing.txt',
+            reference['size'],
+            reference['mtime'],
+        )
+        raise AssertionError('rename unexpectedly overwrote an existing file')
+    except standterm.SFTPTransferError as exc:
+        assert exc.error_code == 'sftp_rename_destination_exists'
+    renamed = bridge.rename_sftp_file(
+        reference['directory'],
+        reference['filename'],
+        'renamed.txt',
+        reference['size'],
+        reference['mtime'],
+    )
+    assert renamed['destination_path'] == 'C:/Users/tester/renamed.txt'
+    assert 'C:/Users/tester/reference.txt' not in filesystem
+
+    browse = bridge.browse_sftp()
+    renamed_entry = next(item for item in browse['files'] if item['name'] == 'renamed.txt')
+    renamed_reference = bridge.resolve_sftp_file_reference(renamed_entry['file_id'])
+    assert b''.join(bridge.download_sftp_chunks(renamed_reference, chunk_size=2)) == b'replaced'
+    filesystem['C:/Users/tester/renamed.txt']['mtime'] = 99
+    try:
+        bridge.delete_sftp_file(
+            renamed_reference['directory'],
+            renamed_reference['filename'],
+            renamed_reference['size'],
+            renamed_reference['mtime'],
+        )
+        raise AssertionError('delete unexpectedly removed a changed file')
+    except standterm.SFTPTransferError as exc:
+        assert exc.error_code == 'sftp_file_changed'
+    assert 'C:/Users/tester/renamed.txt' in filesystem
+    filesystem['C:/Users/tester/renamed.txt']['mtime'] = renamed_reference['mtime']
+    deleted = bridge.delete_sftp_file(
+        renamed_reference['directory'],
+        renamed_reference['filename'],
+        renamed_reference['size'],
+        renamed_reference['mtime'],
+    )
+    assert deleted['deleted_path'] == 'C:/Users/tester/renamed.txt'
+    assert 'C:/Users/tester/renamed.txt' not in filesystem
+
+
+def test_sftp_socket_ticket_streams_one_file_and_is_single_use():
+    flask_client = make_flask_client()
+    socket_client = make_socket_client(flask_client)
+    session_token = current_session_token()
+    sid = current_sid_for_session(session_token)
+    bridge = make_sftp_test_bridge(session_token)
+    bridge.attach(sid)
+    uploads = []
+    file_actions = []
+    file_snapshot = {
+        'directory': '/home/tester',
+        'filename': 'reference.txt',
+        'path': '/home/tester/reference.txt',
+        'size': 9,
+        'mtime': 25,
+        'endpoint': bridge.sftp_endpoint(),
+    }
+    bridge.browse_sftp = lambda path=None, child=None, parent=False: {
+        'path': '/home/tester',
+        'directories': [{'name': 'docs'}],
+        'files': [{'file_id': 'sftpf_test', 'name': 'reference.txt', 'size': 9, 'mtime': 25}],
+        'truncated': False,
+        'endpoint': bridge.sftp_endpoint(),
+    }
+    bridge.prepare_sftp_upload = lambda directory, filename, conflict_mode='ask': {
+        'status': 'ready',
+        'directory': directory,
+        'filename': filename,
+        'destination_path': f'{directory}/{filename}',
+        'replace': False,
+        'existing_size': None,
+        'existing_mtime': None,
+        'endpoint': bridge.sftp_endpoint(),
+    }
+    bridge.resolve_sftp_file_reference = lambda file_id: dict(file_snapshot) if file_id == 'sftpf_test' else None
+    bridge.prepare_sftp_file = lambda directory, filename: dict(file_snapshot)
+    bridge.download_sftp_chunks = lambda snapshot: iter([b'refer', b'ence'])
+    bridge.rename_sftp_file = lambda directory, filename, new_filename, size, mtime: (
+        file_actions.append(('rename', directory, filename, new_filename, size, mtime))
+        or {
+            'status': 'completed',
+            'action': 'rename',
+            'source_path': f'{directory}/{filename}',
+            'destination_path': f'{directory}/{new_filename}',
+            'filename': new_filename,
+        }
+    )
+    bridge.delete_sftp_file = lambda directory, filename, size, mtime: (
+        file_actions.append(('delete', directory, filename, size, mtime))
+        or {
+            'status': 'completed',
+            'action': 'delete',
+            'deleted_path': f'{directory}/{filename}',
+            'filename': filename,
+        }
+    )
+
+    def upload_stream(stream, upload, expected_size, progress_callback=None):
+        data = stream.read()
+        uploads.append((upload, expected_size, data))
+        return {
+            'destination_path': upload['destination_path'],
+            'filename': upload['filename'],
+            'bytes_written': len(data),
+        }
+
+    bridge.upload_sftp_stream = upload_stream
+    standterm.set_bridge(session_token, standterm.TERMINAL_ID_MAIN, bridge)
+
+    socket_client.emit(standterm.SFTP_BROWSE_REQUEST_EVENT, {
+        'request_id': 'browse-1',
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'path': None,
+    })
+    browse = last_payload(socket_client, standterm.SFTP_BROWSE_RESULT_EVENT)
+    assert browse['status'] == 'ready'
+    assert browse['endpoint']['host'] == 'host.example'
+    assert browse['files'][0]['file_id'] == 'sftpf_test'
+
+    socket_client.emit(standterm.SFTP_UPLOAD_TICKET_REQUEST_EVENT, {
+        'request_id': 'upload-1',
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'directory': '/home/tester',
+        'filename': 'reference.txt',
+        'size': 9,
+        'conflict_mode': 'ask',
+    })
+    ticket = last_payload(socket_client, standterm.SFTP_UPLOAD_TICKET_RESULT_EVENT)
+    assert ticket['status'] == 'ready'
+    assert ticket['destination_path'] == '/home/tester/reference.txt'
+
+    response = flask_client.post(
+        ticket['upload_url'],
+        data=b'reference',
+        content_type='application/octet-stream',
+    )
+    assert response.status_code == 200
+    assert response.get_json()['status'] == 'completed'
+    assert uploads[0][1:] == (9, b'reference')
+
+    response = flask_client.post(
+        ticket['upload_url'],
+        data=b'reference',
+        content_type='application/octet-stream',
+    )
+    assert response.status_code == 404
+
+    socket_client.emit(standterm.SFTP_DOWNLOAD_TICKET_REQUEST_EVENT, {
+        'request_id': 'download-1',
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'file_id': 'sftpf_test',
+    })
+    download = last_payload(socket_client, standterm.SFTP_DOWNLOAD_TICKET_RESULT_EVENT)
+    assert download['status'] == 'ready'
+    assert download['download_id'].startswith('sftpd_')
+    assert 'reference.txt' not in download['download_url']
+    response = flask_client.get(download['download_url'])
+    assert response.status_code == 200
+    assert response.data == b'reference'
+    assert response.headers['Content-Disposition'].startswith('attachment;')
+    assert flask_client.get(download['download_url']).status_code == 404
+
+    socket_client.emit(standterm.SFTP_FILE_ACTION_REQUEST_EVENT, {
+        'request_id': 'rename-1',
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'action': 'rename',
+        'file_id': 'sftpf_test',
+        'new_filename': 'renamed.txt',
+    })
+    renamed = last_payload(socket_client, standterm.SFTP_FILE_ACTION_RESULT_EVENT)
+    assert renamed['status'] == 'completed'
+    assert file_actions[-1] == ('rename', '/home/tester', 'reference.txt', 'renamed.txt', 9, 25)
+
+    socket_client.emit(standterm.SFTP_FILE_ACTION_REQUEST_EVENT, {
+        'request_id': 'delete-unconfirmed',
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'action': 'delete',
+        'file_id': 'sftpf_test',
+    })
+    unconfirmed = last_payload(socket_client, standterm.SFTP_FILE_ACTION_RESULT_EVENT)
+    assert unconfirmed['error_code'] == 'sftp_delete_confirmation_required'
+
+    socket_client.emit(standterm.SFTP_FILE_ACTION_REQUEST_EVENT, {
+        'request_id': 'delete-confirmed',
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'action': 'delete',
+        'file_id': 'sftpf_test',
+        'delete_confirmation': 'permanent_delete_confirmed',
+    })
+    deleted = last_payload(socket_client, standterm.SFTP_FILE_ACTION_RESULT_EVENT)
+    assert deleted['status'] == 'completed'
+    assert file_actions[-1] == ('delete', '/home/tester', 'reference.txt', 9, 25)
+
+    socket_client.emit(standterm.SFTP_FILE_ACTION_REQUEST_EVENT, {
+        'request_id': 'delete-direct-name',
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'action': 'delete',
+        'directory': '/home/tester',
+        'filename': 'reference.txt',
+        'delete_confirmation': 'permanent_delete_confirmed',
+    })
+    rejected = last_payload(socket_client, standterm.SFTP_FILE_ACTION_RESULT_EVENT)
+    assert rejected['error_code'] == 'sftp_invalid_file_request'
+    socket_client.disconnect()
+
+
 def test_terminal_start_tokens_reject_stale_background_connections():
     first = standterm.begin_terminal_start('session-1', 'main')
     assert standterm.is_current_terminal_start('session-1', 'main', first) is True
@@ -5981,6 +6365,8 @@ def main():
         test_browser_ssh_key_payload_requires_local_or_authorized_https_transport,
         test_browser_ed25519_key_wraps_and_verifies_remote_signature,
         test_browser_ssh_sign_request_store_is_sid_bound_and_fail_closed,
+        test_sftp_bridge_browses_direct_endpoint_and_replaces_atomically,
+        test_sftp_socket_ticket_streams_one_file_and_is_single_use,
         test_terminal_start_tokens_reject_stale_background_connections,
         test_remote_unauthorized_socket_cannot_attach_existing_ssh_terminal,
         test_browser_authorization_success_refreshes_visible_terminal_list,

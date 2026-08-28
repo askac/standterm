@@ -10,7 +10,7 @@ from .base import (
     TerminalBridgeRuntime,
 )
 from .local_shell import LocalShellBackendPlugin, LocalShellBridge
-from .ssh import SSHBackendPlugin, SSHBridge
+from .ssh import SFTPTransferError, SSHBackendPlugin, SSHBridge
 from .uart import UARTBackendPlugin, UARTBridge
 
 __all__ = [
@@ -18,6 +18,7 @@ __all__ = [
     'LocalShellBridge',
     'SSHBackendPlugin',
     'SSHBridge',
+    'SFTPTransferError',
     'BackendAction',
     'BackendActionStore',
     'BackendPolicyContext',
