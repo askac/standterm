@@ -4,6 +4,10 @@ import getpass
 import hashlib
 import os
 import re
+import secrets
+import stat
+import threading
+import time
 from pathlib import Path
 
 from .base import BackendAction, BackendSettingSchema, BackendStartFieldSchema, TerminalBackendPlugin, TerminalBridge
@@ -13,10 +17,19 @@ from runtime_logging import log_message
 SSH_PROFILE_NAME_MAX_LENGTH = 64
 SSH_BROWSER_KEY_ID_MAX_LENGTH = 128
 SSH_BROWSER_KEY_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]+$')
+SFTP_FILE_REFERENCE_TTL_SECONDS = 5 * 60
+SFTP_FILE_REFERENCE_MAX_RECORDS = 4096
+SFTP_FILE_REFERENCE_TOKEN_BYTES = 12
 
 
 class BrowserSSHKeyError(Exception):
     pass
+
+
+class SFTPTransferError(Exception):
+    def __init__(self, error_code, message):
+        super().__init__(message)
+        self.error_code = error_code
 
 
 class BrowserEd25519Key:
@@ -90,6 +103,10 @@ class SSHBridge(TerminalBridge):
         self._local_public_key_types = local_public_key_types
         self._request_browser_signature = request_browser_signature
         self._browser_signer_sid = None
+        self._sftp_lock = threading.Lock()
+        self._sftp_file_refs_lock = threading.Lock()
+        self._sftp_file_refs = {}
+        self._sftp_endpoint = None
         self.ssh = None
         self.auth_method = None
         self._reset_ssh_client()
@@ -101,6 +118,429 @@ class SSHBridge(TerminalBridge):
         if self.auth_method:
             metadata['auth_method'] = self.auth_method
         return metadata
+
+    def sftp_endpoint(self):
+        return dict(self._sftp_endpoint) if self._sftp_endpoint else None
+
+    @staticmethod
+    def _validate_sftp_path(path):
+        if not isinstance(path, str):
+            raise SFTPTransferError('sftp_invalid_path', 'Remote path is invalid.')
+        if not path:
+            raise SFTPTransferError('sftp_invalid_path', 'Remote path is required.')
+        if len(path.encode('utf-8', errors='ignore')) > 4096 or any(ord(ch) < 32 or ord(ch) == 127 for ch in path):
+            raise SFTPTransferError('sftp_invalid_path', 'Remote path is invalid.')
+        return path
+
+    @staticmethod
+    def _validate_sftp_name(name):
+        SSHBridge._validate_sftp_path(name)
+        if name in {'.', '..'} or '/' in name or '\\' in name:
+            raise SFTPTransferError('sftp_invalid_filename', 'File name is invalid.')
+        if len(name.encode('utf-8', errors='ignore')) > 255:
+            raise SFTPTransferError('sftp_invalid_filename', 'File name is too long.')
+        return name
+
+    @staticmethod
+    def _join_sftp_path(directory, name):
+        if directory.endswith('/'):
+            return directory + name
+        return directory + '/' + name
+
+    @staticmethod
+    def _is_sftp_not_found(exc):
+        return isinstance(exc, FileNotFoundError) or getattr(exc, 'errno', None) == 2
+
+    @staticmethod
+    def _keep_both_name(filename, sequence):
+        dot_index = filename.rfind('.')
+        if dot_index > 0:
+            stem = filename[:dot_index]
+            suffix = filename[dot_index:]
+        else:
+            stem = filename
+            suffix = ''
+        return f'{stem} ({sequence}){suffix}'
+
+    def _open_sftp(self):
+        transport = self.ssh.get_transport() if self.ssh else None
+        if not transport or not transport.is_active():
+            raise SFTPTransferError('sftp_connection_closed', 'The SSH connection is closed.')
+        try:
+            return self.ssh.open_sftp()
+        except Exception as exc:
+            raise SFTPTransferError('sftp_unavailable', 'SFTP is unavailable on this SSH server.') from exc
+
+    def _canonical_sftp_directory(self, sftp, directory):
+        canonical_directory = self._validate_sftp_path(sftp.normalize(directory))
+        directory_stat = sftp.stat(canonical_directory)
+        if directory_stat.st_mode is None or not stat.S_ISDIR(directory_stat.st_mode):
+            raise SFTPTransferError('sftp_not_directory', 'Remote path is not a directory.')
+        return canonical_directory
+
+    def _get_sftp_regular_file(self, sftp, directory, filename):
+        path = self._join_sftp_path(directory, filename)
+        try:
+            attributes = sftp.lstat(path)
+        except Exception as exc:
+            if self._is_sftp_not_found(exc):
+                raise SFTPTransferError('sftp_file_not_found', 'The remote file no longer exists.') from exc
+            raise
+        if attributes.st_mode is not None and stat.S_ISLNK(attributes.st_mode):
+            raise SFTPTransferError('sftp_file_symlink', 'Symbolic links are not supported for this operation.')
+        if attributes.st_mode is None or not stat.S_ISREG(attributes.st_mode):
+            raise SFTPTransferError('sftp_file_not_regular', 'The remote path is not a regular file.')
+        return path, attributes
+
+    @staticmethod
+    def _validate_sftp_file_snapshot(attributes, expected_size, expected_mtime):
+        if attributes.st_size != expected_size or attributes.st_mtime != expected_mtime:
+            raise SFTPTransferError('sftp_file_changed', 'The remote file changed after the directory was listed.')
+
+    def _register_sftp_file_reference(self, file_snapshot):
+        now = time.monotonic()
+        with self._sftp_file_refs_lock:
+            for existing_id, record in list(self._sftp_file_refs.items()):
+                if record['expires_at'] <= now:
+                    self._sftp_file_refs.pop(existing_id, None)
+            while len(self._sftp_file_refs) >= SFTP_FILE_REFERENCE_MAX_RECORDS:
+                self._sftp_file_refs.pop(next(iter(self._sftp_file_refs)))
+            file_id = 'sftpf_' + secrets.token_urlsafe(SFTP_FILE_REFERENCE_TOKEN_BYTES)
+            while file_id in self._sftp_file_refs:
+                file_id = 'sftpf_' + secrets.token_urlsafe(SFTP_FILE_REFERENCE_TOKEN_BYTES)
+            self._sftp_file_refs[file_id] = {
+                **file_snapshot,
+                'expires_at': now + SFTP_FILE_REFERENCE_TTL_SECONDS,
+            }
+        return file_id
+
+    def resolve_sftp_file_reference(self, file_id):
+        if not isinstance(file_id, str) or len(file_id) > 128:
+            raise SFTPTransferError('sftp_file_reference_invalid', 'The remote file selection is invalid.')
+        now = time.monotonic()
+        with self._sftp_file_refs_lock:
+            record = self._sftp_file_refs.get(file_id)
+            if not record or record['expires_at'] <= now:
+                self._sftp_file_refs.pop(file_id, None)
+                raise SFTPTransferError('sftp_file_reference_expired', 'The remote file selection expired. Refresh the directory and try again.')
+            return {
+                key: value
+                for key, value in record.items()
+                if key != 'expires_at'
+            }
+
+    def browse_sftp(self, path=None, *, child=None, parent=False, max_entries=1000):
+        requested_path = '.' if path is None else self._validate_sftp_path(path)
+        if child is not None:
+            child = self._validate_sftp_name(child)
+            requested_path = self._join_sftp_path(requested_path, child)
+        elif parent:
+            requested_path = self._join_sftp_path(requested_path, '..')
+
+        with self._sftp_lock:
+            sftp = self._open_sftp()
+            try:
+                canonical_path = self._canonical_sftp_directory(sftp, requested_path)
+                directories = []
+                files = []
+                truncated = False
+                for entry in sftp.listdir_iter(canonical_path, read_aheads=10):
+                    try:
+                        entry_name = self._validate_sftp_name(entry.filename)
+                    except SFTPTransferError:
+                        continue
+                    is_directory = entry.st_mode is not None and stat.S_ISDIR(entry.st_mode)
+                    is_regular_file = entry.st_mode is not None and stat.S_ISREG(entry.st_mode)
+                    if not is_directory and not is_regular_file:
+                        continue
+                    if len(directories) + len(files) >= max_entries:
+                        truncated = True
+                        break
+                    if is_directory:
+                        directories.append({'name': entry_name})
+                    elif entry.st_size is not None and entry.st_mtime is not None:
+                        file_snapshot = {
+                            'directory': canonical_path,
+                            'filename': entry_name,
+                            'path': self._join_sftp_path(canonical_path, entry_name),
+                            'size': entry.st_size,
+                            'mtime': entry.st_mtime,
+                            'endpoint': self.sftp_endpoint(),
+                        }
+                        files.append({
+                            'file_id': self._register_sftp_file_reference(file_snapshot),
+                            'name': entry_name,
+                            'size': entry.st_size,
+                            'mtime': entry.st_mtime,
+                        })
+                directories.sort(key=lambda item: item['name'].casefold())
+                files.sort(key=lambda item: item['name'].casefold())
+                return {
+                    'path': canonical_path,
+                    'directories': directories,
+                    'files': files,
+                    'truncated': truncated,
+                    'endpoint': self.sftp_endpoint(),
+                }
+            except SFTPTransferError:
+                raise
+            except Exception as exc:
+                raise SFTPTransferError('sftp_browse_failed', f'Remote directory could not be opened: {exc}') from exc
+            finally:
+                sftp.close()
+
+    def prepare_sftp_file(self, directory, filename):
+        directory = self._validate_sftp_path(directory)
+        filename = self._validate_sftp_name(filename)
+        with self._sftp_lock:
+            sftp = self._open_sftp()
+            try:
+                canonical_directory = self._canonical_sftp_directory(sftp, directory)
+                path, attributes = self._get_sftp_regular_file(sftp, canonical_directory, filename)
+                return {
+                    'directory': canonical_directory,
+                    'filename': filename,
+                    'path': path,
+                    'size': attributes.st_size,
+                    'mtime': attributes.st_mtime,
+                    'endpoint': self.sftp_endpoint(),
+                }
+            except SFTPTransferError:
+                raise
+            except Exception as exc:
+                raise SFTPTransferError('sftp_file_prepare_failed', f'Remote file could not be checked: {exc}') from exc
+            finally:
+                sftp.close()
+
+    def download_sftp_chunks(self, file_snapshot, chunk_size=65536):
+        with self._sftp_lock:
+            sftp = self._open_sftp()
+            try:
+                path, attributes = self._get_sftp_regular_file(
+                    sftp,
+                    file_snapshot['directory'],
+                    file_snapshot['filename'],
+                )
+                self._validate_sftp_file_snapshot(
+                    attributes,
+                    file_snapshot['size'],
+                    file_snapshot['mtime'],
+                )
+                remaining = file_snapshot['size']
+                with sftp.open(path, 'rb') as remote_file:
+                    while remaining > 0:
+                        chunk = remote_file.read(min(chunk_size, remaining))
+                        if not chunk:
+                            raise SFTPTransferError('sftp_download_incomplete', 'The remote file ended before the download completed.')
+                        remaining -= len(chunk)
+                        yield chunk
+            finally:
+                sftp.close()
+
+    def rename_sftp_file(self, directory, filename, new_filename, expected_size, expected_mtime):
+        directory = self._validate_sftp_path(directory)
+        filename = self._validate_sftp_name(filename)
+        new_filename = self._validate_sftp_name(new_filename)
+        if new_filename == filename:
+            raise SFTPTransferError('sftp_rename_unchanged', 'Enter a different file name.')
+        with self._sftp_lock:
+            sftp = self._open_sftp()
+            try:
+                canonical_directory = self._canonical_sftp_directory(sftp, directory)
+                source_path, attributes = self._get_sftp_regular_file(sftp, canonical_directory, filename)
+                self._validate_sftp_file_snapshot(attributes, expected_size, expected_mtime)
+                destination_path = self._join_sftp_path(canonical_directory, new_filename)
+                try:
+                    sftp.lstat(destination_path)
+                except Exception as exc:
+                    if not self._is_sftp_not_found(exc):
+                        raise
+                else:
+                    raise SFTPTransferError('sftp_rename_destination_exists', 'A file with the new name already exists.')
+                sftp.rename(source_path, destination_path)
+                return {
+                    'status': 'completed',
+                    'action': 'rename',
+                    'source_path': source_path,
+                    'destination_path': destination_path,
+                    'filename': new_filename,
+                }
+            except SFTPTransferError:
+                raise
+            except Exception as exc:
+                raise SFTPTransferError('sftp_rename_failed', f'Remote file could not be renamed: {exc}') from exc
+            finally:
+                sftp.close()
+
+    def delete_sftp_file(self, directory, filename, expected_size, expected_mtime):
+        directory = self._validate_sftp_path(directory)
+        filename = self._validate_sftp_name(filename)
+        with self._sftp_lock:
+            sftp = self._open_sftp()
+            try:
+                canonical_directory = self._canonical_sftp_directory(sftp, directory)
+                path, attributes = self._get_sftp_regular_file(sftp, canonical_directory, filename)
+                self._validate_sftp_file_snapshot(attributes, expected_size, expected_mtime)
+                sftp.remove(path)
+                return {
+                    'status': 'completed',
+                    'action': 'delete',
+                    'deleted_path': path,
+                    'filename': filename,
+                }
+            except SFTPTransferError:
+                raise
+            except Exception as exc:
+                raise SFTPTransferError('sftp_delete_failed', f'Remote file could not be deleted: {exc}') from exc
+            finally:
+                sftp.close()
+
+    def prepare_sftp_upload(self, directory, filename, conflict_mode='ask'):
+        directory = self._validate_sftp_path(directory)
+        filename = self._validate_sftp_name(filename)
+        if conflict_mode not in {'ask', 'keep_both', 'replace'}:
+            raise SFTPTransferError('sftp_invalid_conflict_mode', 'Upload conflict mode is invalid.')
+
+        with self._sftp_lock:
+            sftp = self._open_sftp()
+            try:
+                canonical_directory = self._validate_sftp_path(sftp.normalize(directory))
+                directory_stat = sftp.stat(canonical_directory)
+                if directory_stat.st_mode is None or not stat.S_ISDIR(directory_stat.st_mode):
+                    raise SFTPTransferError('sftp_not_directory', 'Remote path is not a directory.')
+                selected_name = filename
+                destination_path = self._join_sftp_path(canonical_directory, selected_name)
+                existing = None
+                try:
+                    existing = sftp.lstat(destination_path)
+                except Exception as exc:
+                    if not self._is_sftp_not_found(exc):
+                        raise
+
+                if existing is not None:
+                    if existing.st_mode is not None and stat.S_ISLNK(existing.st_mode):
+                        raise SFTPTransferError('sftp_destination_symlink', 'The destination is a symbolic link and cannot be replaced.')
+                    if existing.st_mode is None or not stat.S_ISREG(existing.st_mode):
+                        raise SFTPTransferError('sftp_destination_not_file', 'The destination exists and is not a regular file.')
+                    if conflict_mode == 'ask':
+                        return {
+                            'status': 'conflict',
+                            'directory': canonical_directory,
+                            'filename': selected_name,
+                            'destination_path': destination_path,
+                            'existing_size': existing.st_size,
+                            'existing_mtime': existing.st_mtime,
+                            'endpoint': self.sftp_endpoint(),
+                        }
+                    if conflict_mode == 'keep_both':
+                        for sequence in range(1, 10000):
+                            candidate = self._keep_both_name(filename, sequence)
+                            candidate_path = self._join_sftp_path(canonical_directory, candidate)
+                            try:
+                                sftp.lstat(candidate_path)
+                            except Exception as exc:
+                                if self._is_sftp_not_found(exc):
+                                    selected_name = candidate
+                                    destination_path = candidate_path
+                                    existing = None
+                                    break
+                                raise
+                        else:
+                            raise SFTPTransferError('sftp_keep_both_exhausted', 'A unique destination name could not be created.')
+
+                return {
+                    'status': 'ready',
+                    'directory': canonical_directory,
+                    'filename': selected_name,
+                    'destination_path': destination_path,
+                    'replace': existing is not None and conflict_mode == 'replace',
+                    'existing_size': existing.st_size if existing is not None else None,
+                    'existing_mtime': existing.st_mtime if existing is not None else None,
+                    'endpoint': self.sftp_endpoint(),
+                }
+            except SFTPTransferError:
+                raise
+            except Exception as exc:
+                raise SFTPTransferError('sftp_upload_prepare_failed', f'Upload destination could not be checked: {exc}') from exc
+            finally:
+                sftp.close()
+
+    def upload_sftp_stream(self, stream, upload, expected_size, progress_callback=None):
+        destination_path = upload['destination_path']
+        filename = upload['filename']
+        replace = bool(upload.get('replace'))
+        expected_existing_size = upload.get('existing_size')
+        expected_existing_mtime = upload.get('existing_mtime')
+        temporary_path = self._join_sftp_path(
+            upload['directory'],
+            f'.standterm-upload-{os.urandom(16).hex()}',
+        )
+        completed = False
+
+        with self._sftp_lock:
+            sftp = self._open_sftp()
+            try:
+                try:
+                    current = sftp.lstat(destination_path)
+                except Exception as exc:
+                    if self._is_sftp_not_found(exc):
+                        current = None
+                    else:
+                        raise
+                if replace:
+                    if (
+                        current is None
+                        or current.st_mode is None
+                        or not stat.S_ISREG(current.st_mode)
+                        or current.st_size != expected_existing_size
+                        or current.st_mtime != expected_existing_mtime
+                    ):
+                        raise SFTPTransferError('sftp_destination_changed', 'The destination changed before upload started.')
+                elif current is not None:
+                    raise SFTPTransferError('sftp_destination_changed', 'The destination was created before upload started.')
+
+                transferred = 0
+                with sftp.open(temporary_path, 'wx') as remote_file:
+                    while transferred < expected_size:
+                        chunk = stream.read(min(65536, expected_size - transferred))
+                        if not chunk:
+                            raise SFTPTransferError('sftp_upload_incomplete', 'The upload ended before the complete file was received.')
+                        remote_file.write(chunk)
+                        transferred += len(chunk)
+                        if progress_callback:
+                            progress_callback(transferred, expected_size)
+                    remote_file.flush()
+
+                uploaded_stat = sftp.stat(temporary_path)
+                if uploaded_stat.st_size != expected_size:
+                    raise SFTPTransferError('sftp_upload_size_mismatch', 'The uploaded file size did not match the source file.')
+                if replace:
+                    try:
+                        sftp.posix_rename(temporary_path, destination_path)
+                    except Exception as exc:
+                        raise SFTPTransferError(
+                            'sftp_atomic_replace_unavailable',
+                            'This SFTP server cannot replace the existing file atomically.',
+                        ) from exc
+                else:
+                    sftp.rename(temporary_path, destination_path)
+                completed = True
+                return {
+                    'destination_path': destination_path,
+                    'filename': filename,
+                    'bytes_written': expected_size,
+                }
+            except SFTPTransferError:
+                raise
+            except Exception as exc:
+                raise SFTPTransferError('sftp_upload_failed', f'File upload failed: {exc}') from exc
+            finally:
+                if not completed:
+                    try:
+                        sftp.remove(temporary_path)
+                    except Exception:
+                        pass
+                sftp.close()
 
     def set_browser_signer_sid(self, sid):
         if self._browser_signer_sid is not None and self._browser_signer_sid != sid:
@@ -512,6 +952,12 @@ class SSHBridge(TerminalBridge):
 
             self.channel = self.ssh.invoke_shell(term=self._ssh_term, width=cols, height=rows)
             self.channel.setblocking(0)
+            self._sftp_endpoint = {
+                'user': str(user),
+                'host': str(host),
+                'port': int(port),
+                'route': 'direct',
+            }
             log_message(f"[+] SSH connection established for {self.sid}")
             return True, None
         except BrowserSSHKeyError as exc:
@@ -577,6 +1023,9 @@ class SSHBridge(TerminalBridge):
                 log_message(f"[!] Resize error: {e}")
 
     def close(self):
+        with self._sftp_file_refs_lock:
+            self._sftp_file_refs.clear()
+        self._sftp_endpoint = None
         if self.channel:
             try:
                 self.channel.close()

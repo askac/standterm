@@ -65,6 +65,8 @@ pulling large changes.
 
 - Runs SSH, Local Shell, and UART sessions inside browser terminal tabs.
 - Supports multiple persistent terminal tabs while the server process is alive.
+- Provides a lightweight SFTP File Manager for direct SSH sessions, including
+  upload, download, rename, and carefully confirmed permanent deletion.
 - Opens URLs and image links in an in-page overlay, and can pop a terminal into
   system Picture-in-Picture when the browser supports it.
 - Provides Windows Terminal-inspired themes, IBM 5153 colors, 256-color, and
@@ -257,6 +259,27 @@ returns a 64-byte Ed25519 signature. Python verifies that signature against the
 profile's public key before returning it to Paramiko. A browser disconnect,
 timeout, changed connection draft, or stale terminal start cancels the path
 without falling back to a password automatically.
+
+### Lightweight SFTP File Manager
+
+For a connected SSH tab, use the folder button in the status bar, the terminal
+context menu, or the folder button in Terminal Picture-in-Picture. StandTerm
+opens a compact SFTP File Manager in Picture-in-Picture. When opened from a
+terminal PiP, the terminal first returns to its tab so the single Document PiP
+window can switch cleanly to the file manager.
+
+The file manager supports a flat directory listing with manual path navigation,
+drag-and-drop upload, download, rename, and permanent deletion. Upload conflicts
+offer **Keep Both** or atomic **Replace**. Delete uses two distinct confirmation
+steps with deliberately separated actions. It operates only on the direct SSH
+endpoint represented by the tab; it does not follow nested interactive SSH
+sessions, recursively browse directory trees, or act as a full SFTP client.
+
+Remote file actions use short-lived opaque references and transfer tickets bound
+to the browser session, socket, terminal, and live SSH bridge. Displayed paths
+and file names remain data rather than control authority. Downloads and file
+actions accept regular files only; symbolic links and other non-regular entries
+are rejected.
 
 **Settings > General > Import & Export** transfers browser preferences, SSH
 profiles and order, SSH history, and persistent UI layout in a versioned JSON
