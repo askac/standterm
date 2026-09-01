@@ -76,8 +76,16 @@ startup banner:
 - Local Shell paths must be absolute. The backend currently requires POSIX
   directory-relative operations and rejects unsupported non-POSIX Local Shell
   backends.
-- Wait for the typed action result. A pending proposal is not a completed copy,
-  and a rejected proposal must not be replayed automatically.
+- Wait for the typed action result. Running responses expose structured byte
+  progress. If the local wait ends with `wait_timed_out: true`, query the same
+  action id; the backend action may still be active. A pending proposal is not a
+  completed copy, and a rejected proposal must not be replayed automatically.
+- Use `--no-wait` when the caller should return immediately, then query the
+  returned action id with `agent_cli.py action-status`. Browser approval starts
+  a backend background task rather than holding the approval handler open.
+- Treat `file_copy_busy` as a terminal result. Wait for existing work to finish
+  and create a new backend proposal if the user still wants the copy; do not
+  replay the approved action or switch to terminal-stream rescue.
 - If the result is `file_copy_publish_outcome_unknown`, inspect the destination
   before deciding whether to retry. The SSH server may already have published
   the file.

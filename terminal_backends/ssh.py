@@ -20,6 +20,7 @@ SSH_BROWSER_KEY_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]+$')
 SFTP_FILE_REFERENCE_TTL_SECONDS = 5 * 60
 SFTP_FILE_REFERENCE_MAX_RECORDS = 4096
 SFTP_FILE_REFERENCE_TOKEN_BYTES = 12
+SFTP_IO_TIMEOUT_SECONDS = 60
 
 
 class BrowserSSHKeyError(Exception):
@@ -167,9 +168,25 @@ class SSHBridge(TerminalBridge):
         if not transport or not transport.is_active():
             raise SFTPTransferError('sftp_connection_closed', 'The SSH connection is closed.')
         try:
-            return self.ssh.open_sftp()
+            sftp = self.ssh.open_sftp()
+            sftp.get_channel().settimeout(SFTP_IO_TIMEOUT_SECONDS)
+            return sftp
         except Exception as exc:
             raise SFTPTransferError('sftp_unavailable', 'SFTP is unavailable on this SSH server.') from exc
+
+    @staticmethod
+    def _close_sftp_in_background(sftp):
+        def close_sftp():
+            try:
+                sftp.close()
+            except Exception as exc:
+                log_message(f'[!] SFTP session cleanup failed: {exc}')
+
+        threading.Thread(
+            target=close_sftp,
+            daemon=True,
+            name='standterm-sftp-close',
+        ).start()
 
     def _canonical_sftp_directory(self, sftp, directory):
         canonical_directory = self._validate_sftp_path(sftp.normalize(directory))
@@ -606,7 +623,7 @@ class SSHBridge(TerminalBridge):
                         sftp.remove(temporary_path)
                     except Exception:
                         pass
-                sftp.close()
+                self._close_sftp_in_background(sftp)
 
     def set_browser_signer_sid(self, sid):
         if self._browser_signer_sid is not None and self._browser_signer_sid != sid:

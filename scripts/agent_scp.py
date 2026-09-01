@@ -132,6 +132,8 @@ def wait_for_action(args, pending):
         file=sys.stderr,
         flush=True,
     )
+    last_result = dict(pending)
+    last_reported_percent = -1
     while time.monotonic() < deadline:
         time.sleep(args.poll_ms / 1000)
         _status, result = post_command(args, {
@@ -142,15 +144,32 @@ def wait_for_action(args, pending):
         })
         if not isinstance(result, dict):
             continue
+        last_result = result
+        copied = result.get('bytes_copied')
+        total = result.get('total_bytes')
+        if (
+            result.get('status') in {'running', 'committing'}
+            and isinstance(copied, int)
+            and isinstance(total, int)
+            and total > 0
+        ):
+            percent = min(100, int(copied * 100 / total))
+            if last_reported_percent < 0 or percent >= last_reported_percent + 5 or percent == 100:
+                print(
+                    f'Copy progress: {copied}/{total} bytes ({percent}%)',
+                    file=sys.stderr,
+                    flush=True,
+                )
+                last_reported_percent = percent
         if result.get('status') in TERMINAL_ACTION_STATUSES:
             return result
         if result.get('status') == 'failed' and result.get('error_code'):
             return result
     return {
-        'status': 'failed',
-        'error_code': 'agent_action_wait_timeout',
+        **last_result,
         'action_id': action_id,
-        'message': 'Timed out waiting for browser approval or copy completion.',
+        'wait_timed_out': True,
+        'message': 'Stopped waiting; the backend action may still be active. Query action-status before retrying.',
     }
 
 

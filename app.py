@@ -391,6 +391,7 @@ AGENT_ERROR_EXTERNAL_AGENT_DISCONNECTED = 'agent_external_disconnected'
 AGENT_ERROR_EXTERNAL_AGENT_ORIGIN_BLOCKED = 'agent_external_origin_blocked'
 AGENT_ERROR_EXTERNAL_AGENT_DISABLED = 'agent_external_disabled'
 AGENT_ERROR_HUMAN_INPUT_ACTIVE = 'agent_human_input_active'
+AGENT_ERROR_FILE_COPY_BUSY = 'file_copy_busy'
 AGENT_ERROR_FILE_COPY_PUBLISH_OUTCOME_UNKNOWN = 'file_copy_publish_outcome_unknown'
 AGENT_REASON_DETACHED = 'agent_detached'
 AGENT_REASON_DISABLED = 'agent_disabled'
@@ -410,6 +411,9 @@ AGENT_AUDIT_EVENTS = 200
 AGENT_AUDIT_TTL_SECONDS = 12 * 60 * 60
 AGENT_PREVIEW_CHARS = 160
 AGENT_ACTION_MAX_RECORDS = 256
+AGENT_FILE_COPY_MAX_BACKGROUND_WORKERS = 4
+AGENT_FILE_COPY_PROGRESS_EMIT_BYTES = 1024 * 1024
+AGENT_FILE_COPY_PROGRESS_EMIT_SECONDS = 1.0
 AGENT_TRANSCRIPT_TTL_SECONDS = 30 * 60
 AGENT_TRANSCRIPT_MAX_EVENTS = 400
 AGENT_TRANSCRIPT_MAX_BYTES = 120000
@@ -2199,6 +2203,7 @@ class SFTPDownloadTicketStore:
 
 sftp_download_ticket_store = SFTPDownloadTicketStore()
 agent_file_copy_lock = threading.Lock()
+agent_file_copy_worker_slots = threading.BoundedSemaphore(AGENT_FILE_COPY_MAX_BACKGROUND_WORKERS)
 
 
 class AgentFileCopyStream:
@@ -4586,8 +4591,12 @@ def transition_agent_file_copy_action(state, action, event, *, error_code=None, 
         return False
 
     action['status'] = target_status
+    action['action_revision'] = action.get('action_revision', 0) + 1
     if event == AGENT_FILE_COPY_EVENT_START:
         action['approval_granted'] = True
+        action['bytes_copied'] = 0
+        action['total_bytes'] = action.get('source_size')
+        action['progress_updated_at'] = time.time()
     if target_status == AGENT_STATUS_FAILED:
         action.pop('result', None)
         failure_code = error_code
@@ -4599,6 +4608,11 @@ def transition_agent_file_copy_action(state, action, event, *, error_code=None, 
     elif target_status == AGENT_STATUS_COMPLETED:
         action.pop('error_code', None)
         action['result'] = dict(result) if isinstance(result, dict) else {}
+        copied = action['result'].get('bytes_copied')
+        if isinstance(copied, int) and copied >= 0:
+            action['bytes_copied'] = copied
+        action['total_bytes'] = action.get('source_size')
+        action['progress_updated_at'] = time.time()
     else:
         action.pop('error_code', None)
         action.pop('result', None)
@@ -4757,6 +4771,9 @@ def build_agent_file_copy_action(state, record, destination_state, destination_r
         'source_path': source_path,
         'destination_path': destination_path,
         'source_size': source_file['size'],
+        'bytes_copied': 0,
+        'total_bytes': source_file['size'],
+        'progress_updated_at': None,
         'destination_exists': upload.get('status') == 'conflict' or upload.get('existing_size') is not None,
         'destination_existing_size': upload.get('existing_size'),
         'source_file': dict(source_file),
@@ -4778,6 +4795,7 @@ def build_agent_file_copy_action(state, record, destination_state, destination_r
         'approval_granted': False,
         'status': AGENT_STATUS_PENDING_APPROVAL,
         'created_at': time.time(),
+        'action_revision': 0,
         'control_epoch': state.control_epoch,
         'mode_version': state.mode_version,
         'privacy_state': state.privacy_state,
@@ -4863,6 +4881,7 @@ def public_agent_action(action):
         'action_id': action.get('action_id'),
         'proposal_id': action.get('proposal_id'),
         'action_type': action.get('action_type'),
+        'action_revision': action.get('action_revision'),
         'session_id': action.get('session_id'),
         'viewer_id': action.get('viewer_id'),
         'agent_binding_id': action.get('agent_binding_id'),
@@ -4891,6 +4910,9 @@ def public_agent_action(action):
         'source_path': action.get('source_path'),
         'destination_path': action.get('destination_path'),
         'source_size': action.get('source_size'),
+        'bytes_copied': action.get('bytes_copied'),
+        'total_bytes': action.get('total_bytes'),
+        'progress_updated_at': action.get('progress_updated_at'),
         'destination_exists': action.get('destination_exists'),
         'destination_existing_size': action.get('destination_existing_size'),
         'conflict_mode': action.get('conflict_mode'),
@@ -5012,7 +5034,9 @@ def emit_agent_action_failure(sid, action, error_code):
     emit_agent_action_result(sid, action, AGENT_STATUS_FAILED, error_code=error_code)
 
 def emit_agent_decision_error(sid, terminal_id, state, action, error_code):
-    if action:
+    if action and action.get('status') != AGENT_STATUS_PENDING_APPROVAL:
+        emit_agent_action_result(sid, action, action.get('status') or AGENT_STATUS_FAILED)
+    elif action:
         emit_agent_action_failure(sid, action, error_code)
     else:
         emit_agent_error(sid, terminal_id, error_code)
@@ -5033,6 +5057,7 @@ def cancel_agent_pending_actions(state, reason):
             continue
         if action.get('status') in AGENT_STATUS_OPEN:
             action['status'] = AGENT_STATUS_FAILED
+            action['error_code'] = reason
             record_agent_audit(state, action, AGENT_STATUS_FAILED, error_code=reason)
             cancelled.append(dict(action))
     return cancelled
@@ -5052,18 +5077,18 @@ def find_agent_action_for_decision(state, action_id, proposal_id):
 def validate_agent_action_decision(state, data):
     action_id = data.get('action_id')
     proposal_id = data.get('proposal_id')
-    if data.get('session_id') is not None and data.get('session_id') != state.session_id:
-        return None, AGENT_ERROR_STALE_PROPOSAL
-    if data.get('viewer_id') is not None and data.get('viewer_id') != state.viewer_id:
-        return None, AGENT_ERROR_STALE_PROPOSAL
-    if data.get('agent_binding_id') is not None and data.get('agent_binding_id') != state.agent_binding_id:
-        return None, AGENT_ERROR_STALE_PROPOSAL
-    if data.get('mode_version') is not None and data.get('mode_version') != state.mode_version:
-        return None, AGENT_ERROR_STALE_MODE_VERSION
-    if data.get('privacy_version') is not None and data.get('privacy_version') != state.privacy_version:
-        return None, AGENT_ERROR_STALE_PROPOSAL
-
     action = find_agent_action_for_decision(state, action_id, proposal_id)
+    if data.get('session_id') is not None and data.get('session_id') != state.session_id:
+        return action, AGENT_ERROR_STALE_PROPOSAL
+    if data.get('viewer_id') is not None and data.get('viewer_id') != state.viewer_id:
+        return action, AGENT_ERROR_STALE_PROPOSAL
+    if data.get('agent_binding_id') is not None and data.get('agent_binding_id') != state.agent_binding_id:
+        return action, AGENT_ERROR_STALE_PROPOSAL
+    if data.get('mode_version') is not None and data.get('mode_version') != state.mode_version:
+        return action, AGENT_ERROR_STALE_MODE_VERSION
+    if data.get('privacy_version') is not None and data.get('privacy_version') != state.privacy_version:
+        return action, AGENT_ERROR_STALE_PROPOSAL
+
     if not action:
         return None, AGENT_ERROR_ACTION_NOT_FOUND
     if isinstance(proposal_id, str) and action.get('proposal_id') != proposal_id:
@@ -8275,6 +8300,10 @@ def copy_file_between_agent_bridges(state, action):
         raise SFTPTransferError(error_code, 'The approved file copy is no longer authorized.')
 
     conflict_mode = action['conflict_mode']
+    last_progress_emit = {
+        'bytes': 0,
+        'at': time.monotonic(),
+    }
     with agent_file_copy_lock:
         source_file = dict(action['source_file'])
         upload = dict(action['destination_upload'])
@@ -8284,20 +8313,43 @@ def copy_file_between_agent_bridges(state, action):
                 'The destination file already exists. Choose keep_both or replace explicitly.',
             )
 
-        def ensure_copy_still_authorized(_transferred, _expected_size):
+        def ensure_copy_still_authorized(transferred, expected_size, *, report_progress=False):
+            emit_progress = False
             with agent_lock:
                 _source, _destination, progress_error = validate_agent_file_copy_execution(
                     state,
                     action,
                 )
+                if not progress_error and report_progress:
+                    action['bytes_copied'] = transferred
+                    action['total_bytes'] = expected_size
+                    action['progress_updated_at'] = time.time()
+                    now = time.monotonic()
+                    emit_progress = (
+                        transferred >= expected_size
+                        or transferred - last_progress_emit['bytes'] >= AGENT_FILE_COPY_PROGRESS_EMIT_BYTES
+                        or now - last_progress_emit['at'] >= AGENT_FILE_COPY_PROGRESS_EMIT_SECONDS
+                    )
+                    if emit_progress:
+                        last_progress_emit['bytes'] = transferred
+                        last_progress_emit['at'] = now
+                        action['action_revision'] = action.get('action_revision', 0) + 1
+                        emit_agent_action_result(state.sid, action, AGENT_STATUS_RUNNING)
             if progress_error:
                 raise SFTPTransferError(
                     progress_error,
                     'The approved file copy authorization changed during transfer.',
                 )
 
-        def ensure_copy_read_still_authorized(_transferred, _expected_size):
-            ensure_copy_still_authorized(_transferred, _expected_size)
+        def ensure_copy_read_still_authorized(transferred, expected_size):
+            ensure_copy_still_authorized(transferred, expected_size)
+
+        def report_copy_progress(transferred, expected_size):
+            ensure_copy_still_authorized(
+                transferred,
+                expected_size,
+                report_progress=True,
+            )
 
         def begin_copy_commit(_transferred, _expected_size):
             current_source = prepare_agent_file_copy_source(source_bridge, source_file['path'])
@@ -8330,6 +8382,7 @@ def copy_file_between_agent_bridges(state, action):
                         action.get('error_code') or AGENT_ERROR_ACTION_NOT_WRITABLE,
                         'The approved file copy could not enter the commit barrier.',
                     )
+                emit_agent_action_result(state.sid, action, AGENT_STATUS_COMMITTING)
 
         chunks = download_agent_file_copy_chunks(source_bridge, source_file)
         stream = AgentFileCopyStream(chunks, expected_size=source_file['size'])
@@ -8340,7 +8393,7 @@ def copy_file_between_agent_bridges(state, action):
                 upload,
                 source_file['size'],
                 before_read_callback=ensure_copy_read_still_authorized,
-                progress_callback=ensure_copy_still_authorized,
+                progress_callback=report_copy_progress,
                 pre_commit_callback=begin_copy_commit,
             )
         finally:
@@ -8403,6 +8456,7 @@ def execute_agent_file_copy(session_token, terminal_id, sid, action_id):
             return False, {
                 'error_code': action.get('error_code') or AGENT_ERROR_ACTION_NOT_WRITABLE,
             }
+        emit_agent_action_result(sid, action, AGENT_STATUS_RUNNING)
     try:
         result = copy_file_between_agent_bridges(state, action)
     except (SFTPTransferError, LocalFileTransferError) as exc:
@@ -8442,6 +8496,36 @@ def execute_agent_file_copy(session_token, terminal_id, sid, action_id):
                 'error_code': current_action.get('error_code') or AGENT_ERROR_ACTION_NOT_WRITABLE,
             }
     return True, result
+
+
+def execute_agent_file_copy_in_background(session_token, terminal_id, sid, action_id, action):
+    try:
+        try:
+            ok, result = execute_agent_file_copy(
+                session_token,
+                terminal_id,
+                sid,
+                action_id,
+            )
+        except Exception:
+            failure_code = fail_agent_file_copy_action(
+                session_token,
+                terminal_id,
+                sid,
+                action_id,
+                action,
+                'file_copy_failed',
+                unexpected=True,
+            )
+            ok, result = False, {'error_code': failure_code}
+        status = AGENT_STATUS_COMPLETED if ok else AGENT_STATUS_FAILED
+        emit_agent_action_result(sid, action, status, error_code=result.get('error_code'))
+        with agent_lock:
+            state = get_agent_state(session_token, terminal_id, sid)
+            if state:
+                emit_agent_state(sid, state)
+    finally:
+        agent_file_copy_worker_slots.release()
 
 
 def emit_external_agent_send_action_request(sid, action):
@@ -8788,7 +8872,11 @@ def on_agent_action_approve(data):
             emit_agent_state(request.sid, state)
             return
         if action.get('status') != AGENT_STATUS_PENDING_APPROVAL:
-            emit_agent_action_failure(request.sid, action, AGENT_ERROR_ACTION_NOT_PENDING)
+            emit_agent_action_result(
+                request.sid,
+                action,
+                action.get('status') or AGENT_STATUS_FAILED,
+            )
             emit_agent_state(request.sid, state)
             return
         if action.get('control_epoch') != state.control_epoch:
@@ -8811,6 +8899,9 @@ def on_agent_action_approve(data):
         record_agent_audit_event(state, AGENT_AUDIT_ACTION_APPROVE, action=action)
         record_agent_audit(state, action, AGENT_STATUS_APPROVED)
         control_epoch = state.control_epoch
+        if action_type == AGENT_ACTION_FILE_COPY:
+            emit_agent_action_result(request.sid, action, AGENT_STATUS_APPROVED)
+            emit_agent_state(request.sid, state)
 
     if action_type == AGENT_ACTION_TERMINAL_INPUT:
         ok, result = write_agent_terminal_input(
@@ -8823,12 +8914,57 @@ def on_agent_action_approve(data):
             proposal_id=action['proposal_id'],
         )
     elif action_type == AGENT_ACTION_FILE_COPY:
-        ok, result = execute_agent_file_copy(
-            session_token,
-            terminal_id,
-            request.sid,
-            action_id,
-        )
+        if not agent_file_copy_worker_slots.acquire(blocking=False):
+            failure_code = fail_agent_file_copy_action(
+                session_token,
+                terminal_id,
+                request.sid,
+                action_id,
+                action,
+                AGENT_ERROR_FILE_COPY_BUSY,
+            )
+            emit_agent_action_result(
+                request.sid,
+                action,
+                AGENT_STATUS_FAILED,
+                error_code=failure_code,
+            )
+            with agent_lock:
+                current_state = get_agent_state(session_token, terminal_id, request.sid)
+                if current_state:
+                    emit_agent_state(request.sid, current_state)
+            return
+        try:
+            socketio.start_background_task(
+                execute_agent_file_copy_in_background,
+                session_token,
+                terminal_id,
+                request.sid,
+                action_id,
+                action,
+            )
+        except Exception:
+            agent_file_copy_worker_slots.release()
+            failure_code = fail_agent_file_copy_action(
+                session_token,
+                terminal_id,
+                request.sid,
+                action_id,
+                action,
+                AGENT_ERROR_FILE_COPY_BUSY,
+                unexpected=True,
+            )
+            emit_agent_action_result(
+                request.sid,
+                action,
+                AGENT_STATUS_FAILED,
+                error_code=failure_code,
+            )
+            with agent_lock:
+                current_state = get_agent_state(session_token, terminal_id, request.sid)
+                if current_state:
+                    emit_agent_state(request.sid, current_state)
+        return
     else:
         ok, result = False, {'error_code': AGENT_ERROR_ACTION_NOT_ALLOWED}
         with agent_lock:
@@ -8868,7 +9004,11 @@ def on_agent_action_reject(data):
             emit_agent_decision_error(request.sid, terminal_id, state, action, error_code)
             return
         if action.get('status') != AGENT_STATUS_PENDING_APPROVAL:
-            emit_agent_action_failure(request.sid, action, AGENT_ERROR_ACTION_NOT_PENDING)
+            emit_agent_action_result(
+                request.sid,
+                action,
+                action.get('status') or AGENT_STATUS_FAILED,
+            )
             emit_agent_state(request.sid, state)
             return
         if action.get('action_type') == AGENT_ACTION_FILE_COPY:

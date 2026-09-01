@@ -289,7 +289,13 @@ must belong to the same StandTerm browser session and viewer. Local Shell paths
 must be absolute and currently require POSIX directory-relative file operations.
 The helper waits for the typed action result by default; use
 `--no-wait` to return the pending action id. It never prints either bearer
-token or the transferred file content.
+token or the transferred file content. While an approved copy runs, it reports
+backend byte progress to stderr. Reaching `--wait-seconds` stops only the local
+wait and returns the last typed action status with `wait_timed_out: true`; it
+does not report the backend copy as failed or authorize a retry. Browser
+approval schedules the copy as a backend background task, so the approval
+handler does not wait for the transfer. Callers may use `--no-wait` and query
+the returned action id with `action-status` instead.
 
 For workflows that need one paced text entry before interactive follow-up, the
 REPL can run `--type-text` or `--type-file` after attaching and then continue
@@ -729,7 +735,9 @@ source size, destination existence, and exact conflict behavior. Preflight
 details are not returned to the external caller. Every request returns
 `pending_approval` and requires a separate **Approve copy** click, including
 when both terminals use Full mode. The backend does not treat a caller's claim
-that the user requested a copy as authorization.
+that the user requested a copy as authorization. The authorizing viewer shows
+file-copy approval globally even when another terminal tab is active; ordinary
+terminal-input approvals remain scoped to their terminal tab.
 
 `conflict_mode` is one of `fail`, `keep_both`, or `replace`. `fail` is the safe
 default and never writes when the destination existed during preflight.
@@ -757,11 +765,25 @@ Poll the typed result with the source token and returned action id:
 Pending and rejected responses, plus failures that occur before approval is
 validated, expose only action identity, status, and an optional error code.
 Running, committing, completed, and post-approval failed responses may expose
-the approved canonical plan. Completed results add metadata such as
-`bytes_copied`, `destination_path`, and `source_preserved`, but never file
-content. If a terminal/token is invalidated after the commit barrier, the
-publish continues and its confirmed result remains authoritative, but that
-invalid token can no longer poll it.
+the approved canonical plan. Running and committing responses include
+`bytes_copied`, `total_bytes`, and `progress_updated_at`; progress is structured
+backend state and is not inferred from terminal output. File-copy events also
+include a monotonic `action_revision`; clients must ignore an older revision for
+the same action id. A duplicate approval or rejection receives the current
+authoritative action state instead of changing the action to `failed`.
+Completed results add
+metadata such as `bytes_copied`, `destination_path`, and `source_preserved`, but
+never file content. Once the SSH server confirms the atomic publish, SFTP
+session cleanup is best-effort and cannot hold the action in `running`. If a
+terminal/token is invalidated after the commit barrier, the publish continues
+and its confirmed result remains authoritative, but that invalid token can no
+longer poll it.
+
+Approved copies use a bounded background-worker pool and remain serialized at
+the cross-bridge copy barrier. If the pool is full, the action fails with
+`file_copy_busy` rather than creating an unbounded waiter. SSH SFTP channels use
+a 60-second timeout for each blocking read or write; a timeout after publish
+starts follows the same publish-outcome reconciliation rules below.
 
 `failed` means the workflow did not obtain confirmed success; it does not
 always prove that the destination remained unchanged. In particular,

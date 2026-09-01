@@ -1702,7 +1702,7 @@ def test_approval_payload_and_stale_rejections(browser, access_url):
             f"state.privacy_state === 'private_input' && state.privacy_version > {privacy_action['privacy_version']}",
         )
         emit_socket(page, 'agent_action_approve', stale_privacy_payload)
-        wait_for_last_action_error(page, 'agent_stale_proposal')
+        wait_for_last_action_error(page, 'agent_privacy_blocked')
 
         set_privacy(page, 'normal')
         wait_for_agent(page, "state.privacy_state === 'normal'")
@@ -1711,7 +1711,7 @@ def test_approval_payload_and_stale_rejections(browser, access_url):
         emit_socket(page, 'agent_mode_set', {'terminal_id': TERMINAL_ID, 'mode': 'observe'})
         wait_for_agent(page, f"state.mode === 'observe' && state.mode_version > {mode_action['mode_version']}")
         emit_socket(page, 'agent_action_approve', stale_mode_payload)
-        wait_for_last_action_error(page, 'agent_stale_mode_version')
+        wait_for_last_action_error(page, 'agent_mode_changed')
     finally:
         close_context(context)
 
@@ -1791,6 +1791,133 @@ def test_file_copy_approval_shows_canonical_plan(browser, access_url):
             'destination may have changed; inspect it before retrying' in status_detail,
             'publish outcome warning was not explicit',
         )
+    finally:
+        close_context(context)
+
+
+def test_file_copy_approval_is_global_and_decision_is_single_shot(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        page.evaluate(
+            """() => window.terminalTest.applyTerminalListForTest({
+                terminals: [
+                    {
+                        terminal_id: 'main',
+                        connection_type: 'ssh',
+                        terminal_label: 'SSH - source',
+                        term: 'xterm-256color',
+                        connected: true
+                    },
+                    {
+                        terminal_id: 'term-2',
+                        connection_type: 'ssh',
+                        terminal_label: 'SSH - destination',
+                        term: 'xterm-256color',
+                        connected: true
+                    }
+                ]
+            })"""
+        )
+        page.evaluate("() => window.terminalTest.switchTerminalForTest('term-2')")
+        copy_payload = {
+            'action_id': 'copy-global-1',
+            'proposal_id': 'copy-global-proposal-1',
+            'action_type': 'file_copy',
+            'action_revision': 0,
+            'status': 'pending_approval',
+            'terminal_id': 'main',
+            'destination_terminal_id': 'term-2',
+            'source_endpoint': {'route': 'direct', 'user': 'source', 'host': 'source.example', 'port': 22},
+            'destination_endpoint': {'route': 'direct', 'user': 'destination', 'host': 'destination.example', 'port': 22},
+            'source_path': '/srv/source.bin',
+            'destination_path': '/srv/destination.bin',
+            'source_size': 1536,
+            'bytes_copied': 0,
+            'total_bytes': 1536,
+            'conflict_mode': 'fail',
+            'escaped_preview': 'Copy source to destination',
+        }
+        page.evaluate(
+            "payload => window.terminalTest.applyAgentActionPayloadForTest(payload)",
+            copy_payload,
+        )
+        global_prompt = page.evaluate(
+            """() => ({
+                tabs: window.terminalTest.getTerminalTabsState(),
+                panelVisible: document.getElementById('agent-panel').classList.contains('visible'),
+                actionVisible: document.getElementById('agent-action-box').classList.contains('visible'),
+                approveDisabled: document.getElementById('agent-approve-btn').disabled
+            })"""
+        )
+        check(global_prompt['tabs']['activeTerminalId'] == 'term-2', 'file copy prompt switched the active terminal')
+        check(global_prompt['tabs']['agentPanelTerminalId'] == 'main', 'file copy prompt did not target the source terminal')
+        check(global_prompt['tabs']['agentPanelInMainDocument'] is True, 'file copy prompt stayed in another document')
+        check(global_prompt['panelVisible'] is True and global_prompt['actionVisible'] is True, 'background file copy prompt was hidden')
+        check(global_prompt['approveDisabled'] is False, 'background file copy approval was disabled')
+
+        clear_emitted(page)
+        page.evaluate(
+            """() => {
+                const button = document.getElementById('agent-approve-btn');
+                button.click();
+                button.click();
+            }"""
+        )
+        approvals = get_emitted(page, 'agent_action_approve')
+        check(len(approvals) == 1, 'double click emitted more than one file copy approval')
+        check(page.locator('#agent-approve-btn').is_disabled(), 'approval button did not lock immediately')
+
+        page.evaluate(
+            "payload => window.terminalTest.applyAgentActionPayloadForTest(payload)",
+            {**copy_payload, 'action_revision': 2, 'status': 'running', 'bytes_copied': 768},
+        )
+        progress = page.evaluate(
+            """() => ({
+                visible: document.getElementById('agent-action-box').classList.contains('visible'),
+                bytes: document.getElementById('agent-action-bytes').innerText,
+                status: document.getElementById('agent-action-status').innerText,
+                approveDisabled: document.getElementById('agent-approve-btn').disabled
+            })"""
+        )
+        check(progress['visible'] is True, 'running file copy progress was hidden')
+        check(progress['bytes'] == '768 B / 1.50 KiB', 'file copy byte progress was incorrect')
+        check(progress['status'] == 'running · 50%', 'file copy percentage was incorrect')
+        check(progress['approveDisabled'] is True, 'running file copy could still be approved')
+
+        page.evaluate(
+            "payload => window.terminalTest.applyAgentActionPayloadForTest(payload)",
+            {**copy_payload, 'action_revision': 3, 'status': 'completed', 'bytes_copied': 1536},
+        )
+        page.evaluate(
+            "payload => window.terminalTest.applyAgentActionPayloadForTest(payload)",
+            {**copy_payload, 'action_revision': 2, 'status': 'running', 'bytes_copied': 768},
+        )
+        monotonic = page.evaluate(
+            "() => window.terminalTest.getAgentStateForTest('main')",
+        )
+        check(monotonic['last_action']['status'] == 'completed', 'stale progress replaced the completed action')
+        check(monotonic['pending_action'] is None, 'stale progress reopened the completed action')
+        page.click('#agent-panel-close-btn')
+        page.evaluate(
+            """payload => window.terminalTest.applyAgentActionPayloadForTest(payload)""",
+            {
+                'action_id': 'command-background-1',
+                'action_type': 'terminal_input',
+                'status': 'pending_approval',
+                'terminal_id': 'main',
+                'escaped_preview': 'echo background',
+            },
+        )
+        normal_prompt = page.evaluate(
+            """() => ({
+                panelVisible: document.getElementById('agent-panel').classList.contains('visible'),
+                activeTerminalId: window.terminalTest.getTerminalTabsState().activeTerminalId,
+                pending: window.terminalTest.getAgentStateForTest('main').pending_action
+            })"""
+        )
+        check(normal_prompt['activeTerminalId'] == 'term-2', 'normal approval switched the active terminal')
+        check(normal_prompt['panelVisible'] is False, 'normal command approval became a global prompt')
+        check(normal_prompt['pending']['action_id'] == 'command-background-1', 'normal approval was not retained on its terminal')
     finally:
         close_context(context)
 
@@ -3428,6 +3555,7 @@ def main():
         test_paste_review_approve_and_cancel,
         test_approval_payload_and_stale_rejections,
         test_file_copy_approval_shows_canonical_plan,
+        test_file_copy_approval_is_global_and_decision_is_single_shot,
         test_cjk_width_compatibility_defaults_off,
         test_windows_font_fallback_defaults_and_migrates_legacy,
         test_powerline_symbol_fallback_is_optional_and_applies_immediately,

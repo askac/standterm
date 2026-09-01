@@ -2018,6 +2018,7 @@
             let browserPairingCheckExpiresAt = 0;
             let agentPanelVisible = false;
             let agentPanelTerminalIdOverride = null;
+            const agentDecisionActionIds = new Set();
             let agentPanelPosition = null;
             let agentPanelDrag = null;
             let agentExternalTokenCountdownTimer = null;
@@ -2378,6 +2379,7 @@
                     humanInputLeaseExpiresAt: null,
                     pendingActions: 0,
                     openActionIds: new Set(),
+                    actionRevisions: new Map(),
                     lastAction: null,
                     pendingAction: null,
                     snapshotSeq: 0,
@@ -2707,8 +2709,16 @@
                 if (action.errorCode === 'file_copy_publish_outcome_unknown') {
                     parts.push('destination may have changed; inspect it before retrying');
                 }
-                if (Number.isFinite(Number(action.bytesWritten))) parts.push(`written: ${action.bytesWritten}`);
-                else if (Number.isFinite(Number(action.byteLength))) parts.push(`bytes: ${action.byteLength}`);
+                if (action.bytesWritten !== null && Number.isFinite(Number(action.bytesWritten))) {
+                    parts.push(`written: ${action.bytesWritten}`);
+                } else if (action.bytesCopied !== null && Number.isFinite(Number(action.bytesCopied))) {
+                    const total = action.totalBytes !== null && Number.isFinite(Number(action.totalBytes))
+                        ? `/${action.totalBytes}`
+                        : '';
+                    parts.push(`copied: ${action.bytesCopied}${total}`);
+                } else if (action.byteLength !== null && Number.isFinite(Number(action.byteLength))) {
+                    parts.push(`bytes: ${action.byteLength}`);
+                }
                 agentStatusDetail.innerText = parts.join(' · ');
             }
 
@@ -2916,13 +2926,31 @@
                         agentFileCopyWarning.innerText = 'The source file will be preserved.';
                     }
                 }
-                agentActionBytes.innerText = isFileCopy ? 'after approval' : String(normalizeAgentCount(action.byte_length));
+                if (isFileCopy) {
+                    const copied = normalizeAgentCount(action.bytes_copied);
+                    const total = normalizeAgentCount(action.total_bytes || action.source_size);
+                    agentActionBytes.innerText = action.status === 'pending_approval'
+                        ? 'after approval'
+                        : `${formatSftpBytes(copied)} / ${formatSftpBytes(total)}`;
+                } else {
+                    agentActionBytes.innerText = String(normalizeAgentCount(action.byte_length));
+                }
                 agentActionLines.innerText = isFileCopy ? '--' : String(normalizeAgentCount(action.line_count));
                 agentActionNewline.innerText = isFileCopy ? '--' : (action.ends_with_newline ? 'yes' : 'no');
                 agentActionControl.innerText = isFileCopy ? '--' : (action.contains_control_chars ? 'yes' : 'no');
-                agentActionStatus.innerText = action.status || '--';
+                const copied = normalizeAgentCount(action.bytes_copied);
+                const total = normalizeAgentCount(action.total_bytes || action.source_size);
+                const percent = isFileCopy && total > 0
+                    ? Math.min(100, Math.floor(copied * 100 / total))
+                    : null;
+                agentActionStatus.innerText = percent === null
+                    ? (action.status || '--')
+                    : `${action.status || '--'} · ${percent}%`;
                 agentApproveBtn.innerText = isFileCopy ? 'Approve copy' : 'Approve';
-                const canDecide = canUseAgentPanel(state) && action.status === 'pending_approval' && !!action.action_id;
+                const canDecide = canUseAgentPanel(state)
+                    && action.status === 'pending_approval'
+                    && !!action.action_id
+                    && !agentDecisionActionIds.has(action.action_id);
                 agentApproveBtn.disabled = !canDecide;
                 agentRejectBtn.disabled = !canDecide;
                 agentActionPauseBtn.disabled = !(canUseAgentPanel(state) && hasAgentPauseCapability(state));
@@ -3691,8 +3719,17 @@
                 }
                 const actionId = typeof data.action_id === 'string' ? data.action_id : null;
                 const status = typeof data.status === 'string' ? data.status : '';
+                const isFileCopy = data.action_type === 'file_copy';
+                const actionRevision = getAgentNumberField(data, 'action_revision');
+                if (actionId && actionRevision !== null) {
+                    const previousRevision = state.agent.actionRevisions.get(actionId);
+                    if (previousRevision !== undefined && actionRevision < previousRevision) return;
+                    state.agent.actionRevisions.set(actionId, actionRevision);
+                }
+                if (actionId && status !== 'pending_approval') agentDecisionActionIds.delete(actionId);
                 state.agent.lastAction = {
                     actionId,
+                    actionRevision,
                     proposalId: getAgentStringField(data, 'proposal_id'),
                     sessionId: getAgentStringField(data, 'session_id'),
                     viewerId: getAgentStringField(data, 'viewer_id'),
@@ -3703,13 +3740,20 @@
                     errorCode: typeof data.error_code === 'string' ? data.error_code : null,
                     byteLength: getAgentNumberField(data, 'byte_length'),
                     bytesWritten: getAgentNumberField(data, 'bytes_written'),
+                    bytesCopied: getAgentNumberField(data, 'bytes_copied'),
+                    totalBytes: getAgentNumberField(data, 'total_bytes'),
                     controlEpoch: Number.isFinite(Number(data.control_epoch)) ? Number(data.control_epoch) : null
                 };
                 if (actionId) {
                     if (AGENT_OPEN_ACTION_STATUSES.has(status)) {
                         state.agent.openActionIds.add(actionId);
                         state.agent.pendingActions = Math.max(state.agent.pendingActions, state.agent.openActionIds.size);
-                        if (status === 'pending_approval') state.agent.pendingAction = data;
+                        if (
+                            status === 'pending_approval'
+                            || (isFileCopy && ['approved', 'running', 'committing'].includes(status))
+                        ) {
+                            state.agent.pendingAction = data;
+                        }
                     } else {
                         state.agent.openActionIds.delete(actionId);
                         state.agent.pendingActions = Math.max(state.agent.openActionIds.size, state.agent.pendingActions - 1, 0);
@@ -3717,6 +3761,11 @@
                             state.agent.pendingAction = null;
                         }
                     }
+                }
+                if (isFileCopy && status === 'pending_approval') {
+                    restoreAgentPanelToMainDocument();
+                    agentPanelTerminalIdOverride = state.id;
+                    agentPanelVisible = true;
                 }
                 updateAgentPauseButton();
                 updateAgentPanel();
@@ -6197,6 +6246,7 @@
                 setBrowserAuthBusy(false);
                 pendingSshConnectionDrafts.clear();
                 handledSshSignRequestIds.clear();
+                agentDecisionActionIds.clear();
                 clearSessionRenewTimer();
                 setServerConnectionState('unavailable');
                 terminals.forEach(state => {
@@ -6843,13 +6893,27 @@
             agentApproveBtn.onclick = () => {
                 const state = getAgentPanelTerminalState();
                 const action = getPendingAgentAction(state);
-                if (!canUseAgentPanel(state) || !action || !action.action_id) return;
+                if (
+                    !canUseAgentPanel(state)
+                    || !action
+                    || !action.action_id
+                    || agentDecisionActionIds.has(action.action_id)
+                ) return;
+                agentDecisionActionIds.add(action.action_id);
+                updateAgentPanel();
                 socket.emit('agent_action_approve', buildAgentActionDecisionPayload(state, action));
             };
             agentRejectBtn.onclick = () => {
                 const state = getAgentPanelTerminalState();
                 const action = getPendingAgentAction(state);
-                if (!canUseAgentPanel(state) || !action || !action.action_id) return;
+                if (
+                    !canUseAgentPanel(state)
+                    || !action
+                    || !action.action_id
+                    || agentDecisionActionIds.has(action.action_id)
+                ) return;
+                agentDecisionActionIds.add(action.action_id);
+                updateAgentPanel();
                 socket.emit('agent_action_reject', buildAgentActionDecisionPayload(state, action));
             };
             agentActionPauseBtn.onclick = () => {

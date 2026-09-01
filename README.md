@@ -462,7 +462,14 @@ any two attached SSH or Local Shell terminals. Both terminals need separately
 minted external-agent tokens from the same browser session. Every copy opens a
 dedicated browser approval card showing the backend-canonical source,
 destination, size, and conflict behavior; Full mode does not bypass this
-per-operation approval. The safe default is `--conflict-mode fail`; use
+per-operation approval. File-copy approval appears even when a different
+terminal tab is active, while ordinary command approvals remain terminal
+scoped. Approved copies expose typed byte progress through the browser card and
+`agent_scp.py`. Execution runs as a backend background action; use
+`agent_scp.py --no-wait` and `agent_cli.py action-status` for an explicitly
+non-blocking query workflow. Background workers are bounded; `file_copy_busy`
+is a terminal action result and does not authorize a rescue-path fallback. The
+safe default is `--conflict-mode fail`; use
 `keep-both` or `replace` only when the requested behavior is intentional. Local
 Shell paths must be absolute and currently require POSIX directory-relative
 file operations. File contents stream through bounded backend
