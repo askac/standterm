@@ -925,7 +925,10 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                     sessions: [...pipDocument.querySelector('.sftp-session-select').options].map(option => option.value),
                     path: pipDocument.querySelector('.sftp-destination-pane .sftp-path-input').value,
                     filename: pipDocument.querySelector('.sftp-copy-name-input').value,
-                    endpoint: pipDocument.querySelector('.sftp-destination-pane .sftp-endpoint-value').innerText
+                    endpoint: pipDocument.querySelector('.sftp-destination-pane .sftp-endpoint-value').innerText,
+                    innerCloseCount: pipDocument.querySelectorAll('.sftp-destination-close').length,
+                    cancelText: pipDocument.querySelector('.sftp-copy-cancel').innerText,
+                    lifecycle: pipDocument.querySelector('.sftp-copy-lifecycle-hint').innerText
                 };
             }"""
         )
@@ -935,6 +938,9 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
         check(copy_picker['path'] == '/home/local', 'destination Files pane did not browse the selected session')
         check(copy_picker['filename'] == 'reference.txt', 'destination Files pane did not preserve the source name')
         check(copy_picker['endpoint'].startswith('Local Shell'), 'destination Files pane did not identify Local Shell')
+        check(copy_picker['innerCloseCount'] == 0, 'destination Files pane kept a duplicate close icon')
+        check(copy_picker['cancelText'] == 'Cancel', 'destination Files pane did not provide one clear pre-copy exit')
+        check('closes this destination pane' in copy_picker['lifecycle'], 'destination Files pane did not explain pre-copy cancellation')
 
         clear_emitted(page)
         page.evaluate("() => documentPictureInPicture.window.document.querySelector('.sftp-copy-confirm').click()")
@@ -968,18 +974,57 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                 });
                 const statusAfterForeign = documentPictureInPicture.window.document
                     .querySelector('.sftp-destination-pane .sftp-transfer-status').innerText;
+                documentPictureInPicture.window.document.querySelector('.sftp-pip-header .sftp-pip-close').click();
+                const closeBlocked = !!documentPictureInPicture.window.document.querySelector('.sftp-destination-pane');
+                const closeExplanation = documentPictureInPicture.window.document
+                    .querySelector('.sftp-copy-lifecycle-hint').innerText;
                 window.terminalTest.handleFilesCopyResultForTest({
                     request_id: payload.request_id,
                     copy_id: 'filesc_test',
-                    status: 'completed',
+                    status: 'committing',
                     revision: 1,
                     source_size: 9,
                     bytes_copied: 9,
                     total_bytes: 9,
                     destination_path: '/home/local/reference.txt'
                 });
+                const publishingButton = documentPictureInPicture.window.document.querySelector('.sftp-copy-cancel');
+                const publishing = {
+                    text: publishingButton.innerText,
+                    disabled: publishingButton.disabled,
+                    lifecycle: documentPictureInPicture.window.document
+                        .querySelector('.sftp-copy-lifecycle-hint').innerText
+                };
+                window.terminalTest.handleFilesCopyResultForTest({
+                    request_id: payload.request_id,
+                    copy_id: 'filesc_test',
+                    status: 'completed',
+                    revision: 2,
+                    source_size: 9,
+                    bytes_copied: 9,
+                    total_bytes: 9,
+                    destination_path: '/home/local/reference.txt'
+                });
+                const refreshRequest = window.terminalTest.getEmitted()
+                    .findLast(item => item.event === 'sftp_browse_request' && item.args[0].terminal_id === 'term-2');
+                window.terminalTest.handleSftpBrowseResultForTest({
+                    request_id: refreshRequest.args[0].request_id,
+                    terminal_id: 'term-2',
+                    status: 'ready',
+                    path: '/home/local',
+                    endpoint: { route: 'local', shell: 'bash', platform: 'linux' },
+                    directories: [],
+                    files: [{ file_id: 'sftpf_destination', name: 'reference.txt', size: 9, mtime: 30 }],
+                    truncated: false,
+                    max_upload_bytes: 1024
+                });
                 return {
                     statusAfterForeign,
+                    closeBlocked,
+                    closeExplanation,
+                    publishing,
+                    terminalButtonText: documentPictureInPicture.window.document
+                        .querySelector('.sftp-copy-cancel').innerText,
                     progressHidden: !documentPictureInPicture.window.document
                         .querySelector('.sftp-destination-pane .sftp-progress').classList.contains('visible')
                 };
@@ -987,8 +1032,99 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
             copy_payload,
         )
         check(copy_result_ui['statusAfterForeign'].startswith('Copying '), 'Files copy accepted a foreign copy_id with the same request_id')
+        check(copy_result_ui['closeBlocked'] is True, 'Files closed without distinguishing close from copy cancellation')
+        check('Cancel the copy first' in copy_result_ui['closeExplanation'], 'Files close did not explain how to stop the copy')
+        check(copy_result_ui['publishing']['text'] == 'Publishing…', 'commit barrier did not replace the cancel action')
+        check(copy_result_ui['publishing']['disabled'] is True, 'commit barrier still allowed cancellation')
+        check('cannot be cancelled' in copy_result_ui['publishing']['lifecycle'], 'commit barrier did not explain its cancellation boundary')
+        check(copy_result_ui['terminalButtonText'] == 'Close', 'completed Files copy did not provide a clear close action')
         check(copy_result_ui['progressHidden'] is True, 'Files copy did not accept its bound terminal result')
-        page.evaluate("() => documentPictureInPicture.window.document.querySelector('.sftp-destination-close').click()")
+        page.evaluate("() => documentPictureInPicture.window.document.querySelector('.sftp-copy-cancel').click()")
+
+        clear_emitted(page)
+        page.evaluate(
+            """() => {
+                const pipDocument = documentPictureInPicture.window.document;
+                pipDocument.querySelector('.sftp-file-copy').click();
+                const request = window.terminalTest.getEmitted()
+                    .find(item => item.event === 'sftp_browse_request' && item.args[0].terminal_id === 'term-2');
+                window.terminalTest.handleSftpBrowseResultForTest({
+                    request_id: request.args[0].request_id,
+                    terminal_id: 'term-2',
+                    status: 'ready',
+                    path: '/home/local',
+                    endpoint: { route: 'local', shell: 'bash', platform: 'linux' },
+                    directories: [],
+                    files: [],
+                    truncated: false,
+                    max_upload_bytes: 1024
+                });
+            }"""
+        )
+        clear_emitted(page)
+        page.evaluate("() => documentPictureInPicture.window.document.querySelector('.sftp-copy-confirm').click()")
+        cancel_copy_payload = get_emitted(page, 'files_copy_request')[0]['args'][0]
+        clear_emitted(page)
+        cancel_pending_ui = page.evaluate(
+            """payload => {
+                window.terminalTest.handleFilesCopyResultForTest({
+                    request_id: payload.request_id,
+                    copy_id: 'filesc_cancel_test',
+                    status: 'running',
+                    revision: 0,
+                    source_size: 9,
+                    bytes_copied: 2,
+                    total_bytes: 9,
+                    destination_path: '/home/local/reference.txt'
+                });
+                const button = documentPictureInPicture.window.document.querySelector('.sftp-copy-cancel');
+                const runningText = button.innerText;
+                button.click();
+                return {
+                    runningText,
+                    pendingText: button.innerText,
+                    pendingDisabled: button.disabled,
+                    lifecycle: documentPictureInPicture.window.document
+                        .querySelector('.sftp-copy-lifecycle-hint').innerText
+                };
+            }""",
+            cancel_copy_payload,
+        )
+        cancel_requests = get_emitted(page, 'files_copy_cancel_request')
+        check(len(cancel_requests) == 1, 'Cancel copy did not emit one typed cancellation request')
+        check(cancel_requests[0]['args'][0]['copy_id'] == 'filesc_cancel_test', 'Cancel copy lost the backend copy id')
+        check(cancel_pending_ui['runningText'] == 'Cancel copy', 'running Files copy did not expose cancellation')
+        check(cancel_pending_ui['pendingText'] == 'Cancelling…' and cancel_pending_ui['pendingDisabled'] is True, 'Files copy cancellation could be submitted twice')
+        check('Cancelling before' in cancel_pending_ui['lifecycle'], 'Files copy did not explain pending cancellation')
+        cancelled_ui = page.evaluate(
+            """payload => {
+                window.terminalTest.handleFilesCopyResultForTest({
+                    request_id: payload.request_id,
+                    copy_id: 'filesc_cancel_test',
+                    status: 'cancelled',
+                    revision: 1,
+                    source_size: 9,
+                    bytes_copied: 2,
+                    total_bytes: 9,
+                    destination_path: '/home/local/reference.txt',
+                    message: 'File copy cancelled before publishing.'
+                });
+                const pipDocument = documentPictureInPicture.window.document;
+                const result = {
+                    buttonText: pipDocument.querySelector('.sftp-copy-cancel').innerText,
+                    status: pipDocument.querySelector('.sftp-destination-pane .sftp-transfer-status').innerText,
+                    lifecycle: pipDocument.querySelector('.sftp-copy-lifecycle-hint').innerText
+                };
+                pipDocument.querySelector('.sftp-copy-cancel').click();
+                result.closed = !pipDocument.querySelector('.sftp-destination-pane');
+                return result;
+            }""",
+            cancel_copy_payload,
+        )
+        check(cancelled_ui['buttonText'] == 'Close', 'cancelled Files copy did not restore a close action')
+        check('cancelled before publishing' in cancelled_ui['status'], 'Files copy did not show the cancellation boundary')
+        check('You can close Files' in cancelled_ui['lifecycle'], 'Files copy did not explain the terminal cancellation state')
+        check(cancelled_ui['closed'] is True, 'cancelled Files copy destination pane did not close')
 
         page.evaluate("() => documentPictureInPicture.window.document.querySelector('.sftp-file-rename').click()")
         rename_initial = page.evaluate(

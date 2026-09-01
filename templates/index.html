@@ -159,6 +159,7 @@
             padding: 8px 10px; border: 1px solid #3a3a3c; border-radius: 6px;
             background: #202022; color: #ddd; overflow-wrap: anywhere;
         }
+        .sftp-copy-lifecycle-hint { color: #aaa; font-size: 11px; line-height: 1.4; }
         .sftp-endpoint-card {
             padding: 8px 10px; border: 1px solid #3a3a3c; border-radius: 6px; background: #202022;
         }
@@ -7281,6 +7282,7 @@
                 state.busy = !!busy;
                 if (state.mode === 'destination') {
                     const copying = !!state.copying;
+                    const copyPhase = state.copyPhase || 'idle';
                     state.elements.home.disabled = busy || copying;
                     state.elements.up.disabled = busy || copying || !state.currentPath;
                     state.elements.go.disabled = busy || copying;
@@ -7288,7 +7290,14 @@
                     state.elements.session.disabled = busy || copying;
                     state.elements.filename.disabled = busy || copying;
                     state.elements.copy.disabled = busy || copying || !state.currentPath || !state.elements.filename.value;
-                    state.elements.cancel.disabled = copying;
+                    state.elements.cancel.textContent = state.cancelPending
+                        ? 'Cancelling…'
+                        : (copyPhase === 'committing'
+                            ? 'Publishing…'
+                            : (copying ? 'Cancel copy' : (state.finished ? 'Close' : 'Cancel')));
+                    state.elements.cancel.disabled = copying
+                        ? copyPhase !== 'running' || state.cancelPending || !state.copyId || !socket || !socket.connected
+                        : (busy && !state.finished);
                     state.elements.conflictCancel.disabled = busy || copying;
                     state.elements.conflictKeep.disabled = busy || copying;
                     state.elements.conflictReplace.disabled = busy || copying;
@@ -7934,7 +7943,14 @@
             function closeSftpCopyDestination(sourceState, restoreFocus = true) {
                 if (!sourceState || !sourceState.copyDestinationState) return;
                 const destinationState = sourceState.copyDestinationState;
-                if (destinationState.copying) return;
+                if (destinationState.copying) {
+                    destinationState.elements.lifecycle.textContent = destinationState.cancelPending
+                        ? 'Cancellation requested. Wait for backend confirmation before closing Files.'
+                        : (destinationState.copyPhase === 'committing'
+                            ? 'Publishing cannot be cancelled. Wait for the result before closing Files.'
+                            : 'Cancel the copy first. Closing Files does not cancel it.');
+                    return;
+                }
                 if (destinationState.elements && destinationState.elements.pane.isConnected) {
                     destinationState.elements.pane.remove();
                 }
@@ -7995,7 +8011,11 @@
                 state.pendingCopyRequestId = requestId;
                 state.copyId = null;
                 state.copyRevision = -1;
+                state.copyPhase = 'preparing';
+                state.cancelPending = false;
+                state.finished = false;
                 state.elements.conflict.classList.remove('visible');
+                state.elements.lifecycle.textContent = 'Preparing the copy. Keep Files open.';
                 setSftpPipBusy(state, true);
                 setSftpPipStatus(state, 'Checking copy destination…');
                 socket.emit('files_copy_request', {
@@ -8006,6 +8026,25 @@
                     destination_directory: state.currentPath,
                     destination_filename: filename,
                     conflict_mode: conflictMode,
+                });
+            }
+
+            function requestFilesCopyCancel(state) {
+                if (
+                    !state
+                    || !state.copying
+                    || state.copyPhase !== 'running'
+                    || state.cancelPending
+                    || !state.copyId
+                    || !socket
+                    || !socket.connected
+                ) return;
+                state.cancelPending = true;
+                state.elements.lifecycle.textContent = 'Cancelling before the destination is published…';
+                setSftpPipBusy(state, false);
+                socket.emit('files_copy_cancel_request', {
+                    request_id: nextSftpRequestId('files-copy-cancel'),
+                    copy_id: state.copyId,
                 });
             }
 
@@ -8021,11 +8060,19 @@
                 if (Number.isFinite(revision)) state.copyRevision = revision;
                 setSftpPipBusy(state, false);
                 if (data.status === 'preparing') {
+                    state.copyPhase = 'preparing';
+                    state.cancelPending = false;
+                    state.finished = false;
+                    state.elements.lifecycle.textContent = 'Preparing the copy. Keep Files open.';
                     setSftpPipBusy(state, true);
                     setSftpPipStatus(state, 'Checking copy destination…');
                     return;
                 }
                 if (data.status === 'conflict') {
+                    state.copyPhase = 'conflict';
+                    state.cancelPending = false;
+                    state.finished = false;
+                    state.elements.lifecycle.textContent = 'Choose a conflict action, or cancel this destination pane.';
                     state.elements.conflictText.textContent = `${data.destination_path} already exists (${formatSftpBytes(data.existing_size)}).`;
                     state.elements.conflict.classList.add('visible');
                     setSftpPipStatus(state, 'Choose how to handle the existing file.');
@@ -8035,6 +8082,9 @@
                     state.copyId = data.copy_id || state.copyId;
                     if (state.copyId) state.pendingCopyRequestId = null;
                     state.copying = true;
+                    state.copyPhase = data.status;
+                    state.finished = false;
+                    if (data.status === 'committing') state.cancelPending = false;
                     const copied = Number(data.bytes_copied) || 0;
                     const total = Number(data.total_bytes) || Number(data.source_size) || 0;
                     const percent = total > 0 ? Math.min(100, copied * 100 / total) : 100;
@@ -8046,15 +8096,24 @@
                             ? 'Publishing copied file…'
                             : `Copying ${formatSftpBytes(copied)} / ${formatSftpBytes(total)}…`,
                     );
+                    state.elements.lifecycle.textContent = data.status === 'committing'
+                        ? 'Publishing has started. It cannot be cancelled; wait for the result before closing Files.'
+                        : (state.cancelPending
+                            ? 'Cancelling before the destination is published…'
+                            : 'Use Cancel copy before closing Files. Closing the system window does not cancel the copy.');
                     setSftpPipBusy(state, false);
                     return;
                 }
                 state.copying = false;
+                state.copyPhase = data.status || 'failed';
+                state.cancelPending = false;
+                state.finished = true;
                 state.elements.progress.classList.remove('visible');
                 state.elements.progressBar.style.width = '0%';
                 setSftpPipBusy(state, false);
                 if (data.status === 'completed') {
                     state.elements.conflict.classList.remove('visible');
+                    state.elements.lifecycle.textContent = 'Copy finished. You can close Files or start another copy.';
                     setSftpPipStatus(state, `Copied to ${data.destination_path}.`, 'success');
                     requestSftpBrowse(state, {
                         path: state.currentPath,
@@ -8062,6 +8121,12 @@
                     });
                     return;
                 }
+                if (data.status === 'cancelled') {
+                    state.elements.lifecycle.textContent = 'Cancelled before publishing. You can close Files.';
+                    setSftpPipStatus(state, data.message || 'File copy cancelled before publishing.');
+                    return;
+                }
+                state.elements.lifecycle.textContent = 'Copy stopped. You can close Files or retry.';
                 const failureMessage = data.error_code === 'file_copy_publish_outcome_unknown'
                     ? `${data.message || 'The SSH server did not confirm the publish result.'} Inspect the destination before retrying.`
                     : (data.message || 'File copy failed.');
@@ -8081,7 +8146,6 @@
                 pane.innerHTML = `
                     <div class="sftp-destination-header">
                         <div class="sftp-destination-title">Choose destination</div>
-                        <button type="button" class="sftp-pip-close sftp-destination-close" title="Close destination">&times;</button>
                     </div>
                     <select class="sftp-session-select" aria-label="Destination session"></select>
                     <div class="sftp-endpoint-card">
@@ -8110,6 +8174,7 @@
                     </div>
                     <div class="sftp-progress"><div class="sftp-progress-bar"></div></div>
                     <div class="sftp-transfer-status" role="status" aria-live="polite">Choose a destination.</div>
+                    <div class="sftp-copy-lifecycle-hint">Cancel closes this destination pane before copying.</div>
                     <div class="sftp-pip-actions">
                         <button type="button" class="sftp-copy-cancel">Cancel</button>
                         <button type="button" class="sftp-copy-confirm primary">Copy</button>
@@ -8126,6 +8191,9 @@
                     currentEntryNames: new Set(),
                     busy: false,
                     copying: false,
+                    copyPhase: 'idle',
+                    cancelPending: false,
+                    finished: false,
                     pendingBrowseRequestId: null,
                     pendingBrowseStatus: null,
                     pendingCopyRequestId: null,
@@ -8150,9 +8218,9 @@
                         progress: pane.querySelector('.sftp-progress'),
                         progressBar: pane.querySelector('.sftp-progress-bar'),
                         status: pane.querySelector('.sftp-transfer-status'),
+                        lifecycle: pane.querySelector('.sftp-copy-lifecycle-hint'),
                         cancel: pane.querySelector('.sftp-copy-cancel'),
                         copy: pane.querySelector('.sftp-copy-confirm'),
-                        close: pane.querySelector('.sftp-destination-close'),
                     },
                 };
                 destinationTerminals.forEach(terminalState => {
@@ -8167,8 +8235,10 @@
                 sourceState.elements.workspace.appendChild(pane);
                 sourceState.elements.workspace.classList.add('copy-open');
                 try { sourceState.window.resizeTo(960, 620); } catch (_error) {}
-                destinationState.elements.close.addEventListener('click', () => closeSftpCopyDestination(sourceState));
-                destinationState.elements.cancel.addEventListener('click', () => closeSftpCopyDestination(sourceState));
+                destinationState.elements.cancel.addEventListener('click', () => {
+                    if (destinationState.copying) requestFilesCopyCancel(destinationState);
+                    else closeSftpCopyDestination(sourceState);
+                });
                 destinationState.elements.session.addEventListener('change', () => {
                     selectSftpCopyDestinationTerminal(destinationState, destinationState.elements.session.value);
                 });
@@ -8199,7 +8269,12 @@
 
             function closeSftpPip(state) {
                 if (!state) return;
-                if (state.busy || state.uploading || (state.copyDestinationState && state.copyDestinationState.copying)) return;
+                const destinationState = state.copyDestinationState;
+                if (destinationState && destinationState.copying) {
+                    closeSftpCopyDestination(state, false);
+                    return;
+                }
+                if (state.busy || state.uploading) return;
                 const pipWindow = state.window;
                 if (pipWindow && !pipWindow.closed) pipWindow.close();
                 if (sftpPipState === state) sftpPipState = null;

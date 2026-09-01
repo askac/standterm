@@ -5347,6 +5347,69 @@ def test_files_copy_start_failure_keeps_correlated_terminal_result():
     client.disconnect()
 
 
+def test_files_copy_cancel_request_stops_before_commit_barrier():
+    client = make_client()
+    session_token = current_session_token()
+    sid = current_sid_for_session(session_token)
+
+    def make_job(copy_id, status):
+        return {
+            'request_id': f'request-{copy_id}',
+            'copy_id': copy_id,
+            'session_token': session_token,
+            'sid': sid,
+            'source_terminal_id': 'source',
+            'destination_terminal_id': 'destination',
+            'source_file': {
+                'endpoint': {'route': 'local'},
+                'path': '/source/reference.bin',
+                'size': 12,
+            },
+            'destination_upload': {
+                'endpoint': {'route': 'local'},
+                'destination_path': '/destination/reference.bin',
+            },
+            'conflict_mode': 'fail',
+            'status': status,
+            'bytes_copied': 4,
+            'revision': 0,
+            'created_at': time.monotonic(),
+        }
+
+    running_job = make_job('filesc_cancel_running', 'running')
+    committing_job = make_job('filesc_cancel_committing', 'committing')
+    with standterm.files_copy_jobs_lock:
+        standterm.files_copy_jobs[running_job['copy_id']] = running_job
+        standterm.files_copy_jobs[committing_job['copy_id']] = committing_job
+
+    client.get_received()
+    client.emit(standterm.FILES_COPY_CANCEL_REQUEST_EVENT, {
+        'request_id': 'cancel-running',
+        'copy_id': running_job['copy_id'],
+    })
+    cancelled = last_payload(client, standterm.FILES_COPY_RESULT_EVENT)
+    assert cancelled['status'] == 'cancelled'
+    assert cancelled['revision'] == 1
+    assert 'before publishing' in cancelled['message']
+    assert running_job['completed_at'] <= running_job['expires_at']
+    assert standterm.transition_files_copy_job(
+        running_job,
+        standterm.FILES_COPY_EVENT_BEGIN_COMMIT,
+    ) is False
+
+    client.get_received()
+    client.emit(standterm.FILES_COPY_CANCEL_REQUEST_EVENT, {
+        'request_id': 'cancel-committing',
+        'copy_id': committing_job['copy_id'],
+    })
+    committing = last_payload(client, standterm.FILES_COPY_RESULT_EVENT)
+    assert committing['status'] == 'committing'
+    assert committing['revision'] == 0
+    assert committing['message'] == 'Publishing has started and can no longer be cancelled.'
+    assert committing_job['status'] == 'committing'
+    client.disconnect()
+
+
 def test_files_copy_transition_machine_preserves_terminal_outcomes():
     failed_job = {'status': 'running', 'revision': 0}
     assert standterm.transition_files_copy_job(
@@ -5394,6 +5457,26 @@ def test_files_copy_transition_machine_preserves_terminal_outcomes():
     ) is False
     assert completed_job['status'] == 'completed'
     assert completed_job['revision'] == completed_revision
+
+    cancelled_job = {'status': 'running', 'revision': 0}
+    assert standterm.transition_files_copy_job(
+        cancelled_job,
+        standterm.FILES_COPY_EVENT_CANCEL,
+    ) is True
+    assert cancelled_job['status'] == 'cancelled'
+    cancelled_revision = cancelled_job['revision']
+    assert standterm.transition_files_copy_job(
+        cancelled_job,
+        standterm.FILES_COPY_EVENT_BEGIN_COMMIT,
+    ) is False
+    assert standterm.transition_files_copy_job(
+        cancelled_job,
+        standterm.FILES_COPY_EVENT_FAIL,
+        error_code='late_failure',
+        message='Late failure.',
+    ) is False
+    assert cancelled_job['status'] == 'cancelled'
+    assert cancelled_job['revision'] == cancelled_revision
 
 
 def test_agent_scp_posts_file_copy_and_waits_for_typed_result():
@@ -7983,6 +8066,7 @@ def main():
         test_files_copy_request_runs_human_local_copy_without_agent_approval,
         test_files_copy_request_rejects_same_ssh_endpoint_path,
         test_files_copy_start_failure_keeps_correlated_terminal_result,
+        test_files_copy_cancel_request_stops_before_commit_barrier,
         test_files_copy_transition_machine_preserves_terminal_outcomes,
         test_agent_scp_posts_file_copy_and_waits_for_typed_result,
         test_sftp_bridge_browses_direct_endpoint_and_replaces_atomically,

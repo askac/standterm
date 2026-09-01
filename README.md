@@ -291,8 +291,12 @@ another connected SSH or Files-capable Local Shell tab, browse to the target
 directory, choose the destination name, and press **Copy**. That final browser
 click is the human authorization for this copy. The backend streams the file
 between the two live endpoints with structured progress and an atomic publish;
-the source is preserved. Agent-initiated copies use the same bounded transfer
-core but still require their separate, fresh **Approve copy** decision.
+the source is preserved. While streaming, **Cancel copy** stops the transaction
+before the destination is published. Once the status changes to publishing, the
+atomic commit barrier has been crossed and cancellation is no longer possible.
+Keep Files open for the final result; closing the system PiP window does not
+cancel the backend transaction. Agent-initiated copies use the same bounded
+transfer core but still require their separate, fresh **Approve copy** decision.
 If the backend cannot determine whether an SSH publish succeeded, inspect the
 destination before retrying; a blind retry may duplicate or replace a file that
 was already published.

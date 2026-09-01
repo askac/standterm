@@ -187,6 +187,7 @@ SFTP_DOWNLOAD_TICKET_RESULT_EVENT = 'sftp_download_ticket_result'
 SFTP_FILE_ACTION_REQUEST_EVENT = 'sftp_file_action_request'
 SFTP_FILE_ACTION_RESULT_EVENT = 'sftp_file_action_result'
 FILES_COPY_REQUEST_EVENT = 'files_copy_request'
+FILES_COPY_CANCEL_REQUEST_EVENT = 'files_copy_cancel_request'
 FILES_COPY_RESULT_EVENT = 'files_copy_result'
 SFTP_UPLOAD_TICKET_TTL_SECONDS = 60
 SFTP_DOWNLOAD_TICKET_TTL_SECONDS = 60
@@ -421,11 +422,13 @@ AGENT_FILE_COPY_PROGRESS_EMIT_SECONDS = 1.0
 FILES_COPY_JOB_TTL_SECONDS = 10 * 60
 FILES_COPY_JOB_MAX_RECORDS = 128
 FILES_COPY_EVENT_BEGIN_COMMIT = 'begin_commit'
+FILES_COPY_EVENT_CANCEL = 'cancel'
 FILES_COPY_EVENT_COMPLETE = 'complete'
 FILES_COPY_EVENT_FAIL = 'fail'
 FILES_COPY_TRANSITIONS = {
     'running': {
         FILES_COPY_EVENT_BEGIN_COMMIT: 'committing',
+        FILES_COPY_EVENT_CANCEL: 'cancelled',
         FILES_COPY_EVENT_FAIL: 'failed',
     },
     'committing': {
@@ -9529,6 +9532,10 @@ def transition_files_copy_job(job, event, *, error_code=None, message=None, resu
     if target_status == 'failed':
         job['error_code'] = error_code or 'files_copy_failed'
         job['message'] = message or 'The Files copy failed.'
+    elif target_status == 'cancelled':
+        job['message'] = message or 'File copy cancelled before publishing.'
+        job.pop('error_code', None)
+        job.pop('result', None)
     elif target_status == 'completed':
         job['result'] = dict(result or {})
         job.pop('error_code', None)
@@ -9539,12 +9546,12 @@ def transition_files_copy_job(job, event, *, error_code=None, message=None, resu
 def trim_files_copy_jobs_locked(now=None):
     now = time.monotonic() if now is None else now
     for copy_id, job in list(files_copy_jobs.items()):
-        if job.get('status') in {'completed', 'failed'} and job.get('expires_at', 0) <= now:
+        if job.get('status') in {'cancelled', 'completed', 'failed'} and job.get('expires_at', 0) <= now:
             files_copy_jobs.pop(copy_id, None)
     completed = [
         (copy_id, job)
         for copy_id, job in files_copy_jobs.items()
-        if job.get('status') in {'completed', 'failed'}
+        if job.get('status') in {'cancelled', 'completed', 'failed'}
     ]
     while len(files_copy_jobs) >= FILES_COPY_JOB_MAX_RECORDS and completed:
         copy_id, _job = min(completed, key=lambda item: item[1].get('completed_at', 0))
@@ -9596,9 +9603,11 @@ def execute_files_copy_job(job):
             raise SFTPTransferError(error_code, 'The Files copy is no longer authorized.')
 
     def report_copy_progress(transferred, expected_size):
-        ensure_copy_available(transferred, expected_size)
         now = time.monotonic()
         with files_copy_jobs_lock:
+            _source, _destination, error_code = validate_files_copy_job(job)
+            if error_code:
+                raise SFTPTransferError(error_code, 'The Files copy is no longer authorized.')
             job['bytes_copied'] = transferred
             should_emit = (
                 transferred >= expected_size
@@ -9907,6 +9916,35 @@ def on_files_copy_request(data):
                 'error_code': 'files_copy_start_failed',
                 'message': 'The Files copy could not be started.',
             })
+
+
+@socketio.on(FILES_COPY_CANCEL_REQUEST_EVENT)
+def on_files_copy_cancel_request(data):
+    session_token = socket_session_tokens.get(request.sid)
+    copy_id = data.get('copy_id') if isinstance(data, dict) else None
+    if (
+        not session_token
+        or not isinstance(copy_id, str)
+        or not copy_id
+        or len(copy_id) > 128
+    ):
+        return
+    with files_copy_jobs_lock:
+        trim_files_copy_jobs_locked()
+        job = files_copy_jobs.get(copy_id)
+        if (
+            not job
+            or job.get('session_token') != session_token
+            or job.get('sid') != request.sid
+        ):
+            return
+        if transition_files_copy_job(job, FILES_COPY_EVENT_CANCEL):
+            job['completed_at'] = time.monotonic()
+            job['expires_at'] = job['completed_at'] + FILES_COPY_JOB_TTL_SECONDS
+        payload = public_files_copy_job(job)
+        if job.get('status') == 'committing':
+            payload['message'] = 'Publishing has started and can no longer be cancelled.'
+        socketio.emit(FILES_COPY_RESULT_EVENT, payload, room=request.sid)
 
 
 def emit_sftp_result(event_name, sid, request_id, terminal_id, *, result=None, error=None):

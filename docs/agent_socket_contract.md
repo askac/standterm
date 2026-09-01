@@ -753,8 +753,13 @@ The browser Files UI has a separate human-initiated **Copy to…** path. Its fin
 **Copy** button is the explicit authorization for that one browser transaction,
 so it does not create an Agent action. It shares the bounded backend stream,
 snapshot revalidation, progress, conflict, and atomic-publish mechanisms with
-Agent copies. This browser path does not change the mandatory approval contract
-for the external `file-copy` operation.
+Agent copies. The browser can request cancellation while that transaction is
+`running`; the backend serializes cancellation against the commit barrier and
+returns `cancelled` only when the destination cannot subsequently be published.
+Once the transaction is `committing`, cancellation is rejected and the browser
+must wait for the terminal result. Closing the Files window is not a cancellation
+request. This browser path does not change the mandatory approval contract for
+the external `file-copy` operation.
 
 `conflict_mode` is one of `fail`, `keep_both`, or `replace`. `fail` is the safe
 default and never writes when the destination existed during preflight.
