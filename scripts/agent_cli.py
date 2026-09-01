@@ -73,6 +73,9 @@ def parse_args():
     wait_parser.add_argument('--include-events', action='store_true', help='Include display tail events for output waits')
     wait_parser.add_argument('--strip-ansi', action='store_true', help='Strip ANSI/control sequences from included events')
 
+    action_status_parser = subparsers.add_parser('action-status')
+    action_status_parser.add_argument('--action-id', required=True, help='Agent action id returned by a pending operation')
+
     send_parser = subparsers.add_parser('send')
     input_group = send_parser.add_mutually_exclusive_group(required=True)
     input_group.add_argument('--text', help='Text to send')
@@ -231,6 +234,19 @@ def apply_handoff(args):
         args.ca_file = payload.get('tls_ca_cert_path')
 
 
+def normalized_server_url(value):
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = urllib.parse.urlsplit(value)
+    except ValueError:
+        return None
+    if parsed.scheme not in {'http', 'https'} or not parsed.hostname:
+        return None
+    default_port = 443 if parsed.scheme == 'https' else 80
+    return parsed.scheme, parsed.hostname.lower(), parsed.port or default_port
+
+
 def command_payload(args):
     command = args.command
     op = {
@@ -308,6 +324,8 @@ def command_payload(args):
             payload['limit'] = args.limit
         if getattr(args, 'strip_ansi', False):
             payload['strip_ansi'] = True
+    elif command == 'action-status':
+        payload['action_id'] = args.action_id
     return payload
 
 

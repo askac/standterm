@@ -438,6 +438,7 @@ Start here with the active Python path printed by the StandTerm startup banner:
 <python-from-startup-banner> scripts/agent_cli.py --handoff standterm_external_agent_handoff.json render --mode mirror-screen
 <python-from-startup-banner> scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send --text $'pwd\r'
 <python-from-startup-banner> scripts/agent_shcmd.py --handoff standterm_external_agent_handoff.json "pwd"
+<python-from-startup-banner> scripts/agent_scp.py --agentinfo <agentinfo-url-from-startup-banner> --terminal term-2 --destination-terminal term-3 /source/file.bin /destination/file.bin
 <python-from-startup-banner> scripts/agent_repl.py --handoff standterm_external_agent_handoff.json --enter cr
 ```
 
@@ -455,6 +456,19 @@ terminal output as stdout. Use `--json` when an agent needs a structured
 `status`, `stdout`, and capture state. This is a terminal helper, not a
 subprocess exec API; it does not provide a reliable shell exit code or separate
 stderr.
+
+`agent_scp.py` copies one regular file through the StandTerm backend between
+any two attached SSH or Local Shell terminals. Both terminals need separately
+minted external-agent tokens from the same browser session. Every copy opens a
+dedicated browser approval card showing the backend-canonical source,
+destination, size, and conflict behavior; Full mode does not bypass this
+per-operation approval. The safe default is `--conflict-mode fail`; use
+`keep-both` or `replace` only when the requested behavior is intentional. Local
+Shell paths must be absolute and currently require POSIX directory-relative
+file operations. File contents stream through bounded backend
+buffers and are not typed through the terminal or returned to the agent. If an
+SSH publish returns `file_copy_publish_outcome_unknown`, inspect the destination
+before retrying because the server may already have completed the atomic rename.
 
 Prefer the exact absolute commands printed by the StandTerm startup banner. They
 use the active runtime Python, platform-appropriate quoting, and the generated
@@ -528,6 +542,7 @@ change how an agent behaves in specific terminal situations.
 | Skill | Use when |
 | --- | --- |
 | [`standterm-external-agent`](docs/examples/standterm-external-agent-skill/SKILL.md) | Discovering and operating StandTerm through the external-agent handoff. |
+| [`standterm-file-transfer`](docs/examples/standterm-file-transfer/SKILL.md) | Copying a file through the preferred backend path or an explicitly authorized terminal-stream rescue path. |
 | [`standterm-privileged-hitl`](docs/examples/standterm-privileged-hitl/SKILL.md) | A session reaches a credential prompt, human-input lease, or privileged step. |
 
 Each example directory includes `skill_prompt.txt` for installing the skill and

@@ -578,6 +578,19 @@
         }
         #agent-action-box.visible { display: grid; gap: 8px; }
         #agent-action-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; color: #bbb; }
+        #agent-file-copy-details {
+            display: none;
+            gap: 6px;
+            padding: 8px;
+            border: 1px solid #59451f;
+            border-radius: 5px;
+            background: #17120b;
+            color: #ddd;
+            font: 12px/1.4 Consolas, "Courier New", monospace;
+            overflow-wrap: anywhere;
+        }
+        #agent-file-copy-details.visible { display: grid; }
+        #agent-file-copy-warning { color: #ff9f0a; font-weight: 700; }
         .agent-preview {
             max-height: 120px;
             overflow: auto;
@@ -1103,6 +1116,13 @@
             </details>
             <div id="agent-action-box">
                 <div class="agent-preview" id="agent-action-preview"></div>
+                <div id="agent-file-copy-details">
+                    <div>source: <span id="agent-file-copy-source"></span></div>
+                    <div>destination: <span id="agent-file-copy-destination"></span></div>
+                    <div>size: <span id="agent-file-copy-size"></span></div>
+                    <div>conflict: <span id="agent-file-copy-conflict"></span></div>
+                    <div id="agent-file-copy-warning"></div>
+                </div>
                 <div id="agent-action-meta">
                     <span>target: <span id="agent-action-target">--</span></span>
                     <span>bytes: <span id="agent-action-bytes">0</span></span>
@@ -1163,7 +1183,13 @@
         const AGENT_MODE_APPROVAL_PENDING = 'approval_pending';
         const AGENT_MODE_DIRECT_ACTIVE = 'direct_active';
         const AGENT_MODE_PAUSED = 'paused';
-        const AGENT_OPEN_ACTION_STATUSES = new Set(['pending_approval', 'direct_pending', 'approved']);
+        const AGENT_OPEN_ACTION_STATUSES = new Set([
+            'pending_approval',
+            'direct_pending',
+            'approved',
+            'running',
+            'committing'
+        ]);
         const AGENT_VIEWPORT_SNAPSHOT_DEBOUNCE_MS = 250;
         const AGENT_SNAPSHOT_BLOCKED_PRIVACY_STATES = new Set(['private_input', 'paste_review', 'paused']);
         const AGENT_VIEWPORT_RENDER_MAX_PIXELS = 4096 * 4096;
@@ -1897,6 +1923,12 @@
             const agentExternalCommand = document.getElementById('agent-external-command');
             const agentActionBox = document.getElementById('agent-action-box');
             const agentActionPreview = document.getElementById('agent-action-preview');
+            const agentFileCopyDetails = document.getElementById('agent-file-copy-details');
+            const agentFileCopySource = document.getElementById('agent-file-copy-source');
+            const agentFileCopyDestination = document.getElementById('agent-file-copy-destination');
+            const agentFileCopySize = document.getElementById('agent-file-copy-size');
+            const agentFileCopyConflict = document.getElementById('agent-file-copy-conflict');
+            const agentFileCopyWarning = document.getElementById('agent-file-copy-warning');
             const agentActionTarget = document.getElementById('agent-action-target');
             const agentActionBytes = document.getElementById('agent-action-bytes');
             const agentActionLines = document.getElementById('agent-action-lines');
@@ -2592,8 +2624,8 @@
 
             function formatExternalAgentPermissionHint(mode) {
                 if (mode === AGENT_MODE_OBSERVE) return 'Observer can read terminal output. It cannot type.';
-                if (mode === AGENT_MODE_APPROVAL_PENDING) return 'Approval lets the agent propose input. You approve before it is sent.';
-                if (mode === AGENT_MODE_DIRECT_ACTIVE) return 'Full lets the agent type into this terminal without approval.';
+                if (mode === AGENT_MODE_APPROVAL_PENDING) return 'Approval lets the agent propose input. You approve before it is sent. Remote file copies always need separate approval.';
+                if (mode === AGENT_MODE_DIRECT_ACTIVE) return 'Full lets the agent type into this terminal without approval. Remote file copies still need separate approval.';
                 if (mode === AGENT_MODE_PAUSED) return 'Agent input is paused. Choose a permission to resume or disable access.';
                 return 'Enable external agent to choose what a local agent can do.';
             }
@@ -2672,6 +2704,9 @@
                 const parts = [];
                 if (action.errorCode) parts.push(`error: ${action.errorCode}`);
                 else parts.push('error: none');
+                if (action.errorCode === 'file_copy_publish_outcome_unknown') {
+                    parts.push('destination may have changed; inspect it before retrying');
+                }
                 if (Number.isFinite(Number(action.bytesWritten))) parts.push(`written: ${action.bytesWritten}`);
                 else if (Number.isFinite(Number(action.byteLength))) parts.push(`bytes: ${action.byteLength}`);
                 agentStatusDetail.innerText = parts.join(' · ');
@@ -2837,24 +2872,56 @@
                 agentActionBox.classList.toggle('visible', !!action);
                 if (!action) {
                     agentActionPreview.innerText = '';
+                    agentFileCopyDetails.classList.remove('visible');
+                    agentFileCopySource.innerText = '';
+                    agentFileCopyDestination.innerText = '';
+                    agentFileCopySize.innerText = '';
+                    agentFileCopyConflict.innerText = '';
+                    agentFileCopyWarning.innerText = '';
                     agentActionTarget.innerText = '--';
                     agentActionBytes.innerText = '0';
                     agentActionLines.innerText = '0';
                     agentActionNewline.innerText = 'no';
                     agentActionControl.innerText = 'no';
                     agentActionStatus.innerText = '--';
+                    agentApproveBtn.innerText = 'Approve';
                     agentApproveBtn.disabled = true;
                     agentRejectBtn.disabled = true;
                     agentActionPauseBtn.disabled = true;
                     return;
                 }
                 agentActionPreview.innerText = typeof action.escaped_preview === 'string' ? action.escaped_preview : '';
-                agentActionTarget.innerText = state.label || state.id;
-                agentActionBytes.innerText = String(normalizeAgentCount(action.byte_length));
-                agentActionLines.innerText = String(normalizeAgentCount(action.line_count));
-                agentActionNewline.innerText = action.ends_with_newline ? 'yes' : 'no';
-                agentActionControl.innerText = action.contains_control_chars ? 'yes' : 'no';
+                const isFileCopy = action.action_type === 'file_copy';
+                const destinationState = isFileCopy && typeof action.destination_terminal_id === 'string'
+                    ? terminals.get(action.destination_terminal_id)
+                    : null;
+                agentActionTarget.innerText = isFileCopy
+                    ? `${state.label || state.id} → ${destinationState ? (destinationState.label || destinationState.id) : action.destination_terminal_id}`
+                    : (state.label || state.id);
+                agentFileCopyDetails.classList.toggle('visible', isFileCopy);
+                if (isFileCopy) {
+                    agentFileCopySource.innerText = `${formatSftpEndpoint(action.source_endpoint)}:${action.source_path || ''}`;
+                    agentFileCopyDestination.innerText = `${formatSftpEndpoint(action.destination_endpoint)}:${action.destination_path || ''}`;
+                    agentFileCopySize.innerText = formatSftpBytes(action.source_size);
+                    agentFileCopyConflict.innerText = String(action.conflict_mode || 'fail').replace('_', ' ');
+                    if (action.conflict_mode === 'replace') {
+                        agentFileCopyWarning.innerText = action.destination_exists
+                            ? `This will atomically replace an existing regular file (${formatSftpBytes(action.destination_existing_size)}).`
+                            : 'Replace was requested, but no destination file existed during preflight.';
+                    } else if (action.conflict_mode === 'keep_both') {
+                        agentFileCopyWarning.innerText = 'The displayed destination is the exact keep-both name selected by the backend.';
+                    } else if (action.destination_exists) {
+                        agentFileCopyWarning.innerText = 'The destination exists. Approval reveals the conflict result; no file will be copied.';
+                    } else {
+                        agentFileCopyWarning.innerText = 'The source file will be preserved.';
+                    }
+                }
+                agentActionBytes.innerText = isFileCopy ? 'after approval' : String(normalizeAgentCount(action.byte_length));
+                agentActionLines.innerText = isFileCopy ? '--' : String(normalizeAgentCount(action.line_count));
+                agentActionNewline.innerText = isFileCopy ? '--' : (action.ends_with_newline ? 'yes' : 'no');
+                agentActionControl.innerText = isFileCopy ? '--' : (action.contains_control_chars ? 'yes' : 'no');
                 agentActionStatus.innerText = action.status || '--';
+                agentApproveBtn.innerText = isFileCopy ? 'Approve copy' : 'Approve';
                 const canDecide = canUseAgentPanel(state) && action.status === 'pending_approval' && !!action.action_id;
                 agentApproveBtn.disabled = !canDecide;
                 agentRejectBtn.disabled = !canDecide;
@@ -5503,6 +5570,9 @@
                     getAgentStateForTest(terminalId) {
                         return serializeAgentForTest(terminals.get(terminalId));
                     },
+                    applyAgentActionPayloadForTest(payload) {
+                        applyAgentActionPayload(cloneForTest(payload));
+                    },
                     activeTerminalHasFocus() {
                         const state = getActiveTerminalState();
                         return !!(state && state.term && state.term.textarea === document.activeElement);
@@ -7022,6 +7092,10 @@
 
             function formatSftpEndpoint(endpoint) {
                 if (!endpoint || typeof endpoint !== 'object') return 'Direct SSH endpoint';
+                if (endpoint.route === 'local') {
+                    const shell = typeof endpoint.shell === 'string' && endpoint.shell ? ` (${endpoint.shell})` : '';
+                    return `Local Shell${shell}`;
+                }
                 const user = typeof endpoint.user === 'string' ? endpoint.user : '';
                 const host = typeof endpoint.host === 'string' ? endpoint.host : '';
                 const port = Number.isFinite(Number(endpoint.port)) ? Number(endpoint.port) : 22;

@@ -14,11 +14,13 @@ EXTERNAL_AGENT_CAPABILITIES = [
     'render_visible_xterm_png',
     'render_mirror_screen',
     'tail',
+    'action_status',
     'send',
     'typed_send',
     'send_capture',
     'submit_after',
     'strip_ansi',
+    'file_copy',
     'revoke',
 ]
 

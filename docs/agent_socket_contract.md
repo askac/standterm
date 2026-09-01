@@ -271,6 +271,26 @@ terminal helper rather than a subprocess exec API: it does not provide a
 reliable shell exit code or separate stderr, and captured text remains display
 data rather than StandTerm control state.
 
+For direct backend file copies, use the dedicated `scripts/agent_scp.py`
+wrapper. It supports SSH-to-SSH, SSH-to-Local-Shell, Local-Shell-to-SSH, and
+Local-Shell-to-Local-Shell copies between two distinct attached terminals:
+
+```bash
+tools/.venv_wsl/bin/python scripts/agent_scp.py \
+  --agentinfo standterm_agentinfo.json \
+  --terminal term-2 \
+  --destination-terminal term-3 \
+  /source/file.bin \
+  /destination/file.bin
+```
+
+Both terminals need their own current token-bearing handoff, and both tokens
+must belong to the same StandTerm browser session and viewer. Local Shell paths
+must be absolute and currently require POSIX directory-relative file operations.
+The helper waits for the typed action result by default; use
+`--no-wait` to return the pending action id. It never prints either bearer
+token or the transferred file content.
+
 For workflows that need one paced text entry before interactive follow-up, the
 REPL can run `--type-text` or `--type-file` after attaching and then continue
 the same live session. It uses the shared `scripts/agent_input.py` pacing
@@ -363,7 +383,8 @@ mode/privacy gates. It reads the existing handoff or tokenless agentinfo data,
 redacts bearer tokens from discovery output, and forwards MCP tools through
 `/agent/external/command`. The first tools are `standterm_discover`,
 `standterm_hello`, `standterm_state`, `standterm_heartbeat`,
-`standterm_observe`, `standterm_wait`, `standterm_send`, `standterm_render`,
+`standterm_observe`, `standterm_wait`, `standterm_send`,
+`standterm_action_status`, `standterm_file_copy`, `standterm_render`,
 `standterm_sequence`, and `standterm_revoke`.
 
 `standterm_observe` defaults to `mode: "since_cursor"`, which maps to `tail`
@@ -392,7 +413,8 @@ Discover protocol/capabilities:
 `hello` returns `version`, `external_agent_id`, `terminal_id`, current public
 Agent state, and a typed `capabilities` array such as `state`, `heartbeat`, `screen`,
 `headless_screen`, `screen_wait`, `wait`, `sequence`, `render`, `tail`, `send`,
-`send_capture`, `submit_after`, `strip_ansi`, and `revoke`.
+`send_capture`, `submit_after`, `strip_ansi`, `action_status`, `file_copy`, and
+`revoke`.
 
 Attach:
 
@@ -675,6 +697,83 @@ long-poll tail calls. When `strip_ansi` is requested, the response includes
 `"strip_ansi": true` and `"data_format": "plain"`, and each returned event's
 `data` field is the stripped text. Clients must not infer control state from
 terminal text.
+
+Propose a direct backend file copy:
+
+```json
+{
+  "op": "file-copy",
+  "token": "agt_source...",
+  "terminal_id": "term-2",
+  "source_path": "/source/file.bin",
+  "destination_token": "agt_destination...",
+  "destination_terminal_id": "term-3",
+  "destination_path": "/destination/file.bin",
+  "conflict_mode": "fail"
+}
+```
+
+`file-copy` accepts one regular file and two distinct attached SSH or Local
+Shell terminals. Both terminal-scoped tokens must belong to the same StandTerm
+session and authorizing browser viewer, and both terminal Agent states must be
+writable and outside privacy/pause gates. Local Shell paths must be absolute and
+run only where the backend can anchor POSIX directory-relative operations;
+symbolic links and non-regular files are rejected. Source and destination must
+identify different files. For SSH, exact same-path detection depends on the
+canonical endpoint identity and cannot equate every possible host alias. The
+source is always preserved, and file metadata is not copied.
+
+The backend performs a metadata-only preflight so the browser can show the
+canonical source endpoint and path, canonical destination endpoint and path,
+source size, destination existence, and exact conflict behavior. Preflight
+details are not returned to the external caller. Every request returns
+`pending_approval` and requires a separate **Approve copy** click, including
+when both terminals use Full mode. The backend does not treat a caller's claim
+that the user requested a copy as authorization.
+
+`conflict_mode` is one of `fail`, `keep_both`, or `replace`. `fail` is the safe
+default and never writes when the destination existed during preflight.
+`keep_both` approves the exact backend-selected alternate path. `replace`
+requires explicit approval and uses an atomic replace only when the destination
+still matches its preflight snapshot. A change to either endpoint, terminal
+binding, mode, privacy state, source snapshot, or destination snapshot before
+the commit barrier fails the action. Crossing that barrier changes the action
+from `running` to `committing` and prevents lifecycle cancellation while the
+destination adapter attempts its atomic publish; it does not itself confirm
+that the destination was updated. Contents stream through bounded backend
+buffers and are never returned in the command response.
+
+Poll the typed result with the source token and returned action id:
+
+```json
+{
+  "op": "action-status",
+  "token": "agt_source...",
+  "terminal_id": "term-2",
+  "action_id": "..."
+}
+```
+
+Pending and rejected responses, plus failures that occur before approval is
+validated, expose only action identity, status, and an optional error code.
+Running, committing, completed, and post-approval failed responses may expose
+the approved canonical plan. Completed results add metadata such as
+`bytes_copied`, `destination_path`, and `source_preserved`, but never file
+content. If a terminal/token is invalidated after the commit barrier, the
+publish continues and its confirmed result remains authoritative, but that
+invalid token can no longer poll it.
+
+`failed` means the workflow did not obtain confirmed success; it does not
+always prove that the destination remained unchanged. In particular,
+`file_copy_publish_outcome_unknown` means an SSH publish request was attempted
+but the server response and destination state could not be reconciled. The
+destination may already contain the copied file. Inspect it before deciding
+whether to retry; never retry this outcome blindly.
+
+Explicitly revoking either endpoint token cancels its pending or running copy
+before the commit barrier. Sliding idle expiry does not independently cancel a
+copy that the browser already approved; terminal mode, privacy, binding, and
+lifecycle gates remain authoritative throughout the stream.
 
 Propose terminal input:
 
@@ -1151,6 +1250,7 @@ explicit `error_code`.
 - `agent_external_origin_blocked`
 - `agent_external_disabled`
 - `agent_human_input_active`
+- `file_copy_publish_outcome_unknown`
 
 ## Transcript Boundary
 

@@ -1102,6 +1102,8 @@ def test_mcp_tools_list_exposes_incremental_observe():
     })
     tool_names = [tool['name'] for tool in response['result']['tools']]
     assert 'standterm_observe' in tool_names
+    assert 'standterm_action_status' in tool_names
+    assert 'standterm_file_copy' in tool_names
     observe = next(tool for tool in response['result']['tools'] if tool['name'] == 'standterm_observe')
     assert observe['inputSchema']['properties']['mode']['default'] == 'since_cursor'
     assert 'since_cursor' in observe['inputSchema']['properties']['mode']['enum']
@@ -1178,12 +1180,40 @@ def test_mcp_agentinfo_resolves_token_per_terminal():
         fake_post = FakePostJson(responses=[
             (200, {'status': 'ok'}),
             (200, {'status': 'ok'}),
+            (200, {'status': 'pending_approval', 'action_id': 'copy-1'}),
         ])
         connection = mcp.StandTermConnection(args, post_json=fake_post)
         connection.command({'op': 'state', 'terminal_id': 'term-2'})
         connection.command({'op': 'state', 'terminal_id': 'term-3'})
+        connection.command({
+            'op': 'file-copy',
+            'terminal_id': 'term-2',
+            'source_path': '/source.bin',
+            'destination_terminal_id': 'term-3',
+            'destination_path': '/destination.bin',
+        })
         assert fake_post.calls[0]['payload']['token'] == 'agt_term_2'
         assert fake_post.calls[1]['payload']['token'] == 'agt_term_3'
+        assert fake_post.calls[2]['payload']['token'] == 'agt_term_2'
+        assert fake_post.calls[2]['payload']['destination_token'] == 'agt_term_3'
+
+
+def test_mcp_file_copy_builds_explicit_typed_proposal():
+    command = mcp.build_file_copy_command({
+        'terminal_id': 'term-2',
+        'source_path': '/source.bin',
+        'destination_terminal_id': 'term-3',
+        'destination_path': '/destination.bin',
+        'conflict_mode': 'replace',
+    })
+    assert command == {
+        'op': 'file-copy',
+        'terminal_id': 'term-2',
+        'source_path': '/source.bin',
+        'destination_terminal_id': 'term-3',
+        'destination_path': '/destination.bin',
+        'conflict_mode': 'replace',
+    }
 
 
 def test_mcp_send_accepts_structured_keys_only():
@@ -1417,6 +1447,7 @@ def main():
         test_mcp_tools_list_exposes_incremental_observe,
         test_mcp_observe_since_cursor_forwards_tail_command,
         test_mcp_agentinfo_resolves_token_per_terminal,
+        test_mcp_file_copy_builds_explicit_typed_proposal,
         test_mcp_send_accepts_structured_keys_only,
         test_mcp_discover_redacts_handoff_token,
         test_type_units_translate_newlines_and_preserve_unicode_characters,

@@ -1716,6 +1716,85 @@ def test_approval_payload_and_stale_rejections(browser, access_url):
         close_context(context)
 
 
+def test_file_copy_approval_shows_canonical_plan(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        attach_agent(page)
+        set_agent_mode(page, 'direct', 'direct_active')
+        state = active_agent_state(page)
+        page.evaluate(
+            """payload => window.terminalTest.applyAgentActionPayloadForTest(payload)""",
+            {
+                'action_id': 'copy-action-1',
+                'proposal_id': 'copy-proposal-1',
+                'action_type': 'file_copy',
+                'status': 'pending_approval',
+                'terminal_id': TERMINAL_ID,
+                'destination_terminal_id': 'term-2',
+                'session_id': state['session_id'],
+                'viewer_id': state['viewer_id'],
+                'agent_binding_id': state['agent_binding_id'],
+                'mode_version': state['mode_version'],
+                'privacy_version': state['privacy_version'],
+                'source_endpoint': {
+                    'route': 'direct',
+                    'user': 'builder',
+                    'host': 'source.example',
+                    'port': 22,
+                },
+                'destination_endpoint': {
+                    'route': 'local',
+                    'shell': 'bash',
+                    'platform': 'linux',
+                },
+                'source_path': '/srv/releases/image.bin',
+                'destination_path': '/tmp/image.bin',
+                'source_size': 1536,
+                'destination_exists': True,
+                'destination_existing_size': 64,
+                'conflict_mode': 'replace',
+                'escaped_preview': 'Copy approved backend plan',
+            },
+        )
+        details = page.evaluate(
+            """() => ({
+                visible: document.getElementById('agent-file-copy-details').classList.contains('visible'),
+                source: document.getElementById('agent-file-copy-source').innerText,
+                destination: document.getElementById('agent-file-copy-destination').innerText,
+                size: document.getElementById('agent-file-copy-size').innerText,
+                conflict: document.getElementById('agent-file-copy-conflict').innerText,
+                warning: document.getElementById('agent-file-copy-warning').innerText,
+                approve: document.getElementById('agent-approve-btn').innerText,
+                approveDisabled: document.getElementById('agent-approve-btn').disabled
+            })"""
+        )
+        check(details['visible'] is True, 'file copy approval details were hidden')
+        check(details['source'] == 'builder@source.example:22:/srv/releases/image.bin', 'source plan was not exact')
+        check(details['destination'] == 'Local Shell (bash):/tmp/image.bin', 'destination plan was not exact')
+        check(details['size'] == '1.50 KiB', 'source size was not rendered')
+        check(details['conflict'] == 'replace', 'replace mode was not rendered')
+        check('atomically replace' in details['warning'], 'replace warning was not explicit')
+        check(details['approve'] == 'Approve copy', 'copy approval button was not explicit')
+        check(details['approveDisabled'] is False, 'copy approval button was unexpectedly disabled')
+        page.evaluate(
+            """payload => window.terminalTest.applyAgentActionPayloadForTest(payload)""",
+            {
+                'action_id': 'copy-action-1',
+                'action_type': 'file_copy',
+                'status': 'failed',
+                'terminal_id': TERMINAL_ID,
+                'error_code': 'file_copy_publish_outcome_unknown',
+            },
+        )
+        status_detail = page.locator('#agent-status-detail').inner_text()
+        check(
+            'destination may have changed; inspect it before retrying' in status_detail,
+            'publish outcome warning was not explicit',
+        )
+    finally:
+        close_context(context)
+
+
 def test_cjk_width_compatibility_defaults_off(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
@@ -3348,6 +3427,7 @@ def main():
         test_background_terminal_render_uses_mirror_canvas_png,
         test_paste_review_approve_and_cancel,
         test_approval_payload_and_stale_rejections,
+        test_file_copy_approval_shows_canonical_plan,
         test_cjk_width_compatibility_defaults_off,
         test_windows_font_fallback_defaults_and_migrates_legacy,
         test_powerline_symbol_fallback_is_optional_and_applies_immediately,

@@ -334,6 +334,12 @@ class SSHBridge(TerminalBridge):
                             raise SFTPTransferError('sftp_download_incomplete', 'The remote file ended before the download completed.')
                         remaining -= len(chunk)
                         yield chunk
+                final_attributes = sftp.lstat(path)
+                self._validate_sftp_file_snapshot(
+                    final_attributes,
+                    file_snapshot['size'],
+                    file_snapshot['mtime'],
+                )
             finally:
                 sftp.close()
 
@@ -465,7 +471,9 @@ class SSHBridge(TerminalBridge):
             finally:
                 sftp.close()
 
-    def upload_sftp_stream(self, stream, upload, expected_size, progress_callback=None):
+    def upload_sftp_stream(self, stream, upload, expected_size, before_read_callback=None,
+                           progress_callback=None, pre_commit_callback=None,
+                           report_publish_outcome_unknown=False):
         destination_path = upload['destination_path']
         filename = upload['filename']
         replace = bool(upload.get('replace'))
@@ -502,6 +510,8 @@ class SSHBridge(TerminalBridge):
                 transferred = 0
                 with sftp.open(temporary_path, 'wx') as remote_file:
                     while transferred < expected_size:
+                        if before_read_callback:
+                            before_read_callback(transferred, expected_size)
                         chunk = stream.read(min(65536, expected_size - transferred))
                         if not chunk:
                             raise SFTPTransferError('sftp_upload_incomplete', 'The upload ended before the complete file was received.')
@@ -514,16 +524,72 @@ class SSHBridge(TerminalBridge):
                 uploaded_stat = sftp.stat(temporary_path)
                 if uploaded_stat.st_size != expected_size:
                     raise SFTPTransferError('sftp_upload_size_mismatch', 'The uploaded file size did not match the source file.')
+                try:
+                    current = sftp.lstat(destination_path)
+                except Exception as exc:
+                    if self._is_sftp_not_found(exc):
+                        current = None
+                    else:
+                        raise
                 if replace:
+                    if (
+                        current is None
+                        or current.st_mode is None
+                        or not stat.S_ISREG(current.st_mode)
+                        or current.st_size != expected_existing_size
+                        or current.st_mtime != expected_existing_mtime
+                    ):
+                        raise SFTPTransferError('sftp_destination_changed', 'The destination changed before upload commit.')
+                elif current is not None:
+                    raise SFTPTransferError('sftp_destination_changed', 'The destination was created before upload commit.')
+                if pre_commit_callback:
+                    pre_commit_callback(transferred, expected_size)
+
+                def publish_is_definitely_unapplied():
                     try:
+                        temporary = sftp.lstat(temporary_path)
+                        if (
+                            temporary.st_mode is None
+                            or not stat.S_ISREG(temporary.st_mode)
+                            or temporary.st_size != expected_size
+                        ):
+                            return False
+                        try:
+                            destination = sftp.lstat(destination_path)
+                        except Exception as exc:
+                            if self._is_sftp_not_found(exc):
+                                destination = None
+                            else:
+                                return False
+                        if not replace:
+                            return destination is None
+                        return (
+                            destination is not None
+                            and destination.st_mode is not None
+                            and stat.S_ISREG(destination.st_mode)
+                            and destination.st_size == expected_existing_size
+                            and destination.st_mtime == expected_existing_mtime
+                        )
+                    except Exception:
+                        return False
+
+                try:
+                    if replace:
                         sftp.posix_rename(temporary_path, destination_path)
-                    except Exception as exc:
+                    else:
+                        sftp.rename(temporary_path, destination_path)
+                except Exception as exc:
+                    if report_publish_outcome_unknown and not publish_is_definitely_unapplied():
+                        raise SFTPTransferError(
+                            'file_copy_publish_outcome_unknown',
+                            'The SFTP server did not confirm whether the destination was updated.',
+                        ) from exc
+                    if replace:
                         raise SFTPTransferError(
                             'sftp_atomic_replace_unavailable',
                             'This SFTP server cannot replace the existing file atomically.',
                         ) from exc
-                else:
-                    sftp.rename(temporary_path, destination_path)
+                    raise
                 completed = True
                 return {
                     'destination_path': destination_path,

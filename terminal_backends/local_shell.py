@@ -1,7 +1,10 @@
 import codecs
 import os
+import secrets
 import select
+import stat
 import sys
+import threading
 from pathlib import Path
 
 from .base import BackendSettingSchema, BackendStartFieldSchema, TerminalBackendPlugin, TerminalBridge
@@ -28,6 +31,12 @@ def decode_local_shell_output(data, decoder=None, *, final=False):
     return str(data)
 
 
+class LocalFileTransferError(Exception):
+    def __init__(self, error_code, message):
+        super().__init__(message)
+        self.error_code = error_code
+
+
 class LocalShellBridge(TerminalBridge):
     connection_type = 'local_shell'
 
@@ -50,6 +59,375 @@ class LocalShellBridge(TerminalBridge):
         self.terminal_kind = shell_config['terminal_kind']
         self.terminal_label = shell_config['terminal_label']
         self._output_decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
+        self._file_copy_lock = threading.Lock()
+
+    def file_copy_endpoint(self):
+        return {
+            'route': 'local',
+            'shell': self.shell,
+            'platform': sys.platform,
+        }
+
+    @staticmethod
+    def _require_anchored_file_copy_support():
+        required = (os.open, os.stat, os.unlink, os.link, os.rename)
+        if (
+            not hasattr(os, 'O_DIRECTORY')
+            or not hasattr(os, 'O_NOFOLLOW')
+            or any(function not in os.supports_dir_fd for function in required)
+        ):
+            raise LocalFileTransferError(
+                'local_copy_platform_unsupported',
+                'Agent file copy for Local Shell requires anchored POSIX file operations.',
+            )
+
+    @staticmethod
+    def _directory_snapshot(path):
+        attributes = path.stat()
+        if not stat.S_ISDIR(attributes.st_mode):
+            raise LocalFileTransferError(
+                'local_copy_not_directory',
+                'The local file directory is not available.',
+            )
+        return {
+            'directory_device': attributes.st_dev,
+            'directory_inode': attributes.st_ino,
+        }
+
+    @classmethod
+    def _open_anchored_directory(cls, snapshot):
+        cls._require_anchored_file_copy_support()
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        descriptor = None
+        try:
+            descriptor = os.open(snapshot['directory'], flags)
+            attributes = os.fstat(descriptor)
+            if (
+                not stat.S_ISDIR(attributes.st_mode)
+                or attributes.st_dev != snapshot.get('directory_device')
+                or attributes.st_ino != snapshot.get('directory_inode')
+            ):
+                raise LocalFileTransferError(
+                    'local_copy_directory_changed',
+                    'The approved local directory changed before the copy completed.',
+                )
+            return descriptor
+        except LocalFileTransferError:
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            raise
+        except OSError as exc:
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            raise LocalFileTransferError(
+                'local_copy_directory_changed',
+                'The approved local directory could not be reopened safely.',
+            ) from exc
+
+    @staticmethod
+    def _validate_local_file_path(path):
+        if not isinstance(path, str) or not path:
+            raise LocalFileTransferError('local_copy_invalid_path', 'Local file path is required.')
+        if len(path.encode('utf-8', errors='ignore')) > 4096 \
+                or any(ord(ch) < 32 or ord(ch) == 127 for ch in path):
+            raise LocalFileTransferError('local_copy_invalid_path', 'Local file path is invalid.')
+        candidate = Path(path)
+        if not candidate.is_absolute():
+            raise LocalFileTransferError(
+                'local_copy_absolute_path_required',
+                'Local Shell file copies require an absolute path.',
+            )
+        if not candidate.name:
+            raise LocalFileTransferError(
+                'local_copy_invalid_path',
+                'Local file path must name a file.',
+            )
+        return candidate
+
+    @staticmethod
+    def _local_file_snapshot(path, attributes):
+        return {
+            'path': str(path),
+            'directory': str(path.parent),
+            'filename': path.name,
+            'size': attributes.st_size,
+            'mtime_ns': attributes.st_mtime_ns,
+            'device': attributes.st_dev,
+            'inode': attributes.st_ino,
+        }
+
+    @staticmethod
+    def _validate_local_snapshot(attributes, snapshot, error_code='local_copy_file_changed'):
+        if (
+            not stat.S_ISREG(attributes.st_mode)
+            or attributes.st_size != snapshot.get('size')
+            or attributes.st_mtime_ns != snapshot.get('mtime_ns')
+            or attributes.st_dev != snapshot.get('device')
+            or attributes.st_ino != snapshot.get('inode')
+        ):
+            raise LocalFileTransferError(error_code, 'The local file changed after approval preflight.')
+
+    @staticmethod
+    def _keep_both_path(path, sequence):
+        suffix = path.suffix
+        stem = path.name[:-len(suffix)] if suffix else path.name
+        return path.with_name(f'{stem} ({sequence}){suffix}')
+
+    def prepare_local_file(self, path):
+        self._require_anchored_file_copy_support()
+        requested_path = self._validate_local_file_path(path)
+        try:
+            requested_attributes = requested_path.lstat()
+            if stat.S_ISLNK(requested_attributes.st_mode):
+                raise LocalFileTransferError(
+                    'local_copy_file_symlink',
+                    'Symbolic links are not supported for local file copies.',
+                )
+            canonical_path = requested_path.resolve(strict=True)
+            attributes = canonical_path.stat()
+            if not stat.S_ISREG(attributes.st_mode):
+                raise LocalFileTransferError(
+                    'local_copy_file_not_regular',
+                    'The local source path is not a regular file.',
+                )
+            snapshot = self._local_file_snapshot(canonical_path, attributes)
+            snapshot.update(self._directory_snapshot(canonical_path.parent))
+            snapshot['endpoint'] = self.file_copy_endpoint()
+            return snapshot
+        except LocalFileTransferError:
+            raise
+        except FileNotFoundError as exc:
+            raise LocalFileTransferError('local_copy_file_not_found', 'The local source file does not exist.') from exc
+        except OSError as exc:
+            raise LocalFileTransferError('local_copy_file_prepare_failed', 'The local source file could not be checked.') from exc
+
+    def download_local_chunks(self, file_snapshot, chunk_size=65536):
+        flags = os.O_RDONLY | getattr(os, 'O_BINARY', 0)
+        flags |= os.O_NOFOLLOW
+        with self._file_copy_lock:
+            directory_descriptor = self._open_anchored_directory(file_snapshot)
+            try:
+                descriptor = os.open(
+                    file_snapshot['filename'],
+                    flags,
+                    dir_fd=directory_descriptor,
+                )
+            except OSError as exc:
+                os.close(directory_descriptor)
+                raise LocalFileTransferError('local_copy_file_open_failed', 'The local source file could not be opened.') from exc
+            try:
+                with os.fdopen(descriptor, 'rb', closefd=True) as source:
+                    self._validate_local_snapshot(os.fstat(source.fileno()), file_snapshot)
+                    remaining = file_snapshot['size']
+                    while remaining > 0:
+                        chunk = source.read(min(chunk_size, remaining))
+                        if not chunk:
+                            raise LocalFileTransferError(
+                                'local_copy_read_incomplete',
+                                'The local source file ended before the copy completed.',
+                            )
+                        remaining -= len(chunk)
+                        yield chunk
+                    self._validate_local_snapshot(os.fstat(source.fileno()), file_snapshot)
+                final_attributes = os.stat(
+                    file_snapshot['filename'],
+                    dir_fd=directory_descriptor,
+                    follow_symlinks=False,
+                )
+                self._validate_local_snapshot(final_attributes, file_snapshot)
+            except LocalFileTransferError:
+                raise
+            except OSError as exc:
+                raise LocalFileTransferError('local_copy_read_failed', 'The local source file could not be read.') from exc
+            finally:
+                os.close(directory_descriptor)
+
+    def prepare_local_upload(self, path, conflict_mode='fail'):
+        self._require_anchored_file_copy_support()
+        requested_path = self._validate_local_file_path(path)
+        if conflict_mode not in {'fail', 'keep_both', 'replace'}:
+            raise LocalFileTransferError('local_copy_invalid_conflict_mode', 'Local copy conflict mode is invalid.')
+        try:
+            canonical_directory = requested_path.parent.resolve(strict=True)
+            if not canonical_directory.is_dir():
+                raise LocalFileTransferError(
+                    'local_copy_not_directory',
+                    'The local destination directory does not exist.',
+                )
+            selected_path = canonical_directory / requested_path.name
+            existing_snapshot = None
+            try:
+                existing = selected_path.lstat()
+            except FileNotFoundError:
+                existing = None
+            if existing is not None:
+                if stat.S_ISLNK(existing.st_mode):
+                    raise LocalFileTransferError(
+                        'local_copy_destination_symlink',
+                        'A symbolic-link destination cannot be replaced.',
+                    )
+                if not stat.S_ISREG(existing.st_mode):
+                    raise LocalFileTransferError(
+                        'local_copy_destination_not_file',
+                        'The local destination exists and is not a regular file.',
+                    )
+                existing_snapshot = self._local_file_snapshot(selected_path, existing)
+                if conflict_mode == 'keep_both':
+                    for sequence in range(1, 10000):
+                        candidate = self._keep_both_path(selected_path, sequence)
+                        if not candidate.exists() and not candidate.is_symlink():
+                            selected_path = candidate
+                            existing_snapshot = None
+                            break
+                    else:
+                        raise LocalFileTransferError(
+                            'local_copy_keep_both_exhausted',
+                            'A unique local destination name could not be created.',
+                        )
+            return {
+                'status': 'conflict' if existing_snapshot and conflict_mode == 'fail' else 'ready',
+                'directory': str(canonical_directory),
+                'filename': selected_path.name,
+                'destination_path': str(selected_path),
+                'replace': existing_snapshot is not None and conflict_mode == 'replace',
+                'existing': existing_snapshot,
+                'existing_size': existing_snapshot['size'] if existing_snapshot else None,
+                'endpoint': self.file_copy_endpoint(),
+                **self._directory_snapshot(canonical_directory),
+            }
+        except LocalFileTransferError:
+            raise
+        except OSError as exc:
+            raise LocalFileTransferError(
+                'local_copy_destination_prepare_failed',
+                'The local destination could not be checked.',
+            ) from exc
+
+    def upload_local_stream(self, stream, upload, expected_size, before_read_callback=None,
+                            progress_callback=None, pre_commit_callback=None):
+        destination_path = upload['destination_path']
+        destination_name = upload['filename']
+        temporary_name = f'.standterm-copy-{secrets.token_hex(16)}'
+        completed = False
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_BINARY', 0)
+        with self._file_copy_lock:
+            directory_descriptor = self._open_anchored_directory(upload)
+            try:
+                descriptor = os.open(
+                    temporary_name,
+                    flags,
+                    0o600,
+                    dir_fd=directory_descriptor,
+                )
+                with os.fdopen(descriptor, 'wb', closefd=True) as destination:
+                    transferred = 0
+                    while transferred < expected_size:
+                        if before_read_callback:
+                            before_read_callback(transferred, expected_size)
+                        chunk = stream.read(min(65536, expected_size - transferred))
+                        if not chunk:
+                            raise LocalFileTransferError(
+                                'local_copy_read_incomplete',
+                                'The source stream ended before the local copy completed.',
+                            )
+                        destination.write(chunk)
+                        transferred += len(chunk)
+                        if progress_callback:
+                            progress_callback(transferred, expected_size)
+                    destination.flush()
+                    os.fsync(destination.fileno())
+                temporary_attributes = os.stat(
+                    temporary_name,
+                    dir_fd=directory_descriptor,
+                    follow_symlinks=False,
+                )
+                if not stat.S_ISREG(temporary_attributes.st_mode) \
+                        or temporary_attributes.st_size != expected_size:
+                    raise LocalFileTransferError(
+                        'local_copy_size_mismatch',
+                        'The local temporary file size did not match the source.',
+                    )
+
+                try:
+                    current = os.stat(
+                        destination_name,
+                        dir_fd=directory_descriptor,
+                        follow_symlinks=False,
+                    )
+                except FileNotFoundError:
+                    current = None
+                expected_existing = upload.get('existing')
+                if upload.get('replace'):
+                    if current is None or not expected_existing:
+                        raise LocalFileTransferError(
+                            'local_copy_destination_changed',
+                            'The local destination changed before commit.',
+                        )
+                    self._validate_local_snapshot(
+                        current,
+                        expected_existing,
+                        error_code='local_copy_destination_changed',
+                    )
+                elif current is not None:
+                    raise LocalFileTransferError(
+                        'local_copy_destination_changed',
+                        'The local destination was created before commit.',
+                    )
+                if pre_commit_callback:
+                    pre_commit_callback(transferred, expected_size)
+                if upload.get('replace'):
+                    os.rename(
+                        temporary_name,
+                        destination_name,
+                        src_dir_fd=directory_descriptor,
+                        dst_dir_fd=directory_descriptor,
+                    )
+                else:
+                    try:
+                        os.link(
+                            temporary_name,
+                            destination_name,
+                            src_dir_fd=directory_descriptor,
+                            dst_dir_fd=directory_descriptor,
+                            follow_symlinks=False,
+                        )
+                    except OSError as exc:
+                        raise LocalFileTransferError(
+                            'local_copy_atomic_create_failed',
+                            'The local destination could not be created atomically.',
+                        ) from exc
+                completed = True
+                if not upload.get('replace'):
+                    try:
+                        os.unlink(temporary_name, dir_fd=directory_descriptor)
+                    except OSError:
+                        pass
+                try:
+                    os.fsync(directory_descriptor)
+                except OSError:
+                    pass
+                return {
+                    'destination_path': destination_path,
+                    'filename': destination_name,
+                    'bytes_written': expected_size,
+                }
+            except LocalFileTransferError:
+                raise
+            except OSError as exc:
+                raise LocalFileTransferError('local_copy_write_failed', 'The local destination could not be written.') from exc
+            finally:
+                if not completed:
+                    try:
+                        os.unlink(temporary_name, dir_fd=directory_descriptor)
+                    except OSError:
+                        pass
+                os.close(directory_descriptor)
 
     def connect(self, cols=80, rows=24):
         if sys.platform.startswith('win'):

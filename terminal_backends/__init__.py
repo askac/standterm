@@ -9,13 +9,14 @@ from .base import (
     TerminalBridge,
     TerminalBridgeRuntime,
 )
-from .local_shell import LocalShellBackendPlugin, LocalShellBridge
+from .local_shell import LocalFileTransferError, LocalShellBackendPlugin, LocalShellBridge
 from .ssh import SFTPTransferError, SSHBackendPlugin, SSHBridge
 from .uart import UARTBackendPlugin, UARTBridge
 
 __all__ = [
     'LocalShellBackendPlugin',
     'LocalShellBridge',
+    'LocalFileTransferError',
     'SSHBackendPlugin',
     'SSHBridge',
     'SFTPTransferError',

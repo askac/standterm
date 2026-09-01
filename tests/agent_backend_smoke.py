@@ -1,4 +1,5 @@
 import base64
+import contextlib
 import hashlib
 import sys
 import tempfile
@@ -9,6 +10,7 @@ import io
 import re
 import stat
 import struct
+from types import SimpleNamespace
 import zlib
 from pathlib import Path
 
@@ -18,6 +20,7 @@ import app as standterm
 import scripts.access_window as access_window
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import agent_cli
+import agent_scp
 from terminal_backends.ssh import BrowserEd25519Key, BrowserSSHKeyError
 
 
@@ -3996,7 +3999,856 @@ def make_sftp_test_bridge(session_token, terminal_id=standterm.TERMINAL_ID_MAIN)
     return bridge
 
 
+def make_local_file_test_bridge(session_token, terminal_id):
+    return standterm.LocalShellBridge(
+        session_token,
+        terminal_id,
+        shell_config={
+            'shell_display': 'test-shell',
+            'shell_command': ['sh'],
+            'terminal_kind': 'local',
+            'terminal_label': 'Local Shell',
+        },
+        ssh_term='xterm-256color',
+        get_default_local_shell_config=lambda: (None, None),
+    )
+
+
+def test_external_agent_file_copy_requires_approval_and_streams_between_ssh_bridges():
+    client = make_client()
+    session_token = current_session_token()
+    sid = current_sid_for_session(session_token)
+    source_terminal_id = standterm.TERMINAL_ID_MAIN
+    destination_terminal_id = 'term-2'
+    source_bridge = make_sftp_test_bridge(session_token, source_terminal_id)
+    destination_bridge = make_sftp_test_bridge(session_token, destination_terminal_id)
+    destination_bridge._sftp_endpoint = {
+        'user': 'receiver',
+        'host': 'destination.example',
+        'port': 2222,
+        'route': 'direct',
+    }
+    source_bridge.attach(sid)
+    destination_bridge.attach(sid)
+    standterm.set_bridge(session_token, source_terminal_id, source_bridge)
+    standterm.set_bridge(session_token, destination_terminal_id, destination_bridge)
+
+    for terminal_id in (source_terminal_id, destination_terminal_id):
+        client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': terminal_id})
+        client.emit(standterm.AGENT_EVENT_MODE_SET, {
+            'terminal_id': terminal_id,
+            'mode': 'direct',
+        })
+    source_token, _source_record, error_code = standterm.mint_external_agent_attach_token(
+        session_token,
+        source_terminal_id,
+        sid,
+    )
+    assert error_code is None
+    destination_token, _destination_record, error_code = standterm.mint_external_agent_attach_token(
+        session_token,
+        destination_terminal_id,
+        sid,
+    )
+    assert error_code is None
+
+    source_snapshot = {
+        'directory': '/srv/input',
+        'filename': 'payload.bin',
+        'path': '/srv/input/payload.bin',
+        'size': 9,
+        'mtime': 25,
+        'endpoint': source_bridge.sftp_endpoint(),
+    }
+    destination_plan = {
+        'status': 'ready',
+        'directory': '/srv/output',
+        'filename': 'payload (1).bin',
+        'destination_path': '/srv/output/payload (1).bin',
+        'replace': False,
+        'existing_size': None,
+        'existing_mtime': None,
+        'endpoint': destination_bridge.sftp_endpoint(),
+    }
+    source_bridge.prepare_sftp_file = lambda directory, filename: (
+        dict(source_snapshot)
+        if (directory, filename) in {('/srv/input/..', 'payload.bin'), ('/srv/input', 'payload.bin')}
+        else (_ for _ in ()).throw(AssertionError((directory, filename)))
+    )
+    source_bridge.download_sftp_chunks = lambda snapshot: iter([b'pay', b'load', b'!!'])
+    destination_bridge.prepare_sftp_upload = lambda directory, filename, conflict_mode='ask': (
+        dict(destination_plan)
+        if (directory, filename, conflict_mode) == ('/srv/output', 'payload.bin', 'keep_both')
+        else (_ for _ in ()).throw(AssertionError((directory, filename, conflict_mode)))
+    )
+    uploaded = []
+
+    def upload_stream(stream, upload, expected_size, before_read_callback=None,
+                      progress_callback=None, pre_commit_callback=None,
+                      report_publish_outcome_unknown=False):
+        assert report_publish_outcome_unknown is True
+        data = bytearray()
+        while len(data) < expected_size:
+            if before_read_callback:
+                before_read_callback(len(data), expected_size)
+            chunk = stream.read(min(3, expected_size - len(data)))
+            assert chunk
+            data.extend(chunk)
+            if progress_callback:
+                progress_callback(len(data), expected_size)
+        if pre_commit_callback:
+            pre_commit_callback(len(data), expected_size)
+        uploaded.append(bytes(data))
+        return {
+            'destination_path': upload['destination_path'],
+            'filename': upload['filename'],
+            'bytes_written': len(data),
+        }
+
+    destination_bridge.upload_sftp_stream = upload_stream
+    pending = standterm.process_external_agent_command({
+        'op': 'file-copy',
+        'token': source_token,
+        'terminal_id': source_terminal_id,
+        'source_path': '/srv/input/../payload.bin',
+        'destination_token': destination_token,
+        'destination_terminal_id': destination_terminal_id,
+        'destination_path': '/srv/output/payload.bin',
+        'conflict_mode': 'keep_both',
+    })
+    assert pending['status'] == standterm.AGENT_STATUS_PENDING_APPROVAL
+    assert pending['requires_approval'] is True
+    assert 'source_path' not in pending
+    assert uploaded == []
+
+    action = last_payload(client, standterm.AGENT_EVENT_ACTION_REQUEST)
+    assert action['action_type'] == standterm.AGENT_ACTION_FILE_COPY
+    assert action['source_path'] == '/srv/input/payload.bin'
+    assert action['destination_path'] == '/srv/output/payload (1).bin'
+    assert action['source_size'] == 9
+    assert action['conflict_mode'] == 'keep_both'
+    client.emit(standterm.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': source_terminal_id,
+        'action_id': action['action_id'],
+        'proposal_id': action['proposal_id'],
+        'session_id': action['session_id'],
+        'viewer_id': action['viewer_id'],
+        'agent_binding_id': action['agent_binding_id'],
+        'mode_version': action['mode_version'],
+        'privacy_version': action['privacy_version'],
+    })
+    assert uploaded == [b'payload!!']
+
+    completed = standterm.process_external_agent_command({
+        'op': 'action-status',
+        'token': source_token,
+        'terminal_id': source_terminal_id,
+        'action_id': action['action_id'],
+    })
+    assert completed['status'] == standterm.AGENT_STATUS_COMPLETED
+    assert completed['result']['bytes_copied'] == 9
+    assert completed['result']['source_preserved'] is True
+    assert completed['result']['destination_path'] == '/srv/output/payload (1).bin'
+
+    rejected_pending = standterm.process_external_agent_command({
+        'op': 'file-copy',
+        'token': source_token,
+        'terminal_id': source_terminal_id,
+        'source_path': '/srv/input/../payload.bin',
+        'destination_token': destination_token,
+        'destination_terminal_id': destination_terminal_id,
+        'destination_path': '/srv/output/payload.bin',
+        'conflict_mode': 'keep_both',
+    })
+    rejected_action = last_payload(client, standterm.AGENT_EVENT_ACTION_REQUEST)
+    client.emit(standterm.AGENT_EVENT_ACTION_REJECT, {
+        'terminal_id': source_terminal_id,
+        'action_id': rejected_action['action_id'],
+        'proposal_id': rejected_action['proposal_id'],
+    })
+    rejected = standterm.process_external_agent_command({
+        'op': 'action-status',
+        'token': source_token,
+        'terminal_id': source_terminal_id,
+        'action_id': rejected_action['action_id'],
+    })
+    assert rejected_pending['status'] == standterm.AGENT_STATUS_PENDING_APPROVAL
+    assert rejected['status'] == standterm.AGENT_STATUS_REJECTED
+    for private_key in (
+        'source_path',
+        'destination_path',
+        'source_size',
+        'source_endpoint',
+        'destination_endpoint',
+        'destination_exists',
+    ):
+        assert private_key not in rejected
+
+    revoked_pending = standterm.process_external_agent_command({
+        'op': 'file-copy',
+        'token': source_token,
+        'terminal_id': source_terminal_id,
+        'source_path': '/srv/input/../payload.bin',
+        'destination_token': destination_token,
+        'destination_terminal_id': destination_terminal_id,
+        'destination_path': '/srv/output/payload.bin',
+        'conflict_mode': 'keep_both',
+    })
+    revoked_action = last_payload(client, standterm.AGENT_EVENT_ACTION_REQUEST)
+    revoked_internal = standterm.get_agent_state(
+        session_token,
+        source_terminal_id,
+        sid,
+    ).pending_actions[revoked_action['action_id']]
+    revoked_result = standterm.process_external_agent_command({
+        'op': 'revoke',
+        'token': destination_token,
+        'terminal_id': destination_terminal_id,
+    })
+    assert revoked_pending['status'] == standterm.AGENT_STATUS_PENDING_APPROVAL
+    assert revoked_result['revoked'] is True
+    assert revoked_internal['status'] == standterm.AGENT_STATUS_FAILED
+    assert revoked_internal['error_code'] == standterm.AGENT_ERROR_EXTERNAL_AGENT_REVOKED
+    destination_token, _destination_record, error_code = standterm.mint_external_agent_attach_token(
+        session_token,
+        destination_terminal_id,
+        sid,
+    )
+    assert error_code is None
+
+    revoked_running_reads = []
+
+    def revoked_running_chunks(_snapshot):
+        for chunk in (b'pay', b'load', b'!!'):
+            revoked_running_reads.append(chunk)
+            yield chunk
+
+    source_bridge.download_sftp_chunks = revoked_running_chunks
+
+    def revoke_during_upload(stream, _upload, expected_size, before_read_callback=None,
+                             progress_callback=None, pre_commit_callback=None,
+                             report_publish_outcome_unknown=False):
+        assert report_publish_outcome_unknown is True
+        before_read_callback(0, expected_size)
+        chunk = stream.read(3)
+        assert chunk == b'pay'
+        progress_callback(len(chunk), expected_size)
+        revoke_result = standterm.process_external_agent_command({
+            'op': 'revoke',
+            'token': destination_token,
+            'terminal_id': destination_terminal_id,
+        })
+        assert revoke_result['revoked'] is True
+        before_read_callback(len(chunk), expected_size)
+        raise AssertionError('explicit revoke should stop the running copy before commit')
+
+    destination_bridge.upload_sftp_stream = revoke_during_upload
+    revoked_running_pending = standterm.process_external_agent_command({
+        'op': 'file-copy',
+        'token': source_token,
+        'terminal_id': source_terminal_id,
+        'source_path': '/srv/input/../payload.bin',
+        'destination_token': destination_token,
+        'destination_terminal_id': destination_terminal_id,
+        'destination_path': '/srv/output/payload.bin',
+        'conflict_mode': 'keep_both',
+    })
+    revoked_running_action = last_payload(client, standterm.AGENT_EVENT_ACTION_REQUEST)
+    assert revoked_running_pending['status'] == standterm.AGENT_STATUS_PENDING_APPROVAL
+    client.emit(standterm.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': source_terminal_id,
+        'action_id': revoked_running_action['action_id'],
+        'proposal_id': revoked_running_action['proposal_id'],
+    })
+    revoked_running = standterm.process_external_agent_command({
+        'op': 'action-status',
+        'token': source_token,
+        'terminal_id': source_terminal_id,
+        'action_id': revoked_running_action['action_id'],
+    })
+    assert revoked_running['status'] == standterm.AGENT_STATUS_FAILED
+    assert revoked_running['error_code'] == standterm.AGENT_ERROR_EXTERNAL_AGENT_REVOKED
+    assert revoked_running_reads == [b'pay']
+
+    destination_token, _destination_record, error_code = standterm.mint_external_agent_attach_token(
+        session_token,
+        destination_terminal_id,
+        sid,
+    )
+    assert error_code is None
+
+    read_events = []
+
+    def cancelled_chunks(_snapshot):
+        for chunk in (b'pay', b'load', b'!!'):
+            read_events.append(chunk)
+            yield chunk
+
+    source_bridge.download_sftp_chunks = cancelled_chunks
+
+    def cancel_during_upload(stream, _upload, expected_size, before_read_callback=None,
+                             progress_callback=None, pre_commit_callback=None,
+                             report_publish_outcome_unknown=False):
+        assert report_publish_outcome_unknown is True
+        before_read_callback(0, expected_size)
+        chunk = stream.read(3)
+        assert chunk == b'pay'
+        progress_callback(len(chunk), expected_size)
+        destination_state = standterm.get_agent_state(
+            session_token,
+            destination_terminal_id,
+            sid,
+        )
+        destination_state.mode = standterm.AGENT_MODE_OBSERVE
+        destination_state.mode_version += 1
+        before_read_callback(len(chunk), expected_size)
+        raise AssertionError('authorization loss should stop before commit')
+
+    destination_bridge.upload_sftp_stream = cancel_during_upload
+    cancelled_pending = standterm.process_external_agent_command({
+        'op': 'file-copy',
+        'token': source_token,
+        'terminal_id': source_terminal_id,
+        'source_path': '/srv/input/../payload.bin',
+        'destination_token': destination_token,
+        'destination_terminal_id': destination_terminal_id,
+        'destination_path': '/srv/output/payload.bin',
+        'conflict_mode': 'keep_both',
+    })
+    cancelled_action = last_payload(client, standterm.AGENT_EVENT_ACTION_REQUEST)
+    assert cancelled_pending['status'] == standterm.AGENT_STATUS_PENDING_APPROVAL
+    client.emit(standterm.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': source_terminal_id,
+        'action_id': cancelled_action['action_id'],
+        'proposal_id': cancelled_action['proposal_id'],
+    })
+    cancelled = standterm.process_external_agent_command({
+        'op': 'action-status',
+        'token': source_token,
+        'terminal_id': source_terminal_id,
+        'action_id': cancelled_action['action_id'],
+    })
+    assert cancelled['status'] == standterm.AGENT_STATUS_FAILED
+    assert cancelled['error_code'] == standterm.AGENT_ERROR_MODE_NOT_WRITABLE
+    assert read_events == [b'pay']
+
+    destination_state = standterm.get_agent_state(session_token, destination_terminal_id, sid)
+    destination_state.mode = standterm.AGENT_MODE_DIRECT_ACTIVE
+    destination_state.mode_version += 1
+    source_bridge.download_sftp_chunks = lambda _snapshot: iter([b'pay', b'load', b'!!'])
+
+    def publish_outcome_unknown(stream, _upload, expected_size, before_read_callback=None,
+                                progress_callback=None, pre_commit_callback=None,
+                                report_publish_outcome_unknown=False):
+        assert report_publish_outcome_unknown is True
+        transferred = 0
+        while transferred < expected_size:
+            before_read_callback(transferred, expected_size)
+            chunk = stream.read(min(3, expected_size - transferred))
+            transferred += len(chunk)
+            progress_callback(transferred, expected_size)
+        pre_commit_callback(transferred, expected_size)
+        raise standterm.SFTPTransferError(
+            standterm.AGENT_ERROR_FILE_COPY_PUBLISH_OUTCOME_UNKNOWN,
+            'publish outcome unknown',
+        )
+
+    destination_bridge.upload_sftp_stream = publish_outcome_unknown
+    unknown_pending = standterm.process_external_agent_command({
+        'op': 'file-copy',
+        'token': source_token,
+        'terminal_id': source_terminal_id,
+        'source_path': '/srv/input/../payload.bin',
+        'destination_token': destination_token,
+        'destination_terminal_id': destination_terminal_id,
+        'destination_path': '/srv/output/payload.bin',
+        'conflict_mode': 'keep_both',
+    })
+    unknown_action = last_payload(client, standterm.AGENT_EVENT_ACTION_REQUEST)
+    assert unknown_pending['status'] == standterm.AGENT_STATUS_PENDING_APPROVAL
+    client.emit(standterm.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': source_terminal_id,
+        'action_id': unknown_action['action_id'],
+        'proposal_id': unknown_action['proposal_id'],
+    })
+    unknown = standterm.process_external_agent_command({
+        'op': 'action-status',
+        'token': source_token,
+        'terminal_id': source_terminal_id,
+        'action_id': unknown_action['action_id'],
+    })
+    assert unknown['status'] == standterm.AGENT_STATUS_FAILED
+    assert unknown['error_code'] == standterm.AGENT_ERROR_FILE_COPY_PUBLISH_OUTCOME_UNKNOWN
+
+    def commit_then_detach(stream, upload, expected_size, before_read_callback=None,
+                           progress_callback=None, pre_commit_callback=None,
+                           report_publish_outcome_unknown=False):
+        assert report_publish_outcome_unknown is True
+        data = bytearray()
+        while len(data) < expected_size:
+            before_read_callback(len(data), expected_size)
+            chunk = stream.read(min(3, expected_size - len(data)))
+            data.extend(chunk)
+            progress_callback(len(data), expected_size)
+        pre_commit_callback(len(data), expected_size)
+        standterm.invalidate_agent_states(
+            session_token,
+            terminal_id=source_terminal_id,
+            sid=sid,
+        )
+        return {
+            'destination_path': upload['destination_path'],
+            'filename': upload['filename'],
+            'bytes_written': len(data),
+        }
+
+    destination_bridge.upload_sftp_stream = commit_then_detach
+    detached_pending = standterm.process_external_agent_command({
+        'op': 'file-copy',
+        'token': source_token,
+        'terminal_id': source_terminal_id,
+        'source_path': '/srv/input/../payload.bin',
+        'destination_token': destination_token,
+        'destination_terminal_id': destination_terminal_id,
+        'destination_path': '/srv/output/payload.bin',
+        'conflict_mode': 'keep_both',
+    })
+    detached_action = last_payload(client, standterm.AGENT_EVENT_ACTION_REQUEST)
+    detached_internal = standterm.get_agent_state(
+        session_token,
+        source_terminal_id,
+        sid,
+    ).pending_actions[detached_action['action_id']]
+    assert detached_pending['status'] == standterm.AGENT_STATUS_PENDING_APPROVAL
+    client.emit(standterm.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': source_terminal_id,
+        'action_id': detached_action['action_id'],
+        'proposal_id': detached_action['proposal_id'],
+    })
+    assert detached_internal['status'] == standterm.AGENT_STATUS_COMPLETED
+    assert detached_internal['result']['bytes_copied'] == 9
+
+    other_token, _other_record, error_code = standterm.mint_external_agent_attach_token(
+        session_token,
+        source_terminal_id,
+        sid,
+    )
+    assert error_code == standterm.AGENT_ERROR_NOT_ATTACHED
+    assert other_token is None
+    client.disconnect()
+
+
+def test_agent_action_slot_does_not_evict_committing_file_copy():
+    state = SimpleNamespace(pending_actions={})
+    state.pending_actions['committing'] = {
+        'action_id': 'committing',
+        'status': standterm.AGENT_STATUS_COMMITTING,
+        'created_at': 0,
+    }
+    for index in range(standterm.AGENT_ACTION_MAX_RECORDS - 1):
+        action_id = f'completed-{index}'
+        state.pending_actions[action_id] = {
+            'action_id': action_id,
+            'status': standterm.AGENT_STATUS_COMPLETED,
+            'created_at': index + 1,
+        }
+    assert standterm.reserve_agent_action_slot(state) is True
+    assert 'committing' in state.pending_actions
+    assert len(state.pending_actions) == standterm.AGENT_ACTION_MAX_RECORDS - 1
+
+
+def test_agent_file_copy_transition_machine_preserves_terminal_outcomes():
+    action = {
+        'action_type': standterm.AGENT_ACTION_FILE_COPY,
+        'status': standterm.AGENT_STATUS_PENDING_APPROVAL,
+        'approval_granted': False,
+    }
+    assert standterm.transition_agent_file_copy_action(
+        None,
+        action,
+        standterm.AGENT_FILE_COPY_EVENT_BROWSER_APPROVE,
+    ) is True
+    assert action['status'] == standterm.AGENT_STATUS_APPROVED
+    assert action['approval_granted'] is False
+    assert standterm.transition_agent_file_copy_action(
+        None,
+        action,
+        standterm.AGENT_FILE_COPY_EVENT_BEGIN_COMMIT,
+    ) is False
+    assert standterm.transition_agent_file_copy_action(
+        None,
+        action,
+        standterm.AGENT_FILE_COPY_EVENT_START,
+    ) is True
+    assert action['status'] == standterm.AGENT_STATUS_RUNNING
+    assert action['approval_granted'] is True
+    assert standterm.transition_agent_file_copy_action(
+        None,
+        action,
+        standterm.AGENT_FILE_COPY_EVENT_BEGIN_COMMIT,
+    ) is True
+    assert action['status'] == standterm.AGENT_STATUS_COMMITTING
+    assert standterm.transition_agent_file_copy_action(
+        None,
+        action,
+        standterm.AGENT_FILE_COPY_EVENT_CANCEL,
+        error_code=standterm.AGENT_ERROR_EXTERNAL_AGENT_REVOKED,
+    ) is False
+    assert standterm.transition_agent_file_copy_action(
+        None,
+        action,
+        standterm.AGENT_FILE_COPY_EVENT_PUBLISH_UNKNOWN,
+        error_code='ignored_error',
+    ) is True
+    assert action['status'] == standterm.AGENT_STATUS_FAILED
+    assert action['error_code'] == standterm.AGENT_ERROR_FILE_COPY_PUBLISH_OUTCOME_UNKNOWN
+    assert standterm.transition_agent_file_copy_action(
+        None,
+        action,
+        standterm.AGENT_FILE_COPY_EVENT_PUBLISH_CONFIRMED,
+        result={'bytes_copied': 1},
+    ) is False
+    assert action['error_code'] == standterm.AGENT_ERROR_FILE_COPY_PUBLISH_OUTCOME_UNKNOWN
+
+    cancelled = {
+        'action_type': standterm.AGENT_ACTION_FILE_COPY,
+        'status': standterm.AGENT_STATUS_RUNNING,
+        'approval_granted': True,
+    }
+    assert standterm.transition_agent_file_copy_action(
+        None,
+        cancelled,
+        standterm.AGENT_FILE_COPY_EVENT_CANCEL,
+        error_code=standterm.AGENT_ERROR_PAUSED,
+    ) is True
+    assert standterm.transition_agent_file_copy_action(
+        None,
+        cancelled,
+        standterm.AGENT_FILE_COPY_EVENT_EXECUTION_FAILED,
+        error_code='file_copy_failed',
+    ) is False
+    assert cancelled['error_code'] == standterm.AGENT_ERROR_PAUSED
+
+    completed = {
+        'action_type': standterm.AGENT_ACTION_FILE_COPY,
+        'status': standterm.AGENT_STATUS_COMMITTING,
+        'approval_granted': True,
+    }
+    result = {'bytes_copied': 8}
+    assert standterm.transition_agent_file_copy_action(
+        None,
+        completed,
+        standterm.AGENT_FILE_COPY_EVENT_PUBLISH_CONFIRMED,
+        result=result,
+    ) is True
+    assert completed['status'] == standterm.AGENT_STATUS_COMPLETED
+    assert completed['result'] == result
+
+
+def test_external_agent_sftp_copy_revalidates_destination_before_approval():
+    client = make_client()
+    session_token = current_session_token()
+    sid = current_sid_for_session(session_token)
+    source_bridge = make_sftp_test_bridge(session_token, standterm.TERMINAL_ID_MAIN)
+    destination_bridge = make_sftp_test_bridge(session_token, 'term-2')
+    source_bridge.attach(sid)
+    destination_bridge.attach(sid)
+    standterm.set_bridge(session_token, standterm.TERMINAL_ID_MAIN, source_bridge)
+    standterm.set_bridge(session_token, 'term-2', destination_bridge)
+    for terminal_id in (standterm.TERMINAL_ID_MAIN, 'term-2'):
+        client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': terminal_id})
+        client.emit(standterm.AGENT_EVENT_MODE_SET, {
+            'terminal_id': terminal_id,
+            'mode': 'approval',
+        })
+    source_token, _record, error_code = standterm.mint_external_agent_attach_token(
+        session_token,
+        standterm.TERMINAL_ID_MAIN,
+        sid,
+    )
+    assert error_code is None
+    destination_token, _record, error_code = standterm.mint_external_agent_attach_token(
+        session_token,
+        'term-2',
+        sid,
+    )
+    assert error_code is None
+    source_bridge.prepare_sftp_file = lambda directory, filename: {
+        'directory': '/source',
+        'filename': 'file.txt',
+        'path': '/source/file.txt',
+        'size': 4,
+        'mtime': 1,
+        'endpoint': source_bridge.sftp_endpoint(),
+    }
+    destination_bridge.prepare_sftp_upload = lambda directory, filename, conflict_mode='ask': {
+        'status': 'ready',
+        'directory': '/destination',
+        'filename': 'file.txt',
+        'destination_path': '/destination/file.txt',
+        'replace': False,
+        'existing_size': None,
+        'existing_mtime': None,
+        'endpoint': destination_bridge.sftp_endpoint(),
+    }
+    destination_bridge.upload_sftp_stream = lambda *_args, **_kwargs: (
+        (_ for _ in ()).throw(AssertionError('copy should not start'))
+    )
+    pending = standterm.process_external_agent_command({
+        'op': 'file-copy',
+        'token': source_token,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'source_path': '/source/file.txt',
+        'destination_token': destination_token,
+        'destination_terminal_id': 'term-2',
+        'destination_path': '/destination/file.txt',
+    })
+    action = last_payload(client, standterm.AGENT_EVENT_ACTION_REQUEST)
+    assert pending['status'] == standterm.AGENT_STATUS_PENDING_APPROVAL
+
+    client.emit(standterm.AGENT_EVENT_MODE_SET, {
+        'terminal_id': 'term-2',
+        'mode': 'observe',
+    })
+    client.emit(standterm.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'action_id': action['action_id'],
+        'proposal_id': action['proposal_id'],
+    })
+    failed = standterm.process_external_agent_command({
+        'op': 'action-status',
+        'token': source_token,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'action_id': action['action_id'],
+    })
+    assert failed['status'] == standterm.AGENT_STATUS_FAILED
+    assert failed['error_code'] == standterm.AGENT_ERROR_MODE_NOT_WRITABLE
+    for private_key in (
+        'source_path',
+        'destination_path',
+        'source_size',
+        'source_endpoint',
+        'destination_endpoint',
+        'destination_exists',
+    ):
+        assert private_key not in failed
+    client.disconnect()
+
+
+def test_external_agent_file_copy_supports_local_shell_endpoints():
+    client = make_client()
+    session_token = current_session_token()
+    sid = current_sid_for_session(session_token)
+    source_terminal_id = 'local-source'
+    destination_terminal_id = 'local-destination'
+    source_bridge = make_local_file_test_bridge(session_token, source_terminal_id)
+    destination_bridge = make_local_file_test_bridge(session_token, destination_terminal_id)
+    source_bridge.attach(sid)
+    destination_bridge.attach(sid)
+    standterm.set_bridge(session_token, source_terminal_id, source_bridge)
+    standterm.set_bridge(session_token, destination_terminal_id, destination_bridge)
+    for terminal_id in (source_terminal_id, destination_terminal_id):
+        client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': terminal_id})
+        client.emit(standterm.AGENT_EVENT_MODE_SET, {
+            'terminal_id': terminal_id,
+            'mode': 'direct',
+        })
+    source_token, _record, error_code = standterm.mint_external_agent_attach_token(
+        session_token,
+        source_terminal_id,
+        sid,
+    )
+    assert error_code is None
+    destination_token, _record, error_code = standterm.mint_external_agent_attach_token(
+        session_token,
+        destination_terminal_id,
+        sid,
+    )
+    assert error_code is None
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        source_path = root / 'source.bin'
+        destination_path = root / 'destination.bin'
+        source_path.write_bytes(b'local-copy')
+        destination_path.write_bytes(b'old')
+        pending = standterm.process_external_agent_command({
+            'op': 'file-copy',
+            'token': source_token,
+            'terminal_id': source_terminal_id,
+            'source_path': str(source_path),
+            'destination_token': destination_token,
+            'destination_terminal_id': destination_terminal_id,
+            'destination_path': str(destination_path),
+            'conflict_mode': 'replace',
+        })
+        assert pending['status'] == standterm.AGENT_STATUS_PENDING_APPROVAL
+        assert destination_path.read_bytes() == b'old'
+        action = last_payload(client, standterm.AGENT_EVENT_ACTION_REQUEST)
+        assert action['action_type'] == standterm.AGENT_ACTION_FILE_COPY
+        assert action['source_endpoint']['route'] == 'local'
+        assert action['destination_endpoint']['route'] == 'local'
+        assert action['destination_exists'] is True
+        client.emit(standterm.AGENT_EVENT_ACTION_APPROVE, {
+            'terminal_id': source_terminal_id,
+            'action_id': action['action_id'],
+            'proposal_id': action['proposal_id'],
+        })
+        assert destination_path.read_bytes() == b'local-copy'
+        assert source_path.read_bytes() == b'local-copy'
+        completed = standterm.process_external_agent_command({
+            'op': 'action-status',
+            'token': source_token,
+            'terminal_id': source_terminal_id,
+            'action_id': action['action_id'],
+        })
+        assert completed['status'] == standterm.AGENT_STATUS_COMPLETED
+        assert completed['result']['bytes_copied'] == len(b'local-copy')
+
+        source_before = source_path.stat()
+        same_path = standterm.process_external_agent_command({
+            'op': 'file-copy',
+            'token': source_token,
+            'terminal_id': source_terminal_id,
+            'source_path': str(source_path),
+            'destination_token': destination_token,
+            'destination_terminal_id': destination_terminal_id,
+            'destination_path': str(source_path),
+            'conflict_mode': 'replace',
+        })
+        assert same_path['error_code'] == 'file_copy_preflight_failed'
+        source_after = source_path.stat()
+        assert source_after.st_ino == source_before.st_ino
+        assert stat.S_IMODE(source_after.st_mode) == stat.S_IMODE(source_before.st_mode)
+        assert source_path.read_bytes() == b'local-copy'
+
+        approved_directory = root / 'approved'
+        moved_directory = root / 'approved-moved'
+        alternate_directory = root / 'alternate'
+        approved_directory.mkdir()
+        alternate_directory.mkdir()
+        swapped_pending = standterm.process_external_agent_command({
+            'op': 'file-copy',
+            'token': source_token,
+            'terminal_id': source_terminal_id,
+            'source_path': str(source_path),
+            'destination_token': destination_token,
+            'destination_terminal_id': destination_terminal_id,
+            'destination_path': str(approved_directory / 'swapped.bin'),
+        })
+        swapped_action = last_payload(client, standterm.AGENT_EVENT_ACTION_REQUEST)
+        assert swapped_pending['status'] == standterm.AGENT_STATUS_PENDING_APPROVAL
+        approved_directory.rename(moved_directory)
+        approved_directory.symlink_to(alternate_directory, target_is_directory=True)
+        client.emit(standterm.AGENT_EVENT_ACTION_APPROVE, {
+            'terminal_id': source_terminal_id,
+            'action_id': swapped_action['action_id'],
+            'proposal_id': swapped_action['proposal_id'],
+        })
+        swapped = standterm.process_external_agent_command({
+            'op': 'action-status',
+            'token': source_token,
+            'terminal_id': source_terminal_id,
+            'action_id': swapped_action['action_id'],
+        })
+        assert swapped['status'] == standterm.AGENT_STATUS_FAILED
+        assert swapped['error_code'] == 'local_copy_directory_changed'
+        assert not (alternate_directory / 'swapped.bin').exists()
+        assert not (moved_directory / 'swapped.bin').exists()
+
+        symlink_path = root / 'source-link.bin'
+        symlink_path.symlink_to(source_path)
+        blocked = standterm.process_external_agent_command({
+            'op': 'file-copy',
+            'token': source_token,
+            'terminal_id': source_terminal_id,
+            'source_path': str(symlink_path),
+            'destination_token': destination_token,
+            'destination_terminal_id': destination_terminal_id,
+            'destination_path': str(root / 'blocked.bin'),
+        })
+        assert blocked['error_code'] == 'file_copy_preflight_failed'
+        assert not (root / 'blocked.bin').exists()
+    client.disconnect()
+
+
+def test_agent_scp_posts_file_copy_and_waits_for_typed_result():
+    args = SimpleNamespace(
+        url='https://127.0.0.1:5010',
+        token='agt_source',
+        terminal='source',
+        ca_file=None,
+        insecure=True,
+        destination_token='agt_destination',
+        destination_terminal_id='destination',
+        source_path='/source/file.bin',
+        destination_path='/destination/file.bin',
+        conflict_mode='keep-both',
+        no_wait=False,
+        wait_seconds=1,
+        poll_ms=100,
+    )
+    posted = []
+
+    def fake_post(_args, payload):
+        posted.append(dict(payload))
+        if payload['op'] == 'file-copy':
+            return 200, {
+                'status': 'pending_approval',
+                'action_id': 'action-1',
+            }
+        return 200, {
+            'status': 'completed',
+            'action_id': 'action-1',
+            'result': {
+                'bytes_copied': 4,
+                'source_preserved': True,
+            },
+        }
+
+    original_parse_args = agent_scp.parse_args
+    original_post_command = agent_scp.post_command
+    output = io.StringIO()
+    error_output = io.StringIO()
+    try:
+        agent_scp.parse_args = lambda: args
+        agent_scp.post_command = fake_post
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(error_output):
+            assert agent_scp.main() == 0
+    finally:
+        agent_scp.parse_args = original_parse_args
+        agent_scp.post_command = original_post_command
+    assert posted[0] == {
+        'op': 'file-copy',
+        'token': 'agt_source',
+        'terminal_id': 'source',
+        'source_path': '/source/file.bin',
+        'destination_token': 'agt_destination',
+        'destination_terminal_id': 'destination',
+        'destination_path': '/destination/file.bin',
+        'conflict_mode': 'keep_both',
+    }
+    assert posted[1]['op'] == 'action-status'
+    assert posted[1]['action_id'] == 'action-1'
+    assert 'agt_' not in output.getvalue()
+    assert json.loads(output.getvalue())['status'] == 'completed'
+
+    warning_output = io.StringIO()
+    warning_error = io.StringIO()
+    with contextlib.redirect_stdout(warning_output), contextlib.redirect_stderr(warning_error):
+        agent_scp.print_result({
+            'status': 'failed',
+            'error_code': standterm.AGENT_ERROR_FILE_COPY_PUBLISH_OUTCOME_UNKNOWN,
+        })
+    assert json.loads(warning_output.getvalue())['error_code'] == (
+        standterm.AGENT_ERROR_FILE_COPY_PUBLISH_OUTCOME_UNKNOWN
+    )
+    assert 'inspect it before retrying' in warning_error.getvalue()
+
+
 def test_sftp_bridge_browses_direct_endpoint_and_replaces_atomically():
+    publish_behavior = {'mode': None}
+
     class Attr:
         def __init__(self, mode, size=0, mtime=1, filename=None):
             self.st_mode = mode
@@ -4093,7 +4945,11 @@ def test_sftp_bridge_browses_direct_endpoint_and_replaces_atomically():
 
         def posix_rename(self, source, destination):
             self.posix_renames.append((source, destination))
+            if publish_behavior['mode'] == 'before':
+                raise OSError('publish rejected')
             self.filesystem[destination] = self.filesystem.pop(source)
+            if publish_behavior['mode'] == 'after':
+                raise OSError('publish response lost')
 
         def remove(self, path):
             self.filesystem.pop(path, None)
@@ -4142,6 +4998,43 @@ def test_sftp_bridge_browses_direct_endpoint_and_replaces_atomically():
     assert filesystem['C:/Users/tester/reference.txt']['data'] == b'replaced'
     assert opened_clients[-1].posix_renames
 
+    publish_behavior['mode'] = 'before'
+    definite_failure = bridge.prepare_sftp_upload(
+        'C:/Users/tester',
+        'reference.txt',
+        'replace',
+    )
+    try:
+        bridge.upload_sftp_stream(
+            io.BytesIO(b'not-written'),
+            definite_failure,
+            11,
+            report_publish_outcome_unknown=True,
+        )
+        raise AssertionError('a rejected atomic publish unexpectedly succeeded')
+    except standterm.SFTPTransferError as exc:
+        assert exc.error_code == 'sftp_atomic_replace_unavailable'
+    assert filesystem['C:/Users/tester/reference.txt']['data'] == b'replaced'
+
+    publish_behavior['mode'] = 'after'
+    unknown_outcome = bridge.prepare_sftp_upload(
+        'C:/Users/tester',
+        'reference.txt',
+        'replace',
+    )
+    try:
+        bridge.upload_sftp_stream(
+            io.BytesIO(b'uncertain'),
+            unknown_outcome,
+            9,
+            report_publish_outcome_unknown=True,
+        )
+        raise AssertionError('an ambiguous atomic publish unexpectedly reported success')
+    except standterm.SFTPTransferError as exc:
+        assert exc.error_code == standterm.AGENT_ERROR_FILE_COPY_PUBLISH_OUTCOME_UNKNOWN
+    assert filesystem['C:/Users/tester/reference.txt']['data'] == b'uncertain'
+    publish_behavior['mode'] = None
+
     browse = bridge.browse_sftp()
     reference_entry = next(item for item in browse['files'] if item['name'] == 'reference.txt')
     reference = bridge.resolve_sftp_file_reference(reference_entry['file_id'])
@@ -4170,7 +5063,7 @@ def test_sftp_bridge_browses_direct_endpoint_and_replaces_atomically():
     browse = bridge.browse_sftp()
     renamed_entry = next(item for item in browse['files'] if item['name'] == 'renamed.txt')
     renamed_reference = bridge.resolve_sftp_file_reference(renamed_entry['file_id'])
-    assert b''.join(bridge.download_sftp_chunks(renamed_reference, chunk_size=2)) == b'replaced'
+    assert b''.join(bridge.download_sftp_chunks(renamed_reference, chunk_size=2)) == b'uncertain'
     filesystem['C:/Users/tester/renamed.txt']['mtime'] = 99
     try:
         bridge.delete_sftp_file(
@@ -6365,6 +7258,12 @@ def main():
         test_browser_ssh_key_payload_requires_local_or_authorized_https_transport,
         test_browser_ed25519_key_wraps_and_verifies_remote_signature,
         test_browser_ssh_sign_request_store_is_sid_bound_and_fail_closed,
+        test_external_agent_file_copy_requires_approval_and_streams_between_ssh_bridges,
+        test_agent_action_slot_does_not_evict_committing_file_copy,
+        test_agent_file_copy_transition_machine_preserves_terminal_outcomes,
+        test_external_agent_sftp_copy_revalidates_destination_before_approval,
+        test_external_agent_file_copy_supports_local_shell_endpoints,
+        test_agent_scp_posts_file_copy_and_waits_for_typed_result,
         test_sftp_bridge_browses_direct_endpoint_and_replaces_atomically,
         test_sftp_socket_ticket_streams_one_file_and_is_single_use,
         test_terminal_start_tokens_reject_stale_background_connections,
