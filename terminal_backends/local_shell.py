@@ -439,8 +439,7 @@ class LocalShellBridge(TerminalBridge):
             }
 
         try:
-            env = dict(os.environ)
-            env['TERM'] = self._ssh_term
+            env = self._build_process_environment()
             cwd = str(Path.home())
             self.process = PtyProcess.spawn(
                 self.shell_command,
@@ -454,6 +453,13 @@ class LocalShellBridge(TerminalBridge):
             log_message(f"[!] Local shell start error: {exc}")
             return False, {'message': str(exc), 'error_code': 'local_shell_start_failed'}
 
+    def _build_process_environment(self):
+        env = dict(os.environ)
+        env['TERM'] = self._ssh_term
+        env['COLORTERM'] = 'truecolor'
+        env['TERM_PROGRAM'] = 'StandTerm'
+        return env
+
     def _connect_windows(self, cols, rows):
         if WinPtyProcess is None:
             return False, {
@@ -462,8 +468,7 @@ class LocalShellBridge(TerminalBridge):
             }
 
         try:
-            env = dict(os.environ)
-            env['TERM'] = self._ssh_term
+            env = self._build_process_environment()
             cwd = str(Path.home())
             self.process = self._spawn_windows_process(cols, rows, cwd, env)
             self.resize(cols, rows)

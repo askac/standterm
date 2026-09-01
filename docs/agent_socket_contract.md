@@ -105,11 +105,11 @@ The browser mints tokens through `POST /agent/external/token` using the current
 authenticated StandTerm session cookie and public Agent state fields for the active
 terminal. External clients submit commands through `POST /agent/external/command`,
 which is accepted only from loopback clients and still requires the `agt_...`
-token. When a token is minted, the server writes both the backward-compatible
-latest handoff `standterm_external_agent_handoff.json` and a stable handoff for
-that terminal under a server-instance subdirectory of
-`standterm_external_agent_handoffs/`. These ignored local
-files are only conveniences for CLI agents on the StandTerm host; they do not
+token. When a token is minted, the server writes both the latest handoff
+`standterm_external_agent_handoff.json` and a stable handoff for that terminal
+under `standterm_external_agent_handoffs/` in an instance-scoped per-user
+runtime directory. These transient local files are only conveniences for CLI
+agents on the StandTerm host; they do not
 bypass the short-lived token, loopback-only command endpoint, or Agent panel
 mode gates. Each is a machine-readable discovery document for non-StandTerm
 agents and includes `handoff_schema:
@@ -128,7 +128,13 @@ matching token is revoked or its terminal/viewer binding is invalidated. Each
 server process uses a distinct directory so an old launch is never selected as
 the current instance; graceful shutdown removes the current directory, while
 fresh agentinfo generation prunes handoffs whose tokens expired or became
-invalid during the launch.
+invalid during the launch. Linux and WSL prefer
+`$XDG_RUNTIME_DIR/standterm`, Linux falls back to
+`<system-temp>/standterm-<uid>`, native Windows uses
+`%LOCALAPPDATA%\StandTerm\runtime`, and macOS uses
+`~/Library/Caches/StandTerm/runtime`. `STANDTERM_AGENT_RUNTIME_DIR` overrides the
+runtime root. Graceful shutdown removes the current instance directory; a
+token left by a crash is invalid after server restart.
 Agents should call `hello` first when possible and branch only on the typed
 `capabilities` field, not on displayed terminal text.
 See `docs/examples/standterm-external-agent-skill/SKILL.md` and the adjacent
@@ -143,7 +149,7 @@ network interface.
 External clients do not have to run from the StandTerm launch directory. The
 cross-platform connection contract is the loopback command URL, bearer token,
 terminal id, and TLS mode (`--ca-file` for verified HTTPS or `--insecure` only
-for local loopback testing). Local files such as
+for local loopback testing). Runtime files such as
 `standterm_agentinfo.json`, `standterm_external_agent_handoff.json`,
 `standterm_external_agent_handoffs/`, and any current-instance pointer are
 conveniences for agents on the StandTerm host.
@@ -164,7 +170,7 @@ environment.
 
 ```bash
 tools/.venv_wsl/bin/python scripts/agent_cli.py \
-  --handoff standterm_external_agent_handoff.json \
+  --handoff <runtime-handoff-path-from-agentinfo> \
   hello
 
 tools/.venv_wsl/bin/python scripts/agent_cli.py \
@@ -218,11 +224,12 @@ starting one CLI process per line:
 
 ```bash
 tools/.venv_wsl/bin/python scripts/agent_repl.py \
-  --handoff standterm_external_agent_handoff.json \
+  --handoff <runtime-handoff-path-from-agentinfo> \
   --enter cr
 
 tools/.venv_wsl/bin/python scripts/agent_repl.py \
-  --agentinfo standterm_agentinfo.json \
+  --agentinfo <agentinfo-url-from-startup-banner> \
+  <tls-args-from-startup-banner> \
   --enter cr
 ```
 
@@ -258,7 +265,7 @@ For one-line checks in a terminal that is already known to be a shell,
 
 ```bash
 tools/.venv_wsl/bin/python scripts/agent_shcmd.py \
-  --handoff standterm_external_agent_handoff.json \
+  --handoff <runtime-handoff-path-from-agentinfo> \
   --json \
   "pwd"
 ```
@@ -277,7 +284,8 @@ Local-Shell-to-Local-Shell copies between two distinct attached terminals:
 
 ```bash
 tools/.venv_wsl/bin/python scripts/agent_scp.py \
-  --agentinfo standterm_agentinfo.json \
+  --agentinfo <agentinfo-url-from-startup-banner> \
+  <tls-args-from-startup-banner> \
   --terminal term-2 \
   --destination-terminal term-3 \
   /source/file.bin \
@@ -309,13 +317,14 @@ instead of REPL pipe mode:
 
 ```bash
 tools/.venv_wsl/bin/python scripts/agent_type.py \
-  --handoff standterm_external_agent_handoff.json \
+  --handoff <runtime-handoff-path-from-agentinfo> \
   --from-file body.txt \
   --cps 3 \
   --newline cr
 
 tools/.venv_wsl/bin/python scripts/agent_type.py \
-  --agentinfo standterm_agentinfo.json \
+  --agentinfo <agentinfo-url-from-startup-banner> \
+  <tls-args-from-startup-banner> \
   --from-file body.txt \
   --cps 3 \
   --newline cr
@@ -340,7 +349,7 @@ forwards each command to the same loopback HTTP command endpoint:
 
 ```bash
 tools/.venv_wsl/bin/python scripts/agent_jsonl.py \
-  --handoff standterm_external_agent_handoff.json
+  --handoff <runtime-handoff-path-from-agentinfo>
 
 tools/.venv_wsl/bin/python scripts/agent_jsonl.py \
   --agentinfo <agentinfo-url-from-startup-banner> \
@@ -377,10 +386,11 @@ provides an optional stdio MCP adapter over this same command boundary:
 
 ```bash
 tools/.venv_wsl/bin/python scripts/agent_mcp.py \
-  --handoff standterm_external_agent_handoff.json
+  --handoff <runtime-handoff-path-from-agentinfo>
 
 tools/.venv_wsl/bin/python scripts/agent_mcp.py \
-  --agentinfo standterm_agentinfo.json
+  --agentinfo <agentinfo-url-from-startup-banner> \
+  <tls-args-from-startup-banner>
 ```
 
 The adapter is a facade, not a second terminal-control protocol. It does not
@@ -564,7 +574,7 @@ The CLI wrapper can save the returned PNG directly when using the PNG mode:
 
 ```bash
 tools/.venv_wsl/bin/python scripts/agent_cli.py \
-  --handoff standterm_external_agent_handoff.json \
+  --handoff <runtime-handoff-path-from-agentinfo> \
   render --mode visible-xterm-png --save viewport.png
 ```
 

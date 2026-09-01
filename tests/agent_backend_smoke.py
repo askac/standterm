@@ -2856,7 +2856,7 @@ def test_external_agent_per_terminal_handoffs_are_isolated_and_cli_resolvable():
             })['status'] == 'ok'
 
             if not sys.platform.startswith('win'):
-                assert standterm.get_external_agent_handoff_directory().parent.stat().st_mode & 0o777 == 0o700
+                assert standterm.EXTERNAL_AGENT_HANDOFF_PATH.parent.stat().st_mode & 0o777 == 0o700
                 assert standterm.get_external_agent_handoff_directory().stat().st_mode & 0o777 == 0o700
                 assert terminal_paths['term-3'].stat().st_mode & 0o777 == 0o600
             assert list(Path(handoff_dir).rglob('.*.tmp')) == []
@@ -2930,6 +2930,51 @@ def test_external_agent_handoff_uses_loopback_command_url_for_non_loopback_brows
     assert "--url https://127.0.0.1:5000" in payload['cli_commands']['shcmd_json_pwd']
 
 
+def test_external_agent_runtime_paths_are_platform_specific():
+    runtime_env_name = standterm.get_prefixed_env_name('AGENT_RUNTIME_DIR')
+    assert standterm.resolve_external_agent_runtime_root(
+        platform_name='linux',
+        env={'XDG_RUNTIME_DIR': '/run/user/1234'},
+        temp_dir='/tmp',
+        uid=1234,
+    ) == Path('/run/user/1234/standterm')
+    assert standterm.resolve_external_agent_runtime_root(
+        platform_name='linux',
+        env={},
+        temp_dir='/tmp',
+        uid=1234,
+    ) == Path('/tmp/standterm-1234')
+    assert standterm.resolve_external_agent_runtime_root(
+        platform_name='win32',
+        env={'LOCALAPPDATA': 'C:/Users/test/AppData/Local'},
+        temp_dir='C:/Temp',
+    ) == Path('C:/Users/test/AppData/Local') / 'StandTerm' / 'runtime'
+    assert standterm.resolve_external_agent_runtime_root(
+        platform_name='win32',
+        env={},
+        temp_dir='C:/Temp',
+    ) == Path('C:/Temp') / 'StandTerm' / 'runtime'
+    assert standterm.resolve_external_agent_runtime_root(
+        platform_name='darwin',
+        env={},
+        home='/Users/test',
+    ) == Path('/Users/test/Library/Caches/StandTerm/runtime')
+    assert standterm.resolve_external_agent_runtime_root(
+        platform_name='linux',
+        env={runtime_env_name: '/memory/standterm'},
+        temp_dir='/tmp',
+        uid=1234,
+    ) == Path('/memory/standterm')
+    assert standterm.resolve_external_agent_current_info_path(
+        runtime_root='/memory/standterm',
+        env={},
+    ) == Path('/memory/standterm/current_agentinfo.json')
+    assert standterm.resolve_external_agent_current_info_path(
+        runtime_root='/memory/standterm',
+        env={standterm.get_prefixed_env_name('DISABLE_AGENTINFO_CURRENT'): '1'},
+    ) is None
+
+
 def assert_agentinfo_is_tokenless(payload):
     assert payload['schema'] == 'standterm_agentinfo'
     assert payload['schema_version'] == 1
@@ -2941,7 +2986,8 @@ def assert_agentinfo_is_tokenless(payload):
     assert payload['security']['token_bearing_commands_included'] is False
     assert payload['handoff_contains_secret'] is True
     assert payload['handoff_path'].endswith('standterm_external_agent_handoff.json')
-    assert Path(payload['terminal_handoff_directory']).parent.name == 'standterm_external_agent_handoffs'
+    assert Path(payload['runtime_dir']) == Path(payload['agentinfo_path']).parent
+    assert Path(payload['terminal_handoff_directory']).name == 'standterm_external_agent_handoffs'
     assert isinstance(payload['terminal_handoffs'], dict)
     assert payload['transport']['command_endpoint'].endswith('/agent/external/command')
     assert payload['agentinfo_url'].endswith('/agentinfo')
@@ -3000,7 +3046,47 @@ def test_external_agentinfo_payload_route_and_pointer_are_tokenless():
             standterm.EXTERNAL_AGENT_CURRENT_INFO_PATH = original_current_path
 
 
-def test_external_agent_startup_lines_point_to_launch_handoff():
+def test_external_agent_runtime_artifacts_are_removed_on_cleanup():
+    original_runtime_root = standterm.EXTERNAL_AGENT_RUNTIME_ROOT
+    original_instance_dir = standterm.EXTERNAL_AGENT_INSTANCE_DIR
+    original_handoff_path = standterm.EXTERNAL_AGENT_HANDOFF_PATH
+    original_info_path = standterm.EXTERNAL_AGENT_INFO_PATH
+    original_current_path = standterm.EXTERNAL_AGENT_CURRENT_INFO_PATH
+    with tempfile.TemporaryDirectory(prefix='standterm-runtime-cleanup-smoke-') as temp_dir:
+        runtime_root = Path(temp_dir) / 'runtime'
+        instance_dir = runtime_root / 'instance'
+        standterm.EXTERNAL_AGENT_RUNTIME_ROOT = runtime_root
+        standterm.EXTERNAL_AGENT_INSTANCE_DIR = instance_dir
+        standterm.EXTERNAL_AGENT_HANDOFF_PATH = instance_dir / 'standterm_external_agent_handoff.json'
+        standterm.EXTERNAL_AGENT_INFO_PATH = instance_dir / 'standterm_agentinfo.json'
+        standterm.EXTERNAL_AGENT_CURRENT_INFO_PATH = runtime_root / 'current_agentinfo.json'
+        try:
+            standterm.write_external_agentinfo_files(base_url='http://127.0.0.1:5000')
+            handoff_dir = standterm.ensure_external_agent_handoff_directory()
+            handoff_payload = {'token': 'agt_cleanup', 'terminal_id': 'term-cleanup'}
+            standterm.write_json_file_atomic(
+                handoff_dir / 'terminal-cleanup.json',
+                handoff_payload,
+            )
+            standterm.write_json_file_atomic(
+                standterm.EXTERNAL_AGENT_HANDOFF_PATH,
+                handoff_payload,
+            )
+            standterm.cleanup_external_agent_runtime_artifacts()
+            assert not standterm.EXTERNAL_AGENT_CURRENT_INFO_PATH.exists()
+            assert not standterm.EXTERNAL_AGENT_INFO_PATH.exists()
+            assert not standterm.EXTERNAL_AGENT_HANDOFF_PATH.exists()
+            assert not instance_dir.exists()
+            assert not runtime_root.exists()
+        finally:
+            standterm.EXTERNAL_AGENT_RUNTIME_ROOT = original_runtime_root
+            standterm.EXTERNAL_AGENT_INSTANCE_DIR = original_instance_dir
+            standterm.EXTERNAL_AGENT_HANDOFF_PATH = original_handoff_path
+            standterm.EXTERNAL_AGENT_INFO_PATH = original_info_path
+            standterm.EXTERNAL_AGENT_CURRENT_INFO_PATH = original_current_path
+
+
+def test_external_agent_startup_lines_point_to_runtime_handoff():
     original_https_enabled = standterm.HTTPS_ENABLED
     lines = standterm.build_external_agent_startup_lines()
     joined = '\n'.join(lines)
@@ -6404,6 +6490,18 @@ def test_local_shell_bridge_is_provided_by_backend_module():
     bridge.close()
 
 
+def test_local_shell_environment_advertises_truecolor_without_changing_term():
+    bridge = make_local_file_test_bridge(
+        standterm.ACCESS_TOKEN,
+        standterm.TERMINAL_ID_MAIN,
+    )
+    environment = bridge._build_process_environment()
+
+    assert environment['TERM'] == 'xterm-256color'
+    assert environment['COLORTERM'] == 'truecolor'
+    assert environment['TERM_PROGRAM'] == 'StandTerm'
+
+
 def test_local_shell_output_decode_tolerates_non_utf8_bytes():
     import codecs
 
@@ -7432,8 +7530,10 @@ def main():
         test_external_agent_per_terminal_handoffs_are_isolated_and_cli_resolvable,
         test_external_agent_token_route_supports_bounded_three_x_idle_timeout,
         test_external_agent_handoff_uses_loopback_command_url_for_non_loopback_browser_url,
+        test_external_agent_runtime_paths_are_platform_specific,
         test_external_agentinfo_payload_route_and_pointer_are_tokenless,
-        test_external_agent_startup_lines_point_to_launch_handoff,
+        test_external_agent_runtime_artifacts_are_removed_on_cleanup,
+        test_external_agent_startup_lines_point_to_runtime_handoff,
         test_console_clipboard_helpers_select_copy_commands,
         test_console_clipboard_copy_passes_text_to_command,
         test_console_copy_shortcuts_map_token_and_url,
@@ -7490,6 +7590,7 @@ def main():
         test_ssh_backend_action_contract_uses_public_bridge_method,
         test_ssh_bridge_is_provided_by_backend_module,
         test_local_shell_bridge_is_provided_by_backend_module,
+        test_local_shell_environment_advertises_truecolor_without_changing_term,
         test_local_shell_output_decode_tolerates_non_utf8_bytes,
         test_local_shell_read_loop_preserves_split_utf8_characters,
         test_local_shell_read_loop_emits_replacement_text_for_non_utf8_bytes,

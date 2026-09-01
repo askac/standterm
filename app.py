@@ -18,6 +18,7 @@ import shlex
 import struct
 import urllib.parse
 import atexit
+import tempfile
 from collections import deque
 from pathlib import Path
 from flask import Flask, Response, render_template, request, abort, make_response, redirect, send_file, jsonify, stream_with_context
@@ -595,21 +596,56 @@ HTTPS_REQUESTED = CLI_ARGS.https or get_prefixed_env('HTTPS') == '1' or bool(CLI
 HTTPS_ENABLED = HTTPS_REQUESTED
 HTTPS_AUTO_DISABLED = get_prefixed_env('DISABLE_AUTO_HTTPS') == '1'
 APP_DIR = Path(__file__).resolve().parent
-EXTERNAL_AGENT_HANDOFF_PATH = APP_DIR / 'standterm_external_agent_handoff.json'
-EXTERNAL_AGENT_INFO_PATH = APP_DIR / 'standterm_agentinfo.json'
+
+def resolve_external_agent_runtime_root(platform_name=None, env=None, home=None,
+                                        temp_dir=None, uid=None):
+    platform_name = sys.platform if platform_name is None else platform_name
+    env = os.environ if env is None else env
+    configured = str(env.get(get_prefixed_env_name('AGENT_RUNTIME_DIR'), '') or '').strip()
+    if configured:
+        return Path(configured).expanduser()
+
+    if platform_name.startswith('win'):
+        local_app_data = str(env.get('LOCALAPPDATA', '') or '').strip()
+        base_dir = Path(local_app_data).expanduser() if local_app_data else Path(
+            tempfile.gettempdir() if temp_dir is None else temp_dir
+        )
+        return base_dir / APP_NAME / 'runtime'
+
+    if platform_name.startswith('linux'):
+        xdg_runtime_dir = str(env.get('XDG_RUNTIME_DIR', '') or '').strip()
+        if xdg_runtime_dir:
+            return Path(xdg_runtime_dir).expanduser() / 'standterm'
+        if uid is None:
+            uid = os.getuid() if hasattr(os, 'getuid') else 'user'
+        base_dir = Path(tempfile.gettempdir() if temp_dir is None else temp_dir)
+        return base_dir / f'standterm-{uid}'
+
+    if platform_name == 'darwin':
+        home_dir = Path.home() if home is None else Path(home)
+        return home_dir / 'Library' / 'Caches' / APP_NAME / 'runtime'
+
+    base_dir = Path(tempfile.gettempdir() if temp_dir is None else temp_dir)
+    return base_dir / APP_NAME / 'runtime'
+
+EXTERNAL_AGENT_RUNTIME_ROOT = resolve_external_agent_runtime_root()
+EXTERNAL_AGENT_INSTANCE_DIR = EXTERNAL_AGENT_RUNTIME_ROOT / LAUNCHER_INSTANCE_ID
+EXTERNAL_AGENT_HANDOFF_PATH = EXTERNAL_AGENT_INSTANCE_DIR / 'standterm_external_agent_handoff.json'
+EXTERNAL_AGENT_INFO_PATH = EXTERNAL_AGENT_INSTANCE_DIR / 'standterm_agentinfo.json'
 AUTHORIZED_DIR = APP_DIR / 'authorized'
 AUTHORIZED_BROWSERS_PATH = AUTHORIZED_DIR / 'browsers.json'
 
-def resolve_external_agent_current_info_path():
-    if is_prefixed_env_enabled('DISABLE_AGENTINFO_CURRENT'):
+def resolve_external_agent_current_info_path(runtime_root=None, env=None):
+    env = os.environ if env is None else env
+    disabled = str(env.get(get_prefixed_env_name('DISABLE_AGENTINFO_CURRENT'), '') or '') \
+        .strip().lower() in {'1', 'true', 'yes', 'on'}
+    if disabled:
         return None
-    configured = get_prefixed_env('AGENTINFO_CURRENT_PATH').strip()
+    configured = str(env.get(get_prefixed_env_name('AGENTINFO_CURRENT_PATH'), '') or '').strip()
     if configured:
         return Path(configured).expanduser()
-    runtime_dir = os.getenv('XDG_RUNTIME_DIR')
-    if runtime_dir:
-        return Path(runtime_dir).expanduser() / 'standterm' / 'current_agentinfo.json'
-    return Path.home() / '.standterm' / 'current_agentinfo.json'
+    runtime_root = EXTERNAL_AGENT_RUNTIME_ROOT if runtime_root is None else Path(runtime_root)
+    return runtime_root / 'current_agentinfo.json'
 
 EXTERNAL_AGENT_CURRENT_INFO_PATH = resolve_external_agent_current_info_path()
 
@@ -6409,6 +6445,7 @@ def build_external_agentinfo_payload(base_url=None, agentinfo_path=None):
         'command_endpoint': command_endpoint,
         'loopback_only': True,
         'launch_dir': str(APP_DIR),
+        'runtime_dir': str(Path(agentinfo_path or EXTERNAL_AGENT_INFO_PATH).parent),
         'agentinfo_path': str(agentinfo_path or EXTERNAL_AGENT_INFO_PATH),
         'current_agentinfo_path': str(EXTERNAL_AGENT_CURRENT_INFO_PATH) if EXTERNAL_AGENT_CURRENT_INFO_PATH else None,
         'handoff_path': str(handoff_path),
@@ -6450,6 +6487,15 @@ def build_external_agentinfo_payload(base_url=None, agentinfo_path=None):
         payload['tls_ca_cert_path'] = ca_cert_path
     return payload
 
+def ensure_private_agent_directory(path):
+    path = Path(path)
+    if path.is_symlink():
+        raise OSError(f'refusing symlinked External Agent runtime directory: {path}')
+    path.mkdir(parents=True, exist_ok=True)
+    if not sys.platform.startswith('win'):
+        os.chmod(path, 0o700)
+    return path
+
 def write_json_file_atomic(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f'.{path.name}.{secrets.token_urlsafe(8)}.tmp')
@@ -6469,12 +6515,14 @@ def write_external_agentinfo_files(base_url=None):
     payload = build_external_agentinfo_payload(base_url=base_url, agentinfo_path=EXTERNAL_AGENT_INFO_PATH)
     written = []
     try:
+        ensure_private_agent_directory(EXTERNAL_AGENT_INFO_PATH.parent)
         write_json_file_atomic(EXTERNAL_AGENT_INFO_PATH, payload)
         written.append(str(EXTERNAL_AGENT_INFO_PATH))
     except OSError as exc:
         log_message(f"[!] Failed to write External Agent Info {EXTERNAL_AGENT_INFO_PATH}: {exc}", file=sys.stderr)
     if EXTERNAL_AGENT_CURRENT_INFO_PATH:
         try:
+            ensure_private_agent_directory(EXTERNAL_AGENT_CURRENT_INFO_PATH.parent)
             current_payload = dict(payload)
             current_payload['agentinfo_path'] = str(EXTERNAL_AGENT_INFO_PATH)
             current_payload['current_agentinfo_path'] = str(EXTERNAL_AGENT_CURRENT_INFO_PATH)
@@ -6485,7 +6533,7 @@ def write_external_agentinfo_files(base_url=None):
     return written
 
 def get_external_agent_handoff_directory():
-    return EXTERNAL_AGENT_HANDOFF_PATH.with_name('standterm_external_agent_handoffs') / LAUNCHER_INSTANCE_ID
+    return EXTERNAL_AGENT_HANDOFF_PATH.parent / 'standterm_external_agent_handoffs'
 
 def get_external_agent_terminal_handoff_path(terminal_id):
     digest = hashlib.sha256(terminal_id.encode('utf-8')).hexdigest()[:24]
@@ -6493,14 +6541,11 @@ def get_external_agent_terminal_handoff_path(terminal_id):
 
 def ensure_external_agent_handoff_directory():
     handoff_dir = get_external_agent_handoff_directory()
-    handoff_root = handoff_dir.parent
-    if handoff_root.is_symlink() or handoff_dir.is_symlink():
+    instance_dir = handoff_dir.parent
+    if instance_dir.is_symlink() or handoff_dir.is_symlink():
         raise OSError(f'refusing symlinked External Agent handoff directory: {handoff_dir}')
-    handoff_root.mkdir(parents=True, exist_ok=True)
-    handoff_dir.mkdir(exist_ok=True)
-    if not sys.platform.startswith('win'):
-        os.chmod(handoff_root, 0o700)
-        os.chmod(handoff_dir, 0o700)
+    ensure_private_agent_directory(instance_dir)
+    ensure_private_agent_directory(handoff_dir)
     return handoff_dir
 
 def read_external_agent_handoff_file(handoff_path):
@@ -6614,6 +6659,44 @@ def cleanup_external_agent_handoff_artifacts():
         handoff_dir.rmdir()
     except OSError:
         pass
+
+def unlink_external_agent_artifact(path):
+    if not path:
+        return False
+    try:
+        Path(path).unlink()
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        log_message(f"[!] Failed to remove External Agent artifact {path}: {exc}", file=sys.stderr)
+        return False
+
+def cleanup_external_agent_runtime_artifacts():
+    cleanup_external_agent_handoff_artifacts()
+
+    current_payload = (
+        read_external_agent_handoff_file(EXTERNAL_AGENT_CURRENT_INFO_PATH)
+        if EXTERNAL_AGENT_CURRENT_INFO_PATH
+        else None
+    )
+    if current_payload and current_payload.get('agentinfo_path') == str(EXTERNAL_AGENT_INFO_PATH):
+        unlink_external_agent_artifact(EXTERNAL_AGENT_CURRENT_INFO_PATH)
+
+    unlink_external_agent_artifact(EXTERNAL_AGENT_HANDOFF_PATH)
+    unlink_external_agent_artifact(EXTERNAL_AGENT_INFO_PATH)
+
+    candidate_dirs = {
+        get_external_agent_handoff_directory(),
+        EXTERNAL_AGENT_HANDOFF_PATH.parent,
+        EXTERNAL_AGENT_INFO_PATH.parent,
+        EXTERNAL_AGENT_RUNTIME_ROOT,
+    }
+    for directory in sorted(candidate_dirs, key=lambda item: len(Path(item).parts), reverse=True):
+        try:
+            Path(directory).rmdir()
+        except OSError:
+            pass
 
 def build_external_agent_token_payload(token, record, terminal_id, base_url):
     command_base_url = build_external_agent_loopback_base_url(base_url)
@@ -10483,6 +10566,6 @@ if __name__ == '__main__':
     try:
         socketio.run(app, **run_kwargs)
     finally:
-        cleanup_external_agent_handoff_artifacts()
+        cleanup_external_agent_runtime_artifacts()
         cleanup_access_window()
         cleanup_windows_proxy_bypass()

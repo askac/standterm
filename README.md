@@ -204,6 +204,12 @@ Local Shell is selected by default when the browser is allowed to access
 host-local resources, but no shell starts automatically. Use the UI's connect
 button for the selected backend.
 
+Local Shell processes keep the broadly compatible `TERM=xterm-256color` and
+also receive `COLORTERM=truecolor` plus `TERM_PROGRAM=StandTerm`. This advertises
+xterm.js 24-bit color support without requiring a less widely installed terminfo
+entry. SSH sessions continue to request the compatible `xterm-256color` PTY;
+remote environment-variable propagation remains controlled by the SSH server.
+
 Backend plugin policy, start form metadata, and runtime defaults are documented
 in `docs/backend_plugin_contract.md`.
 
@@ -371,7 +377,8 @@ Typical local flow:
 5. Use explicit connection fields from the browser Agent UI or the startup
    banner's `External Agent CLI hello` or `render` command.
 
-Startup writes a tokenless bootstrap file in the StandTerm launch directory:
+Startup writes a tokenless bootstrap file in the per-user External Agent runtime
+directory:
 
 ```text
 standterm_agentinfo.json
@@ -379,20 +386,29 @@ standterm_agentinfo.json
 
 StandTerm also serves the same sanitized payload at the loopback-only
 `/agentinfo` URL printed in the startup banner. External agents should fetch
-that URL first. The launch file and platform-specific current-instance pointer,
-such as `~/.standterm/current_agentinfo.json`, are fallbacks when the URL is
-unavailable. The payload includes launch paths, loopback endpoints, CLI/script
+that URL first. The runtime file and platform-specific current-instance pointer
+are fallbacks when the URL is unavailable. The payload includes launch paths,
+runtime paths, loopback endpoints, CLI/script
 paths, status hints, and recommended commands, but it does not include bearer
 tokens, browser access tokens, terminal display content, cookies, or session
 IDs.
 
-Token minting writes an ignored latest-token handoff in the StandTerm launch
-directory and a stable per-terminal handoff under an ignored local directory:
+Token minting writes an instance-scoped latest-token handoff and stable
+per-terminal handoffs under the same per-user runtime directory:
 
 ```text
-standterm_external_agent_handoff.json
-standterm_external_agent_handoffs/<server-instance>/terminal-<terminal-id-hash>.json
+<runtime-root>/<server-instance>/standterm_external_agent_handoff.json
+<runtime-root>/<server-instance>/standterm_external_agent_handoffs/terminal-<terminal-id-hash>.json
 ```
+
+Linux and WSL prefer `$XDG_RUNTIME_DIR/standterm`, which is normally a tmpfs and
+avoids writes to a checkout on a Windows-mounted drive. Linux falls back to
+`<system-temp>/standterm-<uid>`. Native Windows uses
+`%LOCALAPPDATA%\StandTerm\runtime`, and macOS uses
+`~/Library/Caches/StandTerm/runtime`. Set `STANDTERM_AGENT_RUNTIME_DIR` to use an
+explicit per-user runtime location, including a Windows RAM disk. Runtime files
+are removed on graceful shutdown; tokens are invalid after server restart even
+if a crash leaves a stale file behind.
 
 These files contain bearer tokens with sliding idle timeouts. A standard mint
 uses five idle minutes by default; the optional 3x mint uses fifteen. Each valid
@@ -434,12 +450,12 @@ Start here with the active Python path printed by the StandTerm startup banner:
 
 ```bash
 <python-from-startup-banner> scripts/agent_cli.py --agentinfo <agentinfo-url-from-startup-banner> <tls-args-from-startup-banner> discover
-<python-from-startup-banner> scripts/agent_cli.py --handoff standterm_external_agent_handoff.json hello
-<python-from-startup-banner> scripts/agent_cli.py --handoff standterm_external_agent_handoff.json render --mode mirror-screen
-<python-from-startup-banner> scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send --text $'pwd\r'
-<python-from-startup-banner> scripts/agent_shcmd.py --handoff standterm_external_agent_handoff.json "pwd"
+<python-from-startup-banner> scripts/agent_cli.py --handoff <runtime-handoff-path-from-agentinfo> hello
+<python-from-startup-banner> scripts/agent_cli.py --handoff <runtime-handoff-path-from-agentinfo> render --mode mirror-screen
+<python-from-startup-banner> scripts/agent_cli.py --handoff <runtime-handoff-path-from-agentinfo> send --text $'pwd\r'
+<python-from-startup-banner> scripts/agent_shcmd.py --handoff <runtime-handoff-path-from-agentinfo> "pwd"
 <python-from-startup-banner> scripts/agent_scp.py --agentinfo <agentinfo-url-from-startup-banner> --terminal term-2 --destination-terminal term-3 /source/file.bin /destination/file.bin
-<python-from-startup-banner> scripts/agent_repl.py --handoff standterm_external_agent_handoff.json --enter cr
+<python-from-startup-banner> scripts/agent_repl.py --handoff <runtime-handoff-path-from-agentinfo> --enter cr
 ```
 
 `--agentinfo` is tokenless bootstrap data. Helpers use it for launch paths,
@@ -693,8 +709,8 @@ asset README files when publishing releases that include the vendored files.
   Revoke browsers that no longer need access.
 - The access token lives for the lifetime of the server process and is not
   rotated on its own. Restart the launcher to issue a new one.
-- `standterm_external_agent_handoff.json`, `standterm_external_agent_handoffs/`,
-  `authorized/`, local certs, and venvs are ignored runtime state.
+- External Agent handoffs and agentinfo are transient per-user runtime state;
+  `authorized/`, local certs, and venvs remain local ignored state.
 - Terminal display payload is data. App control decisions should use typed
   fields or typed events.
 

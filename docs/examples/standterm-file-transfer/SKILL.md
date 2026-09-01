@@ -101,17 +101,20 @@ contract.
 Use `agent_rsfile.py` only for a controller-local file and a terminal already
 known to be at an interactive shell prompt. Do not use it in a TUI, pager,
 editor, BBS, login prompt, password prompt, or unknown terminal state.
+Resolve `<runtime-handoff-path-from-agentinfo>` from fresh live agentinfo; do not
+assume the secret-bearing handoff is inside `<standterm-dir>` or the current
+working directory.
 
 Upload from the controller to the shell:
 
 ```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_rsfile.py --handoff <standterm-dir>/standterm_external_agent_handoff.json --method builtin:freebsd-tcsh-python-auto put --local patch.tgz --remote-path /tmp/patch.tgz
+<python-from-startup-banner> <standterm-dir>/scripts/agent_rsfile.py --handoff <runtime-handoff-path-from-agentinfo> --method builtin:freebsd-tcsh-python-auto put --local patch.tgz --remote-path /tmp/patch.tgz
 ```
 
 Download from the shell to the controller:
 
 ```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_rsfile.py --handoff <standterm-dir>/standterm_external_agent_handoff.json --method builtin:linux-sh-python3 get --remote-path /tmp/report.bin --local report.bin --allow-get --max-bytes 1048576
+<python-from-startup-banner> <standterm-dir>/scripts/agent_rsfile.py --handoff <runtime-handoff-path-from-agentinfo> --method builtin:linux-sh-python3 get --remote-path /tmp/report.bin --local report.bin --allow-get --max-bytes 1048576
 ```
 
 - Disclose before execution that payload bytes can appear in terminal echo,
