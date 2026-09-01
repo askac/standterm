@@ -6099,6 +6099,7 @@
                     .catch(err => updateBrowserAuthUi(err.message));
             });
             async function handleBrowserSshSignRequest(data) {
+                const receivedAt = performance.now();
                 const responseBase = {
                     request_id: data && data.request_id,
                     terminal_id: data && data.terminal_id,
@@ -6135,10 +6136,11 @@
                     if (data.algorithm !== 'ssh-ed25519') throw new Error('Unsupported SSH signing algorithm.');
                     if (
                         !Number.isFinite(data.expires_at)
-                        || data.expires_at <= Date.now() / 1000
-                        || data.expires_at > Date.now() / 1000 + 20
+                        || !Number.isFinite(data.timeout_seconds)
+                        || data.timeout_seconds <= 0
+                        || data.timeout_seconds > 20
                     ) {
-                        throw new Error('SSH signing request expired.');
+                        throw new Error('Invalid SSH signing timeout.');
                     }
                     if (handledSshSignRequestIds.has(data.request_id)) throw new Error('SSH signing request was already handled.');
                     const draft = pendingSshConnectionDrafts.get(data.terminal_id);
@@ -6158,6 +6160,9 @@
                     if ((await arrayBufferToHex(challenge)) !== data.challenge_sha256) {
                         throw new Error('SSH signing challenge hash mismatch.');
                     }
+                    if (performance.now() - receivedAt >= data.timeout_seconds * 1000) {
+                        throw new Error('SSH signing request expired.');
+                    }
                     handledSshSignRequestIds.add(data.request_id);
                     if (handledSshSignRequestIds.size > 256) {
                         handledSshSignRequestIds.delete(handledSshSignRequestIds.values().next().value);
@@ -6167,6 +6172,9 @@
                         record.privateKey,
                         challenge
                     );
+                    if (performance.now() - receivedAt >= data.timeout_seconds * 1000) {
+                        throw new Error('SSH signing request expired.');
+                    }
                     if (new Uint8Array(signature).byteLength !== 64) throw new Error('Invalid Ed25519 signature length.');
                     socket.emit('ssh_browser_sign_response', {
                         ...responseBase,

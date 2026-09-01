@@ -4033,8 +4033,9 @@ def test_browser_ssh_sign_request_store_is_sid_bound_and_fail_closed():
     assert store.resolve('session-1', 'sid-a', dict(response, key_id='key-2')) == 'ssh_browser_key_sign_stale'
     assert store.resolve('session-1', 'sid-a', response) is None
     assert store.resolve('session-1', 'sid-a', response) == 'ssh_browser_key_sign_stale'
-    signature, wait_error = store.wait(request_payload)
+    signature, wait_error, error_message = store.wait(request_payload)
     assert wait_error is None
+    assert error_message is None
     assert signature == b's' * 64
 
     timeout_payload, error = store.create(
@@ -4047,9 +4048,10 @@ def test_browser_ssh_sign_request_store_is_sid_bound_and_fail_closed():
         'ssh-ed25519',
     )
     assert error is None
-    signature, wait_error = store.wait(timeout_payload)
+    signature, wait_error, error_message = store.wait(timeout_payload)
     assert signature is None
     assert wait_error == 'ssh_browser_key_sign_timeout'
+    assert error_message is None
 
     cancelled_payload, error = store.create(
         'session-1',
@@ -4062,9 +4064,78 @@ def test_browser_ssh_sign_request_store_is_sid_bound_and_fail_closed():
     )
     assert error is None
     store.discard('session-1', sid='sid-a')
-    signature, wait_error = store.wait(cancelled_payload)
+    signature, wait_error, error_message = store.wait(cancelled_payload)
     assert signature is None
     assert wait_error == 'ssh_browser_key_sign_stale'
+    assert error_message is None
+
+    failed_payload, error = store.create(
+        'session-1',
+        'terminal-1',
+        'sid-a',
+        'browser-a',
+        browser_key,
+        b'failed',
+        'ssh-ed25519',
+    )
+    assert error is None
+    failed_response = {
+        'request_id': failed_payload['request_id'],
+        'terminal_id': failed_payload['terminal_id'],
+        'profile_id': failed_payload['profile_id'],
+        'key_id': failed_payload['key_id'],
+        'challenge_sha256': failed_payload['challenge_sha256'],
+        'status': 'failed',
+        'message': '  SSH signing\nkey\x00 unavailable  ',
+    }
+    assert store.resolve('session-1', 'sid-a', failed_response) == 'ssh_browser_key_sign_failed'
+    signature, wait_error, error_message = store.wait(failed_payload)
+    assert signature is None
+    assert wait_error == 'ssh_browser_key_sign_failed'
+    assert error_message == 'SSH signing key unavailable'
+
+
+def test_browser_ssh_sign_request_store_uses_monotonic_deadlines():
+    clock = {'wall': 1000.0, 'monotonic': 50.0}
+    store = standterm.BrowserSSHSignRequestStore(
+        timeout_seconds=15,
+        wall_time_func=lambda: clock['wall'],
+        monotonic_func=lambda: clock['monotonic'],
+    )
+    browser_key = {
+        'profile_id': 'profile-1',
+        'key_id': 'key-1',
+        'fingerprint': 'f' * 64,
+    }
+    request_payload, error = store.create(
+        'session-1',
+        'terminal-1',
+        'sid-a',
+        'browser-a',
+        browser_key,
+        b'challenge',
+        'ssh-ed25519',
+    )
+    assert error is None
+    assert request_payload['timeout_seconds'] == 15
+    assert request_payload['expires_at'] == 1015.0
+
+    clock['wall'] = 2000.0
+    clock['monotonic'] = 51.0
+    response = {
+        'request_id': request_payload['request_id'],
+        'terminal_id': request_payload['terminal_id'],
+        'profile_id': request_payload['profile_id'],
+        'key_id': request_payload['key_id'],
+        'challenge_sha256': request_payload['challenge_sha256'],
+        'status': 'ok',
+        'signature': base64.b64encode(b's' * 64).decode('ascii'),
+    }
+    assert store.resolve('session-1', 'sid-a', response) is None
+    signature, wait_error, error_message = store.wait(request_payload)
+    assert signature == b's' * 64
+    assert wait_error is None
+    assert error_message is None
 
 
 def make_sftp_test_bridge(session_token, terminal_id=standterm.TERMINAL_ID_MAIN):
@@ -7559,6 +7630,7 @@ def main():
         test_browser_ssh_key_payload_requires_local_or_authorized_https_transport,
         test_browser_ed25519_key_wraps_and_verifies_remote_signature,
         test_browser_ssh_sign_request_store_is_sid_bound_and_fail_closed,
+        test_browser_ssh_sign_request_store_uses_monotonic_deadlines,
         test_external_agent_file_copy_requires_approval_and_streams_between_ssh_bridges,
         test_agent_action_slot_does_not_evict_committing_file_copy,
         test_agent_file_copy_transition_machine_preserves_terminal_outcomes,

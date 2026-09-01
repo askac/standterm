@@ -175,6 +175,7 @@ SESSION_RENEW_INTERVAL_SECONDS = 5 * 60
 SESSION_CLEANUP_INTERVAL_SECONDS = 60
 LOCALHOST_KEY_SETUP_TTL_SECONDS = 120
 SSH_BROWSER_SIGN_TIMEOUT_SECONDS = 15
+SSH_BROWSER_SIGN_FAILURE_MESSAGE_MAX_LENGTH = 160
 SSH_BROWSER_SIGN_REQUEST_EVENT = 'ssh_browser_sign_request'
 SSH_BROWSER_SIGN_RESPONSE_EVENT = 'ssh_browser_sign_response'
 SFTP_BROWSE_REQUEST_EVENT = 'sftp_browse_request'
@@ -1986,18 +1987,37 @@ pending_backend_actions = BackendActionStore(time_func=time.time)
 pending_localhost_key_setups = pending_backend_actions
 
 
+def normalize_browser_ssh_sign_failure_message(value):
+    if not isinstance(value, str):
+        return None
+    normalized = ' '.join(
+        ''.join(character if character.isprintable() else ' ' for character in value).split()
+    )
+    if not normalized:
+        return None
+    return normalized[:SSH_BROWSER_SIGN_FAILURE_MESSAGE_MAX_LENGTH]
+
+
 class BrowserSSHSignRequestStore:
-    def __init__(self, timeout_seconds=SSH_BROWSER_SIGN_TIMEOUT_SECONDS):
+    def __init__(
+        self,
+        timeout_seconds=SSH_BROWSER_SIGN_TIMEOUT_SECONDS,
+        wall_time_func=None,
+        monotonic_func=None,
+    ):
         self._requests = {}
         self._lock = threading.RLock()
         self._timeout_seconds = timeout_seconds
+        self._wall_time_func = wall_time_func or time.time
+        self._monotonic_func = monotonic_func or time.monotonic
 
     def create(self, session_token, terminal_id, sid, browser_id, browser_key, challenge, algorithm):
         if not isinstance(challenge, bytes) or not challenge or len(challenge) > 4096:
             return None, 'ssh_browser_key_invalid_challenge'
-        now = time.time()
+        wall_now = self._wall_time_func()
+        monotonic_now = self._monotonic_func()
         with self._lock:
-            self._trim(now)
+            self._trim(monotonic_now)
             if any(entry.get('sid') == sid for entry in self._requests.values()):
                 return None, 'ssh_browser_key_sign_busy'
             request_id = 'sshs_' + secrets.token_urlsafe(18)
@@ -2011,7 +2031,8 @@ class BrowserSSHSignRequestStore:
                 'algorithm': algorithm,
                 'challenge': base64.b64encode(challenge).decode('ascii'),
                 'challenge_sha256': challenge_hash,
-                'expires_at': now + self._timeout_seconds,
+                'timeout_seconds': self._timeout_seconds,
+                'expires_at': wall_now + self._timeout_seconds,
             }
             self._requests[request_id] = {
                 'request': payload,
@@ -2019,10 +2040,11 @@ class BrowserSSHSignRequestStore:
                 'terminal_id': terminal_id,
                 'sid': sid,
                 'browser_id': browser_id,
-                'expires_at': payload['expires_at'],
+                'deadline': monotonic_now + self._timeout_seconds,
                 'event': threading.Event(),
                 'signature': None,
                 'error_code': None,
+                'error_message': None,
             }
             return dict(payload), None
 
@@ -2033,7 +2055,7 @@ class BrowserSSHSignRequestStore:
         if not isinstance(request_id, str):
             return 'ssh_browser_key_sign_invalid'
         with self._lock:
-            self._trim(time.time())
+            self._trim(self._monotonic_func())
             entry = self._requests.get(request_id)
             if not entry:
                 return 'ssh_browser_key_sign_stale'
@@ -2053,6 +2075,9 @@ class BrowserSSHSignRequestStore:
                 return 'ssh_browser_key_sign_stale'
             if data.get('status') == 'failed':
                 entry['error_code'] = 'ssh_browser_key_sign_failed'
+                entry['error_message'] = normalize_browser_ssh_sign_failure_message(
+                    data.get('message')
+                )
                 entry['event'].set()
                 return entry['error_code']
             if data.get('status') != 'ok':
@@ -2075,19 +2100,19 @@ class BrowserSSHSignRequestStore:
         with self._lock:
             entry = self._requests.get(request_id)
         if not entry:
-            return None, 'ssh_browser_key_sign_stale'
-        wait_seconds = max(0, entry['expires_at'] - time.time())
+            return None, 'ssh_browser_key_sign_stale', None
+        wait_seconds = max(0, entry['deadline'] - self._monotonic_func())
         if not entry['event'].wait(wait_seconds):
             with self._lock:
                 self._requests.pop(request_id, None)
-            return None, 'ssh_browser_key_sign_timeout'
+            return None, 'ssh_browser_key_sign_timeout', None
         with self._lock:
             self._requests.pop(request_id, None)
         if entry.get('error_code'):
-            return None, entry['error_code']
+            return None, entry['error_code'], entry.get('error_message')
         if not isinstance(entry.get('signature'), bytes):
-            return None, 'ssh_browser_key_sign_stale'
-        return entry['signature'], None
+            return None, 'ssh_browser_key_sign_stale', None
+        return entry['signature'], None, None
 
     def discard(self, session_token, terminal_id=None, sid=None):
         with self._lock:
@@ -2110,7 +2135,7 @@ class BrowserSSHSignRequestStore:
 
     def _trim(self, now):
         for request_id, entry in list(self._requests.items()):
-            if entry.get('expires_at', 0) <= now:
+            if entry.get('deadline', 0) <= now:
                 entry['error_code'] = 'ssh_browser_key_sign_timeout'
                 entry['event'].set()
                 self._requests.pop(request_id, None)
@@ -2322,7 +2347,7 @@ def request_browser_ssh_signature(bridge, signer_sid, browser_key, challenge, al
     if error_code:
         raise RuntimeError('Browser SSH signer is busy or unavailable.')
     socketio.emit(SSH_BROWSER_SIGN_REQUEST_EVENT, request_payload, room=signer_sid)
-    signature, error_code = browser_ssh_sign_request_store.wait(request_payload)
+    signature, error_code, error_message = browser_ssh_sign_request_store.wait(request_payload)
     current_identity = socket_browser_identities.get(signer_sid) or {}
     current_client_ip = socket_client_ips.get(signer_sid, 'unknown')
     signer_still_allowed = is_local_client_ip(current_client_ip) or (
@@ -2334,6 +2359,10 @@ def request_browser_ssh_signature(bridge, signer_sid, browser_key, challenge, al
         or current_identity.get('browser_id') != browser_id
         or not signer_still_allowed
     ):
+        if error_message:
+            raise RuntimeError(f'Browser SSH signing did not complete: {error_message}')
+        if error_code == 'ssh_browser_key_sign_timeout':
+            raise RuntimeError('Browser SSH signing timed out.')
         raise RuntimeError('Browser SSH signing did not complete.')
     return signature
 

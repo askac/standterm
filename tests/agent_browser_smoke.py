@@ -3421,7 +3421,8 @@ def test_browser_ssh_key_lifecycle_and_settings_transfer(browser, access_url):
             'algorithm': 'ssh-ed25519',
             'challenge': base64.b64encode(challenge).decode('ascii'),
             'challenge_sha256': hashlib.sha256(challenge).hexdigest(),
-            'expires_at': time.time() + 10,
+            'timeout_seconds': 10,
+            'expires_at': time.time() - 60,
         }
         page.evaluate(
             'payload => window.terminalTest.handleBrowserSshSignRequestForTest(payload)',
@@ -3431,7 +3432,10 @@ def test_browser_ssh_key_lifecycle_and_settings_transfer(browser, access_url):
             """() => window.terminalTest.getEmitted()
                 .filter(entry => entry.event === 'ssh_browser_sign_response').at(-1).args[0]"""
         )
-        check(response['status'] == 'ok', 'structured browser SSH signing request failed')
+        check(
+            response['status'] == 'ok',
+            'Windows/WSL wall-clock skew invalidated a fresh relative signing request',
+        )
         Ed25519PublicKey.from_public_bytes(base64.b64decode(metadata['publicKeyRawB64'])).verify(
             base64.b64decode(response['signature']),
             challenge,

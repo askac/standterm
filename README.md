@@ -262,9 +262,13 @@ challenge to StandTerm's browser-key adapter. StandTerm emits a structured
 request only to the browser connection that started that terminal. The browser
 validates the active connection and exact profile binding before signing, then
 returns a 64-byte Ed25519 signature. Python verifies that signature against the
-profile's public key before returning it to Paramiko. A browser disconnect,
-timeout, changed connection draft, or stale terminal start cancels the path
-without falling back to a password automatically.
+profile's public key before returning it to Paramiko. The browser uses a bounded
+relative signing window, while Python enforces the authoritative monotonic
+deadline, so Windows/WSL wall-clock skew cannot invalidate a fresh request. A
+browser disconnect, timeout, changed connection draft, or stale terminal start
+cancels the path without falling back to a password automatically.
+Browser-side rejection details are sanitized and length-limited before they are
+returned with the connection failure.
 
 ### Lightweight SFTP File Manager
 
