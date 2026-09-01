@@ -126,6 +126,40 @@
             background: #252527; color: #ddd; cursor: pointer; font-size: 17px; line-height: 1;
         }
         .sftp-pip-close:hover { border-color: #ff453a; color: #fff; }
+        .sftp-files-workspace {
+            flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr);
+            gap: 10px; overflow: hidden;
+        }
+        .sftp-files-workspace.copy-open { grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr); }
+        .sftp-source-pane, .sftp-destination-pane {
+            min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 10px; overflow: hidden;
+        }
+        .sftp-destination-pane {
+            padding-left: 10px; border-left: 1px solid #3a3a3c;
+            animation: sftp-destination-slide 0.16s ease-out;
+        }
+        @keyframes sftp-destination-slide {
+            from { opacity: 0; transform: translateX(18px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+        @media (max-width: 760px) {
+            .sftp-files-workspace.copy-open { grid-template-columns: minmax(0, 1fr); }
+            .sftp-files-workspace.copy-open .sftp-source-pane { display: none; }
+            .sftp-destination-pane { border-left: 0; padding-left: 0; }
+        }
+        .sftp-destination-header { display: flex; align-items: center; gap: 8px; }
+        .sftp-destination-title { flex: 1; color: #fff; font-size: 13px; font-weight: 700; }
+        .sftp-session-select, .sftp-copy-name-input {
+            min-width: 0; box-sizing: border-box; padding: 7px 8px; border: 1px solid #444;
+            border-radius: 5px; background: #101011; color: #fff; font-size: 12px;
+        }
+        .sftp-session-select { width: 100%; }
+        .sftp-copy-name-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; align-items: center; }
+        .sftp-copy-summary {
+            padding: 8px 10px; border: 1px solid #3a3a3c; border-radius: 6px;
+            background: #202022; color: #ddd; overflow-wrap: anywhere;
+        }
+        .sftp-copy-lifecycle-hint { color: #aaa; font-size: 11px; line-height: 1.4; }
         .sftp-endpoint-card {
             padding: 8px 10px; border: 1px solid #3a3a3c; border-radius: 6px; background: #202022;
         }
@@ -162,6 +196,7 @@
             cursor: pointer; text-align: left; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
         }
         .sftp-directory-entry:hover { background: #183452; color: #fff; }
+        .sftp-directory-entry.selected { background: #0a4f86; color: #fff; box-shadow: inset 3px 0 #72b5e5; }
         .sftp-file-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; }
         .sftp-file-entry-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .sftp-file-entry-size { color: #888; white-space: nowrap; }
@@ -578,6 +613,19 @@
         }
         #agent-action-box.visible { display: grid; gap: 8px; }
         #agent-action-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; color: #bbb; }
+        #agent-file-copy-details {
+            display: none;
+            gap: 6px;
+            padding: 8px;
+            border: 1px solid #59451f;
+            border-radius: 5px;
+            background: #17120b;
+            color: #ddd;
+            font: 12px/1.4 Consolas, "Courier New", monospace;
+            overflow-wrap: anywhere;
+        }
+        #agent-file-copy-details.visible { display: grid; }
+        #agent-file-copy-warning { color: #ff9f0a; font-weight: 700; }
         .agent-preview {
             max-height: 120px;
             overflow: auto;
@@ -714,7 +762,7 @@
         <div class="menu-item hidden" id="search-google-option">&#x1F50D; Search Google</div>
         <div class="menu-separator" id="menu-sep-sel" style="display:none"></div>
         <div class="menu-item" id="pip-option">&#x29C9; Terminal to PiP</div>
-        <div class="menu-item hidden" id="sftp-send-option">&#x1F4C1; SFTP File Manager&hellip;</div>
+        <div class="menu-item hidden" id="sftp-send-option">&#x1F4C1; Files&hellip;</div>
         <div class="menu-item" id="settings-option">&#x2699;&#xFE0F; Settings</div>
         <div class="menu-separator"></div>
         <div class="menu-item" id="native-menu-option">&#x1F6AA; Use browser context menu</div>
@@ -1044,7 +1092,7 @@
         <button id="agent-status-mint-3x-btn" class="status-action agent-status-mint" title="Mint a 3x idle-time external-agent token for the active terminal">Mint Agent 3&times;</button>
         <button id="new-tab-btn" class="status-action" title="New terminal tab">Add tab</button>
         <button id="close-tabs-btn" class="status-action" title="Close all terminal tabs">Close tabs</button>
-        <button id="sftp-status-btn" class="status-action status-sftp" type="button" title="Open SFTP File Manager" aria-label="Open SFTP File Manager" hidden>&#x1F4C1;</button>
+        <button id="sftp-status-btn" class="status-action status-sftp" type="button" title="Open Files" aria-label="Open Files" hidden>&#x1F4C1;</button>
         <div id="quick-settings" title="Settings">&#x2699;&#xFE0F;</div>
     </div>
     <div id="policy-debug-panel"></div>
@@ -1103,6 +1151,13 @@
             </details>
             <div id="agent-action-box">
                 <div class="agent-preview" id="agent-action-preview"></div>
+                <div id="agent-file-copy-details">
+                    <div>source: <span id="agent-file-copy-source"></span></div>
+                    <div>destination: <span id="agent-file-copy-destination"></span></div>
+                    <div>size: <span id="agent-file-copy-size"></span></div>
+                    <div>conflict: <span id="agent-file-copy-conflict"></span></div>
+                    <div id="agent-file-copy-warning"></div>
+                </div>
                 <div id="agent-action-meta">
                     <span>target: <span id="agent-action-target">--</span></span>
                     <span>bytes: <span id="agent-action-bytes">0</span></span>
@@ -1163,7 +1218,13 @@
         const AGENT_MODE_APPROVAL_PENDING = 'approval_pending';
         const AGENT_MODE_DIRECT_ACTIVE = 'direct_active';
         const AGENT_MODE_PAUSED = 'paused';
-        const AGENT_OPEN_ACTION_STATUSES = new Set(['pending_approval', 'direct_pending', 'approved']);
+        const AGENT_OPEN_ACTION_STATUSES = new Set([
+            'pending_approval',
+            'direct_pending',
+            'approved',
+            'running',
+            'committing'
+        ]);
         const AGENT_VIEWPORT_SNAPSHOT_DEBOUNCE_MS = 250;
         const AGENT_SNAPSHOT_BLOCKED_PRIVACY_STATES = new Set(['private_input', 'paste_review', 'paused']);
         const AGENT_VIEWPORT_RENDER_MAX_PIXELS = 4096 * 4096;
@@ -1897,6 +1958,12 @@
             const agentExternalCommand = document.getElementById('agent-external-command');
             const agentActionBox = document.getElementById('agent-action-box');
             const agentActionPreview = document.getElementById('agent-action-preview');
+            const agentFileCopyDetails = document.getElementById('agent-file-copy-details');
+            const agentFileCopySource = document.getElementById('agent-file-copy-source');
+            const agentFileCopyDestination = document.getElementById('agent-file-copy-destination');
+            const agentFileCopySize = document.getElementById('agent-file-copy-size');
+            const agentFileCopyConflict = document.getElementById('agent-file-copy-conflict');
+            const agentFileCopyWarning = document.getElementById('agent-file-copy-warning');
             const agentActionTarget = document.getElementById('agent-action-target');
             const agentActionBytes = document.getElementById('agent-action-bytes');
             const agentActionLines = document.getElementById('agent-action-lines');
@@ -1986,6 +2053,7 @@
             let browserPairingCheckExpiresAt = 0;
             let agentPanelVisible = false;
             let agentPanelTerminalIdOverride = null;
+            const agentDecisionActionIds = new Set();
             let agentPanelPosition = null;
             let agentPanelDrag = null;
             let agentExternalTokenCountdownTimer = null;
@@ -2346,6 +2414,7 @@
                     humanInputLeaseExpiresAt: null,
                     pendingActions: 0,
                     openActionIds: new Set(),
+                    actionRevisions: new Map(),
                     lastAction: null,
                     pendingAction: null,
                     snapshotSeq: 0,
@@ -2592,8 +2661,8 @@
 
             function formatExternalAgentPermissionHint(mode) {
                 if (mode === AGENT_MODE_OBSERVE) return 'Observer can read terminal output. It cannot type.';
-                if (mode === AGENT_MODE_APPROVAL_PENDING) return 'Approval lets the agent propose input. You approve before it is sent.';
-                if (mode === AGENT_MODE_DIRECT_ACTIVE) return 'Full lets the agent type into this terminal without approval.';
+                if (mode === AGENT_MODE_APPROVAL_PENDING) return 'Approval lets the agent propose input. You approve before it is sent. Remote file copies always need separate approval.';
+                if (mode === AGENT_MODE_DIRECT_ACTIVE) return 'Full lets the agent type into this terminal without approval. Remote file copies still need separate approval.';
                 if (mode === AGENT_MODE_PAUSED) return 'Agent input is paused. Choose a permission to resume or disable access.';
                 return 'Enable external agent to choose what a local agent can do.';
             }
@@ -2672,8 +2741,19 @@
                 const parts = [];
                 if (action.errorCode) parts.push(`error: ${action.errorCode}`);
                 else parts.push('error: none');
-                if (Number.isFinite(Number(action.bytesWritten))) parts.push(`written: ${action.bytesWritten}`);
-                else if (Number.isFinite(Number(action.byteLength))) parts.push(`bytes: ${action.byteLength}`);
+                if (action.errorCode === 'file_copy_publish_outcome_unknown') {
+                    parts.push('destination may have changed; inspect it before retrying');
+                }
+                if (action.bytesWritten !== null && Number.isFinite(Number(action.bytesWritten))) {
+                    parts.push(`written: ${action.bytesWritten}`);
+                } else if (action.bytesCopied !== null && Number.isFinite(Number(action.bytesCopied))) {
+                    const total = action.totalBytes !== null && Number.isFinite(Number(action.totalBytes))
+                        ? `/${action.totalBytes}`
+                        : '';
+                    parts.push(`copied: ${action.bytesCopied}${total}`);
+                } else if (action.byteLength !== null && Number.isFinite(Number(action.byteLength))) {
+                    parts.push(`bytes: ${action.byteLength}`);
+                }
                 agentStatusDetail.innerText = parts.join(' · ');
             }
 
@@ -2837,25 +2917,75 @@
                 agentActionBox.classList.toggle('visible', !!action);
                 if (!action) {
                     agentActionPreview.innerText = '';
+                    agentFileCopyDetails.classList.remove('visible');
+                    agentFileCopySource.innerText = '';
+                    agentFileCopyDestination.innerText = '';
+                    agentFileCopySize.innerText = '';
+                    agentFileCopyConflict.innerText = '';
+                    agentFileCopyWarning.innerText = '';
                     agentActionTarget.innerText = '--';
                     agentActionBytes.innerText = '0';
                     agentActionLines.innerText = '0';
                     agentActionNewline.innerText = 'no';
                     agentActionControl.innerText = 'no';
                     agentActionStatus.innerText = '--';
+                    agentApproveBtn.innerText = 'Approve';
                     agentApproveBtn.disabled = true;
                     agentRejectBtn.disabled = true;
                     agentActionPauseBtn.disabled = true;
                     return;
                 }
                 agentActionPreview.innerText = typeof action.escaped_preview === 'string' ? action.escaped_preview : '';
-                agentActionTarget.innerText = state.label || state.id;
-                agentActionBytes.innerText = String(normalizeAgentCount(action.byte_length));
-                agentActionLines.innerText = String(normalizeAgentCount(action.line_count));
-                agentActionNewline.innerText = action.ends_with_newline ? 'yes' : 'no';
-                agentActionControl.innerText = action.contains_control_chars ? 'yes' : 'no';
-                agentActionStatus.innerText = action.status || '--';
-                const canDecide = canUseAgentPanel(state) && action.status === 'pending_approval' && !!action.action_id;
+                const isFileCopy = action.action_type === 'file_copy';
+                const destinationState = isFileCopy && typeof action.destination_terminal_id === 'string'
+                    ? terminals.get(action.destination_terminal_id)
+                    : null;
+                agentActionTarget.innerText = isFileCopy
+                    ? `${state.label || state.id} → ${destinationState ? (destinationState.label || destinationState.id) : action.destination_terminal_id}`
+                    : (state.label || state.id);
+                agentFileCopyDetails.classList.toggle('visible', isFileCopy);
+                if (isFileCopy) {
+                    agentFileCopySource.innerText = `${formatSftpEndpoint(action.source_endpoint)}:${action.source_path || ''}`;
+                    agentFileCopyDestination.innerText = `${formatSftpEndpoint(action.destination_endpoint)}:${action.destination_path || ''}`;
+                    agentFileCopySize.innerText = formatSftpBytes(action.source_size);
+                    agentFileCopyConflict.innerText = String(action.conflict_mode || 'fail').replace('_', ' ');
+                    if (action.conflict_mode === 'replace') {
+                        agentFileCopyWarning.innerText = action.destination_exists
+                            ? `This will atomically replace an existing regular file (${formatSftpBytes(action.destination_existing_size)}).`
+                            : 'Replace was requested, but no destination file existed during preflight.';
+                    } else if (action.conflict_mode === 'keep_both') {
+                        agentFileCopyWarning.innerText = 'The displayed destination is the exact keep-both name selected by the backend.';
+                    } else if (action.destination_exists) {
+                        agentFileCopyWarning.innerText = 'The destination exists. Approval reveals the conflict result; no file will be copied.';
+                    } else {
+                        agentFileCopyWarning.innerText = 'The source file will be preserved.';
+                    }
+                }
+                if (isFileCopy) {
+                    const copied = normalizeAgentCount(action.bytes_copied);
+                    const total = normalizeAgentCount(action.total_bytes || action.source_size);
+                    agentActionBytes.innerText = action.status === 'pending_approval'
+                        ? 'after approval'
+                        : `${formatSftpBytes(copied)} / ${formatSftpBytes(total)}`;
+                } else {
+                    agentActionBytes.innerText = String(normalizeAgentCount(action.byte_length));
+                }
+                agentActionLines.innerText = isFileCopy ? '--' : String(normalizeAgentCount(action.line_count));
+                agentActionNewline.innerText = isFileCopy ? '--' : (action.ends_with_newline ? 'yes' : 'no');
+                agentActionControl.innerText = isFileCopy ? '--' : (action.contains_control_chars ? 'yes' : 'no');
+                const copied = normalizeAgentCount(action.bytes_copied);
+                const total = normalizeAgentCount(action.total_bytes || action.source_size);
+                const percent = isFileCopy && total > 0
+                    ? Math.min(100, Math.floor(copied * 100 / total))
+                    : null;
+                agentActionStatus.innerText = percent === null
+                    ? (action.status || '--')
+                    : `${action.status || '--'} · ${percent}%`;
+                agentApproveBtn.innerText = isFileCopy ? 'Approve copy' : 'Approve';
+                const canDecide = canUseAgentPanel(state)
+                    && action.status === 'pending_approval'
+                    && !!action.action_id
+                    && !agentDecisionActionIds.has(action.action_id);
                 agentApproveBtn.disabled = !canDecide;
                 agentRejectBtn.disabled = !canDecide;
                 agentActionPauseBtn.disabled = !(canUseAgentPanel(state) && hasAgentPauseCapability(state));
@@ -3624,8 +3754,17 @@
                 }
                 const actionId = typeof data.action_id === 'string' ? data.action_id : null;
                 const status = typeof data.status === 'string' ? data.status : '';
+                const isFileCopy = data.action_type === 'file_copy';
+                const actionRevision = getAgentNumberField(data, 'action_revision');
+                if (actionId && actionRevision !== null) {
+                    const previousRevision = state.agent.actionRevisions.get(actionId);
+                    if (previousRevision !== undefined && actionRevision < previousRevision) return;
+                    state.agent.actionRevisions.set(actionId, actionRevision);
+                }
+                if (actionId && status !== 'pending_approval') agentDecisionActionIds.delete(actionId);
                 state.agent.lastAction = {
                     actionId,
+                    actionRevision,
                     proposalId: getAgentStringField(data, 'proposal_id'),
                     sessionId: getAgentStringField(data, 'session_id'),
                     viewerId: getAgentStringField(data, 'viewer_id'),
@@ -3636,13 +3775,20 @@
                     errorCode: typeof data.error_code === 'string' ? data.error_code : null,
                     byteLength: getAgentNumberField(data, 'byte_length'),
                     bytesWritten: getAgentNumberField(data, 'bytes_written'),
+                    bytesCopied: getAgentNumberField(data, 'bytes_copied'),
+                    totalBytes: getAgentNumberField(data, 'total_bytes'),
                     controlEpoch: Number.isFinite(Number(data.control_epoch)) ? Number(data.control_epoch) : null
                 };
                 if (actionId) {
                     if (AGENT_OPEN_ACTION_STATUSES.has(status)) {
                         state.agent.openActionIds.add(actionId);
                         state.agent.pendingActions = Math.max(state.agent.pendingActions, state.agent.openActionIds.size);
-                        if (status === 'pending_approval') state.agent.pendingAction = data;
+                        if (
+                            status === 'pending_approval'
+                            || (isFileCopy && ['approved', 'running', 'committing'].includes(status))
+                        ) {
+                            state.agent.pendingAction = data;
+                        }
                     } else {
                         state.agent.openActionIds.delete(actionId);
                         state.agent.pendingActions = Math.max(state.agent.openActionIds.size, state.agent.pendingActions - 1, 0);
@@ -3650,6 +3796,11 @@
                             state.agent.pendingAction = null;
                         }
                     }
+                }
+                if (isFileCopy && status === 'pending_approval') {
+                    restoreAgentPanelToMainDocument();
+                    agentPanelTerminalIdOverride = state.id;
+                    agentPanelVisible = true;
                 }
                 updateAgentPauseButton();
                 updateAgentPanel();
@@ -5079,13 +5230,17 @@
                 return !!(
                     state
                     && state.connected
-                    && state.connectionType === 'ssh'
+                    && (state.connectionType === 'ssh' || state.connectionType === 'local_shell')
                     && state.sftpAvailable !== false
                 );
             }
 
             function shouldShowSftpAction(state) {
-                return !!(state && state.connected && state.connectionType === 'ssh');
+                return !!(
+                    state
+                    && state.connected
+                    && (state.connectionType === 'ssh' || state.connectionType === 'local_shell')
+                );
             }
 
             function updateSftpActionButton(button, state) {
@@ -5105,7 +5260,7 @@
                     unavailableMark.innerText = '\u00D7';
                     button.appendChild(unavailableMark);
                 }
-                button.title = available ? 'Open SFTP File Manager' : 'SFTP not available';
+                button.title = available ? 'Open Files' : 'Files not available';
                 button.setAttribute('aria-label', button.title);
             }
 
@@ -5396,6 +5551,9 @@
                     state.connecting = false;
                     state.error = false;
                     state.connectionType = normalizeConnectionType(item.connection_type);
+                    state.sftpAvailable = typeof item.files_available === 'boolean'
+                        ? item.files_available
+                        : (state.connectionType === 'ssh' ? null : false);
                     state.label = item.terminal_label || CONNECTION_LABELS[state.connectionType] || 'Terminal';
                     state.title = state.label;
                     state.termName = item.term || state.termName;
@@ -5502,6 +5660,9 @@
                     },
                     getAgentStateForTest(terminalId) {
                         return serializeAgentForTest(terminals.get(terminalId));
+                    },
+                    applyAgentActionPayloadForTest(payload) {
+                        applyAgentActionPayload(cloneForTest(payload));
                     },
                     activeTerminalHasFocus() {
                         const state = getActiveTerminalState();
@@ -5619,11 +5780,19 @@
                         setSftpPipBusy(sftpPipState, false);
                         return true;
                     },
+                    handleSftpBrowseResultForTest(payload) {
+                        handleSftpBrowseResult(cloneForTest(payload));
+                        return true;
+                    },
                     startSftpBrowserDownloadForTest(payload) {
                         return startSftpBrowserDownload(cloneForTest(payload));
                     },
                     handleSftpDownloadTicketResultForTest(payload) {
                         handleSftpDownloadTicketResult(cloneForTest(payload));
+                        return true;
+                    },
+                    handleFilesCopyResultForTest(payload) {
+                        handleFilesCopyResult(cloneForTest(payload));
                         return true;
                     },
                     setTerminalPipModeForTest(terminalId, inPip) {
@@ -5980,6 +6149,7 @@
                     .catch(err => updateBrowserAuthUi(err.message));
             });
             async function handleBrowserSshSignRequest(data) {
+                const receivedAt = performance.now();
                 const responseBase = {
                     request_id: data && data.request_id,
                     terminal_id: data && data.terminal_id,
@@ -6016,10 +6186,11 @@
                     if (data.algorithm !== 'ssh-ed25519') throw new Error('Unsupported SSH signing algorithm.');
                     if (
                         !Number.isFinite(data.expires_at)
-                        || data.expires_at <= Date.now() / 1000
-                        || data.expires_at > Date.now() / 1000 + 20
+                        || !Number.isFinite(data.timeout_seconds)
+                        || data.timeout_seconds <= 0
+                        || data.timeout_seconds > 20
                     ) {
-                        throw new Error('SSH signing request expired.');
+                        throw new Error('Invalid SSH signing timeout.');
                     }
                     if (handledSshSignRequestIds.has(data.request_id)) throw new Error('SSH signing request was already handled.');
                     const draft = pendingSshConnectionDrafts.get(data.terminal_id);
@@ -6039,6 +6210,9 @@
                     if ((await arrayBufferToHex(challenge)) !== data.challenge_sha256) {
                         throw new Error('SSH signing challenge hash mismatch.');
                     }
+                    if (performance.now() - receivedAt >= data.timeout_seconds * 1000) {
+                        throw new Error('SSH signing request expired.');
+                    }
                     handledSshSignRequestIds.add(data.request_id);
                     if (handledSshSignRequestIds.size > 256) {
                         handledSshSignRequestIds.delete(handledSshSignRequestIds.values().next().value);
@@ -6048,6 +6222,9 @@
                         record.privateKey,
                         challenge
                     );
+                    if (performance.now() - receivedAt >= data.timeout_seconds * 1000) {
+                        throw new Error('SSH signing request expired.');
+                    }
                     if (new Uint8Array(signature).byteLength !== 64) throw new Error('Invalid Ed25519 signature length.');
                     socket.emit('ssh_browser_sign_response', {
                         ...responseBase,
@@ -6063,6 +6240,7 @@
             socket.on('sftp_upload_ticket_result', handleSftpUploadTicketResult);
             socket.on('sftp_download_ticket_result', handleSftpDownloadTicketResult);
             socket.on('sftp_file_action_result', handleSftpFileActionResult);
+            socket.on('files_copy_result', handleFilesCopyResult);
             socket.on('browser_pairing_file', data => {
                 clearBrowserPairingResponseTimer();
                 setBrowserAuthBusy(false);
@@ -6127,6 +6305,7 @@
                 setBrowserAuthBusy(false);
                 pendingSshConnectionDrafts.clear();
                 handledSshSignRequestIds.clear();
+                agentDecisionActionIds.clear();
                 clearSessionRenewTimer();
                 setServerConnectionState('unavailable');
                 terminals.forEach(state => {
@@ -6773,13 +6952,27 @@
             agentApproveBtn.onclick = () => {
                 const state = getAgentPanelTerminalState();
                 const action = getPendingAgentAction(state);
-                if (!canUseAgentPanel(state) || !action || !action.action_id) return;
+                if (
+                    !canUseAgentPanel(state)
+                    || !action
+                    || !action.action_id
+                    || agentDecisionActionIds.has(action.action_id)
+                ) return;
+                agentDecisionActionIds.add(action.action_id);
+                updateAgentPanel();
                 socket.emit('agent_action_approve', buildAgentActionDecisionPayload(state, action));
             };
             agentRejectBtn.onclick = () => {
                 const state = getAgentPanelTerminalState();
                 const action = getPendingAgentAction(state);
-                if (!canUseAgentPanel(state) || !action || !action.action_id) return;
+                if (
+                    !canUseAgentPanel(state)
+                    || !action
+                    || !action.action_id
+                    || agentDecisionActionIds.has(action.action_id)
+                ) return;
+                agentDecisionActionIds.add(action.action_id);
+                updateAgentPanel();
                 socket.emit('agent_action_reject', buildAgentActionDecisionPayload(state, action));
             };
             agentActionPauseBtn.onclick = () => {
@@ -6962,7 +7155,9 @@
                         state.connecting = false;
                         state.error = false;
                         state.connectionType = normalizeConnectionType(data.connection_type);
-                        state.sftpAvailable = null;
+                        state.sftpAvailable = typeof data.files_available === 'boolean'
+                            ? data.files_available
+                            : (state.connectionType === 'ssh' ? null : false);
                         state.sftpEndpoint = null;
                         state.label = successfulSshDraft && successfulSshDraft.profileName
                             ? getSshProfileTabLabel(successfulSshDraft.profileName)
@@ -7021,7 +7216,11 @@
             socket.on('ssh_output', handleSshOutputPayload);
 
             function formatSftpEndpoint(endpoint) {
-                if (!endpoint || typeof endpoint !== 'object') return 'Direct SSH endpoint';
+                if (!endpoint || typeof endpoint !== 'object') return 'Direct endpoint';
+                if (endpoint.route === 'local') {
+                    const shell = typeof endpoint.shell === 'string' && endpoint.shell ? ` (${endpoint.shell})` : '';
+                    return `Local Shell${shell}`;
+                }
                 const user = typeof endpoint.user === 'string' ? endpoint.user : '';
                 const host = typeof endpoint.host === 'string' ? endpoint.host : '';
                 const port = Number.isFinite(Number(endpoint.port)) ? Number(endpoint.port) : 22;
@@ -7081,6 +7280,33 @@
             function setSftpPipBusy(state, busy) {
                 if (!state || !state.elements) return;
                 state.busy = !!busy;
+                if (state.mode === 'destination') {
+                    const copying = !!state.copying;
+                    const copyPhase = state.copyPhase || 'idle';
+                    state.elements.home.disabled = busy || copying;
+                    state.elements.up.disabled = busy || copying || !state.currentPath;
+                    state.elements.go.disabled = busy || copying;
+                    state.elements.path.disabled = busy || copying;
+                    state.elements.session.disabled = busy || copying;
+                    state.elements.filename.disabled = busy || copying;
+                    state.elements.copy.disabled = busy || copying || !state.currentPath || !state.elements.filename.value;
+                    state.elements.cancel.textContent = state.cancelPending
+                        ? 'Cancelling…'
+                        : (copyPhase === 'committing'
+                            ? 'Publishing…'
+                            : (copying ? 'Cancel copy' : (state.finished ? 'Close' : 'Cancel')));
+                    state.elements.cancel.disabled = copying
+                        ? copyPhase !== 'running' || state.cancelPending || !state.copyId || !socket || !socket.connected
+                        : (busy && !state.finished);
+                    state.elements.conflictCancel.disabled = busy || copying;
+                    state.elements.conflictKeep.disabled = busy || copying;
+                    state.elements.conflictReplace.disabled = busy || copying;
+                    state.elements.directoryList.classList.toggle('busy', busy || copying);
+                    state.elements.directoryList.querySelectorAll('button').forEach(button => {
+                        button.disabled = busy || copying || button.dataset.fileEntry === 'true';
+                    });
+                    return;
+                }
                 const uploading = !!state.uploading;
                 state.elements.home.disabled = busy || uploading;
                 state.elements.up.disabled = busy || uploading || !state.currentPath;
@@ -7096,7 +7322,7 @@
                 state.elements.directoryList.querySelectorAll('button').forEach(button => {
                     button.disabled = busy || uploading;
                 });
-                [state.elements.fileRename, state.elements.fileDelete].forEach(button => {
+                [state.elements.fileCopy, state.elements.fileRename, state.elements.fileDelete].forEach(button => {
                     button.disabled = busy || uploading;
                 });
                 [state.elements.deleteYes, state.elements.deleteNo, state.elements.deleteSure, state.elements.deleteDont].forEach(button => {
@@ -7143,6 +7369,9 @@
 
             function closeSftpFileOperation(state, restoreFocus = true) {
                 if (!state || !state.elements) return;
+                if (state.copyDestinationState && !state.copyDestinationState.copying) {
+                    closeSftpCopyDestination(state, false);
+                }
                 state.elements.fileOperation.classList.remove('visible');
                 state.elements.fileOperationActions.hidden = false;
                 state.elements.renameControls.classList.remove('visible');
@@ -7156,6 +7385,10 @@
                 state.downloadConsumed = false;
                 updateSftpDownloadAvailability(state);
                 const focusTarget = state.selectedRemoteFileButton;
+                if (focusTarget) {
+                    focusTarget.classList.remove('selected');
+                    focusTarget.setAttribute('aria-pressed', 'false');
+                }
                 state.selectedRemoteFile = null;
                 state.selectedRemoteFileButton = null;
                 if (restoreFocus && focusTarget && focusTarget.isConnected) focusTarget.focus();
@@ -7163,8 +7396,17 @@
 
             function showSftpFileOperation(state, file, sourceButton) {
                 if (!state || !state.elements || state.busy || state.uploading) return;
+                if (state.copyDestinationState && !state.copyDestinationState.copying) {
+                    closeSftpCopyDestination(state, false);
+                }
+                if (state.selectedRemoteFileButton && state.selectedRemoteFileButton !== sourceButton) {
+                    state.selectedRemoteFileButton.classList.remove('selected');
+                    state.selectedRemoteFileButton.setAttribute('aria-pressed', 'false');
+                }
                 state.selectedRemoteFile = file;
                 state.selectedRemoteFileButton = sourceButton;
+                sourceButton.classList.add('selected');
+                sourceButton.setAttribute('aria-pressed', 'true');
                 state.elements.fileOperationPath.textContent = getSftpRemoteFilePath(state, file);
                 state.elements.fileOperation.classList.add('visible');
                 state.elements.fileOperationActions.hidden = false;
@@ -7222,7 +7464,7 @@
                 state.elements.deletePhaseTwo.forEach(element => { element.hidden = phase !== 2; });
                 state.deleteConfirmationPhase = phase;
                 const safeButton = phase === 1 ? state.elements.deleteNo : state.elements.deleteDont;
-                requestAnimationFrame(() => safeButton.focus());
+                safeButton.focus({ preventScroll: true });
             }
 
             function cancelSftpDelete(state) {
@@ -7237,7 +7479,7 @@
             function renderSftpEntries(state, directories, files, truncated) {
                 if (!state || !state.elements) return;
                 const list = state.elements.directoryList;
-                closeSftpFileOperation(state, false);
+                if (state.mode !== 'destination') closeSftpFileOperation(state, false);
                 list.replaceChildren();
                 const safeDirectories = Array.isArray(directories) ? directories : [];
                 state.currentFiles = (Array.isArray(files) ? files : []).filter(file => (
@@ -7279,8 +7521,10 @@
                         const button = state.window.document.createElement('button');
                         button.type = 'button';
                         button.className = 'sftp-directory-entry sftp-file-entry';
+                        button.dataset.fileEntry = 'true';
                         button.title = getSftpRemoteFilePath(state, file);
                         button.setAttribute('aria-label', `File ${file.name}, ${formatSftpBytes(file.size)}. Open file actions.`);
+                        button.setAttribute('aria-pressed', 'false');
                         const name = state.window.document.createElement('span');
                         name.className = 'sftp-file-entry-name';
                         name.textContent = `📄 ${file.name}`;
@@ -7288,7 +7532,12 @@
                         size.className = 'sftp-file-entry-size';
                         size.textContent = formatSftpBytes(file.size);
                         button.append(name, size);
-                        button.addEventListener('click', () => showSftpFileOperation(state, file, button));
+                        if (state.mode === 'destination') {
+                            button.disabled = true;
+                            button.setAttribute('aria-label', `Existing file ${file.name}, ${formatSftpBytes(file.size)}.`);
+                        } else {
+                            button.addEventListener('click', () => showSftpFileOperation(state, file, button));
+                        }
                         list.appendChild(button);
                     });
                 }
@@ -7296,12 +7545,12 @@
             }
 
             function requestSftpBrowse(state, options = {}) {
-                if (!state || state.busy || state.uploading || !socket || !socket.connected) return;
+                if (!state || state.busy || state.uploading || state.copying || !socket || !socket.connected) return;
                 const requestId = nextSftpRequestId('sftp-browse');
                 state.pendingBrowseRequestId = requestId;
                 state.pendingBrowseStatus = options.successMessage || null;
                 setSftpPipBusy(state, true);
-                setSftpPipStatus(state, 'Opening remote directory…');
+                setSftpPipStatus(state, 'Opening directory…');
                 socket.emit('sftp_browse_request', {
                     request_id: requestId,
                     terminal_id: state.terminalId,
@@ -7312,7 +7561,13 @@
             }
 
             function handleSftpBrowseResult(data) {
-                const state = sftpPipState;
+                const state = [sftpPipState, sftpPipState && sftpPipState.copyDestinationState]
+                    .find(candidate => (
+                        candidate
+                        && data
+                        && data.terminal_id === candidate.terminalId
+                        && data.request_id === candidate.pendingBrowseRequestId
+                    ));
                 if (
                     !state
                     || !data
@@ -7323,7 +7578,9 @@
                 const terminalState = terminals.get(state.terminalId);
                 if (data.status !== 'ready') {
                     state.pendingBrowseStatus = null;
-                    if (terminalState && data.error_code === 'sftp_unavailable') terminalState.sftpAvailable = false;
+                    if (terminalState && ['sftp_unavailable', 'files_unavailable'].includes(data.error_code)) {
+                        terminalState.sftpAvailable = false;
+                    }
                     updateActiveTerminalUi();
                     setSftpPipBusy(state, false);
                     setSftpPipStatus(state, data.message || 'Remote directory could not be opened.', 'error');
@@ -7344,7 +7601,14 @@
                 const completedMessage = state.pendingBrowseStatus;
                 state.pendingBrowseStatus = null;
                 if (completedMessage) setSftpPipStatus(state, completedMessage, 'success');
-                else if (!data.truncated) setSftpPipStatus(state, 'Choose a file action or drop a file to upload.');
+                else if (!data.truncated) {
+                    setSftpPipStatus(
+                        state,
+                        state.mode === 'destination'
+                            ? 'Choose this folder or browse to another destination.'
+                            : 'Choose a file action or drop a file to upload.',
+                    );
+                }
             }
 
             function requestSftpUploadTicket(state, conflictMode = 'ask') {
@@ -7601,7 +7865,7 @@
                     expires_in_seconds: lifetimeSeconds,
                 });
                 updateSftpDownloadAvailability(state);
-                setSftpPipStatus(state, `Download ready: ${data.filename}.`, 'success');
+                setSftpPipStatus(state, `Selected ${data.filename}. Click Download to save it.`);
             }
 
             function requestSftpFileAction(state, action) {
@@ -7655,8 +7919,361 @@
                 requestSftpBrowse(state, { path: state.currentPath, successMessage: completedMessage });
             }
 
+            function getSftpCopyDestinationTerminals(sourceTerminalId) {
+                return [...terminals.values()].filter(state => (
+                    state.id !== sourceTerminalId
+                    && canUseSftpFileManager(state)
+                ));
+            }
+
+            function updateSftpCopySummary(state) {
+                if (!state || state.mode !== 'destination' || !state.elements) return;
+                const sourceState = state.sourceState;
+                const sourceFile = sourceState && sourceState.selectedRemoteFile;
+                const destinationName = state.elements.filename.value;
+                const destinationPath = state.currentPath && destinationName
+                    ? `${state.currentPath.endsWith('/') ? state.currentPath : `${state.currentPath}/`}${destinationName}`
+                    : 'Choose a destination folder.';
+                state.elements.summary.textContent = sourceFile
+                    ? `${getSftpRemoteFilePath(sourceState, sourceFile)} → ${destinationPath}`
+                    : destinationPath;
+                setSftpPipBusy(state, state.busy);
+            }
+
+            function closeSftpCopyDestination(sourceState, restoreFocus = true) {
+                if (!sourceState || !sourceState.copyDestinationState) return;
+                const destinationState = sourceState.copyDestinationState;
+                if (destinationState.copying) {
+                    destinationState.elements.lifecycle.textContent = destinationState.cancelPending
+                        ? 'Cancellation requested. Wait for backend confirmation before closing Files.'
+                        : (destinationState.copyPhase === 'committing'
+                            ? 'Publishing cannot be cancelled. Wait for the result before closing Files.'
+                            : 'Cancel the copy first. Closing Files does not cancel it.');
+                    return;
+                }
+                if (destinationState.elements && destinationState.elements.pane.isConnected) {
+                    destinationState.elements.pane.remove();
+                }
+                sourceState.copyDestinationState = null;
+                if (sourceState.elements && sourceState.elements.workspace) {
+                    sourceState.elements.workspace.classList.remove('copy-open');
+                }
+                try {
+                    if (sourceState.window && !sourceState.window.closed) sourceState.window.resizeTo(500, 620);
+                } catch (_error) {}
+                if (restoreFocus && sourceState.elements && sourceState.elements.fileCopy) {
+                    sourceState.elements.fileCopy.focus();
+                }
+            }
+
+            function selectSftpCopyDestinationTerminal(state, terminalId) {
+                if (!state || state.copying) return;
+                const terminalState = terminals.get(terminalId);
+                if (!canUseSftpFileManager(terminalState) || terminalId === state.sourceState.terminalId) {
+                    setSftpPipStatus(state, 'Choose another connected Files session.', 'error');
+                    return;
+                }
+                state.terminalId = terminalId;
+                state.endpoint = terminalState.sftpEndpoint;
+                state.currentPath = null;
+                state.pendingBrowseRequestId = null;
+                state.elements.endpoint.textContent = formatSftpEndpoint(state.endpoint);
+                requestSftpBrowse(state);
+                updateSftpCopySummary(state);
+            }
+
+            function requestSftpCopy(state, conflictMode = 'ask') {
+                const sourceState = state && state.sourceState;
+                const sourceFile = sourceState && sourceState.selectedRemoteFile;
+                const filename = state && state.elements ? state.elements.filename.value : '';
+                if (
+                    !state
+                    || !sourceFile
+                    || !state.currentPath
+                    || state.busy
+                    || state.copying
+                    || !socket
+                    || !socket.connected
+                ) return;
+                if (
+                    !filename
+                    || filename === '.'
+                    || filename === '..'
+                    || filename.includes('/')
+                    || filename.includes('\\')
+                    || /[\u0000-\u001f\u007f]/.test(filename)
+                    || new TextEncoder().encode(filename).length > 255
+                ) {
+                    setSftpPipStatus(state, 'Enter a valid destination file name.', 'error');
+                    return;
+                }
+                const requestId = nextSftpRequestId('files-copy');
+                state.pendingCopyRequestId = requestId;
+                state.copyId = null;
+                state.copyRevision = -1;
+                state.copyPhase = 'preparing';
+                state.cancelPending = false;
+                state.finished = false;
+                state.elements.conflict.classList.remove('visible');
+                state.elements.lifecycle.textContent = 'Preparing the copy. Keep Files open.';
+                setSftpPipBusy(state, true);
+                setSftpPipStatus(state, 'Checking copy destination…');
+                socket.emit('files_copy_request', {
+                    request_id: requestId,
+                    source_terminal_id: sourceState.terminalId,
+                    source_file_id: sourceFile.fileId,
+                    destination_terminal_id: state.terminalId,
+                    destination_directory: state.currentPath,
+                    destination_filename: filename,
+                    conflict_mode: conflictMode,
+                });
+            }
+
+            function requestFilesCopyCancel(state) {
+                if (
+                    !state
+                    || !state.copying
+                    || state.copyPhase !== 'running'
+                    || state.cancelPending
+                    || !state.copyId
+                    || !socket
+                    || !socket.connected
+                ) return;
+                state.cancelPending = true;
+                state.elements.lifecycle.textContent = 'Cancelling before the destination is published…';
+                setSftpPipBusy(state, false);
+                socket.emit('files_copy_cancel_request', {
+                    request_id: nextSftpRequestId('files-copy-cancel'),
+                    copy_id: state.copyId,
+                });
+            }
+
+            function handleFilesCopyResult(data) {
+                const sourceState = sftpPipState;
+                const state = sourceState && sourceState.copyDestinationState;
+                if (!state || !data) return;
+                if (state.copyId) {
+                    if (data.copy_id !== state.copyId) return;
+                } else if (data.request_id !== state.pendingCopyRequestId) return;
+                const revision = Number(data.revision);
+                if (Number.isFinite(revision) && revision < state.copyRevision) return;
+                if (Number.isFinite(revision)) state.copyRevision = revision;
+                setSftpPipBusy(state, false);
+                if (data.status === 'preparing') {
+                    state.copyPhase = 'preparing';
+                    state.cancelPending = false;
+                    state.finished = false;
+                    state.elements.lifecycle.textContent = 'Preparing the copy. Keep Files open.';
+                    setSftpPipBusy(state, true);
+                    setSftpPipStatus(state, 'Checking copy destination…');
+                    return;
+                }
+                if (data.status === 'conflict') {
+                    state.copyPhase = 'conflict';
+                    state.cancelPending = false;
+                    state.finished = false;
+                    state.elements.lifecycle.textContent = 'Choose a conflict action, or cancel this destination pane.';
+                    state.elements.conflictText.textContent = `${data.destination_path} already exists (${formatSftpBytes(data.existing_size)}).`;
+                    state.elements.conflict.classList.add('visible');
+                    setSftpPipStatus(state, 'Choose how to handle the existing file.');
+                    return;
+                }
+                if (data.status === 'running' || data.status === 'committing') {
+                    state.copyId = data.copy_id || state.copyId;
+                    if (state.copyId) state.pendingCopyRequestId = null;
+                    state.copying = true;
+                    state.copyPhase = data.status;
+                    state.finished = false;
+                    if (data.status === 'committing') state.cancelPending = false;
+                    const copied = Number(data.bytes_copied) || 0;
+                    const total = Number(data.total_bytes) || Number(data.source_size) || 0;
+                    const percent = total > 0 ? Math.min(100, copied * 100 / total) : 100;
+                    state.elements.progress.classList.add('visible');
+                    state.elements.progressBar.style.width = `${percent}%`;
+                    setSftpPipStatus(
+                        state,
+                        data.status === 'committing'
+                            ? 'Publishing copied file…'
+                            : `Copying ${formatSftpBytes(copied)} / ${formatSftpBytes(total)}…`,
+                    );
+                    state.elements.lifecycle.textContent = data.status === 'committing'
+                        ? 'Publishing has started. It cannot be cancelled; wait for the result before closing Files.'
+                        : (state.cancelPending
+                            ? 'Cancelling before the destination is published…'
+                            : 'Use Cancel copy before closing Files. Closing the system window does not cancel the copy.');
+                    setSftpPipBusy(state, false);
+                    return;
+                }
+                state.copying = false;
+                state.copyPhase = data.status || 'failed';
+                state.cancelPending = false;
+                state.finished = true;
+                state.elements.progress.classList.remove('visible');
+                state.elements.progressBar.style.width = '0%';
+                setSftpPipBusy(state, false);
+                if (data.status === 'completed') {
+                    state.elements.conflict.classList.remove('visible');
+                    state.elements.lifecycle.textContent = 'Copy finished. You can close Files or start another copy.';
+                    setSftpPipStatus(state, `Copied to ${data.destination_path}.`, 'success');
+                    requestSftpBrowse(state, {
+                        path: state.currentPath,
+                        successMessage: `Copied to ${data.destination_path}.`,
+                    });
+                    return;
+                }
+                if (data.status === 'cancelled') {
+                    state.elements.lifecycle.textContent = 'Cancelled before publishing. You can close Files.';
+                    setSftpPipStatus(state, data.message || 'File copy cancelled before publishing.');
+                    return;
+                }
+                state.elements.lifecycle.textContent = 'Copy stopped. You can close Files or retry.';
+                const failureMessage = data.error_code === 'file_copy_publish_outcome_unknown'
+                    ? `${data.message || 'The SSH server did not confirm the publish result.'} Inspect the destination before retrying.`
+                    : (data.message || 'File copy failed.');
+                setSftpPipStatus(state, failureMessage, 'error');
+            }
+
+            function openSftpCopyDestination(sourceState) {
+                if (!sourceState || !sourceState.selectedRemoteFile || !sourceState.elements) return;
+                if (sourceState.copyDestinationState) return;
+                const destinationTerminals = getSftpCopyDestinationTerminals(sourceState.terminalId);
+                if (!destinationTerminals.length) {
+                    setSftpPipStatus(sourceState, 'Open another SSH or Local Shell tab to copy this file.', 'error');
+                    return;
+                }
+                const pane = sourceState.window.document.createElement('div');
+                pane.className = 'sftp-destination-pane';
+                pane.innerHTML = `
+                    <div class="sftp-destination-header">
+                        <div class="sftp-destination-title">Choose destination</div>
+                    </div>
+                    <select class="sftp-session-select" aria-label="Destination session"></select>
+                    <div class="sftp-endpoint-card">
+                        <div>Destination endpoint</div>
+                        <div class="sftp-endpoint-value">Direct endpoint</div>
+                    </div>
+                    <div class="sftp-path-controls">
+                        <button type="button" class="sftp-home">Home</button>
+                        <button type="button" class="sftp-up">Up</button>
+                        <input class="sftp-path-input" type="text" spellcheck="false" aria-label="Destination folder">
+                        <button type="button" class="sftp-go">Go</button>
+                    </div>
+                    <div class="sftp-directory-list" aria-label="Destination directories and files"></div>
+                    <div class="sftp-copy-name-row">
+                        <label>File name</label>
+                        <input class="sftp-copy-name-input" type="text" spellcheck="false" aria-label="Destination file name">
+                    </div>
+                    <div class="sftp-copy-summary"></div>
+                    <div class="sftp-conflict-box">
+                        <div class="sftp-conflict-text"></div>
+                        <div class="sftp-conflict-actions">
+                            <button type="button" class="sftp-conflict-cancel">Cancel</button>
+                            <button type="button" class="sftp-conflict-keep">Keep Both</button>
+                            <button type="button" class="sftp-conflict-replace replace">Replace</button>
+                        </div>
+                    </div>
+                    <div class="sftp-progress"><div class="sftp-progress-bar"></div></div>
+                    <div class="sftp-transfer-status" role="status" aria-live="polite">Choose a destination.</div>
+                    <div class="sftp-copy-lifecycle-hint">Cancel closes this destination pane before copying.</div>
+                    <div class="sftp-pip-actions">
+                        <button type="button" class="sftp-copy-cancel">Cancel</button>
+                        <button type="button" class="sftp-copy-confirm primary">Copy</button>
+                    </div>
+                `;
+                const destinationState = {
+                    mode: 'destination',
+                    window: sourceState.window,
+                    sourceState,
+                    terminalId: destinationTerminals[0].id,
+                    endpoint: destinationTerminals[0].sftpEndpoint,
+                    currentPath: null,
+                    currentFiles: [],
+                    currentEntryNames: new Set(),
+                    busy: false,
+                    copying: false,
+                    copyPhase: 'idle',
+                    cancelPending: false,
+                    finished: false,
+                    pendingBrowseRequestId: null,
+                    pendingBrowseStatus: null,
+                    pendingCopyRequestId: null,
+                    copyId: null,
+                    copyRevision: -1,
+                    elements: {
+                        pane,
+                        session: pane.querySelector('.sftp-session-select'),
+                        endpoint: pane.querySelector('.sftp-endpoint-value'),
+                        home: pane.querySelector('.sftp-home'),
+                        up: pane.querySelector('.sftp-up'),
+                        path: pane.querySelector('.sftp-path-input'),
+                        go: pane.querySelector('.sftp-go'),
+                        directoryList: pane.querySelector('.sftp-directory-list'),
+                        filename: pane.querySelector('.sftp-copy-name-input'),
+                        summary: pane.querySelector('.sftp-copy-summary'),
+                        conflict: pane.querySelector('.sftp-conflict-box'),
+                        conflictText: pane.querySelector('.sftp-conflict-text'),
+                        conflictCancel: pane.querySelector('.sftp-conflict-cancel'),
+                        conflictKeep: pane.querySelector('.sftp-conflict-keep'),
+                        conflictReplace: pane.querySelector('.sftp-conflict-replace'),
+                        progress: pane.querySelector('.sftp-progress'),
+                        progressBar: pane.querySelector('.sftp-progress-bar'),
+                        status: pane.querySelector('.sftp-transfer-status'),
+                        lifecycle: pane.querySelector('.sftp-copy-lifecycle-hint'),
+                        cancel: pane.querySelector('.sftp-copy-cancel'),
+                        copy: pane.querySelector('.sftp-copy-confirm'),
+                    },
+                };
+                destinationTerminals.forEach(terminalState => {
+                    const option = sourceState.window.document.createElement('option');
+                    option.value = terminalState.id;
+                    option.textContent = `${terminalState.title || terminalState.label || terminalState.id} · ${terminalState.id}`;
+                    destinationState.elements.session.appendChild(option);
+                });
+                destinationState.elements.filename.value = sourceState.selectedRemoteFile.name;
+                destinationState.elements.endpoint.textContent = formatSftpEndpoint(destinationState.endpoint);
+                sourceState.copyDestinationState = destinationState;
+                sourceState.elements.workspace.appendChild(pane);
+                sourceState.elements.workspace.classList.add('copy-open');
+                try { sourceState.window.resizeTo(960, 620); } catch (_error) {}
+                destinationState.elements.cancel.addEventListener('click', () => {
+                    if (destinationState.copying) requestFilesCopyCancel(destinationState);
+                    else closeSftpCopyDestination(sourceState);
+                });
+                destinationState.elements.session.addEventListener('change', () => {
+                    selectSftpCopyDestinationTerminal(destinationState, destinationState.elements.session.value);
+                });
+                destinationState.elements.home.addEventListener('click', () => requestSftpBrowse(destinationState));
+                destinationState.elements.up.addEventListener('click', () => requestSftpBrowse(destinationState, {
+                    path: destinationState.currentPath,
+                    parent: true,
+                }));
+                destinationState.elements.go.addEventListener('click', () => requestSftpBrowse(destinationState, {
+                    path: destinationState.elements.path.value,
+                }));
+                destinationState.elements.path.addEventListener('keydown', event => {
+                    if (event.key === 'Enter') requestSftpBrowse(destinationState, {
+                        path: destinationState.elements.path.value,
+                    });
+                });
+                destinationState.elements.filename.addEventListener('input', () => updateSftpCopySummary(destinationState));
+                destinationState.elements.copy.addEventListener('click', () => requestSftpCopy(destinationState));
+                destinationState.elements.conflictCancel.addEventListener('click', () => {
+                    destinationState.elements.conflict.classList.remove('visible');
+                    setSftpPipStatus(destinationState, 'Copy cancelled.');
+                });
+                destinationState.elements.conflictKeep.addEventListener('click', () => requestSftpCopy(destinationState, 'keep_both'));
+                destinationState.elements.conflictReplace.addEventListener('click', () => requestSftpCopy(destinationState, 'replace'));
+                updateSftpCopySummary(destinationState);
+                requestSftpBrowse(destinationState);
+            }
+
             function closeSftpPip(state) {
                 if (!state) return;
+                const destinationState = state.copyDestinationState;
+                if (destinationState && destinationState.copying) {
+                    closeSftpCopyDestination(state, false);
+                    return;
+                }
                 if (state.busy || state.uploading) return;
                 const pipWindow = state.window;
                 if (pipWindow && !pipWindow.closed) pipWindow.close();
@@ -7669,13 +8286,15 @@
                 shell.className = 'sftp-pip-shell';
                 shell.innerHTML = `
                     <div class="sftp-pip-header">
-                        <div class="sftp-pip-title">SFTP File Manager</div>
+                        <div class="sftp-pip-title">Files</div>
                         <button type="button" class="sftp-pip-close" title="Close">&times;</button>
                     </div>
+                    <div class="sftp-files-workspace">
+                    <div class="sftp-source-pane">
                     <div class="sftp-endpoint-card">
-                        <div>Destination endpoint</div>
-                        <div class="sftp-endpoint-value">Direct SSH endpoint</div>
-                        <div class="sftp-direct-hint">Direct connection only. Nested SSH sessions inside the terminal are not used.</div>
+                        <div>Session endpoint</div>
+                        <div class="sftp-endpoint-value">Direct endpoint</div>
+                        <div class="sftp-direct-hint">Direct SSH or Local Shell endpoint. Nested SSH sessions inside the terminal are not used.</div>
                     </div>
                     <div class="sftp-path-controls">
                         <button type="button" class="sftp-home">Home</button>
@@ -7689,6 +8308,7 @@
                         <div class="sftp-file-operation-path"></div>
                         <div class="sftp-file-operation-actions">
                             <button type="button" class="sftp-file-download">Download</button>
+                            <button type="button" class="sftp-file-copy">Copy to&hellip;</button>
                             <button type="button" class="sftp-file-rename">Rename&hellip;</button>
                             <button type="button" class="sftp-file-delete danger">Delete&hellip;</button>
                             <button type="button" class="sftp-file-operation-close">Close</button>
@@ -7729,12 +8349,16 @@
                         </div>
                     </div>
                     <div class="sftp-progress"><div class="sftp-progress-bar"></div></div>
-                    <div class="sftp-transfer-status" role="status" aria-live="polite">Opening SFTP…</div>
+                    <div class="sftp-transfer-status" role="status" aria-live="polite">Opening Files…</div>
                     <div class="sftp-pip-actions"><button type="button" class="sftp-send primary" disabled>Send</button></div>
+                    </div>
+                    </div>
                 `;
                 pipDocument.body.replaceChildren(shell);
                 state.elements = {
                     shell,
+                    workspace: shell.querySelector('.sftp-files-workspace'),
+                    sourcePane: shell.querySelector('.sftp-source-pane'),
                     close: shell.querySelector('.sftp-pip-close'),
                     endpoint: shell.querySelector('.sftp-endpoint-value'),
                     home: shell.querySelector('.sftp-home'),
@@ -7746,6 +8370,7 @@
                     fileOperationPath: shell.querySelector('.sftp-file-operation-path'),
                     fileOperationActions: shell.querySelector('.sftp-file-operation-actions'),
                     fileDownload: shell.querySelector('.sftp-file-download'),
+                    fileCopy: shell.querySelector('.sftp-file-copy'),
                     fileRename: shell.querySelector('.sftp-file-rename'),
                     fileDelete: shell.querySelector('.sftp-file-delete'),
                     fileOperationClose: shell.querySelector('.sftp-file-operation-close'),
@@ -7784,6 +8409,7 @@
                 });
                 state.elements.fileOperationClose.addEventListener('click', () => closeSftpFileOperation(state));
                 state.elements.fileDownload.addEventListener('click', () => startPreparedSftpDownload(state));
+                state.elements.fileCopy.addEventListener('click', () => openSftpCopyDestination(state));
                 state.elements.fileRename.addEventListener('click', () => showSftpRename(state));
                 state.elements.fileDelete.addEventListener('click', () => showSftpDeleteConfirmation(state));
                 state.elements.renameInput.addEventListener('input', () => updateSftpRenameAvailability(state));
@@ -7845,7 +8471,7 @@
             async function openSftpPip(state) {
                 if (!canUseSftpFileManager(state)) return;
                 if (!window.documentPictureInPicture) return alert('PiP not supported.');
-                if (pipTerminalState) return alert('Restore the terminal from PiP before opening SFTP File Manager.');
+                if (pipTerminalState) return alert('Restore the terminal from PiP before opening Files.');
                 if (sftpPipState) {
                     if (sftpPipState.window && !sftpPipState.window.closed) sftpPipState.window.focus();
                     return;
@@ -7936,7 +8562,7 @@
                     sftpSendOption.appendChild(unavailableMark);
                 }
                 sftpSendOption.appendChild(document.createTextNode(
-                    enableSftp ? ' SFTP File Manager\u2026' : ' SFTP not available'
+                    enableSftp ? ' Files\u2026' : ' Files not available'
                 ));
                 if (hasSel) { openOption.dataset.url = sel; searchOption.dataset.query = sel; }
                 contextMenu.style.left = `${x}px`; contextMenu.style.top = `${y}px`; contextMenu.style.display = 'block';
@@ -8255,8 +8881,8 @@
                 sftpButton.type = 'button';
                 sftpButton.className = 'pip-agent-button pip-sftp-button';
                 sftpButton.innerText = '\u{1F4C1}';
-                sftpButton.title = 'Open SFTP File Manager';
-                sftpButton.setAttribute('aria-label', 'Open SFTP File Manager');
+                sftpButton.title = 'Open Files';
+                sftpButton.setAttribute('aria-label', 'Open Files');
                 sftpButton.hidden = true;
                 sftpButton.addEventListener('click', () => openSftpFromTerminalPip(state));
                 bar.append(title, applicationTitleItem, meta, spacer, pauseButton, mintButton, mint3xButton, agentButton, sftpButton);

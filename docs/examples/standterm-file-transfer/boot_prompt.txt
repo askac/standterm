@@ -1,0 +1,1 @@
+Use the installed `standterm-external-agent` and `standterm-file-transfer` skills for this StandTerm file transfer. Prefer the typed backend copy path, require its browser approval, and never fall back to terminal-stream rescue without a path-specific explicit instruction.

@@ -18,6 +18,7 @@ import shlex
 import struct
 import urllib.parse
 import atexit
+import tempfile
 from collections import deque
 from pathlib import Path
 from flask import Flask, Response, render_template, request, abort, make_response, redirect, send_file, jsonify, stream_with_context
@@ -60,6 +61,7 @@ from terminal_backends import (
     BackendPolicyContext,
     BackendSettingSchema,
     BackendStartFieldSchema,
+    LocalFileTransferError,
     LocalShellBackendPlugin,
     LocalShellBridge,
     SFTPTransferError,
@@ -173,6 +175,7 @@ SESSION_RENEW_INTERVAL_SECONDS = 5 * 60
 SESSION_CLEANUP_INTERVAL_SECONDS = 60
 LOCALHOST_KEY_SETUP_TTL_SECONDS = 120
 SSH_BROWSER_SIGN_TIMEOUT_SECONDS = 15
+SSH_BROWSER_SIGN_FAILURE_MESSAGE_MAX_LENGTH = 160
 SSH_BROWSER_SIGN_REQUEST_EVENT = 'ssh_browser_sign_request'
 SSH_BROWSER_SIGN_RESPONSE_EVENT = 'ssh_browser_sign_response'
 SFTP_BROWSE_REQUEST_EVENT = 'sftp_browse_request'
@@ -183,6 +186,9 @@ SFTP_DOWNLOAD_TICKET_REQUEST_EVENT = 'sftp_download_ticket_request'
 SFTP_DOWNLOAD_TICKET_RESULT_EVENT = 'sftp_download_ticket_result'
 SFTP_FILE_ACTION_REQUEST_EVENT = 'sftp_file_action_request'
 SFTP_FILE_ACTION_RESULT_EVENT = 'sftp_file_action_result'
+FILES_COPY_REQUEST_EVENT = 'files_copy_request'
+FILES_COPY_CANCEL_REQUEST_EVENT = 'files_copy_cancel_request'
+FILES_COPY_RESULT_EVENT = 'files_copy_result'
 SFTP_UPLOAD_TICKET_TTL_SECONDS = 60
 SFTP_DOWNLOAD_TICKET_TTL_SECONDS = 60
 SFTP_MAX_UPLOAD_BYTES = parse_positive_int_env('SFTP_MAX_UPLOAD_BYTES', 512 * 1024 * 1024)
@@ -234,9 +240,12 @@ AGENT_CLIENT_MODE_MAP = {
     'direct_active': AGENT_MODE_DIRECT_ACTIVE,
 }
 AGENT_ACTION_TERMINAL_INPUT = 'terminal_input'
+AGENT_ACTION_FILE_COPY = 'file_copy'
 AGENT_STATUS_PENDING_APPROVAL = 'pending_approval'
 AGENT_STATUS_DIRECT_PENDING = 'direct_pending'
 AGENT_STATUS_APPROVED = 'approved'
+AGENT_STATUS_RUNNING = 'running'
+AGENT_STATUS_COMMITTING = 'committing'
 AGENT_STATUS_COMPLETED = 'completed'
 AGENT_STATUS_FAILED = 'failed'
 AGENT_STATUS_REJECTED = 'rejected'
@@ -248,6 +257,48 @@ AGENT_STATUS_OPEN = {
     AGENT_STATUS_PENDING_APPROVAL,
     AGENT_STATUS_DIRECT_PENDING,
     AGENT_STATUS_APPROVED,
+    AGENT_STATUS_RUNNING,
+}
+AGENT_STATUS_RETAINED = AGENT_STATUS_OPEN | {AGENT_STATUS_COMMITTING}
+AGENT_FILE_COPY_EVENT_BROWSER_APPROVE = 'browser_approve'
+AGENT_FILE_COPY_EVENT_BROWSER_REJECT = 'browser_reject'
+AGENT_FILE_COPY_EVENT_START = 'start'
+AGENT_FILE_COPY_EVENT_CANCEL = 'cancel'
+AGENT_FILE_COPY_EVENT_EXECUTION_FAILED = 'execution_failed'
+AGENT_FILE_COPY_EVENT_BEGIN_COMMIT = 'begin_commit'
+AGENT_FILE_COPY_EVENT_PUBLISH_CONFIRMED = 'publish_confirmed'
+AGENT_FILE_COPY_EVENT_PUBLISH_FAILED = 'publish_failed'
+AGENT_FILE_COPY_EVENT_PUBLISH_UNKNOWN = 'publish_unknown'
+AGENT_FILE_COPY_TRANSITIONS = {
+    AGENT_STATUS_PENDING_APPROVAL: {
+        AGENT_FILE_COPY_EVENT_BROWSER_APPROVE: AGENT_STATUS_APPROVED,
+        AGENT_FILE_COPY_EVENT_BROWSER_REJECT: AGENT_STATUS_REJECTED,
+        AGENT_FILE_COPY_EVENT_CANCEL: AGENT_STATUS_FAILED,
+    },
+    AGENT_STATUS_APPROVED: {
+        AGENT_FILE_COPY_EVENT_START: AGENT_STATUS_RUNNING,
+        AGENT_FILE_COPY_EVENT_CANCEL: AGENT_STATUS_FAILED,
+        AGENT_FILE_COPY_EVENT_EXECUTION_FAILED: AGENT_STATUS_FAILED,
+    },
+    AGENT_STATUS_RUNNING: {
+        AGENT_FILE_COPY_EVENT_CANCEL: AGENT_STATUS_FAILED,
+        AGENT_FILE_COPY_EVENT_EXECUTION_FAILED: AGENT_STATUS_FAILED,
+        AGENT_FILE_COPY_EVENT_BEGIN_COMMIT: AGENT_STATUS_COMMITTING,
+    },
+    AGENT_STATUS_COMMITTING: {
+        AGENT_FILE_COPY_EVENT_PUBLISH_CONFIRMED: AGENT_STATUS_COMPLETED,
+        AGENT_FILE_COPY_EVENT_PUBLISH_FAILED: AGENT_STATUS_FAILED,
+        AGENT_FILE_COPY_EVENT_PUBLISH_UNKNOWN: AGENT_STATUS_FAILED,
+    },
+}
+AGENT_FILE_COPY_AUDITED_EVENTS = {
+    AGENT_FILE_COPY_EVENT_BROWSER_APPROVE,
+    AGENT_FILE_COPY_EVENT_BROWSER_REJECT,
+    AGENT_FILE_COPY_EVENT_CANCEL,
+    AGENT_FILE_COPY_EVENT_EXECUTION_FAILED,
+    AGENT_FILE_COPY_EVENT_PUBLISH_CONFIRMED,
+    AGENT_FILE_COPY_EVENT_PUBLISH_FAILED,
+    AGENT_FILE_COPY_EVENT_PUBLISH_UNKNOWN,
 }
 AGENT_EVENT_ATTACH = 'agent_attach'
 AGENT_EVENT_DETACH = 'agent_detach'
@@ -345,6 +396,8 @@ AGENT_ERROR_EXTERNAL_AGENT_DISCONNECTED = 'agent_external_disconnected'
 AGENT_ERROR_EXTERNAL_AGENT_ORIGIN_BLOCKED = 'agent_external_origin_blocked'
 AGENT_ERROR_EXTERNAL_AGENT_DISABLED = 'agent_external_disabled'
 AGENT_ERROR_HUMAN_INPUT_ACTIVE = 'agent_human_input_active'
+AGENT_ERROR_FILE_COPY_BUSY = 'file_copy_busy'
+AGENT_ERROR_FILE_COPY_PUBLISH_OUTCOME_UNKNOWN = 'file_copy_publish_outcome_unknown'
 AGENT_REASON_DETACHED = 'agent_detached'
 AGENT_REASON_DISABLED = 'agent_disabled'
 AGENT_REASON_MODE_CHANGED = 'agent_mode_changed'
@@ -362,6 +415,27 @@ AGENT_INPUT_CHUNK_BYTES = 256
 AGENT_AUDIT_EVENTS = 200
 AGENT_AUDIT_TTL_SECONDS = 12 * 60 * 60
 AGENT_PREVIEW_CHARS = 160
+AGENT_ACTION_MAX_RECORDS = 256
+AGENT_FILE_COPY_MAX_BACKGROUND_WORKERS = 4
+AGENT_FILE_COPY_PROGRESS_EMIT_BYTES = 1024 * 1024
+AGENT_FILE_COPY_PROGRESS_EMIT_SECONDS = 1.0
+FILES_COPY_JOB_TTL_SECONDS = 10 * 60
+FILES_COPY_JOB_MAX_RECORDS = 128
+FILES_COPY_EVENT_BEGIN_COMMIT = 'begin_commit'
+FILES_COPY_EVENT_CANCEL = 'cancel'
+FILES_COPY_EVENT_COMPLETE = 'complete'
+FILES_COPY_EVENT_FAIL = 'fail'
+FILES_COPY_TRANSITIONS = {
+    'running': {
+        FILES_COPY_EVENT_BEGIN_COMMIT: 'committing',
+        FILES_COPY_EVENT_CANCEL: 'cancelled',
+        FILES_COPY_EVENT_FAIL: 'failed',
+    },
+    'committing': {
+        FILES_COPY_EVENT_COMPLETE: 'completed',
+        FILES_COPY_EVENT_FAIL: 'failed',
+    },
+}
 AGENT_TRANSCRIPT_TTL_SECONDS = 30 * 60
 AGENT_TRANSCRIPT_MAX_EVENTS = 400
 AGENT_TRANSCRIPT_MAX_BYTES = 120000
@@ -421,6 +495,7 @@ AGENT_AUDIT_EXTERNAL_AGENT_TAIL = 'external_agent_tail'
 AGENT_AUDIT_EXTERNAL_AGENT_WAIT = 'external_agent_wait'
 AGENT_AUDIT_EXTERNAL_AGENT_SEQUENCE = 'external_agent_sequence'
 AGENT_AUDIT_EXTERNAL_AGENT_SEND = 'external_agent_send'
+AGENT_AUDIT_EXTERNAL_AGENT_FILE_COPY = 'external_agent_file_copy'
 AGENT_AUDIT_CONTEXT_BUILT = 'context_built'
 AGENT_AUDIT_PROPOSAL_CREATED = 'proposal_created'
 AGENT_AUDIT_ACTION_APPROVE = 'action_approve'
@@ -542,21 +617,56 @@ HTTPS_REQUESTED = CLI_ARGS.https or get_prefixed_env('HTTPS') == '1' or bool(CLI
 HTTPS_ENABLED = HTTPS_REQUESTED
 HTTPS_AUTO_DISABLED = get_prefixed_env('DISABLE_AUTO_HTTPS') == '1'
 APP_DIR = Path(__file__).resolve().parent
-EXTERNAL_AGENT_HANDOFF_PATH = APP_DIR / 'standterm_external_agent_handoff.json'
-EXTERNAL_AGENT_INFO_PATH = APP_DIR / 'standterm_agentinfo.json'
+
+def resolve_external_agent_runtime_root(platform_name=None, env=None, home=None,
+                                        temp_dir=None, uid=None):
+    platform_name = sys.platform if platform_name is None else platform_name
+    env = os.environ if env is None else env
+    configured = str(env.get(get_prefixed_env_name('AGENT_RUNTIME_DIR'), '') or '').strip()
+    if configured:
+        return Path(configured).expanduser()
+
+    if platform_name.startswith('win'):
+        local_app_data = str(env.get('LOCALAPPDATA', '') or '').strip()
+        base_dir = Path(local_app_data).expanduser() if local_app_data else Path(
+            tempfile.gettempdir() if temp_dir is None else temp_dir
+        )
+        return base_dir / APP_NAME / 'runtime'
+
+    if platform_name.startswith('linux'):
+        xdg_runtime_dir = str(env.get('XDG_RUNTIME_DIR', '') or '').strip()
+        if xdg_runtime_dir:
+            return Path(xdg_runtime_dir).expanduser() / 'standterm'
+        if uid is None:
+            uid = os.getuid() if hasattr(os, 'getuid') else 'user'
+        base_dir = Path(tempfile.gettempdir() if temp_dir is None else temp_dir)
+        return base_dir / f'standterm-{uid}'
+
+    if platform_name == 'darwin':
+        home_dir = Path.home() if home is None else Path(home)
+        return home_dir / 'Library' / 'Caches' / APP_NAME / 'runtime'
+
+    base_dir = Path(tempfile.gettempdir() if temp_dir is None else temp_dir)
+    return base_dir / APP_NAME / 'runtime'
+
+EXTERNAL_AGENT_RUNTIME_ROOT = resolve_external_agent_runtime_root()
+EXTERNAL_AGENT_INSTANCE_DIR = EXTERNAL_AGENT_RUNTIME_ROOT / LAUNCHER_INSTANCE_ID
+EXTERNAL_AGENT_HANDOFF_PATH = EXTERNAL_AGENT_INSTANCE_DIR / 'standterm_external_agent_handoff.json'
+EXTERNAL_AGENT_INFO_PATH = EXTERNAL_AGENT_INSTANCE_DIR / 'standterm_agentinfo.json'
 AUTHORIZED_DIR = APP_DIR / 'authorized'
 AUTHORIZED_BROWSERS_PATH = AUTHORIZED_DIR / 'browsers.json'
 
-def resolve_external_agent_current_info_path():
-    if is_prefixed_env_enabled('DISABLE_AGENTINFO_CURRENT'):
+def resolve_external_agent_current_info_path(runtime_root=None, env=None):
+    env = os.environ if env is None else env
+    disabled = str(env.get(get_prefixed_env_name('DISABLE_AGENTINFO_CURRENT'), '') or '') \
+        .strip().lower() in {'1', 'true', 'yes', 'on'}
+    if disabled:
         return None
-    configured = get_prefixed_env('AGENTINFO_CURRENT_PATH').strip()
+    configured = str(env.get(get_prefixed_env_name('AGENTINFO_CURRENT_PATH'), '') or '').strip()
     if configured:
         return Path(configured).expanduser()
-    runtime_dir = os.getenv('XDG_RUNTIME_DIR')
-    if runtime_dir:
-        return Path(runtime_dir).expanduser() / 'standterm' / 'current_agentinfo.json'
-    return Path.home() / '.standterm' / 'current_agentinfo.json'
+    runtime_root = EXTERNAL_AGENT_RUNTIME_ROOT if runtime_root is None else Path(runtime_root)
+    return runtime_root / 'current_agentinfo.json'
 
 EXTERNAL_AGENT_CURRENT_INFO_PATH = resolve_external_agent_current_info_path()
 
@@ -1897,18 +2007,37 @@ pending_backend_actions = BackendActionStore(time_func=time.time)
 pending_localhost_key_setups = pending_backend_actions
 
 
+def normalize_browser_ssh_sign_failure_message(value):
+    if not isinstance(value, str):
+        return None
+    normalized = ' '.join(
+        ''.join(character if character.isprintable() else ' ' for character in value).split()
+    )
+    if not normalized:
+        return None
+    return normalized[:SSH_BROWSER_SIGN_FAILURE_MESSAGE_MAX_LENGTH]
+
+
 class BrowserSSHSignRequestStore:
-    def __init__(self, timeout_seconds=SSH_BROWSER_SIGN_TIMEOUT_SECONDS):
+    def __init__(
+        self,
+        timeout_seconds=SSH_BROWSER_SIGN_TIMEOUT_SECONDS,
+        wall_time_func=None,
+        monotonic_func=None,
+    ):
         self._requests = {}
         self._lock = threading.RLock()
         self._timeout_seconds = timeout_seconds
+        self._wall_time_func = wall_time_func or time.time
+        self._monotonic_func = monotonic_func or time.monotonic
 
     def create(self, session_token, terminal_id, sid, browser_id, browser_key, challenge, algorithm):
         if not isinstance(challenge, bytes) or not challenge or len(challenge) > 4096:
             return None, 'ssh_browser_key_invalid_challenge'
-        now = time.time()
+        wall_now = self._wall_time_func()
+        monotonic_now = self._monotonic_func()
         with self._lock:
-            self._trim(now)
+            self._trim(monotonic_now)
             if any(entry.get('sid') == sid for entry in self._requests.values()):
                 return None, 'ssh_browser_key_sign_busy'
             request_id = 'sshs_' + secrets.token_urlsafe(18)
@@ -1922,7 +2051,8 @@ class BrowserSSHSignRequestStore:
                 'algorithm': algorithm,
                 'challenge': base64.b64encode(challenge).decode('ascii'),
                 'challenge_sha256': challenge_hash,
-                'expires_at': now + self._timeout_seconds,
+                'timeout_seconds': self._timeout_seconds,
+                'expires_at': wall_now + self._timeout_seconds,
             }
             self._requests[request_id] = {
                 'request': payload,
@@ -1930,10 +2060,11 @@ class BrowserSSHSignRequestStore:
                 'terminal_id': terminal_id,
                 'sid': sid,
                 'browser_id': browser_id,
-                'expires_at': payload['expires_at'],
+                'deadline': monotonic_now + self._timeout_seconds,
                 'event': threading.Event(),
                 'signature': None,
                 'error_code': None,
+                'error_message': None,
             }
             return dict(payload), None
 
@@ -1944,7 +2075,7 @@ class BrowserSSHSignRequestStore:
         if not isinstance(request_id, str):
             return 'ssh_browser_key_sign_invalid'
         with self._lock:
-            self._trim(time.time())
+            self._trim(self._monotonic_func())
             entry = self._requests.get(request_id)
             if not entry:
                 return 'ssh_browser_key_sign_stale'
@@ -1964,6 +2095,9 @@ class BrowserSSHSignRequestStore:
                 return 'ssh_browser_key_sign_stale'
             if data.get('status') == 'failed':
                 entry['error_code'] = 'ssh_browser_key_sign_failed'
+                entry['error_message'] = normalize_browser_ssh_sign_failure_message(
+                    data.get('message')
+                )
                 entry['event'].set()
                 return entry['error_code']
             if data.get('status') != 'ok':
@@ -1986,19 +2120,19 @@ class BrowserSSHSignRequestStore:
         with self._lock:
             entry = self._requests.get(request_id)
         if not entry:
-            return None, 'ssh_browser_key_sign_stale'
-        wait_seconds = max(0, entry['expires_at'] - time.time())
+            return None, 'ssh_browser_key_sign_stale', None
+        wait_seconds = max(0, entry['deadline'] - self._monotonic_func())
         if not entry['event'].wait(wait_seconds):
             with self._lock:
                 self._requests.pop(request_id, None)
-            return None, 'ssh_browser_key_sign_timeout'
+            return None, 'ssh_browser_key_sign_timeout', None
         with self._lock:
             self._requests.pop(request_id, None)
         if entry.get('error_code'):
-            return None, entry['error_code']
+            return None, entry['error_code'], entry.get('error_message')
         if not isinstance(entry.get('signature'), bytes):
-            return None, 'ssh_browser_key_sign_stale'
-        return entry['signature'], None
+            return None, 'ssh_browser_key_sign_stale', None
+        return entry['signature'], None, None
 
     def discard(self, session_token, terminal_id=None, sid=None):
         with self._lock:
@@ -2021,7 +2155,7 @@ class BrowserSSHSignRequestStore:
 
     def _trim(self, now):
         for request_id, entry in list(self._requests.items()):
-            if entry.get('expires_at', 0) <= now:
+            if entry.get('deadline', 0) <= now:
                 entry['error_code'] = 'ssh_browser_key_sign_timeout'
                 entry['event'].set()
                 self._requests.pop(request_id, None)
@@ -2149,6 +2283,65 @@ class SFTPDownloadTicketStore:
 
 
 sftp_download_ticket_store = SFTPDownloadTicketStore()
+agent_file_copy_lock = threading.Lock()
+agent_file_copy_worker_slots = threading.BoundedSemaphore(AGENT_FILE_COPY_MAX_BACKGROUND_WORKERS)
+files_copy_jobs_lock = threading.RLock()
+files_copy_jobs = {}
+files_copy_requests = {}
+
+
+class AgentFileCopyStream:
+    def __init__(self, chunks, expected_size=None):
+        self._chunks = iter(chunks)
+        self._buffer = bytearray()
+        self._closed = False
+        self._expected_size = expected_size
+        self._bytes_read = 0
+        self._finished = False
+
+    def _finish_chunks(self):
+        if self._finished:
+            return
+        self._finished = True
+        try:
+            next(self._chunks)
+        except StopIteration:
+            return
+        raise SFTPTransferError(
+            'file_copy_source_size_changed',
+            'The source file exceeded the approved size during transfer.',
+        )
+
+    def read(self, size=-1):
+        if self._closed or size == 0:
+            return b''
+        if size is None or size < 0:
+            for chunk in self._chunks:
+                self._buffer.extend(chunk)
+            data = bytes(self._buffer)
+            self._buffer.clear()
+            return data
+        while len(self._buffer) < size:
+            try:
+                chunk = next(self._chunks)
+            except StopIteration:
+                break
+            self._buffer.extend(chunk)
+        data = bytes(self._buffer[:size])
+        del self._buffer[:size]
+        self._bytes_read += len(data)
+        if self._expected_size is not None and self._bytes_read >= self._expected_size:
+            self._finish_chunks()
+        return data
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        close_chunks = getattr(self._chunks, 'close', None)
+        if close_chunks:
+            close_chunks()
+        self._buffer.clear()
 
 
 def request_browser_ssh_signature(bridge, signer_sid, browser_key, challenge, algorithm):
@@ -2177,7 +2370,7 @@ def request_browser_ssh_signature(bridge, signer_sid, browser_key, challenge, al
     if error_code:
         raise RuntimeError('Browser SSH signer is busy or unavailable.')
     socketio.emit(SSH_BROWSER_SIGN_REQUEST_EVENT, request_payload, room=signer_sid)
-    signature, error_code = browser_ssh_sign_request_store.wait(request_payload)
+    signature, error_code, error_message = browser_ssh_sign_request_store.wait(request_payload)
     current_identity = socket_browser_identities.get(signer_sid) or {}
     current_client_ip = socket_client_ips.get(signer_sid, 'unknown')
     signer_still_allowed = is_local_client_ip(current_client_ip) or (
@@ -2189,6 +2382,10 @@ def request_browser_ssh_signature(bridge, signer_sid, browser_key, challenge, al
         or current_identity.get('browser_id') != browser_id
         or not signer_still_allowed
     ):
+        if error_message:
+            raise RuntimeError(f'Browser SSH signing did not complete: {error_message}')
+        if error_code == 'ssh_browser_key_sign_timeout':
+            raise RuntimeError('Browser SSH signing timed out.')
         raise RuntimeError('Browser SSH signing did not complete.')
     return signature
 
@@ -4456,6 +4653,343 @@ def summarize_agent_input(value):
         'escaped_preview': preview,
     }
 
+def reserve_agent_action_slot(state):
+    if len(state.pending_actions) < AGENT_ACTION_MAX_RECORDS:
+        return True
+    terminal_actions = sorted(
+        (
+            action for action in state.pending_actions.values()
+            if action.get('status') not in AGENT_STATUS_RETAINED
+        ),
+        key=lambda action: action.get('created_at', 0),
+    )
+    for action in terminal_actions:
+        state.pending_actions.pop(action.get('action_id'), None)
+        if len(state.pending_actions) < AGENT_ACTION_MAX_RECORDS:
+            return True
+    return False
+
+def transition_agent_file_copy_action(state, action, event, *, error_code=None, result=None,
+                                      record_status_audit=True):
+    if not isinstance(action, dict) or action.get('action_type') != AGENT_ACTION_FILE_COPY:
+        return False
+    current_status = action.get('status')
+    target_status = AGENT_FILE_COPY_TRANSITIONS.get(current_status, {}).get(event)
+    if not target_status:
+        return False
+
+    action['status'] = target_status
+    action['action_revision'] = action.get('action_revision', 0) + 1
+    if event == AGENT_FILE_COPY_EVENT_START:
+        action['approval_granted'] = True
+        action['bytes_copied'] = 0
+        action['total_bytes'] = action.get('source_size')
+        action['progress_updated_at'] = time.time()
+    if target_status == AGENT_STATUS_FAILED:
+        action.pop('result', None)
+        failure_code = error_code
+        if event == AGENT_FILE_COPY_EVENT_PUBLISH_UNKNOWN:
+            failure_code = AGENT_ERROR_FILE_COPY_PUBLISH_OUTCOME_UNKNOWN
+        if not isinstance(failure_code, str) or not failure_code:
+            failure_code = 'file_copy_failed'
+        action['error_code'] = failure_code
+    elif target_status == AGENT_STATUS_COMPLETED:
+        action.pop('error_code', None)
+        action['result'] = dict(result) if isinstance(result, dict) else {}
+        copied = action['result'].get('bytes_copied')
+        if isinstance(copied, int) and copied >= 0:
+            action['bytes_copied'] = copied
+        action['total_bytes'] = action.get('source_size')
+        action['progress_updated_at'] = time.time()
+    else:
+        action.pop('error_code', None)
+        action.pop('result', None)
+
+    if state and record_status_audit and event in AGENT_FILE_COPY_AUDITED_EVENTS:
+        record_agent_audit(
+            state,
+            action,
+            target_status,
+            error_code=action.get('error_code'),
+        )
+    return True
+
+def split_sftp_remote_file_path(path):
+    path = SSHBridge._validate_sftp_path(path)
+    separator = path.rfind('/')
+    if separator < 0:
+        directory = '.'
+        filename = path
+    elif separator == 0:
+        directory = '/'
+        filename = path[1:]
+    else:
+        directory = path[:separator]
+        filename = path[separator + 1:]
+    return directory, SSHBridge._validate_sftp_name(filename)
+
+def normalize_agent_file_copy_conflict_mode(value):
+    mode = 'fail' if value is None else value
+    if not isinstance(mode, str):
+        return None
+    mode = mode.strip().lower().replace('-', '_')
+    return mode if mode in {'fail', 'keep_both', 'replace'} else None
+
+def is_files_bridge(bridge):
+    if isinstance(bridge, SSHBridge):
+        return True
+    return isinstance(bridge, LocalShellBridge) and bridge.files_available()
+
+def browse_bridge_files(bridge, path=None, *, child=None, parent=False):
+    if isinstance(bridge, SSHBridge):
+        return bridge.browse_sftp(path, child=child, parent=parent)
+    if isinstance(bridge, LocalShellBridge) and bridge.files_available():
+        return bridge.browse_local_files(path, child=child, parent=parent)
+    raise SFTPTransferError('files_unavailable', 'Files is unavailable for this terminal.')
+
+def resolve_bridge_file_reference(bridge, file_id):
+    if isinstance(bridge, SSHBridge):
+        return bridge.resolve_sftp_file_reference(file_id)
+    if isinstance(bridge, LocalShellBridge) and bridge.files_available():
+        return bridge.resolve_local_file_reference(file_id)
+    raise SFTPTransferError('files_unavailable', 'Files is unavailable for this terminal.')
+
+def prepare_current_bridge_file(bridge, file_snapshot):
+    if isinstance(bridge, SSHBridge):
+        current = bridge.prepare_sftp_file(file_snapshot['directory'], file_snapshot['filename'])
+    elif isinstance(bridge, LocalShellBridge) and bridge.files_available():
+        current = bridge.prepare_local_file(file_snapshot['path'])
+    else:
+        raise SFTPTransferError('files_unavailable', 'Files is unavailable for this terminal.')
+    if not agent_file_copy_snapshot_matches(file_snapshot, current):
+        raise SFTPTransferError('files_file_changed', 'The file changed after the directory was listed.')
+    return current
+
+def prepare_bridge_upload(bridge, directory, filename, conflict_mode):
+    if isinstance(bridge, SSHBridge):
+        return bridge.prepare_sftp_upload(directory, filename, conflict_mode)
+    if isinstance(bridge, LocalShellBridge) and bridge.files_available():
+        filename = bridge.validate_files_name(filename)
+        local_conflict_mode = 'fail' if conflict_mode == 'ask' else conflict_mode
+        return bridge.prepare_local_upload(str(Path(directory) / filename), local_conflict_mode)
+    raise SFTPTransferError('files_unavailable', 'Files is unavailable for this terminal.')
+
+def download_bridge_file_chunks(bridge, file_snapshot):
+    if isinstance(bridge, SSHBridge):
+        return bridge.download_sftp_chunks(file_snapshot)
+    if isinstance(bridge, LocalShellBridge) and bridge.files_available():
+        return bridge.download_local_chunks(file_snapshot)
+    raise SFTPTransferError('files_unavailable', 'Files is unavailable for this terminal.')
+
+def upload_bridge_file_stream(bridge, stream, upload, expected_size):
+    if isinstance(bridge, SSHBridge):
+        return bridge.upload_sftp_stream(stream, upload, expected_size)
+    if isinstance(bridge, LocalShellBridge) and bridge.files_available():
+        return bridge.upload_local_stream(stream, upload, expected_size)
+    raise SFTPTransferError('files_unavailable', 'Files is unavailable for this terminal.')
+
+def rename_bridge_file(bridge, file_snapshot, new_filename):
+    if isinstance(bridge, SSHBridge):
+        return bridge.rename_sftp_file(
+            file_snapshot['directory'],
+            file_snapshot['filename'],
+            new_filename,
+            file_snapshot['size'],
+            file_snapshot['mtime'],
+        )
+    if isinstance(bridge, LocalShellBridge) and bridge.files_available():
+        return bridge.rename_local_file(file_snapshot, new_filename)
+    raise SFTPTransferError('files_unavailable', 'Files is unavailable for this terminal.')
+
+def delete_bridge_file(bridge, file_snapshot):
+    if isinstance(bridge, SSHBridge):
+        return bridge.delete_sftp_file(
+            file_snapshot['directory'],
+            file_snapshot['filename'],
+            file_snapshot['size'],
+            file_snapshot['mtime'],
+        )
+    if isinstance(bridge, LocalShellBridge) and bridge.files_available():
+        return bridge.delete_local_file(file_snapshot)
+    raise SFTPTransferError('files_unavailable', 'Files is unavailable for this terminal.')
+
+def is_agent_file_copy_bridge(bridge):
+    return isinstance(bridge, (SSHBridge, LocalShellBridge))
+
+def prepare_agent_file_copy_source(bridge, path):
+    if isinstance(bridge, SSHBridge):
+        directory, filename = split_sftp_remote_file_path(path)
+        return bridge.prepare_sftp_file(directory, filename)
+    if isinstance(bridge, LocalShellBridge):
+        return bridge.prepare_local_file(path)
+    raise SFTPTransferError('file_copy_unsupported_terminal', 'File copy terminal is unsupported.')
+
+def prepare_agent_file_copy_destination(bridge, path, conflict_mode):
+    if isinstance(bridge, SSHBridge):
+        directory, filename = split_sftp_remote_file_path(path)
+        upload_conflict_mode = 'ask' if conflict_mode == 'fail' else conflict_mode
+        return bridge.prepare_sftp_upload(directory, filename, upload_conflict_mode)
+    if isinstance(bridge, LocalShellBridge):
+        return bridge.prepare_local_upload(path, conflict_mode)
+    raise SFTPTransferError('file_copy_unsupported_terminal', 'File copy terminal is unsupported.')
+
+def download_agent_file_copy_chunks(bridge, file_snapshot):
+    if isinstance(bridge, SSHBridge):
+        return bridge.download_sftp_chunks(file_snapshot)
+    return bridge.download_local_chunks(file_snapshot)
+
+def upload_agent_file_copy_stream(bridge, stream, upload, expected_size,
+                                  before_read_callback=None, progress_callback=None,
+                                  pre_commit_callback=None):
+    if isinstance(bridge, SSHBridge):
+        return bridge.upload_sftp_stream(
+            stream,
+            upload,
+            expected_size,
+            before_read_callback=before_read_callback,
+            progress_callback=progress_callback,
+            pre_commit_callback=pre_commit_callback,
+            report_publish_outcome_unknown=True,
+        )
+    return bridge.upload_local_stream(
+        stream,
+        upload,
+        expected_size,
+        before_read_callback=before_read_callback,
+        progress_callback=progress_callback,
+        pre_commit_callback=pre_commit_callback,
+    )
+
+def agent_file_copy_snapshot_matches(original, current):
+    common_keys = {'path', 'size'}
+    snapshot_keys = common_keys | (
+        {'mtime'} if 'mtime' in original else {'mtime_ns', 'device', 'inode'}
+    )
+    return all(original.get(key) == current.get(key) for key in snapshot_keys)
+
+
+def validate_distinct_file_copy_target(source_bridge, destination_bridge, source_file, upload):
+    if isinstance(source_bridge, LocalShellBridge) and isinstance(destination_bridge, LocalShellBridge):
+        same_path = source_file['path'] == upload['destination_path']
+        existing = upload.get('existing')
+        same_file = bool(existing) and all(
+            source_file.get(key) == existing.get(key)
+            for key in ('device', 'inode')
+        )
+        if same_path or same_file:
+            raise LocalFileTransferError(
+                'file_copy_same_path',
+                'Source and destination must identify different local files.',
+            )
+    if (
+        isinstance(source_bridge, SSHBridge)
+        and isinstance(destination_bridge, SSHBridge)
+        and source_file.get('endpoint') == upload.get('endpoint')
+        and source_file['path'] == upload['destination_path']
+    ):
+        raise SFTPTransferError(
+            'file_copy_same_path',
+            'Source and destination must identify different remote files.',
+        )
+
+def prepare_agent_file_copy_plan(source_bridge, destination_bridge, command):
+    if source_bridge is destination_bridge:
+        raise SFTPTransferError('file_copy_same_terminal', 'Source and destination terminals must differ.')
+    conflict_mode = normalize_agent_file_copy_conflict_mode(command.get('conflict_mode'))
+    if not conflict_mode:
+        raise SFTPTransferError(AGENT_ERROR_ACTION_INVALID_DATA, 'File copy conflict mode is invalid.')
+    source_file = prepare_agent_file_copy_source(source_bridge, command.get('source_path'))
+    if source_file['size'] > SFTP_MAX_UPLOAD_BYTES:
+        raise SFTPTransferError(
+            'file_copy_too_large',
+            'The source file exceeds the configured SFTP transfer limit.',
+        )
+    upload = prepare_agent_file_copy_destination(
+        destination_bridge,
+        command.get('destination_path'),
+        conflict_mode,
+    )
+    validate_distinct_file_copy_target(
+        source_bridge,
+        destination_bridge,
+        source_file,
+        upload,
+    )
+    return source_file, upload, conflict_mode
+
+def build_agent_file_copy_action(state, record, destination_state, destination_record,
+                                 source_bridge, destination_bridge, source_file, upload,
+                                 conflict_mode):
+
+    if not reserve_agent_action_slot(state):
+        return None, 'agent_action_limit_reached'
+    action_id = secrets.token_urlsafe(12)
+    proposal_id = 'agp_' + secrets.token_urlsafe(12)
+    source_path = source_file['path']
+    destination_path = upload['destination_path']
+    preview = escape_agent_preview(
+        f'Copy {state.terminal_id}:{source_path} -> '
+        f'{destination_state.terminal_id}:{destination_path} ({conflict_mode})'
+    )
+    if len(preview) > AGENT_PREVIEW_CHARS:
+        preview = preview[:AGENT_PREVIEW_CHARS] + '...'
+    action = {
+        'action_id': action_id,
+        'proposal_id': proposal_id,
+        'action_type': AGENT_ACTION_FILE_COPY,
+        'session_id': state.session_id,
+        'viewer_id': state.viewer_id,
+        'agent_binding_id': state.agent_binding_id,
+        'terminal_id': state.terminal_id,
+        'source_terminal_id': state.terminal_id,
+        'destination_terminal_id': destination_state.terminal_id,
+        'source_path': source_path,
+        'destination_path': destination_path,
+        'source_size': source_file['size'],
+        'bytes_copied': 0,
+        'total_bytes': source_file['size'],
+        'progress_updated_at': None,
+        'destination_exists': upload.get('status') == 'conflict' or upload.get('existing_size') is not None,
+        'destination_existing_size': upload.get('existing_size'),
+        'source_file': dict(source_file),
+        'destination_upload': dict(upload),
+        'conflict_mode': conflict_mode,
+        'source_endpoint': source_file.get('endpoint') or source_bridge.sftp_endpoint(),
+        'destination_endpoint': upload.get('endpoint') or destination_bridge.sftp_endpoint(),
+        'source_bridge': source_bridge,
+        'destination_bridge': destination_bridge,
+        'destination_session_id': destination_state.session_id,
+        'destination_viewer_id': destination_state.viewer_id,
+        'destination_agent_binding_id': destination_state.agent_binding_id,
+        'destination_control_epoch': destination_state.control_epoch,
+        'destination_mode_version': destination_state.mode_version,
+        'destination_privacy_version': destination_state.privacy_version,
+        'destination_external_agent_id': destination_record.get('external_agent_id'),
+        'external_agent_id': record.get('external_agent_id'),
+        'requires_approval': True,
+        'approval_granted': False,
+        'status': AGENT_STATUS_PENDING_APPROVAL,
+        'created_at': time.time(),
+        'action_revision': 0,
+        'control_epoch': state.control_epoch,
+        'mode_version': state.mode_version,
+        'privacy_state': state.privacy_state,
+        'privacy_version': state.privacy_version,
+        'run_id': create_agent_run_id(),
+        'provider_name': 'external_agent',
+        'provider_version': '1',
+        'escaped_preview': preview,
+    }
+    state.pending_actions[action_id] = action
+    state.run_id = action['run_id']
+    record_agent_audit_event(
+        state,
+        AGENT_AUDIT_PROPOSAL_CREATED,
+        action=action,
+        status=action['status'],
+    )
+    return action, None
+
 def build_agent_action(state, proposal, requires_approval):
     action_data = proposal.get('data')
     if not isinstance(action_data, str):
@@ -4464,6 +4998,8 @@ def build_agent_action(state, proposal, requires_approval):
     extra_submit_bytes = 1 if submit_after else 0
     if len(action_data.encode('utf-8', errors='ignore')) + extra_submit_bytes > AGENT_MAX_INPUT_BYTES:
         return None, AGENT_ERROR_ACTION_TOO_LARGE
+    if not reserve_agent_action_slot(state):
+        return None, 'agent_action_limit_reached'
     action_id = secrets.token_urlsafe(12)
     proposal_id = 'agp_' + secrets.token_urlsafe(12)
     run_id = proposal.get('run_id') if isinstance(proposal.get('run_id'), str) else None
@@ -4516,10 +5052,11 @@ def build_agent_action(state, proposal, requires_approval):
     return action, None
 
 def public_agent_action(action):
-    return {
+    payload = {
         'action_id': action.get('action_id'),
         'proposal_id': action.get('proposal_id'),
         'action_type': action.get('action_type'),
+        'action_revision': action.get('action_revision'),
         'session_id': action.get('session_id'),
         'viewer_id': action.get('viewer_id'),
         'agent_binding_id': action.get('agent_binding_id'),
@@ -4543,7 +5080,41 @@ def public_agent_action(action):
         'ends_with_newline': action.get('ends_with_newline'),
         'submit_after': action.get('submit_after') is True,
         'escaped_preview': action.get('escaped_preview'),
+        'source_terminal_id': action.get('source_terminal_id'),
+        'destination_terminal_id': action.get('destination_terminal_id'),
+        'source_path': action.get('source_path'),
+        'destination_path': action.get('destination_path'),
+        'source_size': action.get('source_size'),
+        'bytes_copied': action.get('bytes_copied'),
+        'total_bytes': action.get('total_bytes'),
+        'progress_updated_at': action.get('progress_updated_at'),
+        'destination_exists': action.get('destination_exists'),
+        'destination_existing_size': action.get('destination_existing_size'),
+        'conflict_mode': action.get('conflict_mode'),
+        'source_endpoint': action.get('source_endpoint'),
+        'destination_endpoint': action.get('destination_endpoint'),
     }
+    if isinstance(action.get('result'), dict):
+        payload['result'] = dict(action['result'])
+    if isinstance(action.get('error_code'), str):
+        payload['error_code'] = action['error_code']
+    return payload
+
+def external_agent_action_status_payload(action):
+    if action.get('approval_granted') is True or action.get('status') == AGENT_STATUS_COMPLETED:
+        return public_agent_action(action)
+    payload = {
+        'status': action.get('status'),
+        'action_id': action.get('action_id'),
+        'proposal_id': action.get('proposal_id'),
+        'action_type': action.get('action_type'),
+        'terminal_id': action.get('terminal_id'),
+        'destination_terminal_id': action.get('destination_terminal_id'),
+        'requires_approval': action.get('requires_approval'),
+    }
+    if isinstance(action.get('error_code'), str):
+        payload['error_code'] = action['error_code']
+    return payload
 
 def build_agent_audit_identity(state):
     if not state:
@@ -4566,7 +5137,15 @@ def record_agent_audit_event(state, event_type, action=None, **fields):
     event_fields.update(fields)
     if action:
         action_metadata = public_agent_action(action)
-        action_metadata.pop('escaped_preview', None)
+        for sensitive_key in (
+            'escaped_preview',
+            'source_path',
+            'destination_path',
+            'source_endpoint',
+            'destination_endpoint',
+            'result',
+        ):
+            action_metadata.pop(sensitive_key, None)
         event_fields['action'] = action_metadata
     entry = agent_audit_store.append(
         state.session_token,
@@ -4630,7 +5209,9 @@ def emit_agent_action_failure(sid, action, error_code):
     emit_agent_action_result(sid, action, AGENT_STATUS_FAILED, error_code=error_code)
 
 def emit_agent_decision_error(sid, terminal_id, state, action, error_code):
-    if action:
+    if action and action.get('status') != AGENT_STATUS_PENDING_APPROVAL:
+        emit_agent_action_result(sid, action, action.get('status') or AGENT_STATUS_FAILED)
+    elif action:
         emit_agent_action_failure(sid, action, error_code)
     else:
         emit_agent_error(sid, terminal_id, error_code)
@@ -4640,8 +5221,18 @@ def emit_agent_decision_error(sid, terminal_id, state, action, error_code):
 def cancel_agent_pending_actions(state, reason):
     cancelled = []
     for action in state.pending_actions.values():
+        if action.get('action_type') == AGENT_ACTION_FILE_COPY:
+            if transition_agent_file_copy_action(
+                state,
+                action,
+                AGENT_FILE_COPY_EVENT_CANCEL,
+                error_code=reason,
+            ):
+                cancelled.append(dict(action))
+            continue
         if action.get('status') in AGENT_STATUS_OPEN:
             action['status'] = AGENT_STATUS_FAILED
+            action['error_code'] = reason
             record_agent_audit(state, action, AGENT_STATUS_FAILED, error_code=reason)
             cancelled.append(dict(action))
     return cancelled
@@ -4661,18 +5252,18 @@ def find_agent_action_for_decision(state, action_id, proposal_id):
 def validate_agent_action_decision(state, data):
     action_id = data.get('action_id')
     proposal_id = data.get('proposal_id')
-    if data.get('session_id') is not None and data.get('session_id') != state.session_id:
-        return None, AGENT_ERROR_STALE_PROPOSAL
-    if data.get('viewer_id') is not None and data.get('viewer_id') != state.viewer_id:
-        return None, AGENT_ERROR_STALE_PROPOSAL
-    if data.get('agent_binding_id') is not None and data.get('agent_binding_id') != state.agent_binding_id:
-        return None, AGENT_ERROR_STALE_PROPOSAL
-    if data.get('mode_version') is not None and data.get('mode_version') != state.mode_version:
-        return None, AGENT_ERROR_STALE_MODE_VERSION
-    if data.get('privacy_version') is not None and data.get('privacy_version') != state.privacy_version:
-        return None, AGENT_ERROR_STALE_PROPOSAL
-
     action = find_agent_action_for_decision(state, action_id, proposal_id)
+    if data.get('session_id') is not None and data.get('session_id') != state.session_id:
+        return action, AGENT_ERROR_STALE_PROPOSAL
+    if data.get('viewer_id') is not None and data.get('viewer_id') != state.viewer_id:
+        return action, AGENT_ERROR_STALE_PROPOSAL
+    if data.get('agent_binding_id') is not None and data.get('agent_binding_id') != state.agent_binding_id:
+        return action, AGENT_ERROR_STALE_PROPOSAL
+    if data.get('mode_version') is not None and data.get('mode_version') != state.mode_version:
+        return action, AGENT_ERROR_STALE_MODE_VERSION
+    if data.get('privacy_version') is not None and data.get('privacy_version') != state.privacy_version:
+        return action, AGENT_ERROR_STALE_PROPOSAL
+
     if not action:
         return None, AGENT_ERROR_ACTION_NOT_FOUND
     if isinstance(proposal_id, str) and action.get('proposal_id') != proposal_id:
@@ -5204,6 +5795,7 @@ def build_terminal_list(session_token, sid=None):
             'term': SSH_TERM,
             'connected': True,
             'buffered_events': len(bridge.replay_buffer),
+            'files_available': bool(bridge.files_available()),
         }
         terminals.append(terminal_info)
     return terminals
@@ -5993,6 +6585,7 @@ def build_external_agentinfo_payload(base_url=None, agentinfo_path=None):
         'command_endpoint': command_endpoint,
         'loopback_only': True,
         'launch_dir': str(APP_DIR),
+        'runtime_dir': str(Path(agentinfo_path or EXTERNAL_AGENT_INFO_PATH).parent),
         'agentinfo_path': str(agentinfo_path or EXTERNAL_AGENT_INFO_PATH),
         'current_agentinfo_path': str(EXTERNAL_AGENT_CURRENT_INFO_PATH) if EXTERNAL_AGENT_CURRENT_INFO_PATH else None,
         'handoff_path': str(handoff_path),
@@ -6006,6 +6599,7 @@ def build_external_agentinfo_payload(base_url=None, agentinfo_path=None):
             'agent_cli': str(APP_DIR / 'scripts' / 'agent_cli.py'),
             'agent_jsonl': str(APP_DIR / 'scripts' / 'agent_jsonl.py'),
             'agent_repl': str(APP_DIR / 'scripts' / 'agent_repl.py'),
+            'agent_scp': str(APP_DIR / 'scripts' / 'agent_scp.py'),
             'agent_shcmd': str(APP_DIR / 'scripts' / 'agent_shcmd.py'),
             'agent_type': str(APP_DIR / 'scripts' / 'agent_type.py'),
         },
@@ -6033,6 +6627,15 @@ def build_external_agentinfo_payload(base_url=None, agentinfo_path=None):
         payload['tls_ca_cert_path'] = ca_cert_path
     return payload
 
+def ensure_private_agent_directory(path):
+    path = Path(path)
+    if path.is_symlink():
+        raise OSError(f'refusing symlinked External Agent runtime directory: {path}')
+    path.mkdir(parents=True, exist_ok=True)
+    if not sys.platform.startswith('win'):
+        os.chmod(path, 0o700)
+    return path
+
 def write_json_file_atomic(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f'.{path.name}.{secrets.token_urlsafe(8)}.tmp')
@@ -6052,12 +6655,14 @@ def write_external_agentinfo_files(base_url=None):
     payload = build_external_agentinfo_payload(base_url=base_url, agentinfo_path=EXTERNAL_AGENT_INFO_PATH)
     written = []
     try:
+        ensure_private_agent_directory(EXTERNAL_AGENT_INFO_PATH.parent)
         write_json_file_atomic(EXTERNAL_AGENT_INFO_PATH, payload)
         written.append(str(EXTERNAL_AGENT_INFO_PATH))
     except OSError as exc:
         log_message(f"[!] Failed to write External Agent Info {EXTERNAL_AGENT_INFO_PATH}: {exc}", file=sys.stderr)
     if EXTERNAL_AGENT_CURRENT_INFO_PATH:
         try:
+            ensure_private_agent_directory(EXTERNAL_AGENT_CURRENT_INFO_PATH.parent)
             current_payload = dict(payload)
             current_payload['agentinfo_path'] = str(EXTERNAL_AGENT_INFO_PATH)
             current_payload['current_agentinfo_path'] = str(EXTERNAL_AGENT_CURRENT_INFO_PATH)
@@ -6068,7 +6673,7 @@ def write_external_agentinfo_files(base_url=None):
     return written
 
 def get_external_agent_handoff_directory():
-    return EXTERNAL_AGENT_HANDOFF_PATH.with_name('standterm_external_agent_handoffs') / LAUNCHER_INSTANCE_ID
+    return EXTERNAL_AGENT_HANDOFF_PATH.parent / 'standterm_external_agent_handoffs'
 
 def get_external_agent_terminal_handoff_path(terminal_id):
     digest = hashlib.sha256(terminal_id.encode('utf-8')).hexdigest()[:24]
@@ -6076,14 +6681,11 @@ def get_external_agent_terminal_handoff_path(terminal_id):
 
 def ensure_external_agent_handoff_directory():
     handoff_dir = get_external_agent_handoff_directory()
-    handoff_root = handoff_dir.parent
-    if handoff_root.is_symlink() or handoff_dir.is_symlink():
+    instance_dir = handoff_dir.parent
+    if instance_dir.is_symlink() or handoff_dir.is_symlink():
         raise OSError(f'refusing symlinked External Agent handoff directory: {handoff_dir}')
-    handoff_root.mkdir(parents=True, exist_ok=True)
-    handoff_dir.mkdir(exist_ok=True)
-    if not sys.platform.startswith('win'):
-        os.chmod(handoff_root, 0o700)
-        os.chmod(handoff_dir, 0o700)
+    ensure_private_agent_directory(instance_dir)
+    ensure_private_agent_directory(handoff_dir)
     return handoff_dir
 
 def read_external_agent_handoff_file(handoff_path):
@@ -6197,6 +6799,44 @@ def cleanup_external_agent_handoff_artifacts():
         handoff_dir.rmdir()
     except OSError:
         pass
+
+def unlink_external_agent_artifact(path):
+    if not path:
+        return False
+    try:
+        Path(path).unlink()
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        log_message(f"[!] Failed to remove External Agent artifact {path}: {exc}", file=sys.stderr)
+        return False
+
+def cleanup_external_agent_runtime_artifacts():
+    cleanup_external_agent_handoff_artifacts()
+
+    current_payload = (
+        read_external_agent_handoff_file(EXTERNAL_AGENT_CURRENT_INFO_PATH)
+        if EXTERNAL_AGENT_CURRENT_INFO_PATH
+        else None
+    )
+    if current_payload and current_payload.get('agentinfo_path') == str(EXTERNAL_AGENT_INFO_PATH):
+        unlink_external_agent_artifact(EXTERNAL_AGENT_CURRENT_INFO_PATH)
+
+    unlink_external_agent_artifact(EXTERNAL_AGENT_HANDOFF_PATH)
+    unlink_external_agent_artifact(EXTERNAL_AGENT_INFO_PATH)
+
+    candidate_dirs = {
+        get_external_agent_handoff_directory(),
+        EXTERNAL_AGENT_HANDOFF_PATH.parent,
+        EXTERNAL_AGENT_INFO_PATH.parent,
+        EXTERNAL_AGENT_RUNTIME_ROOT,
+    }
+    for directory in sorted(candidate_dirs, key=lambda item: len(Path(item).parts), reverse=True):
+        try:
+            Path(directory).rmdir()
+        except OSError:
+            pass
 
 def build_external_agent_token_payload(token, record, terminal_id, base_url):
     command_base_url = build_external_agent_loopback_base_url(base_url)
@@ -6428,7 +7068,7 @@ def upload_sftp_file(ticket):
         return add_common_headers(jsonify({
             'status': 'failed',
             'error_code': error_code,
-            'message': 'The SFTP upload request is invalid or expired.',
+            'message': 'The Files upload request is invalid or expired.',
         })), status_code
     bridge = record['bridge']
     if (
@@ -6439,7 +7079,7 @@ def upload_sftp_file(ticket):
         return add_common_headers(jsonify({
             'status': 'failed',
             'error_code': 'sftp_upload_not_authorized',
-            'message': 'The SSH session is no longer available for this upload.',
+            'message': 'The terminal is no longer available for this upload.',
         })), 403
     content_length = request.content_length
     if content_length is None:
@@ -6461,17 +7101,21 @@ def upload_sftp_file(ticket):
             'message': 'The selected file exceeds the configured upload limit.',
         })), 413
     try:
-        result = bridge.upload_sftp_stream(
+        result = upload_bridge_file_stream(
+            bridge,
             request.stream,
             record['upload'],
             record['expected_size'],
         )
-    except SFTPTransferError as exc:
+    except (SFTPTransferError, LocalFileTransferError) as exc:
         status_code = 409 if exc.error_code in {
             'sftp_atomic_replace_unavailable',
             'sftp_destination_changed',
             'sftp_destination_not_file',
             'sftp_destination_symlink',
+            'local_copy_destination_changed',
+            'local_copy_destination_not_file',
+            'local_copy_destination_symlink',
         } else 502
         return add_common_headers(jsonify({
             'status': 'failed',
@@ -6502,7 +7146,7 @@ def download_sftp_file(ticket):
         return add_common_headers(jsonify({
             'status': 'failed',
             'error_code': error_code,
-            'message': 'The SFTP download request is invalid or expired.',
+            'message': 'The Files download request is invalid or expired.',
         })), status_code
     bridge = record['bridge']
     if (
@@ -6514,7 +7158,7 @@ def download_sftp_file(ticket):
         return add_common_headers(jsonify({
             'status': 'failed',
             'error_code': 'sftp_download_not_authorized',
-            'message': 'The SSH session is no longer available for this download.',
+            'message': 'The terminal is no longer available for this download.',
         })), 403
     file_snapshot = record['file']
     filename = file_snapshot['filename']
@@ -6529,7 +7173,7 @@ def download_sftp_file(ticket):
     def stream_download():
         bytes_sent = 0
         try:
-            for chunk in bridge.download_sftp_chunks(file_snapshot):
+            for chunk in download_bridge_file_chunks(bridge, file_snapshot):
                 bytes_sent += len(chunk)
                 yield chunk
         except GeneratorExit:
@@ -6538,7 +7182,7 @@ def download_sftp_file(ticket):
                 f'bytes_sent={bytes_sent} expected_bytes={expected_size}'
             )
             raise
-        except SFTPTransferError as exc:
+        except (SFTPTransferError, LocalFileTransferError) as exc:
             log_message(
                 f'[sftp] Download stream failed: download_id={download_id} terminal={terminal_id} '
                 f'error_code={exc.error_code} bytes_sent={bytes_sent} '
@@ -7697,6 +8341,440 @@ def process_external_agent_send_command(op, command, record, state, terminal_id)
     return payload
 
 
+def get_agent_file_copy_state_error(state):
+    if not state:
+        return AGENT_ERROR_NOT_ATTACHED
+    if state.paused or state.mode == AGENT_MODE_PAUSED:
+        return AGENT_ERROR_PAUSED
+    if not is_agent_context_allowed(state):
+        return AGENT_ERROR_PRIVACY_BLOCKED
+    if state.mode not in {AGENT_MODE_APPROVAL_PENDING, AGENT_MODE_DIRECT_ACTIVE}:
+        return AGENT_ERROR_MODE_NOT_WRITABLE
+    return None
+
+
+def process_external_agent_file_copy_command(_op, command, record, state, terminal_id):
+    destination_terminal_id = validate_terminal_id_payload({
+        'terminal_id': command.get('destination_terminal_id'),
+    })
+    if not destination_terminal_id:
+        return external_agent_error(AGENT_ERROR_ACTION_INVALID_DATA, terminal_id=terminal_id)
+    destination_record, destination_state, _destination_terminal_id, error_code = (
+        validate_external_agent_command_token({
+            'token': command.get('destination_token'),
+            'terminal_id': destination_terminal_id,
+        })
+    )
+    if error_code:
+        return external_agent_error(error_code, terminal_id=destination_terminal_id)
+    if (
+        record.get('session_token') != destination_record.get('session_token')
+        or record.get('sid') != destination_record.get('sid')
+    ):
+        return external_agent_error('file_copy_terminal_scope_mismatch', terminal_id=terminal_id)
+
+    source_bridge = get_bridge(record.get('session_token'), terminal_id)
+    destination_bridge = get_bridge(record.get('session_token'), destination_terminal_id)
+    if not is_agent_file_copy_bridge(source_bridge) or not is_agent_file_copy_bridge(destination_bridge):
+        return external_agent_error('file_copy_unsupported_terminal', terminal_id=terminal_id)
+
+    with agent_lock:
+        source_state_error = get_agent_file_copy_state_error(state)
+        destination_state_error = get_agent_file_copy_state_error(destination_state)
+        if source_state_error:
+            return external_agent_error(source_state_error, terminal_id=terminal_id)
+        if destination_state_error:
+            return external_agent_error(destination_state_error, terminal_id=destination_terminal_id)
+    try:
+        source_file, upload, conflict_mode = prepare_agent_file_copy_plan(
+            source_bridge,
+            destination_bridge,
+            command,
+        )
+    except (SFTPTransferError, LocalFileTransferError) as exc:
+        emit_agent_error(state.sid, terminal_id, exc.error_code)
+        return external_agent_error('file_copy_preflight_failed', terminal_id=terminal_id)
+
+    with agent_lock:
+        current_source_state = get_agent_state(record.get('session_token'), terminal_id, state.sid)
+        current_destination_state = get_agent_state(
+            record.get('session_token'),
+            destination_terminal_id,
+            state.sid,
+        )
+        if current_source_state is not state or current_destination_state is not destination_state:
+            return external_agent_error(AGENT_ERROR_STALE_PROPOSAL, terminal_id=terminal_id)
+        source_state_error = get_agent_file_copy_state_error(state)
+        destination_state_error = get_agent_file_copy_state_error(destination_state)
+        if source_state_error:
+            return external_agent_error(source_state_error, terminal_id=terminal_id)
+        if destination_state_error:
+            return external_agent_error(destination_state_error, terminal_id=destination_terminal_id)
+        if (
+            get_bridge(record.get('session_token'), terminal_id) is not source_bridge
+            or get_bridge(record.get('session_token'), destination_terminal_id) is not destination_bridge
+        ):
+            return external_agent_error(AGENT_ERROR_TERMINAL_NOT_FOUND, terminal_id=terminal_id)
+        action, error_code = build_agent_file_copy_action(
+            state,
+            record,
+            destination_state,
+            destination_record,
+            source_bridge,
+            destination_bridge,
+            source_file,
+            upload,
+            conflict_mode,
+        )
+        if error_code:
+            return external_agent_error(error_code, terminal_id=terminal_id)
+        record_agent_audit_event(
+            state,
+            AGENT_AUDIT_EXTERNAL_AGENT_FILE_COPY,
+            action=action,
+            external_agent_id=record.get('external_agent_id'),
+            destination_terminal_id=destination_terminal_id,
+            destination_external_agent_id=destination_record.get('external_agent_id'),
+            conflict_mode=action.get('conflict_mode'),
+            status=AGENT_STATUS_PENDING_APPROVAL,
+        )
+        socketio.emit(AGENT_EVENT_ACTION_REQUEST, public_agent_action(action), room=state.sid)
+        emit_agent_state(state.sid, state)
+    return {
+        'status': AGENT_STATUS_PENDING_APPROVAL,
+        'requires_approval': True,
+        'action_id': action['action_id'],
+        'proposal_id': action['proposal_id'],
+        'action_type': action['action_type'],
+        'terminal_id': action['terminal_id'],
+        'destination_terminal_id': action['destination_terminal_id'],
+    }
+
+
+def process_external_agent_action_status_command(_op, command, record, state, terminal_id):
+    action_id = command.get('action_id')
+    if not isinstance(action_id, str) or not action_id or len(action_id) > 128:
+        return external_agent_error(AGENT_ERROR_ACTION_INVALID_DATA, terminal_id=terminal_id)
+    with agent_lock:
+        action = state.pending_actions.get(action_id)
+        if not action or action.get('external_agent_id') != record.get('external_agent_id'):
+            return external_agent_error(AGENT_ERROR_ACTION_NOT_FOUND, terminal_id=terminal_id)
+        return external_agent_action_status_payload(action)
+
+
+def validate_agent_file_copy_execution(state, action):
+    if not state or not action:
+        return None, None, AGENT_ERROR_ACTION_NOT_FOUND
+    if action.get('action_type') != AGENT_ACTION_FILE_COPY:
+        return None, None, AGENT_ERROR_ACTION_NOT_ALLOWED
+    if action.get('status') not in {AGENT_STATUS_APPROVED, AGENT_STATUS_RUNNING}:
+        return None, None, action.get('error_code') or AGENT_ERROR_ACTION_NOT_WRITABLE
+    if action.get('session_id') != state.session_id:
+        return None, None, AGENT_ERROR_STALE_PROPOSAL
+    if action.get('viewer_id') != state.viewer_id:
+        return None, None, AGENT_ERROR_STALE_PROPOSAL
+    if action.get('agent_binding_id') != state.agent_binding_id:
+        return None, None, AGENT_ERROR_STALE_PROPOSAL
+    if action.get('control_epoch') != state.control_epoch:
+        return None, None, AGENT_ERROR_STALE_ACTION
+    if action.get('mode_version') != state.mode_version:
+        return None, None, AGENT_ERROR_STALE_MODE_VERSION
+    if action.get('privacy_version') != state.privacy_version:
+        return None, None, AGENT_ERROR_PRIVACY_BLOCKED
+    state_error = get_agent_file_copy_state_error(state)
+    if state_error:
+        return None, None, state_error
+
+    destination_state = get_agent_state(
+        state.session_token,
+        action.get('destination_terminal_id'),
+        state.sid,
+    )
+    destination_error = get_agent_file_copy_state_error(destination_state)
+    if destination_error:
+        return None, None, destination_error
+    if action.get('destination_session_id') != destination_state.session_id:
+        return None, None, AGENT_ERROR_STALE_PROPOSAL
+    if action.get('destination_viewer_id') != destination_state.viewer_id:
+        return None, None, AGENT_ERROR_STALE_PROPOSAL
+    if action.get('destination_agent_binding_id') != destination_state.agent_binding_id:
+        return None, None, AGENT_ERROR_STALE_PROPOSAL
+    if action.get('destination_control_epoch') != destination_state.control_epoch:
+        return None, None, AGENT_ERROR_STALE_ACTION
+    if action.get('destination_mode_version') != destination_state.mode_version:
+        return None, None, AGENT_ERROR_STALE_MODE_VERSION
+    if action.get('destination_privacy_version') != destination_state.privacy_version:
+        return None, None, AGENT_ERROR_PRIVACY_BLOCKED
+
+    source_bridge = get_bridge(state.session_token, state.terminal_id)
+    destination_bridge = get_bridge(state.session_token, destination_state.terminal_id)
+    if source_bridge is not action.get('source_bridge') or destination_bridge is not action.get('destination_bridge'):
+        return None, None, AGENT_ERROR_TERMINAL_NOT_FOUND
+    if not is_agent_file_copy_bridge(source_bridge) or not is_agent_file_copy_bridge(destination_bridge):
+        return None, None, 'file_copy_unsupported_terminal'
+    if source_bridge is destination_bridge:
+        return None, None, 'file_copy_same_terminal'
+    return source_bridge, destination_bridge, None
+
+
+def copy_file_between_bridges(source_bridge, destination_bridge, source_file, upload, *,
+                              before_read_callback=None, progress_callback=None,
+                              pre_commit_callback=None):
+    with agent_file_copy_lock:
+        source_file = dict(source_file)
+        upload = dict(upload)
+        if upload.get('status') == 'conflict':
+            raise SFTPTransferError(
+                'file_copy_destination_exists',
+                'The destination file already exists. Choose keep_both or replace explicitly.',
+            )
+        if before_read_callback:
+            before_read_callback(0, source_file['size'])
+
+        def begin_copy_commit(_transferred, _expected_size):
+            current_source = prepare_agent_file_copy_source(source_bridge, source_file['path'])
+            if not agent_file_copy_snapshot_matches(source_file, current_source):
+                raise SFTPTransferError(
+                    'sftp_file_changed',
+                    'The remote source file changed during transfer.',
+                )
+            if pre_commit_callback:
+                pre_commit_callback(_transferred, _expected_size)
+
+        chunks = download_agent_file_copy_chunks(source_bridge, source_file)
+        stream = AgentFileCopyStream(chunks, expected_size=source_file['size'])
+        try:
+            upload_result = upload_agent_file_copy_stream(
+                destination_bridge,
+                stream,
+                upload,
+                source_file['size'],
+                before_read_callback=before_read_callback,
+                progress_callback=progress_callback,
+                pre_commit_callback=begin_copy_commit,
+            )
+        finally:
+            stream.close()
+    return upload_result
+
+
+def copy_file_between_agent_bridges(state, action):
+    with agent_lock:
+        source_bridge, destination_bridge, error_code = validate_agent_file_copy_execution(
+            state,
+            action,
+        )
+    if error_code:
+        raise SFTPTransferError(error_code, 'The approved file copy is no longer authorized.')
+
+    conflict_mode = action['conflict_mode']
+    source_file = dict(action['source_file'])
+    last_progress_emit = {
+        'bytes': 0,
+        'at': time.monotonic(),
+    }
+
+    def ensure_copy_still_authorized(transferred, expected_size, *, report_progress=False):
+        emit_progress = False
+        with agent_lock:
+            _source, _destination, progress_error = validate_agent_file_copy_execution(
+                state,
+                action,
+            )
+            if not progress_error and report_progress:
+                action['bytes_copied'] = transferred
+                action['total_bytes'] = expected_size
+                action['progress_updated_at'] = time.time()
+                now = time.monotonic()
+                emit_progress = (
+                    transferred >= expected_size
+                    or transferred - last_progress_emit['bytes'] >= AGENT_FILE_COPY_PROGRESS_EMIT_BYTES
+                    or now - last_progress_emit['at'] >= AGENT_FILE_COPY_PROGRESS_EMIT_SECONDS
+                )
+                if emit_progress:
+                    last_progress_emit['bytes'] = transferred
+                    last_progress_emit['at'] = now
+                    action['action_revision'] = action.get('action_revision', 0) + 1
+                    emit_agent_action_result(state.sid, action, AGENT_STATUS_RUNNING)
+        if progress_error:
+            raise SFTPTransferError(
+                progress_error,
+                'The approved file copy authorization changed during transfer.',
+            )
+
+    def begin_copy_commit(_transferred, _expected_size):
+        with agent_lock:
+            _source, _destination, commit_error = validate_agent_file_copy_execution(
+                state,
+                action,
+            )
+            if commit_error:
+                raise SFTPTransferError(
+                    commit_error,
+                    'The approved file copy authorization changed before commit.',
+                )
+            if action.get('status') != AGENT_STATUS_RUNNING:
+                raise SFTPTransferError(
+                    AGENT_ERROR_ACTION_NOT_WRITABLE,
+                    'The approved file copy is no longer running.',
+                )
+            if not transition_agent_file_copy_action(
+                state,
+                action,
+                AGENT_FILE_COPY_EVENT_BEGIN_COMMIT,
+            ):
+                raise SFTPTransferError(
+                    action.get('error_code') or AGENT_ERROR_ACTION_NOT_WRITABLE,
+                    'The approved file copy could not enter the commit barrier.',
+                )
+            emit_agent_action_result(state.sid, action, AGENT_STATUS_COMMITTING)
+
+    upload_result = copy_file_between_bridges(
+        source_bridge,
+        destination_bridge,
+        source_file,
+        action['destination_upload'],
+        before_read_callback=lambda transferred, expected: ensure_copy_still_authorized(
+            transferred,
+            expected,
+        ),
+        progress_callback=lambda transferred, expected: ensure_copy_still_authorized(
+            transferred,
+            expected,
+            report_progress=True,
+        ),
+        pre_commit_callback=begin_copy_commit,
+    )
+    return {
+        'source_terminal_id': state.terminal_id,
+        'destination_terminal_id': action['destination_terminal_id'],
+        'source_path': source_file['path'],
+        'destination_path': upload_result['destination_path'],
+        'bytes_copied': upload_result['bytes_written'],
+        'conflict_mode': conflict_mode,
+        'source_preserved': True,
+    }
+
+
+def fail_agent_file_copy_action(session_token, terminal_id, sid, action_id, action,
+                                error_code, *, unexpected=False):
+    with agent_lock:
+        current_state = get_agent_state(session_token, terminal_id, sid)
+        stored_action = current_state.pending_actions.get(action_id) if current_state else None
+        current_action = stored_action or action
+        audit_state = current_state if stored_action is not None else None
+        if current_action.get('status') == AGENT_STATUS_COMMITTING:
+            event = (
+                AGENT_FILE_COPY_EVENT_PUBLISH_UNKNOWN
+                if unexpected or error_code == AGENT_ERROR_FILE_COPY_PUBLISH_OUTCOME_UNKNOWN
+                else AGENT_FILE_COPY_EVENT_PUBLISH_FAILED
+            )
+        else:
+            event = AGENT_FILE_COPY_EVENT_EXECUTION_FAILED
+        transition_agent_file_copy_action(
+            audit_state,
+            current_action,
+            event,
+            error_code=error_code,
+        )
+        return current_action.get('error_code') or error_code
+
+
+def execute_agent_file_copy(session_token, terminal_id, sid, action_id):
+    with agent_lock:
+        state = get_agent_state(session_token, terminal_id, sid)
+        action = state.pending_actions.get(action_id) if state else None
+        if not state or not action:
+            return False, {'error_code': AGENT_ERROR_ACTION_NOT_FOUND}
+        _source, _destination, error_code = validate_agent_file_copy_execution(state, action)
+        if error_code:
+            transition_agent_file_copy_action(
+                state,
+                action,
+                AGENT_FILE_COPY_EVENT_EXECUTION_FAILED,
+                error_code=error_code,
+            )
+            return False, {'error_code': action.get('error_code') or error_code}
+        if not transition_agent_file_copy_action(
+            state,
+            action,
+            AGENT_FILE_COPY_EVENT_START,
+        ):
+            return False, {
+                'error_code': action.get('error_code') or AGENT_ERROR_ACTION_NOT_WRITABLE,
+            }
+        emit_agent_action_result(sid, action, AGENT_STATUS_RUNNING)
+    try:
+        result = copy_file_between_agent_bridges(state, action)
+    except (SFTPTransferError, LocalFileTransferError) as exc:
+        failure_code = fail_agent_file_copy_action(
+            session_token,
+            terminal_id,
+            sid,
+            action_id,
+            action,
+            exc.error_code,
+        )
+        return False, {'error_code': failure_code}
+    except Exception:
+        failure_code = fail_agent_file_copy_action(
+            session_token,
+            terminal_id,
+            sid,
+            action_id,
+            action,
+            'file_copy_failed',
+            unexpected=True,
+        )
+        return False, {'error_code': failure_code}
+
+    with agent_lock:
+        current_state = get_agent_state(session_token, terminal_id, sid)
+        stored_action = current_state.pending_actions.get(action_id) if current_state else None
+        current_action = stored_action or action
+        audit_state = current_state if stored_action is not None else None
+        if not transition_agent_file_copy_action(
+            audit_state,
+            current_action,
+            AGENT_FILE_COPY_EVENT_PUBLISH_CONFIRMED,
+            result=result,
+        ):
+            return False, {
+                'error_code': current_action.get('error_code') or AGENT_ERROR_ACTION_NOT_WRITABLE,
+            }
+    return True, result
+
+
+def execute_agent_file_copy_in_background(session_token, terminal_id, sid, action_id, action):
+    try:
+        try:
+            ok, result = execute_agent_file_copy(
+                session_token,
+                terminal_id,
+                sid,
+                action_id,
+            )
+        except Exception:
+            failure_code = fail_agent_file_copy_action(
+                session_token,
+                terminal_id,
+                sid,
+                action_id,
+                action,
+                'file_copy_failed',
+                unexpected=True,
+            )
+            ok, result = False, {'error_code': failure_code}
+        status = AGENT_STATUS_COMPLETED if ok else AGENT_STATUS_FAILED
+        emit_agent_action_result(sid, action, status, error_code=result.get('error_code'))
+        with agent_lock:
+            state = get_agent_state(session_token, terminal_id, sid)
+            if state:
+                emit_agent_state(sid, state)
+    finally:
+        agent_file_copy_worker_slots.release()
+
+
 def emit_external_agent_send_action_request(sid, action):
     socketio.emit(AGENT_EVENT_ACTION_REQUEST, public_agent_action(action), room=sid)
 
@@ -7746,11 +8824,47 @@ def revoke_external_agent_record(token):
 
 
 def record_external_agent_revoked(state, record):
+    cancelled = []
+    with agent_lock:
+        for candidate_state in agent_states.values():
+            if (
+                candidate_state.session_token != record.get('session_token')
+                or candidate_state.sid != record.get('sid')
+            ):
+                continue
+            for action in candidate_state.pending_actions.values():
+                if record.get('external_agent_id') not in {
+                    action.get('external_agent_id'),
+                    action.get('destination_external_agent_id'),
+                }:
+                    continue
+                if action.get('action_type') == AGENT_ACTION_FILE_COPY:
+                    if not transition_agent_file_copy_action(
+                        candidate_state,
+                        action,
+                        AGENT_FILE_COPY_EVENT_CANCEL,
+                        error_code=AGENT_ERROR_EXTERNAL_AGENT_REVOKED,
+                    ):
+                        continue
+                elif action.get('status') in AGENT_STATUS_OPEN:
+                    action['status'] = AGENT_STATUS_FAILED
+                    action['error_code'] = AGENT_ERROR_EXTERNAL_AGENT_REVOKED
+                    record_agent_audit(
+                        candidate_state,
+                        action,
+                        AGENT_STATUS_FAILED,
+                        error_code=AGENT_ERROR_EXTERNAL_AGENT_REVOKED,
+                    )
+                else:
+                    continue
+                cancelled.append((candidate_state.sid, dict(action)))
     record_agent_audit_event(
         state,
         AGENT_AUDIT_EXTERNAL_AGENT_REVOKED,
         external_agent_id=record.get('external_agent_id'),
     )
+    for sid, action in cancelled:
+        emit_agent_action_failure(sid, action, AGENT_ERROR_EXTERNAL_AGENT_REVOKED)
     emit_external_agent_token_state(record, token_status='revoked')
 
 
@@ -7880,6 +8994,7 @@ external_agent_read_command_router = ExternalAgentReadCommandRouter(
 
 EXTERNAL_AGENT_AUTHENTICATED_COMMAND_HANDLERS = {
     'state': external_agent_basic_command_handlers.process_state_command,
+    'action-status': process_external_agent_action_status_command,
     'sequence': process_external_agent_sequence_command,
     'screen': external_agent_read_command_router.process_read_command,
     'render': external_agent_read_command_router.process_read_command,
@@ -7887,6 +9002,7 @@ EXTERNAL_AGENT_AUTHENTICATED_COMMAND_HANDLERS = {
     'wait': external_agent_read_command_router.process_read_command,
     'send': process_external_agent_send_command,
     'send-wait': process_external_agent_send_command,
+    'file-copy': process_external_agent_file_copy_command,
 }
 
 
@@ -8003,27 +9119,110 @@ def on_agent_action_approve(data):
             emit_agent_state(request.sid, state)
             return
         if action.get('status') != AGENT_STATUS_PENDING_APPROVAL:
-            emit_agent_action_failure(request.sid, action, AGENT_ERROR_ACTION_NOT_PENDING)
+            emit_agent_action_result(
+                request.sid,
+                action,
+                action.get('status') or AGENT_STATUS_FAILED,
+            )
             emit_agent_state(request.sid, state)
             return
         if action.get('control_epoch') != state.control_epoch:
             emit_agent_action_failure(request.sid, action, AGENT_ERROR_STALE_ACTION)
             emit_agent_state(request.sid, state)
             return
-        action['status'] = AGENT_STATUS_APPROVED
+        action_type = action.get('action_type')
+        if action_type == AGENT_ACTION_FILE_COPY:
+            if not transition_agent_file_copy_action(
+                state,
+                action,
+                AGENT_FILE_COPY_EVENT_BROWSER_APPROVE,
+                record_status_audit=False,
+            ):
+                emit_agent_action_failure(request.sid, action, AGENT_ERROR_ACTION_NOT_PENDING)
+                emit_agent_state(request.sid, state)
+                return
+        else:
+            action['status'] = AGENT_STATUS_APPROVED
         record_agent_audit_event(state, AGENT_AUDIT_ACTION_APPROVE, action=action)
         record_agent_audit(state, action, AGENT_STATUS_APPROVED)
         control_epoch = state.control_epoch
+        if action_type == AGENT_ACTION_FILE_COPY:
+            emit_agent_action_result(request.sid, action, AGENT_STATUS_APPROVED)
+            emit_agent_state(request.sid, state)
 
-    ok, result = write_agent_terminal_input(
-        session_token,
-        terminal_id,
-        request.sid,
-        action_id,
-        control_epoch,
-        mode_version=action['mode_version'],
-        proposal_id=action['proposal_id'],
-    )
+    if action_type == AGENT_ACTION_TERMINAL_INPUT:
+        ok, result = write_agent_terminal_input(
+            session_token,
+            terminal_id,
+            request.sid,
+            action_id,
+            control_epoch,
+            mode_version=action['mode_version'],
+            proposal_id=action['proposal_id'],
+        )
+    elif action_type == AGENT_ACTION_FILE_COPY:
+        if not agent_file_copy_worker_slots.acquire(blocking=False):
+            failure_code = fail_agent_file_copy_action(
+                session_token,
+                terminal_id,
+                request.sid,
+                action_id,
+                action,
+                AGENT_ERROR_FILE_COPY_BUSY,
+            )
+            emit_agent_action_result(
+                request.sid,
+                action,
+                AGENT_STATUS_FAILED,
+                error_code=failure_code,
+            )
+            with agent_lock:
+                current_state = get_agent_state(session_token, terminal_id, request.sid)
+                if current_state:
+                    emit_agent_state(request.sid, current_state)
+            return
+        try:
+            socketio.start_background_task(
+                execute_agent_file_copy_in_background,
+                session_token,
+                terminal_id,
+                request.sid,
+                action_id,
+                action,
+            )
+        except Exception:
+            agent_file_copy_worker_slots.release()
+            failure_code = fail_agent_file_copy_action(
+                session_token,
+                terminal_id,
+                request.sid,
+                action_id,
+                action,
+                AGENT_ERROR_FILE_COPY_BUSY,
+                unexpected=True,
+            )
+            emit_agent_action_result(
+                request.sid,
+                action,
+                AGENT_STATUS_FAILED,
+                error_code=failure_code,
+            )
+            with agent_lock:
+                current_state = get_agent_state(session_token, terminal_id, request.sid)
+                if current_state:
+                    emit_agent_state(request.sid, current_state)
+        return
+    else:
+        ok, result = False, {'error_code': AGENT_ERROR_ACTION_NOT_ALLOWED}
+        with agent_lock:
+            action['status'] = AGENT_STATUS_FAILED
+            action['error_code'] = AGENT_ERROR_ACTION_NOT_ALLOWED
+            record_agent_audit(
+                state,
+                action,
+                AGENT_STATUS_FAILED,
+                error_code=AGENT_ERROR_ACTION_NOT_ALLOWED,
+            )
     status = AGENT_STATUS_COMPLETED if ok else AGENT_STATUS_FAILED
     emit_agent_action_result(request.sid, action, status, error_code=result.get('error_code'))
     with agent_lock:
@@ -8052,10 +9251,25 @@ def on_agent_action_reject(data):
             emit_agent_decision_error(request.sid, terminal_id, state, action, error_code)
             return
         if action.get('status') != AGENT_STATUS_PENDING_APPROVAL:
-            emit_agent_action_failure(request.sid, action, AGENT_ERROR_ACTION_NOT_PENDING)
+            emit_agent_action_result(
+                request.sid,
+                action,
+                action.get('status') or AGENT_STATUS_FAILED,
+            )
             emit_agent_state(request.sid, state)
             return
-        action['status'] = AGENT_STATUS_REJECTED
+        if action.get('action_type') == AGENT_ACTION_FILE_COPY:
+            if not transition_agent_file_copy_action(
+                state,
+                action,
+                AGENT_FILE_COPY_EVENT_BROWSER_REJECT,
+                record_status_audit=False,
+            ):
+                emit_agent_action_failure(request.sid, action, AGENT_ERROR_ACTION_NOT_PENDING)
+                emit_agent_state(request.sid, state)
+                return
+        else:
+            action['status'] = AGENT_STATUS_REJECTED
         record_agent_audit_event(state, AGENT_AUDIT_ACTION_REJECT, action=action)
         record_agent_audit(state, action, AGENT_STATUS_REJECTED)
         emit_agent_action_result(request.sid, action, AGENT_STATUS_REJECTED)
@@ -8278,6 +9492,461 @@ def on_ssh_browser_sign_response(data):
         )
 
 
+def public_files_copy_job(job):
+    payload = {
+        'request_id': job['request_id'],
+        'copy_id': job['copy_id'],
+        'status': job['status'],
+        'revision': job.get('revision', 0),
+        'source_terminal_id': job['source_terminal_id'],
+        'destination_terminal_id': job['destination_terminal_id'],
+        'source_endpoint': job['source_file'].get('endpoint'),
+        'destination_endpoint': job['destination_upload'].get('endpoint'),
+        'source_path': job['source_file']['path'],
+        'destination_path': job['destination_upload']['destination_path'],
+        'source_size': job['source_file']['size'],
+        'bytes_copied': job.get('bytes_copied', 0),
+        'total_bytes': job['source_file']['size'],
+        'conflict_mode': job['conflict_mode'],
+        'source_preserved': True,
+    }
+    if job.get('error_code'):
+        payload['error_code'] = job['error_code']
+    if job.get('message'):
+        payload['message'] = job['message']
+    if isinstance(job.get('result'), dict):
+        payload['result'] = dict(job['result'])
+    return payload
+
+
+def emit_files_copy_job(job):
+    socketio.emit(FILES_COPY_RESULT_EVENT, public_files_copy_job(job), room=job['sid'])
+
+
+def transition_files_copy_job(job, event, *, error_code=None, message=None, result=None):
+    target_status = FILES_COPY_TRANSITIONS.get(job.get('status'), {}).get(event)
+    if not target_status:
+        return False
+    job['status'] = target_status
+    job['revision'] = job.get('revision', 0) + 1
+    if target_status == 'failed':
+        job['error_code'] = error_code or 'files_copy_failed'
+        job['message'] = message or 'The Files copy failed.'
+    elif target_status == 'cancelled':
+        job['message'] = message or 'File copy cancelled before publishing.'
+        job.pop('error_code', None)
+        job.pop('result', None)
+    elif target_status == 'completed':
+        job['result'] = dict(result or {})
+        job.pop('error_code', None)
+        job.pop('message', None)
+    return True
+
+
+def trim_files_copy_jobs_locked(now=None):
+    now = time.monotonic() if now is None else now
+    for copy_id, job in list(files_copy_jobs.items()):
+        if job.get('status') in {'cancelled', 'completed', 'failed'} and job.get('expires_at', 0) <= now:
+            files_copy_jobs.pop(copy_id, None)
+    completed = [
+        (copy_id, job)
+        for copy_id, job in files_copy_jobs.items()
+        if job.get('status') in {'cancelled', 'completed', 'failed'}
+    ]
+    while len(files_copy_jobs) >= FILES_COPY_JOB_MAX_RECORDS and completed:
+        copy_id, _job = min(completed, key=lambda item: item[1].get('completed_at', 0))
+        files_copy_jobs.pop(copy_id, None)
+        completed = [item for item in completed if item[0] != copy_id]
+    for request_key, record in list(files_copy_requests.items()):
+        copy_id = record.get('copy_id')
+        if copy_id and copy_id not in files_copy_jobs:
+            files_copy_requests.pop(request_key, None)
+        elif not copy_id and record.get('created_at', 0) + FILES_COPY_JOB_TTL_SECONDS <= now:
+            files_copy_requests.pop(request_key, None)
+
+
+def validate_files_copy_job(job, *, require_running=True):
+    if not isinstance(job, dict):
+        return None, None, 'files_copy_not_found'
+    if require_running and job.get('status') != 'running':
+        return None, None, job.get('error_code') or 'files_copy_not_running'
+    session_token = job.get('session_token')
+    sid = job.get('sid')
+    if socket_session_tokens.get(sid) != session_token:
+        return None, None, 'files_copy_browser_disconnected'
+    source_bridge = get_bridge(session_token, job.get('source_terminal_id'))
+    destination_bridge = get_bridge(session_token, job.get('destination_terminal_id'))
+    if (
+        source_bridge is not job.get('source_bridge')
+        or destination_bridge is not job.get('destination_bridge')
+    ):
+        return None, None, 'files_copy_terminal_changed'
+    if source_bridge is destination_bridge:
+        return None, None, 'files_copy_same_terminal'
+    if not is_files_bridge(source_bridge) or not is_files_bridge(destination_bridge):
+        return None, None, 'files_unavailable'
+    if (
+        not is_terminal_bridge_allowed_for_sid(source_bridge, sid)
+        or not is_terminal_bridge_allowed_for_sid(destination_bridge, sid)
+    ):
+        return None, None, 'files_copy_not_authorized'
+    return source_bridge, destination_bridge, None
+
+
+def execute_files_copy_job(job):
+    last_progress_emit = {'bytes': 0, 'at': time.monotonic()}
+
+    def ensure_copy_available(_transferred, _expected_size):
+        with files_copy_jobs_lock:
+            _source, _destination, error_code = validate_files_copy_job(job)
+        if error_code:
+            raise SFTPTransferError(error_code, 'The Files copy is no longer authorized.')
+
+    def report_copy_progress(transferred, expected_size):
+        now = time.monotonic()
+        with files_copy_jobs_lock:
+            _source, _destination, error_code = validate_files_copy_job(job)
+            if error_code:
+                raise SFTPTransferError(error_code, 'The Files copy is no longer authorized.')
+            job['bytes_copied'] = transferred
+            should_emit = (
+                transferred >= expected_size
+                or transferred - last_progress_emit['bytes'] >= AGENT_FILE_COPY_PROGRESS_EMIT_BYTES
+                or now - last_progress_emit['at'] >= AGENT_FILE_COPY_PROGRESS_EMIT_SECONDS
+            )
+            if should_emit:
+                last_progress_emit['bytes'] = transferred
+                last_progress_emit['at'] = now
+                job['revision'] += 1
+                emit_files_copy_job(job)
+
+    def begin_copy_commit(_transferred, _expected_size):
+        with files_copy_jobs_lock:
+            _source, _destination, error_code = validate_files_copy_job(job)
+            if error_code:
+                raise SFTPTransferError(error_code, 'The Files copy is no longer authorized.')
+            if not transition_files_copy_job(job, FILES_COPY_EVENT_BEGIN_COMMIT):
+                raise SFTPTransferError(
+                    'files_copy_invalid_transition',
+                    'The Files copy could not enter the commit barrier.',
+                )
+            emit_files_copy_job(job)
+
+    try:
+        upload_result = copy_file_between_bridges(
+            job['source_bridge'],
+            job['destination_bridge'],
+            job['source_file'],
+            job['destination_upload'],
+            before_read_callback=ensure_copy_available,
+            progress_callback=report_copy_progress,
+            pre_commit_callback=begin_copy_commit,
+        )
+    except (SFTPTransferError, LocalFileTransferError) as exc:
+        with files_copy_jobs_lock:
+            transitioned = transition_files_copy_job(
+                job,
+                FILES_COPY_EVENT_FAIL,
+                error_code=exc.error_code,
+                message=str(exc),
+            )
+            if transitioned:
+                job['completed_at'] = time.monotonic()
+                job['expires_at'] = job['completed_at'] + FILES_COPY_JOB_TTL_SECONDS
+                emit_files_copy_job(job)
+    except Exception as exc:
+        log_message(f'[files] Copy failed unexpectedly: {type(exc).__name__}')
+        with files_copy_jobs_lock:
+            transitioned = transition_files_copy_job(
+                job,
+                FILES_COPY_EVENT_FAIL,
+                error_code='files_copy_failed',
+                message='The Files copy failed unexpectedly.',
+            )
+            if transitioned:
+                job['completed_at'] = time.monotonic()
+                job['expires_at'] = job['completed_at'] + FILES_COPY_JOB_TTL_SECONDS
+                emit_files_copy_job(job)
+    else:
+        with files_copy_jobs_lock:
+            job['bytes_copied'] = upload_result['bytes_written']
+            if not transition_files_copy_job(
+                job,
+                FILES_COPY_EVENT_COMPLETE,
+                result={
+                    'destination_path': upload_result['destination_path'],
+                    'bytes_copied': upload_result['bytes_written'],
+                    'source_preserved': True,
+                },
+            ):
+                transitioned = transition_files_copy_job(
+                    job,
+                    FILES_COPY_EVENT_FAIL,
+                    error_code='files_copy_invalid_transition',
+                    message='The Files copy reached an invalid completion state.',
+                )
+                log_message('[files] Copy could not enter the completed state.')
+            else:
+                transitioned = True
+            if transitioned:
+                job['completed_at'] = time.monotonic()
+                job['expires_at'] = job['completed_at'] + FILES_COPY_JOB_TTL_SECONDS
+                emit_files_copy_job(job)
+    finally:
+        agent_file_copy_worker_slots.release()
+
+
+@socketio.on(FILES_COPY_REQUEST_EVENT)
+def on_files_copy_request(data):
+    session_token = socket_session_tokens.get(request.sid)
+    request_id = data.get('request_id') if isinstance(data, dict) else None
+    source_terminal_id = validate_terminal_id_payload({
+        'terminal_id': data.get('source_terminal_id') if isinstance(data, dict) else None,
+    })
+    destination_terminal_id = validate_terminal_id_payload({
+        'terminal_id': data.get('destination_terminal_id') if isinstance(data, dict) else None,
+    })
+    if (
+        not session_token
+        or not isinstance(request_id, str)
+        or not request_id
+        or len(request_id) > 128
+        or not source_terminal_id
+        or not destination_terminal_id
+    ):
+        return
+
+    def emit_request_result(payload):
+        socketio.emit(
+            FILES_COPY_RESULT_EVENT,
+            {'request_id': request_id, **payload},
+            room=request.sid,
+        )
+
+    source_bridge = get_allowed_bridge(session_token, source_terminal_id, request.sid, emit_error=True)
+    destination_bridge = get_allowed_bridge(
+        session_token,
+        destination_terminal_id,
+        request.sid,
+        emit_error=True,
+    )
+    if source_bridge is destination_bridge:
+        emit_request_result({
+            'status': 'failed',
+            'error_code': 'files_copy_same_terminal',
+            'message': 'Choose a different destination terminal.',
+        })
+        return
+    if not is_files_bridge(source_bridge) or not is_files_bridge(destination_bridge):
+        emit_request_result({
+            'status': 'failed',
+            'error_code': 'files_unavailable',
+            'message': 'Files is unavailable for the selected terminal.',
+        })
+        return
+    conflict_mode = data.get('conflict_mode', 'ask')
+    if conflict_mode not in {'ask', 'keep_both', 'replace'}:
+        emit_request_result({
+            'status': 'failed',
+            'error_code': 'files_copy_invalid_conflict_mode',
+            'message': 'Copy conflict mode is invalid.',
+        })
+        return
+    destination_directory = data.get('destination_directory')
+    destination_filename = data.get('destination_filename')
+    if not isinstance(destination_directory, str) or not isinstance(destination_filename, str):
+        emit_request_result({
+            'status': 'failed',
+            'error_code': 'files_copy_invalid_destination',
+            'message': 'Copy destination is invalid.',
+        })
+        return
+    try:
+        source_file_id = parse_sftp_file_reference_id({'file_id': data.get('source_file_id')})
+    except SFTPTransferError as exc:
+        emit_request_result({
+            'status': 'failed',
+            'error_code': exc.error_code,
+            'message': str(exc),
+        })
+        return
+    request_key = (request.sid, request_id)
+    request_fingerprint = (
+        source_terminal_id,
+        source_file_id,
+        destination_terminal_id,
+        destination_directory,
+        destination_filename,
+        conflict_mode,
+    )
+    with files_copy_jobs_lock:
+        trim_files_copy_jobs_locked()
+        existing_request = files_copy_requests.get(request_key)
+        if existing_request:
+            existing_copy_id = existing_request.get('copy_id')
+            existing_job = files_copy_jobs.get(existing_copy_id) if existing_copy_id else None
+            duplicate_payload = (
+                public_files_copy_job(existing_job)
+                if existing_job and existing_request.get('fingerprint') == request_fingerprint
+                else None
+            )
+            duplicate_mismatch = existing_request.get('fingerprint') != request_fingerprint
+        else:
+            files_copy_requests[request_key] = {
+                'fingerprint': request_fingerprint,
+                'copy_id': None,
+                'created_at': time.monotonic(),
+            }
+            duplicate_payload = None
+            duplicate_mismatch = False
+    if existing_request:
+        if duplicate_mismatch:
+            emit_request_result({
+                'status': 'failed',
+                'error_code': 'files_copy_request_reused',
+                'message': 'This Files copy request id was already used for another operation.',
+            })
+        elif duplicate_payload:
+            socketio.emit(FILES_COPY_RESULT_EVENT, duplicate_payload, room=request.sid)
+        else:
+            emit_request_result({'status': 'preparing'})
+        return
+
+    def discard_request_reservation():
+        with files_copy_jobs_lock:
+            current = files_copy_requests.get(request_key)
+            if current and current.get('fingerprint') == request_fingerprint:
+                files_copy_requests.pop(request_key, None)
+
+    try:
+        source_file = resolve_bridge_file_reference(
+            source_bridge,
+            source_file_id,
+        )
+        source_file = prepare_current_bridge_file(source_bridge, source_file)
+        upload = prepare_bridge_upload(
+            destination_bridge,
+            destination_directory,
+            destination_filename,
+            conflict_mode,
+        )
+        validate_distinct_file_copy_target(
+            source_bridge,
+            destination_bridge,
+            source_file,
+            upload,
+        )
+    except (SFTPTransferError, LocalFileTransferError) as exc:
+        discard_request_reservation()
+        emit_request_result({
+            'status': 'failed',
+            'error_code': exc.error_code,
+            'message': str(exc),
+        })
+        return
+    if upload.get('status') == 'conflict':
+        discard_request_reservation()
+        emit_request_result({
+            'status': 'conflict',
+            'source_terminal_id': source_terminal_id,
+            'destination_terminal_id': destination_terminal_id,
+            'source_path': source_file['path'],
+            'destination_path': upload['destination_path'],
+            'source_size': source_file['size'],
+            'existing_size': upload.get('existing_size'),
+        })
+        return
+    if not agent_file_copy_worker_slots.acquire(blocking=False):
+        discard_request_reservation()
+        emit_request_result({
+            'status': 'failed',
+            'error_code': AGENT_ERROR_FILE_COPY_BUSY,
+            'message': 'No Files copy worker is currently available.',
+        })
+        return
+    copy_id = 'filesc_' + secrets.token_urlsafe(12)
+    job = {
+        'request_id': request_id,
+        'copy_id': copy_id,
+        'session_token': session_token,
+        'sid': request.sid,
+        'source_terminal_id': source_terminal_id,
+        'destination_terminal_id': destination_terminal_id,
+        'source_bridge': source_bridge,
+        'destination_bridge': destination_bridge,
+        'source_file': source_file,
+        'destination_upload': upload,
+        'conflict_mode': 'fail' if conflict_mode == 'ask' else conflict_mode,
+        'status': 'running',
+        'bytes_copied': 0,
+        'revision': 0,
+        'created_at': time.monotonic(),
+    }
+    try:
+        with files_copy_jobs_lock:
+            trim_files_copy_jobs_locked()
+            if len(files_copy_jobs) >= FILES_COPY_JOB_MAX_RECORDS:
+                raise RuntimeError('files_copy_job_store_full')
+            files_copy_jobs[copy_id] = job
+            files_copy_requests[request_key]['copy_id'] = copy_id
+            emit_files_copy_job(job)
+        socketio.start_background_task(execute_files_copy_job, job)
+    except Exception:
+        with files_copy_jobs_lock:
+            stored_job = files_copy_jobs.get(copy_id)
+            if stored_job is job and transition_files_copy_job(
+                job,
+                FILES_COPY_EVENT_FAIL,
+                error_code='files_copy_start_failed',
+                message='The Files copy could not be started.',
+            ):
+                job['completed_at'] = time.monotonic()
+                job['expires_at'] = job['completed_at'] + FILES_COPY_JOB_TTL_SECONDS
+                stored_failure = True
+            else:
+                files_copy_jobs.pop(copy_id, None)
+                files_copy_requests.pop(request_key, None)
+                stored_failure = False
+        agent_file_copy_worker_slots.release()
+        if stored_failure:
+            emit_files_copy_job(job)
+        else:
+            emit_request_result({
+                'status': 'failed',
+                'error_code': 'files_copy_start_failed',
+                'message': 'The Files copy could not be started.',
+            })
+
+
+@socketio.on(FILES_COPY_CANCEL_REQUEST_EVENT)
+def on_files_copy_cancel_request(data):
+    session_token = socket_session_tokens.get(request.sid)
+    copy_id = data.get('copy_id') if isinstance(data, dict) else None
+    if (
+        not session_token
+        or not isinstance(copy_id, str)
+        or not copy_id
+        or len(copy_id) > 128
+    ):
+        return
+    with files_copy_jobs_lock:
+        trim_files_copy_jobs_locked()
+        job = files_copy_jobs.get(copy_id)
+        if (
+            not job
+            or job.get('session_token') != session_token
+            or job.get('sid') != request.sid
+        ):
+            return
+        if transition_files_copy_job(job, FILES_COPY_EVENT_CANCEL):
+            job['completed_at'] = time.monotonic()
+            job['expires_at'] = job['completed_at'] + FILES_COPY_JOB_TTL_SECONDS
+        payload = public_files_copy_job(job)
+        if job.get('status') == 'committing':
+            payload['message'] = 'Publishing has started and can no longer be cancelled.'
+        socketio.emit(FILES_COPY_RESULT_EVENT, payload, room=request.sid)
+
+
 def emit_sftp_result(event_name, sid, request_id, terminal_id, *, result=None, error=None):
     payload = {
         'request_id': request_id,
@@ -8286,7 +9955,7 @@ def emit_sftp_result(event_name, sid, request_id, terminal_id, *, result=None, e
     if error:
         payload.update({
             'status': 'failed',
-            'error_code': error.error_code if isinstance(error, SFTPTransferError) else 'sftp_failed',
+            'error_code': getattr(error, 'error_code', 'files_failed'),
             'message': str(error),
         })
     elif result:
@@ -8302,13 +9971,13 @@ def on_sftp_browse_request(data):
     if not session_token or not terminal_id or not isinstance(request_id, str) or len(request_id) > 128:
         return
     bridge = get_allowed_bridge(session_token, terminal_id, request.sid, emit_error=True)
-    if not isinstance(bridge, SSHBridge):
+    if not is_files_bridge(bridge):
         emit_sftp_result(
             SFTP_BROWSE_RESULT_EVENT,
             request.sid,
             request_id,
             terminal_id,
-            error=SFTPTransferError('sftp_not_ssh', 'SFTP is only available for a connected SSH terminal.'),
+            error=SFTPTransferError('files_unavailable', 'Files is unavailable for this terminal.'),
         )
         return
     path = data.get('path')
@@ -8319,7 +9988,7 @@ def on_sftp_browse_request(data):
     if child is not None and not isinstance(child, str):
         return
     try:
-        result = bridge.browse_sftp(path, child=child, parent=parent)
+        result = browse_bridge_files(bridge, path, child=child, parent=parent)
         result.update({
             'status': 'ready',
             'max_upload_bytes': SFTP_MAX_UPLOAD_BYTES,
@@ -8331,7 +10000,7 @@ def on_sftp_browse_request(data):
             terminal_id,
             result=result,
         )
-    except SFTPTransferError as exc:
+    except (SFTPTransferError, LocalFileTransferError) as exc:
         emit_sftp_result(
             SFTP_BROWSE_RESULT_EVENT,
             request.sid,
@@ -8349,13 +10018,13 @@ def on_sftp_upload_ticket_request(data):
     if not session_token or not terminal_id or not isinstance(request_id, str) or len(request_id) > 128:
         return
     bridge = get_allowed_bridge(session_token, terminal_id, request.sid, emit_error=True)
-    if not isinstance(bridge, SSHBridge):
+    if not is_files_bridge(bridge):
         emit_sftp_result(
             SFTP_UPLOAD_TICKET_RESULT_EVENT,
             request.sid,
             request_id,
             terminal_id,
-            error=SFTPTransferError('sftp_not_ssh', 'SFTP is only available for a connected SSH terminal.'),
+            error=SFTPTransferError('files_unavailable', 'Files is unavailable for this terminal.'),
         )
         return
     directory = data.get('directory')
@@ -8378,7 +10047,7 @@ def on_sftp_upload_ticket_request(data):
         )
         return
     try:
-        upload = bridge.prepare_sftp_upload(directory, filename, conflict_mode)
+        upload = prepare_bridge_upload(bridge, directory, filename, conflict_mode)
         if upload['status'] == 'conflict':
             emit_sftp_result(
                 SFTP_UPLOAD_TICKET_RESULT_EVENT,
@@ -8411,7 +10080,7 @@ def on_sftp_upload_ticket_request(data):
                 'expires_in_seconds': SFTP_UPLOAD_TICKET_TTL_SECONDS,
             },
         )
-    except SFTPTransferError as exc:
+    except (SFTPTransferError, LocalFileTransferError) as exc:
         emit_sftp_result(
             SFTP_UPLOAD_TICKET_RESULT_EVENT,
             request.sid,
@@ -8435,20 +10104,18 @@ def on_sftp_download_ticket_request(data):
     if not session_token or not terminal_id or not isinstance(request_id, str) or len(request_id) > 128:
         return
     bridge = get_allowed_bridge(session_token, terminal_id, request.sid, emit_error=True)
-    if not isinstance(bridge, SSHBridge):
+    if not is_files_bridge(bridge):
         emit_sftp_result(
             SFTP_DOWNLOAD_TICKET_RESULT_EVENT,
             request.sid,
             request_id,
             terminal_id,
-            error=SFTPTransferError('sftp_not_ssh', 'SFTP is only available for a connected SSH terminal.'),
+            error=SFTPTransferError('files_unavailable', 'Files is unavailable for this terminal.'),
         )
         return
     try:
-        file_snapshot = bridge.resolve_sftp_file_reference(parse_sftp_file_reference_id(data))
-        current_file = bridge.prepare_sftp_file(file_snapshot['directory'], file_snapshot['filename'])
-        if current_file['size'] != file_snapshot['size'] or current_file['mtime'] != file_snapshot['mtime']:
-            raise SFTPTransferError('sftp_file_changed', 'The remote file changed after the directory was listed.')
+        file_snapshot = resolve_bridge_file_reference(bridge, parse_sftp_file_reference_id(data))
+        file_snapshot = prepare_current_bridge_file(bridge, file_snapshot)
         ticket, record = sftp_download_ticket_store.create(
             session_token,
             terminal_id,
@@ -8476,7 +10143,7 @@ def on_sftp_download_ticket_request(data):
                 'endpoint': record['file']['endpoint'],
             },
         )
-    except SFTPTransferError as exc:
+    except (SFTPTransferError, LocalFileTransferError) as exc:
         log_message(
             f'[sftp] Download ticket failed: terminal={terminal_id} '
             f'error_code={exc.error_code}'
@@ -8498,13 +10165,13 @@ def on_sftp_file_action_request(data):
     if not session_token or not terminal_id or not isinstance(request_id, str) or len(request_id) > 128:
         return
     bridge = get_allowed_bridge(session_token, terminal_id, request.sid, emit_error=True)
-    if not isinstance(bridge, SSHBridge):
+    if not is_files_bridge(bridge):
         emit_sftp_result(
             SFTP_FILE_ACTION_RESULT_EVENT,
             request.sid,
             request_id,
             terminal_id,
-            error=SFTPTransferError('sftp_not_ssh', 'SFTP is only available for a connected SSH terminal.'),
+            error=SFTPTransferError('files_unavailable', 'Files is unavailable for this terminal.'),
         )
         return
     action = data.get('action') if isinstance(data, dict) else None
@@ -8518,24 +10185,13 @@ def on_sftp_file_action_request(data):
         )
         return
     try:
-        file_snapshot = bridge.resolve_sftp_file_reference(parse_sftp_file_reference_id(data))
+        file_snapshot = resolve_bridge_file_reference(bridge, parse_sftp_file_reference_id(data))
         if action == 'rename':
-            result = bridge.rename_sftp_file(
-                file_snapshot['directory'],
-                file_snapshot['filename'],
-                data.get('new_filename'),
-                file_snapshot['size'],
-                file_snapshot['mtime'],
-            )
+            result = rename_bridge_file(bridge, file_snapshot, data.get('new_filename'))
         else:
             if data.get('delete_confirmation') != 'permanent_delete_confirmed':
                 raise SFTPTransferError('sftp_delete_confirmation_required', 'Permanent deletion was not confirmed.')
-            result = bridge.delete_sftp_file(
-                file_snapshot['directory'],
-                file_snapshot['filename'],
-                file_snapshot['size'],
-                file_snapshot['mtime'],
-            )
+            result = delete_bridge_file(bridge, file_snapshot)
         emit_sftp_result(
             SFTP_FILE_ACTION_RESULT_EVENT,
             request.sid,
@@ -8543,7 +10199,7 @@ def on_sftp_file_action_request(data):
             terminal_id,
             result=result,
         )
-    except SFTPTransferError as exc:
+    except (SFTPTransferError, LocalFileTransferError) as exc:
         emit_sftp_result(
             SFTP_FILE_ACTION_RESULT_EVENT,
             request.sid,
@@ -9516,6 +11172,6 @@ if __name__ == '__main__':
     try:
         socketio.run(app, **run_kwargs)
     finally:
-        cleanup_external_agent_handoff_artifacts()
+        cleanup_external_agent_runtime_artifacts()
         cleanup_access_window()
         cleanup_windows_proxy_bypass()

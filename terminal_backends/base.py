@@ -196,7 +196,7 @@ class TerminalBridge:
     def metadata(self, cols=None, rows=None):
         cols = self.cols if cols is None else cols
         rows = self.rows if rows is None else rows
-        return self.runtime.build_metadata(
+        metadata = self.runtime.build_metadata(
             self.connection_type,
             self.terminal_id,
             self.terminal_kind,
@@ -204,6 +204,11 @@ class TerminalBridge:
             cols,
             rows,
         )
+        metadata['files_available'] = bool(self.files_available())
+        return metadata
+
+    def files_available(self):
+        return False
 
     def session_metadata(self, now=None):
         now = time.time() if now is None else now

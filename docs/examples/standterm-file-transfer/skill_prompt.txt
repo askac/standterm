@@ -1,0 +1,1 @@
+Read `docs/examples/standterm-file-transfer/SKILL.md` and add the `standterm-file-transfer` local skill. It pairs with `standterm-external-agent`; preserve the distinction between preferred backend copy and explicitly authorized terminal-stream rescue.

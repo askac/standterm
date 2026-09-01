@@ -65,8 +65,9 @@ pulling large changes.
 
 - Runs SSH, Local Shell, and UART sessions inside browser terminal tabs.
 - Supports multiple persistent terminal tabs while the server process is alive.
-- Provides a lightweight SFTP File Manager for direct SSH sessions, including
-  upload, download, rename, and carefully confirmed permanent deletion.
+- Provides StandTerm Files for direct SSH and supported Local Shell sessions,
+  including upload, download, rename, carefully confirmed permanent deletion,
+  and explicit cross-tab file copies.
 - Opens URLs and image links in an in-page overlay, and can pop a terminal into
   system Picture-in-Picture when the browser supports it.
 - Provides Windows Terminal-inspired themes, IBM 5153 colors, 256-color, and
@@ -204,6 +205,12 @@ Local Shell is selected by default when the browser is allowed to access
 host-local resources, but no shell starts automatically. Use the UI's connect
 button for the selected backend.
 
+Local Shell processes keep the broadly compatible `TERM=xterm-256color` and
+also receive `COLORTERM=truecolor` plus `TERM_PROGRAM=StandTerm`. This advertises
+xterm.js 24-bit color support without requiring a less widely installed terminfo
+entry. SSH sessions continue to request the compatible `xterm-256color` PTY;
+remote environment-variable propagation remains controlled by the SSH server.
+
 Backend plugin policy, start form metadata, and runtime defaults are documented
 in `docs/backend_plugin_contract.md`.
 
@@ -256,30 +263,55 @@ challenge to StandTerm's browser-key adapter. StandTerm emits a structured
 request only to the browser connection that started that terminal. The browser
 validates the active connection and exact profile binding before signing, then
 returns a 64-byte Ed25519 signature. Python verifies that signature against the
-profile's public key before returning it to Paramiko. A browser disconnect,
-timeout, changed connection draft, or stale terminal start cancels the path
-without falling back to a password automatically.
+profile's public key before returning it to Paramiko. The browser uses a bounded
+relative signing window, while Python enforces the authoritative monotonic
+deadline, so Windows/WSL wall-clock skew cannot invalidate a fresh request. A
+browser disconnect, timeout, changed connection draft, or stale terminal start
+cancels the path without falling back to a password automatically.
+Browser-side rejection details are sanitized and length-limited before they are
+returned with the connection failure.
 
-### Lightweight SFTP File Manager
+### StandTerm Files
 
-For a connected SSH tab, use the folder button in the status bar, the terminal
-context menu, or the folder button in Terminal Picture-in-Picture. StandTerm
-opens a compact SFTP File Manager in Picture-in-Picture. When opened from a
-terminal PiP, the terminal first returns to its tab so the single Document PiP
-window can switch cleanly to the file manager.
+For a connected SSH or supported Local Shell tab, use the folder button in the
+status bar, the terminal context menu, or the folder button in Terminal
+Picture-in-Picture. StandTerm opens a compact Files window in
+Picture-in-Picture. When opened from a terminal PiP, the terminal first returns
+to its tab so the single Document PiP window can switch cleanly to Files.
 
-The file manager supports a flat directory listing with manual path navigation,
-drag-and-drop upload, download, rename, and permanent deletion. Upload conflicts
-offer **Keep Both** or atomic **Replace**. Delete uses two distinct confirmation
-steps with deliberately separated actions. It operates only on the direct SSH
-endpoint represented by the tab; it does not follow nested interactive SSH
-sessions, recursively browse directory trees, or act as a full SFTP client.
+Files browses one directory at a time and supports manual path navigation,
+drag-and-drop upload, explicit download, rename, and permanent deletion.
+Selecting a file only highlights it and prepares the available actions; it does
+not start a download. Upload conflicts offer **Keep Both** or atomic
+**Replace**. Delete uses two distinct confirmation steps with deliberately
+separated actions.
 
-Remote file actions use short-lived opaque references and transfer tickets bound
-to the browser session, socket, terminal, and live SSH bridge. Displayed paths
-and file names remain data rather than control authority. Downloads and file
-actions accept regular files only; symbolic links and other non-regular entries
-are rejected.
+Choose **Copy to…** on a selected file to slide out a destination browser. Pick
+another connected SSH or Files-capable Local Shell tab, browse to the target
+directory, choose the destination name, and press **Copy**. That final browser
+click is the human authorization for this copy. The backend streams the file
+between the two live endpoints with structured progress and an atomic publish;
+the source is preserved. While streaming, **Cancel copy** stops the transaction
+before the destination is published. Once the status changes to publishing, the
+atomic commit barrier has been crossed and cancellation is no longer possible.
+Keep Files open for the final result; closing the system PiP window does not
+cancel the backend transaction. Agent-initiated copies use the same bounded
+transfer core but still require their separate, fresh **Approve copy** decision.
+If the backend cannot determine whether an SSH publish succeeded, inspect the
+destination before retrying; a blind retry may duplicate or replace a file that
+was already published.
+
+Each tab represents its direct backend endpoint. Files does not follow a nested
+interactive SSH session shown inside a terminal or recursively browse directory
+trees. Local Shell Files is enabled only where StandTerm can use anchored POSIX
+file operations; unsupported platforms show the capability as unavailable.
+
+Existing-file source actions use short-lived opaque references and transfer
+tickets bound to the browser session, socket, terminal, and live backend bridge.
+Requested browse, upload, and copy destinations use structured paths and names
+that the backend canonicalizes, validates, and rechecks before publish.
+Downloads, copies, and file actions accept regular files only; symbolic links
+and other non-regular entries are rejected.
 
 **Settings > General > Import & Export** transfers browser preferences, SSH
 profiles and order, SSH history, and persistent UI layout in a versioned JSON
@@ -371,7 +403,8 @@ Typical local flow:
 5. Use explicit connection fields from the browser Agent UI or the startup
    banner's `External Agent CLI hello` or `render` command.
 
-Startup writes a tokenless bootstrap file in the StandTerm launch directory:
+Startup writes a tokenless bootstrap file in the per-user External Agent runtime
+directory:
 
 ```text
 standterm_agentinfo.json
@@ -379,20 +412,29 @@ standterm_agentinfo.json
 
 StandTerm also serves the same sanitized payload at the loopback-only
 `/agentinfo` URL printed in the startup banner. External agents should fetch
-that URL first. The launch file and platform-specific current-instance pointer,
-such as `~/.standterm/current_agentinfo.json`, are fallbacks when the URL is
-unavailable. The payload includes launch paths, loopback endpoints, CLI/script
+that URL first. The runtime file and platform-specific current-instance pointer
+are fallbacks when the URL is unavailable. The payload includes launch paths,
+runtime paths, loopback endpoints, CLI/script
 paths, status hints, and recommended commands, but it does not include bearer
 tokens, browser access tokens, terminal display content, cookies, or session
 IDs.
 
-Token minting writes an ignored latest-token handoff in the StandTerm launch
-directory and a stable per-terminal handoff under an ignored local directory:
+Token minting writes an instance-scoped latest-token handoff and stable
+per-terminal handoffs under the same per-user runtime directory:
 
 ```text
-standterm_external_agent_handoff.json
-standterm_external_agent_handoffs/<server-instance>/terminal-<terminal-id-hash>.json
+<runtime-root>/<server-instance>/standterm_external_agent_handoff.json
+<runtime-root>/<server-instance>/standterm_external_agent_handoffs/terminal-<terminal-id-hash>.json
 ```
+
+Linux and WSL prefer `$XDG_RUNTIME_DIR/standterm`, which is normally a tmpfs and
+avoids writes to a checkout on a Windows-mounted drive. Linux falls back to
+`<system-temp>/standterm-<uid>`. Native Windows uses
+`%LOCALAPPDATA%\StandTerm\runtime`, and macOS uses
+`~/Library/Caches/StandTerm/runtime`. Set `STANDTERM_AGENT_RUNTIME_DIR` to use an
+explicit per-user runtime location, including a Windows RAM disk. Runtime files
+are removed on graceful shutdown; tokens are invalid after server restart even
+if a crash leaves a stale file behind.
 
 These files contain bearer tokens with sliding idle timeouts. A standard mint
 uses five idle minutes by default; the optional 3x mint uses fifteen. Each valid
@@ -434,11 +476,12 @@ Start here with the active Python path printed by the StandTerm startup banner:
 
 ```bash
 <python-from-startup-banner> scripts/agent_cli.py --agentinfo <agentinfo-url-from-startup-banner> <tls-args-from-startup-banner> discover
-<python-from-startup-banner> scripts/agent_cli.py --handoff standterm_external_agent_handoff.json hello
-<python-from-startup-banner> scripts/agent_cli.py --handoff standterm_external_agent_handoff.json render --mode mirror-screen
-<python-from-startup-banner> scripts/agent_cli.py --handoff standterm_external_agent_handoff.json send --text $'pwd\r'
-<python-from-startup-banner> scripts/agent_shcmd.py --handoff standterm_external_agent_handoff.json "pwd"
-<python-from-startup-banner> scripts/agent_repl.py --handoff standterm_external_agent_handoff.json --enter cr
+<python-from-startup-banner> scripts/agent_cli.py --handoff <runtime-handoff-path-from-agentinfo> hello
+<python-from-startup-banner> scripts/agent_cli.py --handoff <runtime-handoff-path-from-agentinfo> render --mode mirror-screen
+<python-from-startup-banner> scripts/agent_cli.py --handoff <runtime-handoff-path-from-agentinfo> send --text $'pwd\r'
+<python-from-startup-banner> scripts/agent_shcmd.py --handoff <runtime-handoff-path-from-agentinfo> "pwd"
+<python-from-startup-banner> scripts/agent_scp.py --agentinfo <agentinfo-url-from-startup-banner> --terminal term-2 --destination-terminal term-3 /source/file.bin /destination/file.bin
+<python-from-startup-banner> scripts/agent_repl.py --handoff <runtime-handoff-path-from-agentinfo> --enter cr
 ```
 
 `--agentinfo` is tokenless bootstrap data. Helpers use it for launch paths,
@@ -455,6 +498,26 @@ terminal output as stdout. Use `--json` when an agent needs a structured
 `status`, `stdout`, and capture state. This is a terminal helper, not a
 subprocess exec API; it does not provide a reliable shell exit code or separate
 stderr.
+
+`agent_scp.py` copies one regular file through the StandTerm backend between
+any two attached SSH or Local Shell terminals. Both terminals need separately
+minted external-agent tokens from the same browser session. Every copy opens a
+dedicated browser approval card showing the backend-canonical source,
+destination, size, and conflict behavior; Full mode does not bypass this
+per-operation approval. File-copy approval appears even when a different
+terminal tab is active, while ordinary command approvals remain terminal
+scoped. Approved copies expose typed byte progress through the browser card and
+`agent_scp.py`. Execution runs as a backend background action; use
+`agent_scp.py --no-wait` and `agent_cli.py action-status` for an explicitly
+non-blocking query workflow. Background workers are bounded; `file_copy_busy`
+is a terminal action result and does not authorize a rescue-path fallback. The
+safe default is `--conflict-mode fail`; use
+`keep-both` or `replace` only when the requested behavior is intentional. Local
+Shell paths must be absolute and currently require POSIX directory-relative
+file operations. File contents stream through bounded backend
+buffers and are not typed through the terminal or returned to the agent. If an
+SSH publish returns `file_copy_publish_outcome_unknown`, inspect the destination
+before retrying because the server may already have completed the atomic rename.
 
 Prefer the exact absolute commands printed by the StandTerm startup banner. They
 use the active runtime Python, platform-appropriate quoting, and the generated
@@ -528,6 +591,7 @@ change how an agent behaves in specific terminal situations.
 | Skill | Use when |
 | --- | --- |
 | [`standterm-external-agent`](docs/examples/standterm-external-agent-skill/SKILL.md) | Discovering and operating StandTerm through the external-agent handoff. |
+| [`standterm-file-transfer`](docs/examples/standterm-file-transfer/SKILL.md) | Copying a file through the preferred backend path or an explicitly authorized terminal-stream rescue path. |
 | [`standterm-privileged-hitl`](docs/examples/standterm-privileged-hitl/SKILL.md) | A session reaches a credential prompt, human-input lease, or privileged step. |
 
 Each example directory includes `skill_prompt.txt` for installing the skill and
@@ -671,8 +735,8 @@ asset README files when publishing releases that include the vendored files.
   Revoke browsers that no longer need access.
 - The access token lives for the lifetime of the server process and is not
   rotated on its own. Restart the launcher to issue a new one.
-- `standterm_external_agent_handoff.json`, `standterm_external_agent_handoffs/`,
-  `authorized/`, local certs, and venvs are ignored runtime state.
+- External Agent handoffs and agentinfo are transient per-user runtime state;
+  `authorized/`, local certs, and venvs remain local ignored state.
 - Terminal display payload is data. App control decisions should use typed
   fields or typed events.
 

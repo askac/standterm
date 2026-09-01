@@ -257,6 +257,53 @@ TOOLS = [
         },
     },
     {
+        'name': 'standterm_action_status',
+        'title': 'Get StandTerm Agent Action Status',
+        'description': 'Get the typed status or terminal result of an external-agent action.',
+        'inputSchema': schema_object({
+            'terminal_id': TERMINAL_ID_PROPERTY,
+            'action_id': {
+                'type': 'string',
+                'description': 'Action id returned by a pending operation.',
+            },
+        }, required=['action_id']),
+        'annotations': {
+            'readOnlyHint': True,
+            'idempotentHint': True,
+        },
+    },
+    {
+        'name': 'standterm_file_copy',
+        'title': 'Copy File Between StandTerm Terminals',
+        'description': 'Propose a backend file copy between two SSH or Local Shell terminals. Every copy requires explicit browser approval, including in Full mode.',
+        'inputSchema': schema_object({
+            'terminal_id': TERMINAL_ID_PROPERTY,
+            'source_path': {
+                'type': 'string',
+                'description': 'Regular file path on the source SSH or Local Shell terminal.',
+            },
+            'destination_terminal_id': {
+                'type': 'string',
+                'description': 'Destination SSH or Local Shell terminal id. Its token is resolved from --agentinfo.',
+            },
+            'destination_path': {
+                'type': 'string',
+                'description': 'File path on the destination SSH or Local Shell terminal.',
+            },
+            'conflict_mode': {
+                'type': 'string',
+                'enum': ['fail', 'keep_both', 'replace'],
+                'default': 'fail',
+                'description': 'Destination conflict behavior. Replace must be explicit and is shown in the approval UI.',
+            },
+        }, required=['source_path', 'destination_terminal_id', 'destination_path']),
+        'annotations': {
+            'readOnlyHint': False,
+            'destructiveHint': True,
+            'idempotentHint': False,
+        },
+    },
+    {
         'name': 'standterm_render',
         'title': 'Render StandTerm Terminal',
         'description': 'Render the terminal via mirror-screen or visible xterm PNG. PNG bytes are returned as MCP image content, not text.',
@@ -330,9 +377,15 @@ class StandTermConnection:
         self.lock = threading.Lock()
 
     def _load_handoff(self, terminal_id=None):
-        handoff_path = getattr(self.args, 'handoff', None)
+        handoff_path = None
+        agentinfo = self._load_agentinfo()
+        if agentinfo and terminal_id:
+            candidate = cli.resolve_terminal_handoff_path(agentinfo, terminal_id)
+            if candidate and os.path.isfile(candidate):
+                handoff_path = candidate
         if not handoff_path:
-            agentinfo = self._load_agentinfo()
+            handoff_path = getattr(self.args, 'handoff', None)
+        if not handoff_path:
             selected_terminal = terminal_id or getattr(self.args, 'terminal', None)
             if agentinfo and selected_terminal:
                 handoff_path = cli.resolve_terminal_handoff_path(agentinfo, selected_terminal)
@@ -340,7 +393,10 @@ class StandTermConnection:
                 handoff_path = agentinfo['handoff_path']
         if not handoff_path or not os.path.isfile(handoff_path):
             return {}
-        return cli.load_handoff(handoff_path)
+        handoff = cli.load_handoff(handoff_path)
+        if terminal_id and handoff.get('terminal_id') != terminal_id:
+            return {}
+        return handoff
 
     def _load_agentinfo(self):
         if not getattr(self.args, 'agentinfo', None):
@@ -351,13 +407,16 @@ class StandTermConnection:
             insecure=getattr(self.args, 'insecure', False),
         )
 
-    def connection_fields(self, terminal_id=None):
+    def connection_fields(self, terminal_id=None, use_explicit_token=True):
         agentinfo = self._load_agentinfo() or {}
         handoff = self._load_handoff(terminal_id=terminal_id)
         transport = handoff.get('transport') if isinstance(handoff.get('transport'), dict) else {}
         agentinfo_transport = agentinfo.get('transport') if isinstance(agentinfo.get('transport'), dict) else {}
         url = getattr(self.args, 'url', None) or handoff.get('url') or agentinfo.get('base_url')
-        token = getattr(self.args, 'token', None) or handoff.get('token')
+        explicit_token = getattr(self.args, 'token', None)
+        token = handoff.get('token')
+        if use_explicit_token and explicit_token:
+            token = explicit_token
         terminal = terminal_id or getattr(self.args, 'terminal', None) or handoff.get('terminal_id') or 'main'
         ca_file = (
             getattr(self.args, 'ca_file', None)
@@ -399,6 +458,19 @@ class StandTermConnection:
         command_payload.setdefault('terminal_id', fields['terminal_id'])
         if fields.get('token') and 'token' not in command_payload:
             command_payload['token'] = fields['token']
+        if command_payload.get('op') == 'file-copy' and 'destination_token' not in command_payload:
+            destination_terminal_id = command_payload.get('destination_terminal_id')
+            if not isinstance(destination_terminal_id, str) or not destination_terminal_id:
+                raise ValueError('destination_terminal_id is required for file-copy')
+            destination_fields = self.connection_fields(
+                terminal_id=destination_terminal_id,
+                use_explicit_token=False,
+            )
+            if cli.normalized_server_url(destination_fields['url']) != cli.normalized_server_url(fields['url']):
+                raise ValueError('source and destination terminals must belong to the same StandTerm server')
+            if not destination_fields.get('token'):
+                raise ValueError('destination terminal does not have a minted external-agent token')
+            command_payload['destination_token'] = destination_fields['token']
         with self.lock:
             return self.post_json(
                 fields['url'],
@@ -519,6 +591,27 @@ def build_sequence_command(arguments):
     }, terminal_id=arguments.get('terminal_id'))
 
 
+def build_file_copy_command(arguments):
+    conflict_mode = arguments.get('conflict_mode', 'fail')
+    if conflict_mode not in {'fail', 'keep_both', 'replace'}:
+        raise ValueError('conflict_mode must be fail, keep_both, or replace')
+    destination_terminal_id = arguments.get('destination_terminal_id')
+    if not isinstance(destination_terminal_id, str) or not destination_terminal_id:
+        raise ValueError('destination_terminal_id is required')
+    source_path = arguments.get('source_path')
+    destination_path = arguments.get('destination_path')
+    if not isinstance(source_path, str) or not source_path:
+        raise ValueError('source_path is required')
+    if not isinstance(destination_path, str) or not destination_path:
+        raise ValueError('destination_path is required')
+    return backend_command('file-copy', {
+        'source_path': source_path,
+        'destination_terminal_id': destination_terminal_id,
+        'destination_path': destination_path,
+        'conflict_mode': conflict_mode,
+    }, terminal_id=arguments.get('terminal_id'))
+
+
 def build_render_command(arguments):
     return backend_command('render', {
         'render_mode': arguments.get('render_mode', 'auto'),
@@ -539,6 +632,12 @@ def build_tool_backend_command(tool_name, arguments):
         return build_wait_command(arguments)
     if tool_name == 'standterm_send':
         return build_send_command(arguments)
+    if tool_name == 'standterm_action_status':
+        return backend_command('action-status', {
+            'action_id': arguments.get('action_id'),
+        }, terminal_id=arguments.get('terminal_id'))
+    if tool_name == 'standterm_file_copy':
+        return build_file_copy_command(arguments)
     if tool_name == 'standterm_render':
         return build_render_command(arguments)
     if tool_name == 'standterm_sequence':

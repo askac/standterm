@@ -639,6 +639,7 @@ def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
                         connection_type: 'ssh',
                         terminal_label: 'SSH',
                         term: 'xterm-256color',
+                        files_available: true,
                         connected: true
                     },
                     {
@@ -646,6 +647,7 @@ def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
                         connection_type: 'local_shell',
                         terminal_label: 'bash',
                         term: 'xterm-256color',
+                        files_available: true,
                         connected: true
                     }
                 ]
@@ -667,14 +669,14 @@ def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
             available_status == {
                 'hidden': False,
                 'disabled': False,
-                'title': 'Open SFTP File Manager',
+                'title': 'Open Files',
                 'text': '📁',
             },
             'connected SSH status bar did not expose the SFTP action',
         )
         page.click('#sftp-status-btn')
         page.wait_for_function(
-            "() => documentPictureInPicture.window?.document.querySelector('.sftp-pip-title')?.textContent === 'SFTP File Manager'",
+            "() => documentPictureInPicture.window?.document.querySelector('.sftp-pip-title')?.textContent === 'Files'",
             timeout=5000,
         )
         page.evaluate('() => documentPictureInPicture.window.close()')
@@ -696,13 +698,13 @@ def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
         )
         check(unavailable_status['hidden'] is False, 'unavailable SFTP status action disappeared')
         check(unavailable_status['disabled'] is True, 'unavailable SFTP status action remained enabled')
-        check(unavailable_status['title'] == 'SFTP not available', 'unavailable SFTP status hint was unclear')
+        check(unavailable_status['title'] == 'Files not available', 'unavailable Files status hint was unclear')
         check('×' in unavailable_status['text'], 'unavailable SFTP status action omitted its cross mark')
         check(unavailable_status['markColor'] == 'rgb(255, 69, 58)', 'unavailable SFTP cross was not red')
         unavailable_menu = page.evaluate("() => window.terminalTest.showContextMenuForTest('main')")
         check(unavailable_menu['sftpVisible'] is True, 'unavailable SSH context action disappeared')
         check(unavailable_menu['sftpDisabled'] is True, 'unavailable SSH context action remained enabled')
-        check('SFTP not available' in unavailable_menu['sftpText'], 'unavailable SSH context action hint was unclear')
+        check('Files not available' in unavailable_menu['sftpText'], 'unavailable SSH context action hint was unclear')
 
         page.evaluate("() => window.terminalTest.setSftpAvailabilityForTest('main', null)")
         page.evaluate("() => window.terminalTest.showContextMenuForTest('main')")
@@ -723,7 +725,7 @@ def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
             pip_action == {
                 'hidden': False,
                 'disabled': False,
-                'title': 'Open SFTP File Manager',
+                'title': 'Open Files',
                 'text': '📁',
             },
             'Terminal PiP did not expose the SFTP action',
@@ -731,7 +733,7 @@ def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
 
         page.evaluate("() => documentPictureInPicture.window.document.querySelector('.pip-sftp-button').click()")
         page.wait_for_function(
-            "() => documentPictureInPicture.window?.document.querySelector('.sftp-pip-title')?.textContent === 'SFTP File Manager'",
+            "() => documentPictureInPicture.window?.document.querySelector('.sftp-pip-title')?.textContent === 'Files'",
             timeout=5000,
         )
         restored = page.evaluate("() => window.terminalTest.getTerminalTabsState()")
@@ -750,19 +752,30 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
     try:
         page.evaluate(
             """() => window.terminalTest.applyTerminalListForTest({
-                terminals: [{
-                    terminal_id: 'main',
-                    connection_type: 'ssh',
-                    terminal_label: 'SSH',
-                    term: 'xterm-256color',
-                    connected: true
-                }]
+                terminals: [
+                    {
+                        terminal_id: 'main',
+                        connection_type: 'ssh',
+                        terminal_label: 'hcbox',
+                        term: 'xterm-256color',
+                        files_available: true,
+                        connected: true
+                    },
+                    {
+                        terminal_id: 'term-2',
+                        connection_type: 'local_shell',
+                        terminal_label: 'Local Shell',
+                        term: 'xterm-256color',
+                        files_available: true,
+                        connected: true
+                    }
+                ]
             })"""
         )
         ssh_menu = page.evaluate("() => window.terminalTest.showContextMenuForTest('main')")
         check(ssh_menu['terminalId'] == 'main', 'SFTP context action targeted the wrong terminal')
         check(ssh_menu['sftpVisible'] is True, 'connected SSH tab did not show SFTP send action')
-        check('SFTP File Manager' in ssh_menu['sftpText'], 'SFTP context action label was unclear')
+        check('Files' in ssh_menu['sftpText'], 'Files context action label was unclear')
         check(page.evaluate('() => !!window.documentPictureInPicture'), 'Document PiP is unavailable in the test browser')
         page.click('#sftp-send-option')
         page.wait_for_function('() => !!window.documentPictureInPicture.window', timeout=5000)
@@ -774,13 +787,13 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                 hasPathInput: !!documentPictureInPicture.window.document.querySelector('.sftp-path-input')
             })"""
         )
-        check(pip_state['title'] == 'SFTP File Manager', 'SFTP PiP title was missing')
+        check(pip_state['title'] == 'Files', 'Files PiP title was missing')
         check('Nested SSH sessions' in pip_state['hint'], 'SFTP PiP did not explain the direct endpoint boundary')
         check(pip_state['hasDropZone'] is True, 'SFTP PiP did not expose a file drop zone')
         check(pip_state['hasPathInput'] is True, 'SFTP PiP did not expose destination path navigation')
 
         page.wait_for_function(
-            "() => documentPictureInPicture.window.document.querySelector('.sftp-transfer-status')?.textContent !== 'Opening SFTP…'",
+            "() => documentPictureInPicture.window.document.querySelector('.sftp-transfer-status')?.textContent !== 'Opening Files…'",
             timeout=5000,
         )
         rendered = page.evaluate(
@@ -821,15 +834,23 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                     operationVisible: pipDocument.querySelector('.sftp-file-operation-box').classList.contains('visible'),
                     actions: [...pipDocument.querySelectorAll('.sftp-file-operation-actions button')].map(button => button.innerText),
                     preparing,
-                    downloadReady: !pipDocument.querySelector('.sftp-file-download').disabled
+                    downloadReady: !pipDocument.querySelector('.sftp-file-download').disabled,
+                    selected: files[0].classList.contains('selected'),
+                    selectedPressed: files[0].getAttribute('aria-pressed'),
+                    status: pipDocument.querySelector('.sftp-transfer-status').innerText
                 };
             }"""
         )
         check(file_ui['fileCount'] == 2, 'SFTP PiP did not list regular files')
         check(file_ui['operationVisible'] is True, 'selecting an SFTP file did not open file actions')
-        check(file_ui['actions'] == ['Download', 'Rename…', 'Delete…', 'Close'], 'SFTP file actions were incomplete')
+        check(file_ui['actions'] == ['Download', 'Copy to…', 'Rename…', 'Delete…', 'Close'], 'Files actions were incomplete')
         check(file_ui['preparing'] == {'disabled': True, 'text': 'Preparing…'}, 'SFTP Download was enabled before its ticket was ready')
         check(file_ui['downloadReady'] is True, 'SFTP Download was not enabled after its ticket became ready')
+        check(file_ui['selected'] is True and file_ui['selectedPressed'] == 'true', 'selected Files row was not highlighted')
+        check(
+            file_ui['status'] == 'Selected reference.txt. Click Download to save it.',
+            'selecting a file implied that it had already downloaded',
+        )
 
         download_requests = get_emitted(page, 'sftp_download_ticket_request')
         check(len(download_requests) == 1, 'selecting an SFTP file did not prepare one download ticket')
@@ -879,6 +900,231 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
         check(any(message.startswith('[sftp] Download ticket ready') for message in browser_console), 'SFTP browser log omitted the ready ticket')
         check(any(message.startswith('[sftp] Download button clicked') for message in browser_console), 'SFTP browser log omitted the explicit click')
         check(any(message.startswith('[sftp] Download link dispatched') for message in browser_console), 'SFTP browser log omitted the link dispatch')
+
+        clear_emitted(page)
+        copy_picker = page.evaluate(
+            """() => {
+                const pipDocument = documentPictureInPicture.window.document;
+                pipDocument.querySelector('.sftp-file-copy').click();
+                const request = window.terminalTest.getEmitted()
+                    .find(item => item.event === 'sftp_browse_request' && item.args[0].terminal_id === 'term-2');
+                window.terminalTest.handleSftpBrowseResultForTest({
+                    request_id: request.args[0].request_id,
+                    terminal_id: 'term-2',
+                    status: 'ready',
+                    path: '/home/local',
+                    endpoint: { route: 'local', shell: 'bash', platform: 'linux' },
+                    directories: [{ name: 'work' }],
+                    files: [],
+                    truncated: false,
+                    max_upload_bytes: 1024
+                });
+                return {
+                    open: pipDocument.querySelector('.sftp-files-workspace').classList.contains('copy-open'),
+                    title: pipDocument.querySelector('.sftp-destination-title').innerText,
+                    sessions: [...pipDocument.querySelector('.sftp-session-select').options].map(option => option.value),
+                    path: pipDocument.querySelector('.sftp-destination-pane .sftp-path-input').value,
+                    filename: pipDocument.querySelector('.sftp-copy-name-input').value,
+                    endpoint: pipDocument.querySelector('.sftp-destination-pane .sftp-endpoint-value').innerText,
+                    innerCloseCount: pipDocument.querySelectorAll('.sftp-destination-close').length,
+                    cancelText: pipDocument.querySelector('.sftp-copy-cancel').innerText,
+                    lifecycle: pipDocument.querySelector('.sftp-copy-lifecycle-hint').innerText
+                };
+            }"""
+        )
+        check(copy_picker['open'] is True, 'Copy to did not slide out the destination Files pane')
+        check(copy_picker['title'] == 'Choose destination', 'destination Files pane title was unclear')
+        check(copy_picker['sessions'] == ['term-2'], 'destination Files pane listed an invalid session')
+        check(copy_picker['path'] == '/home/local', 'destination Files pane did not browse the selected session')
+        check(copy_picker['filename'] == 'reference.txt', 'destination Files pane did not preserve the source name')
+        check(copy_picker['endpoint'].startswith('Local Shell'), 'destination Files pane did not identify Local Shell')
+        check(copy_picker['innerCloseCount'] == 0, 'destination Files pane kept a duplicate close icon')
+        check(copy_picker['cancelText'] == 'Cancel', 'destination Files pane did not provide one clear pre-copy exit')
+        check('closes this destination pane' in copy_picker['lifecycle'], 'destination Files pane did not explain pre-copy cancellation')
+
+        clear_emitted(page)
+        page.evaluate("() => documentPictureInPicture.window.document.querySelector('.sftp-copy-confirm').click()")
+        copy_requests = get_emitted(page, 'files_copy_request')
+        check(len(copy_requests) == 1, 'Copy did not emit one typed Files copy request')
+        copy_payload = copy_requests[0]['args'][0]
+        check(copy_payload['source_terminal_id'] == 'main', 'Files copy lost the source terminal')
+        check(copy_payload['source_file_id'] == 'sftpf_random_a', 'Files copy did not use the opaque source file reference')
+        check(copy_payload['destination_terminal_id'] == 'term-2', 'Files copy lost the destination terminal')
+        check(copy_payload['destination_directory'] == '/home/local', 'Files copy lost the canonical destination view')
+        check(copy_payload['destination_filename'] == 'reference.txt', 'Files copy lost the destination filename')
+        check('source_path' not in copy_payload, 'Files copy trusted the displayed source path as authority')
+        copy_result_ui = page.evaluate(
+            """payload => {
+                window.terminalTest.handleFilesCopyResultForTest({
+                    request_id: payload.request_id,
+                    copy_id: 'filesc_test',
+                    status: 'running',
+                    revision: 0,
+                    source_size: 9,
+                    bytes_copied: 0,
+                    total_bytes: 9,
+                    destination_path: '/home/local/reference.txt'
+                });
+                window.terminalTest.handleFilesCopyResultForTest({
+                    request_id: payload.request_id,
+                    copy_id: 'filesc_foreign',
+                    status: 'failed',
+                    revision: 99,
+                    message: 'Foreign copy failed.'
+                });
+                const statusAfterForeign = documentPictureInPicture.window.document
+                    .querySelector('.sftp-destination-pane .sftp-transfer-status').innerText;
+                documentPictureInPicture.window.document.querySelector('.sftp-pip-header .sftp-pip-close').click();
+                const closeBlocked = !!documentPictureInPicture.window.document.querySelector('.sftp-destination-pane');
+                const closeExplanation = documentPictureInPicture.window.document
+                    .querySelector('.sftp-copy-lifecycle-hint').innerText;
+                window.terminalTest.handleFilesCopyResultForTest({
+                    request_id: payload.request_id,
+                    copy_id: 'filesc_test',
+                    status: 'committing',
+                    revision: 1,
+                    source_size: 9,
+                    bytes_copied: 9,
+                    total_bytes: 9,
+                    destination_path: '/home/local/reference.txt'
+                });
+                const publishingButton = documentPictureInPicture.window.document.querySelector('.sftp-copy-cancel');
+                const publishing = {
+                    text: publishingButton.innerText,
+                    disabled: publishingButton.disabled,
+                    lifecycle: documentPictureInPicture.window.document
+                        .querySelector('.sftp-copy-lifecycle-hint').innerText
+                };
+                window.terminalTest.handleFilesCopyResultForTest({
+                    request_id: payload.request_id,
+                    copy_id: 'filesc_test',
+                    status: 'completed',
+                    revision: 2,
+                    source_size: 9,
+                    bytes_copied: 9,
+                    total_bytes: 9,
+                    destination_path: '/home/local/reference.txt'
+                });
+                const refreshRequest = window.terminalTest.getEmitted()
+                    .findLast(item => item.event === 'sftp_browse_request' && item.args[0].terminal_id === 'term-2');
+                window.terminalTest.handleSftpBrowseResultForTest({
+                    request_id: refreshRequest.args[0].request_id,
+                    terminal_id: 'term-2',
+                    status: 'ready',
+                    path: '/home/local',
+                    endpoint: { route: 'local', shell: 'bash', platform: 'linux' },
+                    directories: [],
+                    files: [{ file_id: 'sftpf_destination', name: 'reference.txt', size: 9, mtime: 30 }],
+                    truncated: false,
+                    max_upload_bytes: 1024
+                });
+                return {
+                    statusAfterForeign,
+                    closeBlocked,
+                    closeExplanation,
+                    publishing,
+                    terminalButtonText: documentPictureInPicture.window.document
+                        .querySelector('.sftp-copy-cancel').innerText,
+                    progressHidden: !documentPictureInPicture.window.document
+                        .querySelector('.sftp-destination-pane .sftp-progress').classList.contains('visible')
+                };
+            }""",
+            copy_payload,
+        )
+        check(copy_result_ui['statusAfterForeign'].startswith('Copying '), 'Files copy accepted a foreign copy_id with the same request_id')
+        check(copy_result_ui['closeBlocked'] is True, 'Files closed without distinguishing close from copy cancellation')
+        check('Cancel the copy first' in copy_result_ui['closeExplanation'], 'Files close did not explain how to stop the copy')
+        check(copy_result_ui['publishing']['text'] == 'Publishing…', 'commit barrier did not replace the cancel action')
+        check(copy_result_ui['publishing']['disabled'] is True, 'commit barrier still allowed cancellation')
+        check('cannot be cancelled' in copy_result_ui['publishing']['lifecycle'], 'commit barrier did not explain its cancellation boundary')
+        check(copy_result_ui['terminalButtonText'] == 'Close', 'completed Files copy did not provide a clear close action')
+        check(copy_result_ui['progressHidden'] is True, 'Files copy did not accept its bound terminal result')
+        page.evaluate("() => documentPictureInPicture.window.document.querySelector('.sftp-copy-cancel').click()")
+
+        clear_emitted(page)
+        page.evaluate(
+            """() => {
+                const pipDocument = documentPictureInPicture.window.document;
+                pipDocument.querySelector('.sftp-file-copy').click();
+                const request = window.terminalTest.getEmitted()
+                    .find(item => item.event === 'sftp_browse_request' && item.args[0].terminal_id === 'term-2');
+                window.terminalTest.handleSftpBrowseResultForTest({
+                    request_id: request.args[0].request_id,
+                    terminal_id: 'term-2',
+                    status: 'ready',
+                    path: '/home/local',
+                    endpoint: { route: 'local', shell: 'bash', platform: 'linux' },
+                    directories: [],
+                    files: [],
+                    truncated: false,
+                    max_upload_bytes: 1024
+                });
+            }"""
+        )
+        clear_emitted(page)
+        page.evaluate("() => documentPictureInPicture.window.document.querySelector('.sftp-copy-confirm').click()")
+        cancel_copy_payload = get_emitted(page, 'files_copy_request')[0]['args'][0]
+        clear_emitted(page)
+        cancel_pending_ui = page.evaluate(
+            """payload => {
+                window.terminalTest.handleFilesCopyResultForTest({
+                    request_id: payload.request_id,
+                    copy_id: 'filesc_cancel_test',
+                    status: 'running',
+                    revision: 0,
+                    source_size: 9,
+                    bytes_copied: 2,
+                    total_bytes: 9,
+                    destination_path: '/home/local/reference.txt'
+                });
+                const button = documentPictureInPicture.window.document.querySelector('.sftp-copy-cancel');
+                const runningText = button.innerText;
+                button.click();
+                return {
+                    runningText,
+                    pendingText: button.innerText,
+                    pendingDisabled: button.disabled,
+                    lifecycle: documentPictureInPicture.window.document
+                        .querySelector('.sftp-copy-lifecycle-hint').innerText
+                };
+            }""",
+            cancel_copy_payload,
+        )
+        cancel_requests = get_emitted(page, 'files_copy_cancel_request')
+        check(len(cancel_requests) == 1, 'Cancel copy did not emit one typed cancellation request')
+        check(cancel_requests[0]['args'][0]['copy_id'] == 'filesc_cancel_test', 'Cancel copy lost the backend copy id')
+        check(cancel_pending_ui['runningText'] == 'Cancel copy', 'running Files copy did not expose cancellation')
+        check(cancel_pending_ui['pendingText'] == 'Cancelling…' and cancel_pending_ui['pendingDisabled'] is True, 'Files copy cancellation could be submitted twice')
+        check('Cancelling before' in cancel_pending_ui['lifecycle'], 'Files copy did not explain pending cancellation')
+        cancelled_ui = page.evaluate(
+            """payload => {
+                window.terminalTest.handleFilesCopyResultForTest({
+                    request_id: payload.request_id,
+                    copy_id: 'filesc_cancel_test',
+                    status: 'cancelled',
+                    revision: 1,
+                    source_size: 9,
+                    bytes_copied: 2,
+                    total_bytes: 9,
+                    destination_path: '/home/local/reference.txt',
+                    message: 'File copy cancelled before publishing.'
+                });
+                const pipDocument = documentPictureInPicture.window.document;
+                const result = {
+                    buttonText: pipDocument.querySelector('.sftp-copy-cancel').innerText,
+                    status: pipDocument.querySelector('.sftp-destination-pane .sftp-transfer-status').innerText,
+                    lifecycle: pipDocument.querySelector('.sftp-copy-lifecycle-hint').innerText
+                };
+                pipDocument.querySelector('.sftp-copy-cancel').click();
+                result.closed = !pipDocument.querySelector('.sftp-destination-pane');
+                return result;
+            }""",
+            cancel_copy_payload,
+        )
+        check(cancelled_ui['buttonText'] == 'Close', 'cancelled Files copy did not restore a close action')
+        check('cancelled before publishing' in cancelled_ui['status'], 'Files copy did not show the cancellation boundary')
+        check('You can close Files' in cancelled_ui['lifecycle'], 'Files copy did not explain the terminal cancellation state')
+        check(cancelled_ui['closed'] is True, 'cancelled Files copy destination pane did not close')
 
         page.evaluate("() => documentPictureInPicture.window.document.querySelector('.sftp-file-rename').click()")
         rename_initial = page.evaluate(
@@ -1022,12 +1268,15 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                     connection_type: 'local_shell',
                     terminal_label: 'bash',
                     term: 'xterm-256color',
+                    files_available: true,
                     connected: true
                 }]
             })"""
         )
         local_menu = page.evaluate("() => window.terminalTest.showContextMenuForTest('main')")
-        check(local_menu['sftpVisible'] is False, 'local shell tab exposed the SFTP send action')
+        check(local_menu['sftpVisible'] is True, 'local shell tab did not expose Files')
+        check(local_menu['sftpDisabled'] is False, 'Files was disabled for a capable local shell tab')
+        check('Files' in local_menu['sftpText'], 'local shell Files label was unclear')
     finally:
         close_context(context)
 
@@ -1702,7 +1951,7 @@ def test_approval_payload_and_stale_rejections(browser, access_url):
             f"state.privacy_state === 'private_input' && state.privacy_version > {privacy_action['privacy_version']}",
         )
         emit_socket(page, 'agent_action_approve', stale_privacy_payload)
-        wait_for_last_action_error(page, 'agent_stale_proposal')
+        wait_for_last_action_error(page, 'agent_privacy_blocked')
 
         set_privacy(page, 'normal')
         wait_for_agent(page, "state.privacy_state === 'normal'")
@@ -1711,7 +1960,213 @@ def test_approval_payload_and_stale_rejections(browser, access_url):
         emit_socket(page, 'agent_mode_set', {'terminal_id': TERMINAL_ID, 'mode': 'observe'})
         wait_for_agent(page, f"state.mode === 'observe' && state.mode_version > {mode_action['mode_version']}")
         emit_socket(page, 'agent_action_approve', stale_mode_payload)
-        wait_for_last_action_error(page, 'agent_stale_mode_version')
+        wait_for_last_action_error(page, 'agent_mode_changed')
+    finally:
+        close_context(context)
+
+
+def test_file_copy_approval_shows_canonical_plan(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        attach_agent(page)
+        set_agent_mode(page, 'direct', 'direct_active')
+        state = active_agent_state(page)
+        page.evaluate(
+            """payload => window.terminalTest.applyAgentActionPayloadForTest(payload)""",
+            {
+                'action_id': 'copy-action-1',
+                'proposal_id': 'copy-proposal-1',
+                'action_type': 'file_copy',
+                'status': 'pending_approval',
+                'terminal_id': TERMINAL_ID,
+                'destination_terminal_id': 'term-2',
+                'session_id': state['session_id'],
+                'viewer_id': state['viewer_id'],
+                'agent_binding_id': state['agent_binding_id'],
+                'mode_version': state['mode_version'],
+                'privacy_version': state['privacy_version'],
+                'source_endpoint': {
+                    'route': 'direct',
+                    'user': 'builder',
+                    'host': 'source.example',
+                    'port': 22,
+                },
+                'destination_endpoint': {
+                    'route': 'local',
+                    'shell': 'bash',
+                    'platform': 'linux',
+                },
+                'source_path': '/srv/releases/image.bin',
+                'destination_path': '/tmp/image.bin',
+                'source_size': 1536,
+                'destination_exists': True,
+                'destination_existing_size': 64,
+                'conflict_mode': 'replace',
+                'escaped_preview': 'Copy approved backend plan',
+            },
+        )
+        details = page.evaluate(
+            """() => ({
+                visible: document.getElementById('agent-file-copy-details').classList.contains('visible'),
+                source: document.getElementById('agent-file-copy-source').innerText,
+                destination: document.getElementById('agent-file-copy-destination').innerText,
+                size: document.getElementById('agent-file-copy-size').innerText,
+                conflict: document.getElementById('agent-file-copy-conflict').innerText,
+                warning: document.getElementById('agent-file-copy-warning').innerText,
+                approve: document.getElementById('agent-approve-btn').innerText,
+                approveDisabled: document.getElementById('agent-approve-btn').disabled
+            })"""
+        )
+        check(details['visible'] is True, 'file copy approval details were hidden')
+        check(details['source'] == 'builder@source.example:22:/srv/releases/image.bin', 'source plan was not exact')
+        check(details['destination'] == 'Local Shell (bash):/tmp/image.bin', 'destination plan was not exact')
+        check(details['size'] == '1.50 KiB', 'source size was not rendered')
+        check(details['conflict'] == 'replace', 'replace mode was not rendered')
+        check('atomically replace' in details['warning'], 'replace warning was not explicit')
+        check(details['approve'] == 'Approve copy', 'copy approval button was not explicit')
+        check(details['approveDisabled'] is False, 'copy approval button was unexpectedly disabled')
+        page.evaluate(
+            """payload => window.terminalTest.applyAgentActionPayloadForTest(payload)""",
+            {
+                'action_id': 'copy-action-1',
+                'action_type': 'file_copy',
+                'status': 'failed',
+                'terminal_id': TERMINAL_ID,
+                'error_code': 'file_copy_publish_outcome_unknown',
+            },
+        )
+        status_detail = page.locator('#agent-status-detail').inner_text()
+        check(
+            'destination may have changed; inspect it before retrying' in status_detail,
+            'publish outcome warning was not explicit',
+        )
+    finally:
+        close_context(context)
+
+
+def test_file_copy_approval_is_global_and_decision_is_single_shot(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        page.evaluate(
+            """() => window.terminalTest.applyTerminalListForTest({
+                terminals: [
+                    {
+                        terminal_id: 'main',
+                        connection_type: 'ssh',
+                        terminal_label: 'SSH - source',
+                        term: 'xterm-256color',
+                        connected: true
+                    },
+                    {
+                        terminal_id: 'term-2',
+                        connection_type: 'ssh',
+                        terminal_label: 'SSH - destination',
+                        term: 'xterm-256color',
+                        connected: true
+                    }
+                ]
+            })"""
+        )
+        page.evaluate("() => window.terminalTest.switchTerminalForTest('term-2')")
+        copy_payload = {
+            'action_id': 'copy-global-1',
+            'proposal_id': 'copy-global-proposal-1',
+            'action_type': 'file_copy',
+            'action_revision': 0,
+            'status': 'pending_approval',
+            'terminal_id': 'main',
+            'destination_terminal_id': 'term-2',
+            'source_endpoint': {'route': 'direct', 'user': 'source', 'host': 'source.example', 'port': 22},
+            'destination_endpoint': {'route': 'direct', 'user': 'destination', 'host': 'destination.example', 'port': 22},
+            'source_path': '/srv/source.bin',
+            'destination_path': '/srv/destination.bin',
+            'source_size': 1536,
+            'bytes_copied': 0,
+            'total_bytes': 1536,
+            'conflict_mode': 'fail',
+            'escaped_preview': 'Copy source to destination',
+        }
+        page.evaluate(
+            "payload => window.terminalTest.applyAgentActionPayloadForTest(payload)",
+            copy_payload,
+        )
+        global_prompt = page.evaluate(
+            """() => ({
+                tabs: window.terminalTest.getTerminalTabsState(),
+                panelVisible: document.getElementById('agent-panel').classList.contains('visible'),
+                actionVisible: document.getElementById('agent-action-box').classList.contains('visible'),
+                approveDisabled: document.getElementById('agent-approve-btn').disabled
+            })"""
+        )
+        check(global_prompt['tabs']['activeTerminalId'] == 'term-2', 'file copy prompt switched the active terminal')
+        check(global_prompt['tabs']['agentPanelTerminalId'] == 'main', 'file copy prompt did not target the source terminal')
+        check(global_prompt['tabs']['agentPanelInMainDocument'] is True, 'file copy prompt stayed in another document')
+        check(global_prompt['panelVisible'] is True and global_prompt['actionVisible'] is True, 'background file copy prompt was hidden')
+        check(global_prompt['approveDisabled'] is False, 'background file copy approval was disabled')
+
+        clear_emitted(page)
+        page.evaluate(
+            """() => {
+                const button = document.getElementById('agent-approve-btn');
+                button.click();
+                button.click();
+            }"""
+        )
+        approvals = get_emitted(page, 'agent_action_approve')
+        check(len(approvals) == 1, 'double click emitted more than one file copy approval')
+        check(page.locator('#agent-approve-btn').is_disabled(), 'approval button did not lock immediately')
+
+        page.evaluate(
+            "payload => window.terminalTest.applyAgentActionPayloadForTest(payload)",
+            {**copy_payload, 'action_revision': 2, 'status': 'running', 'bytes_copied': 768},
+        )
+        progress = page.evaluate(
+            """() => ({
+                visible: document.getElementById('agent-action-box').classList.contains('visible'),
+                bytes: document.getElementById('agent-action-bytes').innerText,
+                status: document.getElementById('agent-action-status').innerText,
+                approveDisabled: document.getElementById('agent-approve-btn').disabled
+            })"""
+        )
+        check(progress['visible'] is True, 'running file copy progress was hidden')
+        check(progress['bytes'] == '768 B / 1.50 KiB', 'file copy byte progress was incorrect')
+        check(progress['status'] == 'running · 50%', 'file copy percentage was incorrect')
+        check(progress['approveDisabled'] is True, 'running file copy could still be approved')
+
+        page.evaluate(
+            "payload => window.terminalTest.applyAgentActionPayloadForTest(payload)",
+            {**copy_payload, 'action_revision': 3, 'status': 'completed', 'bytes_copied': 1536},
+        )
+        page.evaluate(
+            "payload => window.terminalTest.applyAgentActionPayloadForTest(payload)",
+            {**copy_payload, 'action_revision': 2, 'status': 'running', 'bytes_copied': 768},
+        )
+        monotonic = page.evaluate(
+            "() => window.terminalTest.getAgentStateForTest('main')",
+        )
+        check(monotonic['last_action']['status'] == 'completed', 'stale progress replaced the completed action')
+        check(monotonic['pending_action'] is None, 'stale progress reopened the completed action')
+        page.click('#agent-panel-close-btn')
+        page.evaluate(
+            """payload => window.terminalTest.applyAgentActionPayloadForTest(payload)""",
+            {
+                'action_id': 'command-background-1',
+                'action_type': 'terminal_input',
+                'status': 'pending_approval',
+                'terminal_id': 'main',
+                'escaped_preview': 'echo background',
+            },
+        )
+        normal_prompt = page.evaluate(
+            """() => ({
+                panelVisible: document.getElementById('agent-panel').classList.contains('visible'),
+                activeTerminalId: window.terminalTest.getTerminalTabsState().activeTerminalId,
+                pending: window.terminalTest.getAgentStateForTest('main').pending_action
+            })"""
+        )
+        check(normal_prompt['activeTerminalId'] == 'term-2', 'normal approval switched the active terminal')
+        check(normal_prompt['panelVisible'] is False, 'normal command approval became a global prompt')
+        check(normal_prompt['pending']['action_id'] == 'command-background-1', 'normal approval was not retained on its terminal')
     finally:
         close_context(context)
 
@@ -3215,7 +3670,8 @@ def test_browser_ssh_key_lifecycle_and_settings_transfer(browser, access_url):
             'algorithm': 'ssh-ed25519',
             'challenge': base64.b64encode(challenge).decode('ascii'),
             'challenge_sha256': hashlib.sha256(challenge).hexdigest(),
-            'expires_at': time.time() + 10,
+            'timeout_seconds': 10,
+            'expires_at': time.time() - 60,
         }
         page.evaluate(
             'payload => window.terminalTest.handleBrowserSshSignRequestForTest(payload)',
@@ -3225,7 +3681,10 @@ def test_browser_ssh_key_lifecycle_and_settings_transfer(browser, access_url):
             """() => window.terminalTest.getEmitted()
                 .filter(entry => entry.event === 'ssh_browser_sign_response').at(-1).args[0]"""
         )
-        check(response['status'] == 'ok', 'structured browser SSH signing request failed')
+        check(
+            response['status'] == 'ok',
+            'Windows/WSL wall-clock skew invalidated a fresh relative signing request',
+        )
         Ed25519PublicKey.from_public_bytes(base64.b64decode(metadata['publicKeyRawB64'])).verify(
             base64.b64decode(response['signature']),
             challenge,
@@ -3348,6 +3807,8 @@ def main():
         test_background_terminal_render_uses_mirror_canvas_png,
         test_paste_review_approve_and_cancel,
         test_approval_payload_and_stale_rejections,
+        test_file_copy_approval_shows_canonical_plan,
+        test_file_copy_approval_is_global_and_decision_is_single_shot,
         test_cjk_width_compatibility_defaults_off,
         test_windows_font_fallback_defaults_and_migrates_legacy,
         test_powerline_symbol_fallback_is_optional_and_applies_immediately,

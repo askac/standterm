@@ -105,11 +105,11 @@ The browser mints tokens through `POST /agent/external/token` using the current
 authenticated StandTerm session cookie and public Agent state fields for the active
 terminal. External clients submit commands through `POST /agent/external/command`,
 which is accepted only from loopback clients and still requires the `agt_...`
-token. When a token is minted, the server writes both the backward-compatible
-latest handoff `standterm_external_agent_handoff.json` and a stable handoff for
-that terminal under a server-instance subdirectory of
-`standterm_external_agent_handoffs/`. These ignored local
-files are only conveniences for CLI agents on the StandTerm host; they do not
+token. When a token is minted, the server writes both the latest handoff
+`standterm_external_agent_handoff.json` and a stable handoff for that terminal
+under `standterm_external_agent_handoffs/` in an instance-scoped per-user
+runtime directory. These transient local files are only conveniences for CLI
+agents on the StandTerm host; they do not
 bypass the short-lived token, loopback-only command endpoint, or Agent panel
 mode gates. Each is a machine-readable discovery document for non-StandTerm
 agents and includes `handoff_schema:
@@ -128,7 +128,13 @@ matching token is revoked or its terminal/viewer binding is invalidated. Each
 server process uses a distinct directory so an old launch is never selected as
 the current instance; graceful shutdown removes the current directory, while
 fresh agentinfo generation prunes handoffs whose tokens expired or became
-invalid during the launch.
+invalid during the launch. Linux and WSL prefer
+`$XDG_RUNTIME_DIR/standterm`, Linux falls back to
+`<system-temp>/standterm-<uid>`, native Windows uses
+`%LOCALAPPDATA%\StandTerm\runtime`, and macOS uses
+`~/Library/Caches/StandTerm/runtime`. `STANDTERM_AGENT_RUNTIME_DIR` overrides the
+runtime root. Graceful shutdown removes the current instance directory; a
+token left by a crash is invalid after server restart.
 Agents should call `hello` first when possible and branch only on the typed
 `capabilities` field, not on displayed terminal text.
 See `docs/examples/standterm-external-agent-skill/SKILL.md` and the adjacent
@@ -143,7 +149,7 @@ network interface.
 External clients do not have to run from the StandTerm launch directory. The
 cross-platform connection contract is the loopback command URL, bearer token,
 terminal id, and TLS mode (`--ca-file` for verified HTTPS or `--insecure` only
-for local loopback testing). Local files such as
+for local loopback testing). Runtime files such as
 `standterm_agentinfo.json`, `standterm_external_agent_handoff.json`,
 `standterm_external_agent_handoffs/`, and any current-instance pointer are
 conveniences for agents on the StandTerm host.
@@ -164,7 +170,7 @@ environment.
 
 ```bash
 tools/.venv_wsl/bin/python scripts/agent_cli.py \
-  --handoff standterm_external_agent_handoff.json \
+  --handoff <runtime-handoff-path-from-agentinfo> \
   hello
 
 tools/.venv_wsl/bin/python scripts/agent_cli.py \
@@ -218,11 +224,12 @@ starting one CLI process per line:
 
 ```bash
 tools/.venv_wsl/bin/python scripts/agent_repl.py \
-  --handoff standterm_external_agent_handoff.json \
+  --handoff <runtime-handoff-path-from-agentinfo> \
   --enter cr
 
 tools/.venv_wsl/bin/python scripts/agent_repl.py \
-  --agentinfo standterm_agentinfo.json \
+  --agentinfo <agentinfo-url-from-startup-banner> \
+  <tls-args-from-startup-banner> \
   --enter cr
 ```
 
@@ -258,7 +265,7 @@ For one-line checks in a terminal that is already known to be a shell,
 
 ```bash
 tools/.venv_wsl/bin/python scripts/agent_shcmd.py \
-  --handoff standterm_external_agent_handoff.json \
+  --handoff <runtime-handoff-path-from-agentinfo> \
   --json \
   "pwd"
 ```
@@ -270,6 +277,33 @@ object with `--json`. Use `--full-json` for the raw backend response. This is a
 terminal helper rather than a subprocess exec API: it does not provide a
 reliable shell exit code or separate stderr, and captured text remains display
 data rather than StandTerm control state.
+
+For direct backend file copies, use the dedicated `scripts/agent_scp.py`
+wrapper. It supports SSH-to-SSH, SSH-to-Local-Shell, Local-Shell-to-SSH, and
+Local-Shell-to-Local-Shell copies between two distinct attached terminals:
+
+```bash
+tools/.venv_wsl/bin/python scripts/agent_scp.py \
+  --agentinfo <agentinfo-url-from-startup-banner> \
+  <tls-args-from-startup-banner> \
+  --terminal term-2 \
+  --destination-terminal term-3 \
+  /source/file.bin \
+  /destination/file.bin
+```
+
+Both terminals need their own current token-bearing handoff, and both tokens
+must belong to the same StandTerm browser session and viewer. Local Shell paths
+must be absolute and currently require POSIX directory-relative file operations.
+The helper waits for the typed action result by default; use
+`--no-wait` to return the pending action id. It never prints either bearer
+token or the transferred file content. While an approved copy runs, it reports
+backend byte progress to stderr. Reaching `--wait-seconds` stops only the local
+wait and returns the last typed action status with `wait_timed_out: true`; it
+does not report the backend copy as failed or authorize a retry. Browser
+approval schedules the copy as a backend background task, so the approval
+handler does not wait for the transfer. Callers may use `--no-wait` and query
+the returned action id with `action-status` instead.
 
 For workflows that need one paced text entry before interactive follow-up, the
 REPL can run `--type-text` or `--type-file` after attaching and then continue
@@ -283,13 +317,14 @@ instead of REPL pipe mode:
 
 ```bash
 tools/.venv_wsl/bin/python scripts/agent_type.py \
-  --handoff standterm_external_agent_handoff.json \
+  --handoff <runtime-handoff-path-from-agentinfo> \
   --from-file body.txt \
   --cps 3 \
   --newline cr
 
 tools/.venv_wsl/bin/python scripts/agent_type.py \
-  --agentinfo standterm_agentinfo.json \
+  --agentinfo <agentinfo-url-from-startup-banner> \
+  <tls-args-from-startup-banner> \
   --from-file body.txt \
   --cps 3 \
   --newline cr
@@ -314,7 +349,7 @@ forwards each command to the same loopback HTTP command endpoint:
 
 ```bash
 tools/.venv_wsl/bin/python scripts/agent_jsonl.py \
-  --handoff standterm_external_agent_handoff.json
+  --handoff <runtime-handoff-path-from-agentinfo>
 
 tools/.venv_wsl/bin/python scripts/agent_jsonl.py \
   --agentinfo <agentinfo-url-from-startup-banner> \
@@ -351,10 +386,11 @@ provides an optional stdio MCP adapter over this same command boundary:
 
 ```bash
 tools/.venv_wsl/bin/python scripts/agent_mcp.py \
-  --handoff standterm_external_agent_handoff.json
+  --handoff <runtime-handoff-path-from-agentinfo>
 
 tools/.venv_wsl/bin/python scripts/agent_mcp.py \
-  --agentinfo standterm_agentinfo.json
+  --agentinfo <agentinfo-url-from-startup-banner> \
+  <tls-args-from-startup-banner>
 ```
 
 The adapter is a facade, not a second terminal-control protocol. It does not
@@ -363,7 +399,8 @@ mode/privacy gates. It reads the existing handoff or tokenless agentinfo data,
 redacts bearer tokens from discovery output, and forwards MCP tools through
 `/agent/external/command`. The first tools are `standterm_discover`,
 `standterm_hello`, `standterm_state`, `standterm_heartbeat`,
-`standterm_observe`, `standterm_wait`, `standterm_send`, `standterm_render`,
+`standterm_observe`, `standterm_wait`, `standterm_send`,
+`standterm_action_status`, `standterm_file_copy`, `standterm_render`,
 `standterm_sequence`, and `standterm_revoke`.
 
 `standterm_observe` defaults to `mode: "since_cursor"`, which maps to `tail`
@@ -392,7 +429,8 @@ Discover protocol/capabilities:
 `hello` returns `version`, `external_agent_id`, `terminal_id`, current public
 Agent state, and a typed `capabilities` array such as `state`, `heartbeat`, `screen`,
 `headless_screen`, `screen_wait`, `wait`, `sequence`, `render`, `tail`, `send`,
-`send_capture`, `submit_after`, `strip_ansi`, and `revoke`.
+`send_capture`, `submit_after`, `strip_ansi`, `action_status`, `file_copy`, and
+`revoke`.
 
 Attach:
 
@@ -536,7 +574,7 @@ The CLI wrapper can save the returned PNG directly when using the PNG mode:
 
 ```bash
 tools/.venv_wsl/bin/python scripts/agent_cli.py \
-  --handoff standterm_external_agent_handoff.json \
+  --handoff <runtime-handoff-path-from-agentinfo> \
   render --mode visible-xterm-png --save viewport.png
 ```
 
@@ -675,6 +713,111 @@ long-poll tail calls. When `strip_ansi` is requested, the response includes
 `"strip_ansi": true` and `"data_format": "plain"`, and each returned event's
 `data` field is the stripped text. Clients must not infer control state from
 terminal text.
+
+Propose a direct backend file copy:
+
+```json
+{
+  "op": "file-copy",
+  "token": "agt_source...",
+  "terminal_id": "term-2",
+  "source_path": "/source/file.bin",
+  "destination_token": "agt_destination...",
+  "destination_terminal_id": "term-3",
+  "destination_path": "/destination/file.bin",
+  "conflict_mode": "fail"
+}
+```
+
+`file-copy` accepts one regular file and two distinct attached SSH or Local
+Shell terminals. Both terminal-scoped tokens must belong to the same StandTerm
+session and authorizing browser viewer, and both terminal Agent states must be
+writable and outside privacy/pause gates. Local Shell paths must be absolute and
+run only where the backend can anchor POSIX directory-relative operations;
+symbolic links and non-regular files are rejected. Source and destination must
+identify different files. For SSH, exact same-path detection depends on the
+canonical endpoint identity and cannot equate every possible host alias. The
+source is always preserved, and file metadata is not copied.
+
+The backend performs a metadata-only preflight so the browser can show the
+canonical source endpoint and path, canonical destination endpoint and path,
+source size, destination existence, and exact conflict behavior. Preflight
+details are not returned to the external caller. Every request returns
+`pending_approval` and requires a separate **Approve copy** click, including
+when both terminals use Full mode. The backend does not treat a caller's claim
+that the user requested a copy as authorization. The authorizing viewer shows
+file-copy approval globally even when another terminal tab is active; ordinary
+terminal-input approvals remain scoped to their terminal tab.
+
+The browser Files UI has a separate human-initiated **Copy to…** path. Its final
+**Copy** button is the explicit authorization for that one browser transaction,
+so it does not create an Agent action. It shares the bounded backend stream,
+snapshot revalidation, progress, conflict, and atomic-publish mechanisms with
+Agent copies. The browser can request cancellation while that transaction is
+`running`; the backend serializes cancellation against the commit barrier and
+returns `cancelled` only when the destination cannot subsequently be published.
+Once the transaction is `committing`, cancellation is rejected and the browser
+must wait for the terminal result. Closing the Files window is not a cancellation
+request. This browser path does not change the mandatory approval contract for
+the external `file-copy` operation.
+
+`conflict_mode` is one of `fail`, `keep_both`, or `replace`. `fail` is the safe
+default and never writes when the destination existed during preflight.
+`keep_both` approves the exact backend-selected alternate path. `replace`
+requires explicit approval and uses an atomic replace only when the destination
+still matches its preflight snapshot. A change to either endpoint, terminal
+binding, mode, privacy state, source snapshot, or destination snapshot before
+the commit barrier fails the action. Crossing that barrier changes the action
+from `running` to `committing` and prevents lifecycle cancellation while the
+destination adapter attempts its atomic publish; it does not itself confirm
+that the destination was updated. Contents stream through bounded backend
+buffers and are never returned in the command response.
+
+Poll the typed result with the source token and returned action id:
+
+```json
+{
+  "op": "action-status",
+  "token": "agt_source...",
+  "terminal_id": "term-2",
+  "action_id": "..."
+}
+```
+
+Pending and rejected responses, plus failures that occur before approval is
+validated, expose only action identity, status, and an optional error code.
+Running, committing, completed, and post-approval failed responses may expose
+the approved canonical plan. Running and committing responses include
+`bytes_copied`, `total_bytes`, and `progress_updated_at`; progress is structured
+backend state and is not inferred from terminal output. File-copy events also
+include a monotonic `action_revision`; clients must ignore an older revision for
+the same action id. A duplicate approval or rejection receives the current
+authoritative action state instead of changing the action to `failed`.
+Completed results add
+metadata such as `bytes_copied`, `destination_path`, and `source_preserved`, but
+never file content. Once the SSH server confirms the atomic publish, SFTP
+session cleanup is best-effort and cannot hold the action in `running`. If a
+terminal/token is invalidated after the commit barrier, the publish continues
+and its confirmed result remains authoritative, but that invalid token can no
+longer poll it.
+
+Approved copies use a bounded background-worker pool and remain serialized at
+the cross-bridge copy barrier. If the pool is full, the action fails with
+`file_copy_busy` rather than creating an unbounded waiter. SSH SFTP channels use
+a 60-second timeout for each blocking read or write; a timeout after publish
+starts follows the same publish-outcome reconciliation rules below.
+
+`failed` means the workflow did not obtain confirmed success; it does not
+always prove that the destination remained unchanged. In particular,
+`file_copy_publish_outcome_unknown` means an SSH publish request was attempted
+but the server response and destination state could not be reconciled. The
+destination may already contain the copied file. Inspect it before deciding
+whether to retry; never retry this outcome blindly.
+
+Explicitly revoking either endpoint token cancels its pending or running copy
+before the commit barrier. Sliding idle expiry does not independently cancel a
+copy that the browser already approved; terminal mode, privacy, binding, and
+lifecycle gates remain authoritative throughout the stream.
 
 Propose terminal input:
 
@@ -1151,6 +1294,7 @@ explicit `error_code`.
 - `agent_external_origin_blocked`
 - `agent_external_disabled`
 - `agent_human_input_active`
+- `file_copy_publish_outcome_unknown`
 
 ## Transcript Boundary
 

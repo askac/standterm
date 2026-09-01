@@ -1,6 +1,6 @@
 ---
 name: standterm-external-agent
-description: Use when controlling a local StandTerm terminal through the external-agent handoff JSON, CLI wrappers, optional MCP adapter, including hello, render, tail, send, and REPL workflows.
+description: Use when controlling local StandTerm terminals through external-agent handoff JSON, CLI wrappers, or the optional MCP adapter, including observation and input.
 ---
 
 # StandTerm External Agent
@@ -50,12 +50,17 @@ If the user only provides this skill prompt and asks you to operate StandTerm:
    Agent Info URL, active Python,
    `scripts/agent_cli.py`, `scripts/agent_jsonl.py`,
    `scripts/agent_mcp.py`,
-   `scripts/agent_repl.py`, `scripts/agent_shcmd.py`, `scripts/agent_type.py`,
+   `scripts/agent_repl.py`, `scripts/agent_scp.py`, `scripts/agent_shcmd.py`,
+   `scripts/agent_type.py`,
    `standterm_agentinfo.json`, and
    `standterm_external_agent_handoff.json` absolute paths. Do not guess the port,
    URL, token, or working directory. Direct `scripts/*.py` execution may work on
    a preconfigured machine, but for automation always invoke the wrappers through
    the active Python path from the banner or handoff metadata.
+   Secret-bearing handoffs live in a per-user runtime directory outside the
+   StandTerm checkout. Never construct a handoff path from `<standterm-dir>`,
+   the controller cwd, or a remembered path; use the absolute path returned by
+   fresh agentinfo or the startup banner.
 3. If the banner is unavailable and the user provides the current browser
    origin, preserve its scheme and port, replace its host with `127.0.0.1`, and
    fetch `/agentinfo`. Never request or repeat the browser's `?token=...` value.
@@ -116,7 +121,10 @@ If the user only provides this skill prompt and asks you to operate StandTerm:
    handoff files commonly remain after old launches.
 3. Inspect `standterm_external_agent_handoff.json` or a per-terminal handoff
    selected through agentinfo only as a local secret-bearing access file. Do
-   not commit it, paste the token, or print the full file.
+   not commit it, paste the token, or print the full file. Linux and WSL
+   normally place these artifacts under `$XDG_RUNTIME_DIR`; native Windows uses
+   a per-user runtime directory. A path from another OS runtime is not a usable
+   cross-runtime bootstrap.
 4. Call `discover` first when starting from agentinfo, then call `hello` after a
    token is available. Branch on typed JSON fields such as `status`,
    `capabilities`, `terminal_id`, and `error_code`.
@@ -175,6 +183,10 @@ If the user only provides this skill prompt and asks you to operate StandTerm:
    user or host agent. The MCP adapter should be started with the same active
    Python and URL-first agentinfo/handoff fields as the CLI wrappers, and it must not
    print tokens or full handoff JSON.
+17. For file transfer, apply the paired `standterm-file-transfer` workflow
+   skill. It selects between preferred typed backend copy and terminal-stream
+   rescue. Do not treat a backend failure or unsupported endpoint as permission
+   to expose the file through the terminal stream.
 
 ## Commands
 
@@ -196,19 +208,19 @@ Run tokenless discovery:
 Run a capability check:
 
 ```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json hello
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <runtime-handoff-path-from-agentinfo> hello
 ```
 
 Renew a token during passive monitoring without reading display:
 
 ```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json heartbeat
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <runtime-handoff-path-from-agentinfo> heartbeat
 ```
 
 Start the optional MCP stdio adapter when configuring an MCP-capable client:
 
 ```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_mcp.py --handoff <standterm-dir>/standterm_external_agent_handoff.json
+<python-from-startup-banner> <standterm-dir>/scripts/agent_mcp.py --handoff <runtime-handoff-path-from-agentinfo>
 <python-from-startup-banner> <standterm-dir>/scripts/agent_mcp.py --agentinfo <agentinfo-url-from-startup-banner> <tls-args-from-startup-banner>
 ```
 
@@ -222,14 +234,14 @@ signal.
 Request headless-safe structured Agent mirror screen data first:
 
 ```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json render --mode mirror-screen
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <runtime-handoff-path-from-agentinfo> render --mode mirror-screen
 ```
 
 Use `screen` for a compact structured text viewport without any browser
 render dependency:
 
 ```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json screen --tail-lines 12
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <runtime-handoff-path-from-agentinfo> screen --tail-lines 12
 ```
 
 Request a browser-produced terminal PNG when image output is needed and an
@@ -237,7 +249,7 @@ authorizing browser viewer is attached. Foreground terminals use the visible
 xterm DOM; background browser or terminal tabs use a terminal-mirror canvas:
 
 ```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json render --mode visible-xterm-png
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <runtime-handoff-path-from-agentinfo> render --mode visible-xterm-png
 ```
 
 Inspect the typed `render.source`: `visible_xterm_dom` is the foreground
@@ -249,60 +261,60 @@ solely to obtain a usable PNG.
 Save a browser-rendered terminal PNG without printing base64 to stdout:
 
 ```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json render --mode visible-xterm-png --save viewport.png
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <runtime-handoff-path-from-agentinfo> render --mode visible-xterm-png --save viewport.png
 ```
 
 Read terminal output events:
 
 ```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json tail --since 0 --limit 50
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <runtime-handoff-path-from-agentinfo> tail --since 0 --limit 50
 ```
 
 Use stripped plain display data only when raw ANSI redraws are too noisy:
 
 ```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json tail --since 0 --limit 50 --strip-ansi
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <runtime-handoff-path-from-agentinfo> tail --since 0 --limit 50 --strip-ansi
 ```
 
 Read a smaller provisional viewport slice when full `screen` would be too
 large:
 
 ```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json screen --tail-lines 12
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <runtime-handoff-path-from-agentinfo> screen --tail-lines 12
 ```
 
 ```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json screen --region 0:12
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <runtime-handoff-path-from-agentinfo> screen --region 0:12
 ```
 
 Send input only when Agent mode allows it:
 
 ```bash
-<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json send --text $'pwd\r'
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <runtime-handoff-path-from-agentinfo> send --text $'pwd\r'
 ```
 
 Send named navigation keys:
 
 ```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json send --key Down --key Enter
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <runtime-handoff-path-from-agentinfo> send --key Down --key Enter
 ```
 
 Use the generic key alias when a workflow is described in terms of terminal
 automation primitives:
 
 ```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json key --key Down --key Enter
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <runtime-handoff-path-from-agentinfo> key --key Down --key Enter
 ```
 
 Wait for output or a quiet screen without treating display text as control
 data:
 
 ```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json wait-output --since 0 --wait-ms 25000
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <runtime-handoff-path-from-agentinfo> wait-output --since 0 --wait-ms 25000
 ```
 
 ```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json wait-quiet --wait-ms 3000 --quiet-ms 500
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <runtime-handoff-path-from-agentinfo> wait-quiet --wait-ms 3000 --quiet-ms 500
 ```
 
 `wait-output` reports stream activity and `wait-quiet` reports a bounded quiet
@@ -319,11 +331,11 @@ within a sequence.
 Prefer atomic send-and-observe when the server advertises `send_capture`:
 
 ```bash
-<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json send-wait --text $'pwd\r'
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <runtime-handoff-path-from-agentinfo> send-wait --text $'pwd\r'
 ```
 
 ```bash
-<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <standterm-dir>/standterm_external_agent_handoff.json send-wait --text $'pwd\r' --strip-ansi
+<python-from-startup-banner> <standterm-dir>/scripts/agent_cli.py --handoff <runtime-handoff-path-from-agentinfo> send-wait --text $'pwd\r' --strip-ansi
 ```
 
 `send-wait` and `send --capture` return normal send metadata plus a typed
@@ -339,7 +351,7 @@ For one-line checks in a terminal that is already known to be a shell, prefer
 `agent_shcmd.py --json` over hand-building `send-wait` payloads:
 
 ```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_shcmd.py --handoff <standterm-dir>/standterm_external_agent_handoff.json --json "pwd"
+<python-from-startup-banner> <standterm-dir>/scripts/agent_shcmd.py --handoff <runtime-handoff-path-from-agentinfo> --json "pwd"
 <python-from-startup-banner> <standterm-dir>/scripts/agent_shcmd.py --agentinfo <agentinfo-url-from-startup-banner> <tls-args-from-startup-banner> --json git status --short
 ```
 
@@ -360,7 +372,7 @@ For repeated machine-driven operations, prefer the persistent JSONL client over
 starting one CLI process per command:
 
 ```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_jsonl.py --handoff <standterm-dir>/standterm_external_agent_handoff.json
+<python-from-startup-banner> <standterm-dir>/scripts/agent_jsonl.py --handoff <runtime-handoff-path-from-agentinfo>
 <python-from-startup-banner> <standterm-dir>/scripts/agent_jsonl.py --agentinfo <agentinfo-url-from-startup-banner> <tls-args-from-startup-banner>
 <python-from-startup-banner> <standterm-dir>/scripts/agent_jsonl.py --agentinfo <agentinfo-url-from-startup-banner> <tls-args-from-startup-banner> --terminal term-2
 ```
@@ -385,49 +397,10 @@ bytes before sending; this is intentionally different from raw CLI `--text`.
 Legacy `data` is accepted as an alias for plain text input, but prefer the
 canonical `kind`/`text` or `kind`/`keys` shape.
 
-Use `agent_rsfile.py` only as a terminal-stream fallback for file transfer when
-the target is at an interactive shell prompt and no direct file channel is
-available. It sends prebuilt remote commands through the same External Agent
-`send_capture` path, so payload bytes may appear in terminal echo, tail,
-scrollback, logs, and model context. Do not use it for passwords, private keys,
-tokens, cookies, or other secrets.
-
-Common built-in methods:
-
-```text
-builtin:macos-zsh-python3
-builtin:linux-sh-python3
-builtin:windows-powershell
-builtin:freebsd-tcsh-python3
-builtin:freebsd-tcsh-python3.11
-builtin:freebsd-tcsh-python-auto
-```
-
-Upload a file to the remote shell:
-
-```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_rsfile.py --handoff <standterm-dir>/standterm_external_agent_handoff.json --method builtin:freebsd-tcsh-python-auto put --local patch.tgz --remote-path /tmp/patch.tgz
-```
-
-Download is guarded because remote bytes return through terminal output:
-
-```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_rsfile.py --handoff <standterm-dir>/standterm_external_agent_handoff.json --method builtin:linux-sh-python3 get --remote-path /tmp/report.bin --local report.bin --allow-get --max-bytes 1048576
-```
-
-The helper uses nonce-scoped `STFT1` markers and verifies size/SHA-256, but
-terminal output remains display data except for markers produced by the helper's
-own command after the current request. If the target is in a TUI, pager, editor,
-BBS, login prompt, or any non-shell state, do not use `agent_rsfile.py`; navigate
-back to a shell or choose another transfer path. External method packs are
-trusted remote command templates and may execute arbitrary commands in the
-connected terminal: load them only from local files you trust and pass
-`--trust-pack` explicitly.
-
 Use the REPL for interactive work:
 
 ```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_repl.py --handoff <standterm-dir>/standterm_external_agent_handoff.json --enter cr
+<python-from-startup-banner> <standterm-dir>/scripts/agent_repl.py --handoff <runtime-handoff-path-from-agentinfo> --enter cr
 <python-from-startup-banner> <standterm-dir>/scripts/agent_repl.py --agentinfo <agentinfo-url-from-startup-banner> <tls-args-from-startup-banner> --enter cr
 ```
 
@@ -447,7 +420,7 @@ Use REPL startup paced typing when a workflow needs long text entry followed by
 interactive prompt handling in the same session:
 
 ```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_repl.py --handoff <standterm-dir>/standterm_external_agent_handoff.json --type-file body.txt --type-cps 3 --type-wait-quiet-ms 500
+<python-from-startup-banner> <standterm-dir>/scripts/agent_repl.py --handoff <runtime-handoff-path-from-agentinfo> --type-file body.txt --type-cps 3 --type-wait-quiet-ms 500
 ```
 
 REPL startup typing uses the same shared pacing helpers as `agent_type.py`.
@@ -457,7 +430,7 @@ Use the paced typer for long editor/TUI text entry that should arrive at a
 controlled cadence:
 
 ```text
-<python-from-startup-banner> <standterm-dir>/scripts/agent_type.py --handoff <standterm-dir>/standterm_external_agent_handoff.json --from-file body.txt --cps 3 --newline cr
+<python-from-startup-banner> <standterm-dir>/scripts/agent_type.py --handoff <runtime-handoff-path-from-agentinfo> --from-file body.txt --cps 3 --newline cr
 <python-from-startup-banner> <standterm-dir>/scripts/agent_type.py --agentinfo <agentinfo-url-from-startup-banner> <tls-args-from-startup-banner> --from-file body.txt --cps 3 --newline cr
 ```
 
