@@ -20,6 +20,10 @@ Do not silently substitute one for the other.
 - A general copy request may be proposed through the preferred backend path, but
   the backend still requires a fresh browser **Approve copy** decision for every
   operation, including in Full mode.
+- StandTerm Files > **Copy to…** is a human-operated browser path. An agent must
+  not click or automate its **Copy** button or emit `files_copy_request`;
+  agent-initiated copies must use external `file-copy` and its fresh browser
+  approval.
 - If the backend path is unavailable or fails, stop before using terminal-stream
   rescue. Explain its exposure and obtain a new explicit instruction for that
   path.

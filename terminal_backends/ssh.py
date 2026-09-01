@@ -123,6 +123,9 @@ class SSHBridge(TerminalBridge):
     def sftp_endpoint(self):
         return dict(self._sftp_endpoint) if self._sftp_endpoint else None
 
+    def files_available(self):
+        return True
+
     @staticmethod
     def _validate_sftp_path(path):
         if not isinstance(path, str):

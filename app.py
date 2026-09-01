@@ -186,6 +186,8 @@ SFTP_DOWNLOAD_TICKET_REQUEST_EVENT = 'sftp_download_ticket_request'
 SFTP_DOWNLOAD_TICKET_RESULT_EVENT = 'sftp_download_ticket_result'
 SFTP_FILE_ACTION_REQUEST_EVENT = 'sftp_file_action_request'
 SFTP_FILE_ACTION_RESULT_EVENT = 'sftp_file_action_result'
+FILES_COPY_REQUEST_EVENT = 'files_copy_request'
+FILES_COPY_RESULT_EVENT = 'files_copy_result'
 SFTP_UPLOAD_TICKET_TTL_SECONDS = 60
 SFTP_DOWNLOAD_TICKET_TTL_SECONDS = 60
 SFTP_MAX_UPLOAD_BYTES = parse_positive_int_env('SFTP_MAX_UPLOAD_BYTES', 512 * 1024 * 1024)
@@ -416,6 +418,21 @@ AGENT_ACTION_MAX_RECORDS = 256
 AGENT_FILE_COPY_MAX_BACKGROUND_WORKERS = 4
 AGENT_FILE_COPY_PROGRESS_EMIT_BYTES = 1024 * 1024
 AGENT_FILE_COPY_PROGRESS_EMIT_SECONDS = 1.0
+FILES_COPY_JOB_TTL_SECONDS = 10 * 60
+FILES_COPY_JOB_MAX_RECORDS = 128
+FILES_COPY_EVENT_BEGIN_COMMIT = 'begin_commit'
+FILES_COPY_EVENT_COMPLETE = 'complete'
+FILES_COPY_EVENT_FAIL = 'fail'
+FILES_COPY_TRANSITIONS = {
+    'running': {
+        FILES_COPY_EVENT_BEGIN_COMMIT: 'committing',
+        FILES_COPY_EVENT_FAIL: 'failed',
+    },
+    'committing': {
+        FILES_COPY_EVENT_COMPLETE: 'completed',
+        FILES_COPY_EVENT_FAIL: 'failed',
+    },
+}
 AGENT_TRANSCRIPT_TTL_SECONDS = 30 * 60
 AGENT_TRANSCRIPT_MAX_EVENTS = 400
 AGENT_TRANSCRIPT_MAX_BYTES = 120000
@@ -2265,6 +2282,9 @@ class SFTPDownloadTicketStore:
 sftp_download_ticket_store = SFTPDownloadTicketStore()
 agent_file_copy_lock = threading.Lock()
 agent_file_copy_worker_slots = threading.BoundedSemaphore(AGENT_FILE_COPY_MAX_BACKGROUND_WORKERS)
+files_copy_jobs_lock = threading.RLock()
+files_copy_jobs = {}
+files_copy_requests = {}
 
 
 class AgentFileCopyStream:
@@ -4712,6 +4732,84 @@ def normalize_agent_file_copy_conflict_mode(value):
     mode = mode.strip().lower().replace('-', '_')
     return mode if mode in {'fail', 'keep_both', 'replace'} else None
 
+def is_files_bridge(bridge):
+    if isinstance(bridge, SSHBridge):
+        return True
+    return isinstance(bridge, LocalShellBridge) and bridge.files_available()
+
+def browse_bridge_files(bridge, path=None, *, child=None, parent=False):
+    if isinstance(bridge, SSHBridge):
+        return bridge.browse_sftp(path, child=child, parent=parent)
+    if isinstance(bridge, LocalShellBridge) and bridge.files_available():
+        return bridge.browse_local_files(path, child=child, parent=parent)
+    raise SFTPTransferError('files_unavailable', 'Files is unavailable for this terminal.')
+
+def resolve_bridge_file_reference(bridge, file_id):
+    if isinstance(bridge, SSHBridge):
+        return bridge.resolve_sftp_file_reference(file_id)
+    if isinstance(bridge, LocalShellBridge) and bridge.files_available():
+        return bridge.resolve_local_file_reference(file_id)
+    raise SFTPTransferError('files_unavailable', 'Files is unavailable for this terminal.')
+
+def prepare_current_bridge_file(bridge, file_snapshot):
+    if isinstance(bridge, SSHBridge):
+        current = bridge.prepare_sftp_file(file_snapshot['directory'], file_snapshot['filename'])
+    elif isinstance(bridge, LocalShellBridge) and bridge.files_available():
+        current = bridge.prepare_local_file(file_snapshot['path'])
+    else:
+        raise SFTPTransferError('files_unavailable', 'Files is unavailable for this terminal.')
+    if not agent_file_copy_snapshot_matches(file_snapshot, current):
+        raise SFTPTransferError('files_file_changed', 'The file changed after the directory was listed.')
+    return current
+
+def prepare_bridge_upload(bridge, directory, filename, conflict_mode):
+    if isinstance(bridge, SSHBridge):
+        return bridge.prepare_sftp_upload(directory, filename, conflict_mode)
+    if isinstance(bridge, LocalShellBridge) and bridge.files_available():
+        filename = bridge.validate_files_name(filename)
+        local_conflict_mode = 'fail' if conflict_mode == 'ask' else conflict_mode
+        return bridge.prepare_local_upload(str(Path(directory) / filename), local_conflict_mode)
+    raise SFTPTransferError('files_unavailable', 'Files is unavailable for this terminal.')
+
+def download_bridge_file_chunks(bridge, file_snapshot):
+    if isinstance(bridge, SSHBridge):
+        return bridge.download_sftp_chunks(file_snapshot)
+    if isinstance(bridge, LocalShellBridge) and bridge.files_available():
+        return bridge.download_local_chunks(file_snapshot)
+    raise SFTPTransferError('files_unavailable', 'Files is unavailable for this terminal.')
+
+def upload_bridge_file_stream(bridge, stream, upload, expected_size):
+    if isinstance(bridge, SSHBridge):
+        return bridge.upload_sftp_stream(stream, upload, expected_size)
+    if isinstance(bridge, LocalShellBridge) and bridge.files_available():
+        return bridge.upload_local_stream(stream, upload, expected_size)
+    raise SFTPTransferError('files_unavailable', 'Files is unavailable for this terminal.')
+
+def rename_bridge_file(bridge, file_snapshot, new_filename):
+    if isinstance(bridge, SSHBridge):
+        return bridge.rename_sftp_file(
+            file_snapshot['directory'],
+            file_snapshot['filename'],
+            new_filename,
+            file_snapshot['size'],
+            file_snapshot['mtime'],
+        )
+    if isinstance(bridge, LocalShellBridge) and bridge.files_available():
+        return bridge.rename_local_file(file_snapshot, new_filename)
+    raise SFTPTransferError('files_unavailable', 'Files is unavailable for this terminal.')
+
+def delete_bridge_file(bridge, file_snapshot):
+    if isinstance(bridge, SSHBridge):
+        return bridge.delete_sftp_file(
+            file_snapshot['directory'],
+            file_snapshot['filename'],
+            file_snapshot['size'],
+            file_snapshot['mtime'],
+        )
+    if isinstance(bridge, LocalShellBridge) and bridge.files_available():
+        return bridge.delete_local_file(file_snapshot)
+    raise SFTPTransferError('files_unavailable', 'Files is unavailable for this terminal.')
+
 def is_agent_file_copy_bridge(bridge):
     return isinstance(bridge, (SSHBridge, LocalShellBridge))
 
@@ -4766,23 +4864,8 @@ def agent_file_copy_snapshot_matches(original, current):
     )
     return all(original.get(key) == current.get(key) for key in snapshot_keys)
 
-def prepare_agent_file_copy_plan(source_bridge, destination_bridge, command):
-    if source_bridge is destination_bridge:
-        raise SFTPTransferError('file_copy_same_terminal', 'Source and destination terminals must differ.')
-    conflict_mode = normalize_agent_file_copy_conflict_mode(command.get('conflict_mode'))
-    if not conflict_mode:
-        raise SFTPTransferError(AGENT_ERROR_ACTION_INVALID_DATA, 'File copy conflict mode is invalid.')
-    source_file = prepare_agent_file_copy_source(source_bridge, command.get('source_path'))
-    if source_file['size'] > SFTP_MAX_UPLOAD_BYTES:
-        raise SFTPTransferError(
-            'file_copy_too_large',
-            'The source file exceeds the configured SFTP transfer limit.',
-        )
-    upload = prepare_agent_file_copy_destination(
-        destination_bridge,
-        command.get('destination_path'),
-        conflict_mode,
-    )
+
+def validate_distinct_file_copy_target(source_bridge, destination_bridge, source_file, upload):
     if isinstance(source_bridge, LocalShellBridge) and isinstance(destination_bridge, LocalShellBridge):
         same_path = source_file['path'] == upload['destination_path']
         existing = upload.get('existing')
@@ -4805,6 +4888,30 @@ def prepare_agent_file_copy_plan(source_bridge, destination_bridge, command):
             'file_copy_same_path',
             'Source and destination must identify different remote files.',
         )
+
+def prepare_agent_file_copy_plan(source_bridge, destination_bridge, command):
+    if source_bridge is destination_bridge:
+        raise SFTPTransferError('file_copy_same_terminal', 'Source and destination terminals must differ.')
+    conflict_mode = normalize_agent_file_copy_conflict_mode(command.get('conflict_mode'))
+    if not conflict_mode:
+        raise SFTPTransferError(AGENT_ERROR_ACTION_INVALID_DATA, 'File copy conflict mode is invalid.')
+    source_file = prepare_agent_file_copy_source(source_bridge, command.get('source_path'))
+    if source_file['size'] > SFTP_MAX_UPLOAD_BYTES:
+        raise SFTPTransferError(
+            'file_copy_too_large',
+            'The source file exceeds the configured SFTP transfer limit.',
+        )
+    upload = prepare_agent_file_copy_destination(
+        destination_bridge,
+        command.get('destination_path'),
+        conflict_mode,
+    )
+    validate_distinct_file_copy_target(
+        source_bridge,
+        destination_bridge,
+        source_file,
+        upload,
+    )
     return source_file, upload, conflict_mode
 
 def build_agent_file_copy_action(state, record, destination_state, destination_record,
@@ -5685,6 +5792,7 @@ def build_terminal_list(session_token, sid=None):
             'term': SSH_TERM,
             'connected': True,
             'buffered_events': len(bridge.replay_buffer),
+            'files_available': bool(bridge.files_available()),
         }
         terminals.append(terminal_info)
     return terminals
@@ -6957,7 +7065,7 @@ def upload_sftp_file(ticket):
         return add_common_headers(jsonify({
             'status': 'failed',
             'error_code': error_code,
-            'message': 'The SFTP upload request is invalid or expired.',
+            'message': 'The Files upload request is invalid or expired.',
         })), status_code
     bridge = record['bridge']
     if (
@@ -6968,7 +7076,7 @@ def upload_sftp_file(ticket):
         return add_common_headers(jsonify({
             'status': 'failed',
             'error_code': 'sftp_upload_not_authorized',
-            'message': 'The SSH session is no longer available for this upload.',
+            'message': 'The terminal is no longer available for this upload.',
         })), 403
     content_length = request.content_length
     if content_length is None:
@@ -6990,17 +7098,21 @@ def upload_sftp_file(ticket):
             'message': 'The selected file exceeds the configured upload limit.',
         })), 413
     try:
-        result = bridge.upload_sftp_stream(
+        result = upload_bridge_file_stream(
+            bridge,
             request.stream,
             record['upload'],
             record['expected_size'],
         )
-    except SFTPTransferError as exc:
+    except (SFTPTransferError, LocalFileTransferError) as exc:
         status_code = 409 if exc.error_code in {
             'sftp_atomic_replace_unavailable',
             'sftp_destination_changed',
             'sftp_destination_not_file',
             'sftp_destination_symlink',
+            'local_copy_destination_changed',
+            'local_copy_destination_not_file',
+            'local_copy_destination_symlink',
         } else 502
         return add_common_headers(jsonify({
             'status': 'failed',
@@ -7031,7 +7143,7 @@ def download_sftp_file(ticket):
         return add_common_headers(jsonify({
             'status': 'failed',
             'error_code': error_code,
-            'message': 'The SFTP download request is invalid or expired.',
+            'message': 'The Files download request is invalid or expired.',
         })), status_code
     bridge = record['bridge']
     if (
@@ -7043,7 +7155,7 @@ def download_sftp_file(ticket):
         return add_common_headers(jsonify({
             'status': 'failed',
             'error_code': 'sftp_download_not_authorized',
-            'message': 'The SSH session is no longer available for this download.',
+            'message': 'The terminal is no longer available for this download.',
         })), 403
     file_snapshot = record['file']
     filename = file_snapshot['filename']
@@ -7058,7 +7170,7 @@ def download_sftp_file(ticket):
     def stream_download():
         bytes_sent = 0
         try:
-            for chunk in bridge.download_sftp_chunks(file_snapshot):
+            for chunk in download_bridge_file_chunks(bridge, file_snapshot):
                 bytes_sent += len(chunk)
                 yield chunk
         except GeneratorExit:
@@ -7067,7 +7179,7 @@ def download_sftp_file(ticket):
                 f'bytes_sent={bytes_sent} expected_bytes={expected_size}'
             )
             raise
-        except SFTPTransferError as exc:
+        except (SFTPTransferError, LocalFileTransferError) as exc:
             log_message(
                 f'[sftp] Download stream failed: download_id={download_id} terminal={terminal_id} '
                 f'error_code={exc.error_code} bytes_sent={bytes_sent} '
@@ -8402,6 +8514,47 @@ def validate_agent_file_copy_execution(state, action):
     return source_bridge, destination_bridge, None
 
 
+def copy_file_between_bridges(source_bridge, destination_bridge, source_file, upload, *,
+                              before_read_callback=None, progress_callback=None,
+                              pre_commit_callback=None):
+    with agent_file_copy_lock:
+        source_file = dict(source_file)
+        upload = dict(upload)
+        if upload.get('status') == 'conflict':
+            raise SFTPTransferError(
+                'file_copy_destination_exists',
+                'The destination file already exists. Choose keep_both or replace explicitly.',
+            )
+        if before_read_callback:
+            before_read_callback(0, source_file['size'])
+
+        def begin_copy_commit(_transferred, _expected_size):
+            current_source = prepare_agent_file_copy_source(source_bridge, source_file['path'])
+            if not agent_file_copy_snapshot_matches(source_file, current_source):
+                raise SFTPTransferError(
+                    'sftp_file_changed',
+                    'The remote source file changed during transfer.',
+                )
+            if pre_commit_callback:
+                pre_commit_callback(_transferred, _expected_size)
+
+        chunks = download_agent_file_copy_chunks(source_bridge, source_file)
+        stream = AgentFileCopyStream(chunks, expected_size=source_file['size'])
+        try:
+            upload_result = upload_agent_file_copy_stream(
+                destination_bridge,
+                stream,
+                upload,
+                source_file['size'],
+                before_read_callback=before_read_callback,
+                progress_callback=progress_callback,
+                pre_commit_callback=begin_copy_commit,
+            )
+        finally:
+            stream.close()
+    return upload_result
+
+
 def copy_file_between_agent_bridges(state, action):
     with agent_lock:
         source_bridge, destination_bridge, error_code = validate_agent_file_copy_execution(
@@ -8412,104 +8565,83 @@ def copy_file_between_agent_bridges(state, action):
         raise SFTPTransferError(error_code, 'The approved file copy is no longer authorized.')
 
     conflict_mode = action['conflict_mode']
+    source_file = dict(action['source_file'])
     last_progress_emit = {
         'bytes': 0,
         'at': time.monotonic(),
     }
-    with agent_file_copy_lock:
-        source_file = dict(action['source_file'])
-        upload = dict(action['destination_upload'])
-        if upload.get('status') == 'conflict':
+
+    def ensure_copy_still_authorized(transferred, expected_size, *, report_progress=False):
+        emit_progress = False
+        with agent_lock:
+            _source, _destination, progress_error = validate_agent_file_copy_execution(
+                state,
+                action,
+            )
+            if not progress_error and report_progress:
+                action['bytes_copied'] = transferred
+                action['total_bytes'] = expected_size
+                action['progress_updated_at'] = time.time()
+                now = time.monotonic()
+                emit_progress = (
+                    transferred >= expected_size
+                    or transferred - last_progress_emit['bytes'] >= AGENT_FILE_COPY_PROGRESS_EMIT_BYTES
+                    or now - last_progress_emit['at'] >= AGENT_FILE_COPY_PROGRESS_EMIT_SECONDS
+                )
+                if emit_progress:
+                    last_progress_emit['bytes'] = transferred
+                    last_progress_emit['at'] = now
+                    action['action_revision'] = action.get('action_revision', 0) + 1
+                    emit_agent_action_result(state.sid, action, AGENT_STATUS_RUNNING)
+        if progress_error:
             raise SFTPTransferError(
-                'file_copy_destination_exists',
-                'The destination file already exists. Choose keep_both or replace explicitly.',
+                progress_error,
+                'The approved file copy authorization changed during transfer.',
             )
 
-        def ensure_copy_still_authorized(transferred, expected_size, *, report_progress=False):
-            emit_progress = False
-            with agent_lock:
-                _source, _destination, progress_error = validate_agent_file_copy_execution(
-                    state,
-                    action,
-                )
-                if not progress_error and report_progress:
-                    action['bytes_copied'] = transferred
-                    action['total_bytes'] = expected_size
-                    action['progress_updated_at'] = time.time()
-                    now = time.monotonic()
-                    emit_progress = (
-                        transferred >= expected_size
-                        or transferred - last_progress_emit['bytes'] >= AGENT_FILE_COPY_PROGRESS_EMIT_BYTES
-                        or now - last_progress_emit['at'] >= AGENT_FILE_COPY_PROGRESS_EMIT_SECONDS
-                    )
-                    if emit_progress:
-                        last_progress_emit['bytes'] = transferred
-                        last_progress_emit['at'] = now
-                        action['action_revision'] = action.get('action_revision', 0) + 1
-                        emit_agent_action_result(state.sid, action, AGENT_STATUS_RUNNING)
-            if progress_error:
+    def begin_copy_commit(_transferred, _expected_size):
+        with agent_lock:
+            _source, _destination, commit_error = validate_agent_file_copy_execution(
+                state,
+                action,
+            )
+            if commit_error:
                 raise SFTPTransferError(
-                    progress_error,
-                    'The approved file copy authorization changed during transfer.',
+                    commit_error,
+                    'The approved file copy authorization changed before commit.',
                 )
-
-        def ensure_copy_read_still_authorized(transferred, expected_size):
-            ensure_copy_still_authorized(transferred, expected_size)
-
-        def report_copy_progress(transferred, expected_size):
-            ensure_copy_still_authorized(
-                transferred,
-                expected_size,
-                report_progress=True,
-            )
-
-        def begin_copy_commit(_transferred, _expected_size):
-            current_source = prepare_agent_file_copy_source(source_bridge, source_file['path'])
-            if not agent_file_copy_snapshot_matches(source_file, current_source):
+            if action.get('status') != AGENT_STATUS_RUNNING:
                 raise SFTPTransferError(
-                    'sftp_file_changed',
-                    'The remote source file changed during transfer.',
+                    AGENT_ERROR_ACTION_NOT_WRITABLE,
+                    'The approved file copy is no longer running.',
                 )
-            with agent_lock:
-                _source, _destination, commit_error = validate_agent_file_copy_execution(
-                    state,
-                    action,
+            if not transition_agent_file_copy_action(
+                state,
+                action,
+                AGENT_FILE_COPY_EVENT_BEGIN_COMMIT,
+            ):
+                raise SFTPTransferError(
+                    action.get('error_code') or AGENT_ERROR_ACTION_NOT_WRITABLE,
+                    'The approved file copy could not enter the commit barrier.',
                 )
-                if commit_error:
-                    raise SFTPTransferError(
-                        commit_error,
-                        'The approved file copy authorization changed before commit.',
-                    )
-                if action.get('status') != AGENT_STATUS_RUNNING:
-                    raise SFTPTransferError(
-                        AGENT_ERROR_ACTION_NOT_WRITABLE,
-                        'The approved file copy is no longer running.',
-                    )
-                if not transition_agent_file_copy_action(
-                    state,
-                    action,
-                    AGENT_FILE_COPY_EVENT_BEGIN_COMMIT,
-                ):
-                    raise SFTPTransferError(
-                        action.get('error_code') or AGENT_ERROR_ACTION_NOT_WRITABLE,
-                        'The approved file copy could not enter the commit barrier.',
-                    )
-                emit_agent_action_result(state.sid, action, AGENT_STATUS_COMMITTING)
+            emit_agent_action_result(state.sid, action, AGENT_STATUS_COMMITTING)
 
-        chunks = download_agent_file_copy_chunks(source_bridge, source_file)
-        stream = AgentFileCopyStream(chunks, expected_size=source_file['size'])
-        try:
-            upload_result = upload_agent_file_copy_stream(
-                destination_bridge,
-                stream,
-                upload,
-                source_file['size'],
-                before_read_callback=ensure_copy_read_still_authorized,
-                progress_callback=report_copy_progress,
-                pre_commit_callback=begin_copy_commit,
-            )
-        finally:
-            stream.close()
+    upload_result = copy_file_between_bridges(
+        source_bridge,
+        destination_bridge,
+        source_file,
+        action['destination_upload'],
+        before_read_callback=lambda transferred, expected: ensure_copy_still_authorized(
+            transferred,
+            expected,
+        ),
+        progress_callback=lambda transferred, expected: ensure_copy_still_authorized(
+            transferred,
+            expected,
+            report_progress=True,
+        ),
+        pre_commit_callback=begin_copy_commit,
+    )
     return {
         'source_terminal_id': state.terminal_id,
         'destination_terminal_id': action['destination_terminal_id'],
@@ -9357,6 +9489,426 @@ def on_ssh_browser_sign_response(data):
         )
 
 
+def public_files_copy_job(job):
+    payload = {
+        'request_id': job['request_id'],
+        'copy_id': job['copy_id'],
+        'status': job['status'],
+        'revision': job.get('revision', 0),
+        'source_terminal_id': job['source_terminal_id'],
+        'destination_terminal_id': job['destination_terminal_id'],
+        'source_endpoint': job['source_file'].get('endpoint'),
+        'destination_endpoint': job['destination_upload'].get('endpoint'),
+        'source_path': job['source_file']['path'],
+        'destination_path': job['destination_upload']['destination_path'],
+        'source_size': job['source_file']['size'],
+        'bytes_copied': job.get('bytes_copied', 0),
+        'total_bytes': job['source_file']['size'],
+        'conflict_mode': job['conflict_mode'],
+        'source_preserved': True,
+    }
+    if job.get('error_code'):
+        payload['error_code'] = job['error_code']
+    if job.get('message'):
+        payload['message'] = job['message']
+    if isinstance(job.get('result'), dict):
+        payload['result'] = dict(job['result'])
+    return payload
+
+
+def emit_files_copy_job(job):
+    socketio.emit(FILES_COPY_RESULT_EVENT, public_files_copy_job(job), room=job['sid'])
+
+
+def transition_files_copy_job(job, event, *, error_code=None, message=None, result=None):
+    target_status = FILES_COPY_TRANSITIONS.get(job.get('status'), {}).get(event)
+    if not target_status:
+        return False
+    job['status'] = target_status
+    job['revision'] = job.get('revision', 0) + 1
+    if target_status == 'failed':
+        job['error_code'] = error_code or 'files_copy_failed'
+        job['message'] = message or 'The Files copy failed.'
+    elif target_status == 'completed':
+        job['result'] = dict(result or {})
+        job.pop('error_code', None)
+        job.pop('message', None)
+    return True
+
+
+def trim_files_copy_jobs_locked(now=None):
+    now = time.monotonic() if now is None else now
+    for copy_id, job in list(files_copy_jobs.items()):
+        if job.get('status') in {'completed', 'failed'} and job.get('expires_at', 0) <= now:
+            files_copy_jobs.pop(copy_id, None)
+    completed = [
+        (copy_id, job)
+        for copy_id, job in files_copy_jobs.items()
+        if job.get('status') in {'completed', 'failed'}
+    ]
+    while len(files_copy_jobs) >= FILES_COPY_JOB_MAX_RECORDS and completed:
+        copy_id, _job = min(completed, key=lambda item: item[1].get('completed_at', 0))
+        files_copy_jobs.pop(copy_id, None)
+        completed = [item for item in completed if item[0] != copy_id]
+    for request_key, record in list(files_copy_requests.items()):
+        copy_id = record.get('copy_id')
+        if copy_id and copy_id not in files_copy_jobs:
+            files_copy_requests.pop(request_key, None)
+        elif not copy_id and record.get('created_at', 0) + FILES_COPY_JOB_TTL_SECONDS <= now:
+            files_copy_requests.pop(request_key, None)
+
+
+def validate_files_copy_job(job, *, require_running=True):
+    if not isinstance(job, dict):
+        return None, None, 'files_copy_not_found'
+    if require_running and job.get('status') != 'running':
+        return None, None, job.get('error_code') or 'files_copy_not_running'
+    session_token = job.get('session_token')
+    sid = job.get('sid')
+    if socket_session_tokens.get(sid) != session_token:
+        return None, None, 'files_copy_browser_disconnected'
+    source_bridge = get_bridge(session_token, job.get('source_terminal_id'))
+    destination_bridge = get_bridge(session_token, job.get('destination_terminal_id'))
+    if (
+        source_bridge is not job.get('source_bridge')
+        or destination_bridge is not job.get('destination_bridge')
+    ):
+        return None, None, 'files_copy_terminal_changed'
+    if source_bridge is destination_bridge:
+        return None, None, 'files_copy_same_terminal'
+    if not is_files_bridge(source_bridge) or not is_files_bridge(destination_bridge):
+        return None, None, 'files_unavailable'
+    if (
+        not is_terminal_bridge_allowed_for_sid(source_bridge, sid)
+        or not is_terminal_bridge_allowed_for_sid(destination_bridge, sid)
+    ):
+        return None, None, 'files_copy_not_authorized'
+    return source_bridge, destination_bridge, None
+
+
+def execute_files_copy_job(job):
+    last_progress_emit = {'bytes': 0, 'at': time.monotonic()}
+
+    def ensure_copy_available(_transferred, _expected_size):
+        with files_copy_jobs_lock:
+            _source, _destination, error_code = validate_files_copy_job(job)
+        if error_code:
+            raise SFTPTransferError(error_code, 'The Files copy is no longer authorized.')
+
+    def report_copy_progress(transferred, expected_size):
+        ensure_copy_available(transferred, expected_size)
+        now = time.monotonic()
+        with files_copy_jobs_lock:
+            job['bytes_copied'] = transferred
+            should_emit = (
+                transferred >= expected_size
+                or transferred - last_progress_emit['bytes'] >= AGENT_FILE_COPY_PROGRESS_EMIT_BYTES
+                or now - last_progress_emit['at'] >= AGENT_FILE_COPY_PROGRESS_EMIT_SECONDS
+            )
+            if should_emit:
+                last_progress_emit['bytes'] = transferred
+                last_progress_emit['at'] = now
+                job['revision'] += 1
+                emit_files_copy_job(job)
+
+    def begin_copy_commit(_transferred, _expected_size):
+        with files_copy_jobs_lock:
+            _source, _destination, error_code = validate_files_copy_job(job)
+            if error_code:
+                raise SFTPTransferError(error_code, 'The Files copy is no longer authorized.')
+            if not transition_files_copy_job(job, FILES_COPY_EVENT_BEGIN_COMMIT):
+                raise SFTPTransferError(
+                    'files_copy_invalid_transition',
+                    'The Files copy could not enter the commit barrier.',
+                )
+            emit_files_copy_job(job)
+
+    try:
+        upload_result = copy_file_between_bridges(
+            job['source_bridge'],
+            job['destination_bridge'],
+            job['source_file'],
+            job['destination_upload'],
+            before_read_callback=ensure_copy_available,
+            progress_callback=report_copy_progress,
+            pre_commit_callback=begin_copy_commit,
+        )
+    except (SFTPTransferError, LocalFileTransferError) as exc:
+        with files_copy_jobs_lock:
+            transitioned = transition_files_copy_job(
+                job,
+                FILES_COPY_EVENT_FAIL,
+                error_code=exc.error_code,
+                message=str(exc),
+            )
+            if transitioned:
+                job['completed_at'] = time.monotonic()
+                job['expires_at'] = job['completed_at'] + FILES_COPY_JOB_TTL_SECONDS
+                emit_files_copy_job(job)
+    except Exception as exc:
+        log_message(f'[files] Copy failed unexpectedly: {type(exc).__name__}')
+        with files_copy_jobs_lock:
+            transitioned = transition_files_copy_job(
+                job,
+                FILES_COPY_EVENT_FAIL,
+                error_code='files_copy_failed',
+                message='The Files copy failed unexpectedly.',
+            )
+            if transitioned:
+                job['completed_at'] = time.monotonic()
+                job['expires_at'] = job['completed_at'] + FILES_COPY_JOB_TTL_SECONDS
+                emit_files_copy_job(job)
+    else:
+        with files_copy_jobs_lock:
+            job['bytes_copied'] = upload_result['bytes_written']
+            if not transition_files_copy_job(
+                job,
+                FILES_COPY_EVENT_COMPLETE,
+                result={
+                    'destination_path': upload_result['destination_path'],
+                    'bytes_copied': upload_result['bytes_written'],
+                    'source_preserved': True,
+                },
+            ):
+                transitioned = transition_files_copy_job(
+                    job,
+                    FILES_COPY_EVENT_FAIL,
+                    error_code='files_copy_invalid_transition',
+                    message='The Files copy reached an invalid completion state.',
+                )
+                log_message('[files] Copy could not enter the completed state.')
+            else:
+                transitioned = True
+            if transitioned:
+                job['completed_at'] = time.monotonic()
+                job['expires_at'] = job['completed_at'] + FILES_COPY_JOB_TTL_SECONDS
+                emit_files_copy_job(job)
+    finally:
+        agent_file_copy_worker_slots.release()
+
+
+@socketio.on(FILES_COPY_REQUEST_EVENT)
+def on_files_copy_request(data):
+    session_token = socket_session_tokens.get(request.sid)
+    request_id = data.get('request_id') if isinstance(data, dict) else None
+    source_terminal_id = validate_terminal_id_payload({
+        'terminal_id': data.get('source_terminal_id') if isinstance(data, dict) else None,
+    })
+    destination_terminal_id = validate_terminal_id_payload({
+        'terminal_id': data.get('destination_terminal_id') if isinstance(data, dict) else None,
+    })
+    if (
+        not session_token
+        or not isinstance(request_id, str)
+        or not request_id
+        or len(request_id) > 128
+        or not source_terminal_id
+        or not destination_terminal_id
+    ):
+        return
+
+    def emit_request_result(payload):
+        socketio.emit(
+            FILES_COPY_RESULT_EVENT,
+            {'request_id': request_id, **payload},
+            room=request.sid,
+        )
+
+    source_bridge = get_allowed_bridge(session_token, source_terminal_id, request.sid, emit_error=True)
+    destination_bridge = get_allowed_bridge(
+        session_token,
+        destination_terminal_id,
+        request.sid,
+        emit_error=True,
+    )
+    if source_bridge is destination_bridge:
+        emit_request_result({
+            'status': 'failed',
+            'error_code': 'files_copy_same_terminal',
+            'message': 'Choose a different destination terminal.',
+        })
+        return
+    if not is_files_bridge(source_bridge) or not is_files_bridge(destination_bridge):
+        emit_request_result({
+            'status': 'failed',
+            'error_code': 'files_unavailable',
+            'message': 'Files is unavailable for the selected terminal.',
+        })
+        return
+    conflict_mode = data.get('conflict_mode', 'ask')
+    if conflict_mode not in {'ask', 'keep_both', 'replace'}:
+        emit_request_result({
+            'status': 'failed',
+            'error_code': 'files_copy_invalid_conflict_mode',
+            'message': 'Copy conflict mode is invalid.',
+        })
+        return
+    destination_directory = data.get('destination_directory')
+    destination_filename = data.get('destination_filename')
+    if not isinstance(destination_directory, str) or not isinstance(destination_filename, str):
+        emit_request_result({
+            'status': 'failed',
+            'error_code': 'files_copy_invalid_destination',
+            'message': 'Copy destination is invalid.',
+        })
+        return
+    try:
+        source_file_id = parse_sftp_file_reference_id({'file_id': data.get('source_file_id')})
+    except SFTPTransferError as exc:
+        emit_request_result({
+            'status': 'failed',
+            'error_code': exc.error_code,
+            'message': str(exc),
+        })
+        return
+    request_key = (request.sid, request_id)
+    request_fingerprint = (
+        source_terminal_id,
+        source_file_id,
+        destination_terminal_id,
+        destination_directory,
+        destination_filename,
+        conflict_mode,
+    )
+    with files_copy_jobs_lock:
+        trim_files_copy_jobs_locked()
+        existing_request = files_copy_requests.get(request_key)
+        if existing_request:
+            existing_copy_id = existing_request.get('copy_id')
+            existing_job = files_copy_jobs.get(existing_copy_id) if existing_copy_id else None
+            duplicate_payload = (
+                public_files_copy_job(existing_job)
+                if existing_job and existing_request.get('fingerprint') == request_fingerprint
+                else None
+            )
+            duplicate_mismatch = existing_request.get('fingerprint') != request_fingerprint
+        else:
+            files_copy_requests[request_key] = {
+                'fingerprint': request_fingerprint,
+                'copy_id': None,
+                'created_at': time.monotonic(),
+            }
+            duplicate_payload = None
+            duplicate_mismatch = False
+    if existing_request:
+        if duplicate_mismatch:
+            emit_request_result({
+                'status': 'failed',
+                'error_code': 'files_copy_request_reused',
+                'message': 'This Files copy request id was already used for another operation.',
+            })
+        elif duplicate_payload:
+            socketio.emit(FILES_COPY_RESULT_EVENT, duplicate_payload, room=request.sid)
+        else:
+            emit_request_result({'status': 'preparing'})
+        return
+
+    def discard_request_reservation():
+        with files_copy_jobs_lock:
+            current = files_copy_requests.get(request_key)
+            if current and current.get('fingerprint') == request_fingerprint:
+                files_copy_requests.pop(request_key, None)
+
+    try:
+        source_file = resolve_bridge_file_reference(
+            source_bridge,
+            source_file_id,
+        )
+        source_file = prepare_current_bridge_file(source_bridge, source_file)
+        upload = prepare_bridge_upload(
+            destination_bridge,
+            destination_directory,
+            destination_filename,
+            conflict_mode,
+        )
+        validate_distinct_file_copy_target(
+            source_bridge,
+            destination_bridge,
+            source_file,
+            upload,
+        )
+    except (SFTPTransferError, LocalFileTransferError) as exc:
+        discard_request_reservation()
+        emit_request_result({
+            'status': 'failed',
+            'error_code': exc.error_code,
+            'message': str(exc),
+        })
+        return
+    if upload.get('status') == 'conflict':
+        discard_request_reservation()
+        emit_request_result({
+            'status': 'conflict',
+            'source_terminal_id': source_terminal_id,
+            'destination_terminal_id': destination_terminal_id,
+            'source_path': source_file['path'],
+            'destination_path': upload['destination_path'],
+            'source_size': source_file['size'],
+            'existing_size': upload.get('existing_size'),
+        })
+        return
+    if not agent_file_copy_worker_slots.acquire(blocking=False):
+        discard_request_reservation()
+        emit_request_result({
+            'status': 'failed',
+            'error_code': AGENT_ERROR_FILE_COPY_BUSY,
+            'message': 'No Files copy worker is currently available.',
+        })
+        return
+    copy_id = 'filesc_' + secrets.token_urlsafe(12)
+    job = {
+        'request_id': request_id,
+        'copy_id': copy_id,
+        'session_token': session_token,
+        'sid': request.sid,
+        'source_terminal_id': source_terminal_id,
+        'destination_terminal_id': destination_terminal_id,
+        'source_bridge': source_bridge,
+        'destination_bridge': destination_bridge,
+        'source_file': source_file,
+        'destination_upload': upload,
+        'conflict_mode': 'fail' if conflict_mode == 'ask' else conflict_mode,
+        'status': 'running',
+        'bytes_copied': 0,
+        'revision': 0,
+        'created_at': time.monotonic(),
+    }
+    try:
+        with files_copy_jobs_lock:
+            trim_files_copy_jobs_locked()
+            if len(files_copy_jobs) >= FILES_COPY_JOB_MAX_RECORDS:
+                raise RuntimeError('files_copy_job_store_full')
+            files_copy_jobs[copy_id] = job
+            files_copy_requests[request_key]['copy_id'] = copy_id
+            emit_files_copy_job(job)
+        socketio.start_background_task(execute_files_copy_job, job)
+    except Exception:
+        with files_copy_jobs_lock:
+            stored_job = files_copy_jobs.get(copy_id)
+            if stored_job is job and transition_files_copy_job(
+                job,
+                FILES_COPY_EVENT_FAIL,
+                error_code='files_copy_start_failed',
+                message='The Files copy could not be started.',
+            ):
+                job['completed_at'] = time.monotonic()
+                job['expires_at'] = job['completed_at'] + FILES_COPY_JOB_TTL_SECONDS
+                stored_failure = True
+            else:
+                files_copy_jobs.pop(copy_id, None)
+                files_copy_requests.pop(request_key, None)
+                stored_failure = False
+        agent_file_copy_worker_slots.release()
+        if stored_failure:
+            emit_files_copy_job(job)
+        else:
+            emit_request_result({
+                'status': 'failed',
+                'error_code': 'files_copy_start_failed',
+                'message': 'The Files copy could not be started.',
+            })
+
+
 def emit_sftp_result(event_name, sid, request_id, terminal_id, *, result=None, error=None):
     payload = {
         'request_id': request_id,
@@ -9365,7 +9917,7 @@ def emit_sftp_result(event_name, sid, request_id, terminal_id, *, result=None, e
     if error:
         payload.update({
             'status': 'failed',
-            'error_code': error.error_code if isinstance(error, SFTPTransferError) else 'sftp_failed',
+            'error_code': getattr(error, 'error_code', 'files_failed'),
             'message': str(error),
         })
     elif result:
@@ -9381,13 +9933,13 @@ def on_sftp_browse_request(data):
     if not session_token or not terminal_id or not isinstance(request_id, str) or len(request_id) > 128:
         return
     bridge = get_allowed_bridge(session_token, terminal_id, request.sid, emit_error=True)
-    if not isinstance(bridge, SSHBridge):
+    if not is_files_bridge(bridge):
         emit_sftp_result(
             SFTP_BROWSE_RESULT_EVENT,
             request.sid,
             request_id,
             terminal_id,
-            error=SFTPTransferError('sftp_not_ssh', 'SFTP is only available for a connected SSH terminal.'),
+            error=SFTPTransferError('files_unavailable', 'Files is unavailable for this terminal.'),
         )
         return
     path = data.get('path')
@@ -9398,7 +9950,7 @@ def on_sftp_browse_request(data):
     if child is not None and not isinstance(child, str):
         return
     try:
-        result = bridge.browse_sftp(path, child=child, parent=parent)
+        result = browse_bridge_files(bridge, path, child=child, parent=parent)
         result.update({
             'status': 'ready',
             'max_upload_bytes': SFTP_MAX_UPLOAD_BYTES,
@@ -9410,7 +9962,7 @@ def on_sftp_browse_request(data):
             terminal_id,
             result=result,
         )
-    except SFTPTransferError as exc:
+    except (SFTPTransferError, LocalFileTransferError) as exc:
         emit_sftp_result(
             SFTP_BROWSE_RESULT_EVENT,
             request.sid,
@@ -9428,13 +9980,13 @@ def on_sftp_upload_ticket_request(data):
     if not session_token or not terminal_id or not isinstance(request_id, str) or len(request_id) > 128:
         return
     bridge = get_allowed_bridge(session_token, terminal_id, request.sid, emit_error=True)
-    if not isinstance(bridge, SSHBridge):
+    if not is_files_bridge(bridge):
         emit_sftp_result(
             SFTP_UPLOAD_TICKET_RESULT_EVENT,
             request.sid,
             request_id,
             terminal_id,
-            error=SFTPTransferError('sftp_not_ssh', 'SFTP is only available for a connected SSH terminal.'),
+            error=SFTPTransferError('files_unavailable', 'Files is unavailable for this terminal.'),
         )
         return
     directory = data.get('directory')
@@ -9457,7 +10009,7 @@ def on_sftp_upload_ticket_request(data):
         )
         return
     try:
-        upload = bridge.prepare_sftp_upload(directory, filename, conflict_mode)
+        upload = prepare_bridge_upload(bridge, directory, filename, conflict_mode)
         if upload['status'] == 'conflict':
             emit_sftp_result(
                 SFTP_UPLOAD_TICKET_RESULT_EVENT,
@@ -9490,7 +10042,7 @@ def on_sftp_upload_ticket_request(data):
                 'expires_in_seconds': SFTP_UPLOAD_TICKET_TTL_SECONDS,
             },
         )
-    except SFTPTransferError as exc:
+    except (SFTPTransferError, LocalFileTransferError) as exc:
         emit_sftp_result(
             SFTP_UPLOAD_TICKET_RESULT_EVENT,
             request.sid,
@@ -9514,20 +10066,18 @@ def on_sftp_download_ticket_request(data):
     if not session_token or not terminal_id or not isinstance(request_id, str) or len(request_id) > 128:
         return
     bridge = get_allowed_bridge(session_token, terminal_id, request.sid, emit_error=True)
-    if not isinstance(bridge, SSHBridge):
+    if not is_files_bridge(bridge):
         emit_sftp_result(
             SFTP_DOWNLOAD_TICKET_RESULT_EVENT,
             request.sid,
             request_id,
             terminal_id,
-            error=SFTPTransferError('sftp_not_ssh', 'SFTP is only available for a connected SSH terminal.'),
+            error=SFTPTransferError('files_unavailable', 'Files is unavailable for this terminal.'),
         )
         return
     try:
-        file_snapshot = bridge.resolve_sftp_file_reference(parse_sftp_file_reference_id(data))
-        current_file = bridge.prepare_sftp_file(file_snapshot['directory'], file_snapshot['filename'])
-        if current_file['size'] != file_snapshot['size'] or current_file['mtime'] != file_snapshot['mtime']:
-            raise SFTPTransferError('sftp_file_changed', 'The remote file changed after the directory was listed.')
+        file_snapshot = resolve_bridge_file_reference(bridge, parse_sftp_file_reference_id(data))
+        file_snapshot = prepare_current_bridge_file(bridge, file_snapshot)
         ticket, record = sftp_download_ticket_store.create(
             session_token,
             terminal_id,
@@ -9555,7 +10105,7 @@ def on_sftp_download_ticket_request(data):
                 'endpoint': record['file']['endpoint'],
             },
         )
-    except SFTPTransferError as exc:
+    except (SFTPTransferError, LocalFileTransferError) as exc:
         log_message(
             f'[sftp] Download ticket failed: terminal={terminal_id} '
             f'error_code={exc.error_code}'
@@ -9577,13 +10127,13 @@ def on_sftp_file_action_request(data):
     if not session_token or not terminal_id or not isinstance(request_id, str) or len(request_id) > 128:
         return
     bridge = get_allowed_bridge(session_token, terminal_id, request.sid, emit_error=True)
-    if not isinstance(bridge, SSHBridge):
+    if not is_files_bridge(bridge):
         emit_sftp_result(
             SFTP_FILE_ACTION_RESULT_EVENT,
             request.sid,
             request_id,
             terminal_id,
-            error=SFTPTransferError('sftp_not_ssh', 'SFTP is only available for a connected SSH terminal.'),
+            error=SFTPTransferError('files_unavailable', 'Files is unavailable for this terminal.'),
         )
         return
     action = data.get('action') if isinstance(data, dict) else None
@@ -9597,24 +10147,13 @@ def on_sftp_file_action_request(data):
         )
         return
     try:
-        file_snapshot = bridge.resolve_sftp_file_reference(parse_sftp_file_reference_id(data))
+        file_snapshot = resolve_bridge_file_reference(bridge, parse_sftp_file_reference_id(data))
         if action == 'rename':
-            result = bridge.rename_sftp_file(
-                file_snapshot['directory'],
-                file_snapshot['filename'],
-                data.get('new_filename'),
-                file_snapshot['size'],
-                file_snapshot['mtime'],
-            )
+            result = rename_bridge_file(bridge, file_snapshot, data.get('new_filename'))
         else:
             if data.get('delete_confirmation') != 'permanent_delete_confirmed':
                 raise SFTPTransferError('sftp_delete_confirmation_required', 'Permanent deletion was not confirmed.')
-            result = bridge.delete_sftp_file(
-                file_snapshot['directory'],
-                file_snapshot['filename'],
-                file_snapshot['size'],
-                file_snapshot['mtime'],
-            )
+            result = delete_bridge_file(bridge, file_snapshot)
         emit_sftp_result(
             SFTP_FILE_ACTION_RESULT_EVENT,
             request.sid,
@@ -9622,7 +10161,7 @@ def on_sftp_file_action_request(data):
             terminal_id,
             result=result,
         )
-    except SFTPTransferError as exc:
+    except (SFTPTransferError, LocalFileTransferError) as exc:
         emit_sftp_result(
             SFTP_FILE_ACTION_RESULT_EVENT,
             request.sid,

@@ -7,6 +7,7 @@ import threading
 import time
 import json
 import io
+import os
 import re
 import stat
 import struct
@@ -120,6 +121,9 @@ def reset_state():
     standterm.browser_ssh_sign_request_store.clear()
     standterm.sftp_upload_ticket_store.clear()
     standterm.sftp_download_ticket_store.clear()
+    with standterm.files_copy_jobs_lock:
+        standterm.files_copy_jobs.clear()
+        standterm.files_copy_requests.clear()
     standterm.external_agent_attach_store.clear()
     standterm.operator_observations.clear()
     standterm.serial_port_cache['expires_at'] = 0
@@ -5053,6 +5057,345 @@ def test_external_agent_file_copy_supports_local_shell_endpoints():
     client.disconnect()
 
 
+def test_local_shell_files_supports_browse_transfer_rename_and_delete():
+    bridge = make_local_file_test_bridge('session-local-files', 'local-files')
+    assert bridge.files_available() is True
+    metadata = bridge.metadata()
+    assert metadata['files_available'] is True
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        (root / 'folder').mkdir()
+        source_path = root / 'source.txt'
+        source_path.write_bytes(b'local-files')
+        symlink_path = root / 'source-link.txt'
+        symlink_path.symlink_to(source_path)
+
+        listing = bridge.browse_local_files(str(root))
+        assert listing['path'] == str(root.resolve())
+        assert listing['directories'] == [{'name': 'folder'}]
+        assert [file['name'] for file in listing['files']] == ['source.txt']
+        assert listing['endpoint']['route'] == 'local'
+        source_entry = listing['files'][0]
+        assert source_entry['file_id'].startswith('localf_')
+        assert 'source.txt' not in source_entry['file_id']
+
+        source = bridge.resolve_local_file_reference(source_entry['file_id'])
+        assert b''.join(bridge.download_local_chunks(source, chunk_size=3)) == b'local-files'
+
+        upload = bridge.prepare_local_upload(str(root / 'uploaded.txt'), 'fail')
+        result = bridge.upload_local_stream(io.BytesIO(b'uploaded'), upload, len(b'uploaded'))
+        assert result['destination_path'] == str(root / 'uploaded.txt')
+        assert (root / 'uploaded.txt').read_bytes() == b'uploaded'
+
+        listing = bridge.browse_local_files(str(root))
+        uploaded_entry = next(file for file in listing['files'] if file['name'] == 'uploaded.txt')
+        uploaded = bridge.resolve_local_file_reference(uploaded_entry['file_id'])
+        renamed = bridge.rename_local_file(uploaded, 'renamed.txt')
+        assert renamed['destination_path'] == str(root / 'renamed.txt')
+        assert not (root / 'uploaded.txt').exists()
+        assert (root / 'renamed.txt').read_bytes() == b'uploaded'
+
+        listing = bridge.browse_local_files(str(root))
+        renamed_entry = next(file for file in listing['files'] if file['name'] == 'renamed.txt')
+        renamed_snapshot = bridge.resolve_local_file_reference(renamed_entry['file_id'])
+        deleted = bridge.delete_local_file(renamed_snapshot)
+        assert deleted['deleted_path'] == str(root / 'renamed.txt')
+        assert not (root / 'renamed.txt').exists()
+
+
+def test_files_copy_request_runs_human_local_copy_without_agent_approval():
+    client = make_client()
+    session_token = current_session_token()
+    sid = current_sid_for_session(session_token)
+    source_terminal_id = 'human-source'
+    destination_terminal_id = 'human-destination'
+    source_bridge = make_local_file_test_bridge(session_token, source_terminal_id)
+    destination_bridge = make_local_file_test_bridge(session_token, destination_terminal_id)
+    source_bridge.attach(sid)
+    destination_bridge.attach(sid)
+    standterm.set_bridge(session_token, source_terminal_id, source_bridge)
+    standterm.set_bridge(session_token, destination_terminal_id, destination_bridge)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        source_dir = root / 'source'
+        destination_dir = root / 'destination'
+        source_dir.mkdir()
+        destination_dir.mkdir()
+        source_path = source_dir / 'reference.bin'
+        source_path.write_bytes(b'human-copy')
+        source_entry = source_bridge.browse_local_files(str(source_dir))['files'][0]
+
+        client.get_received()
+        client.emit(standterm.FILES_COPY_REQUEST_EVENT, {
+            'request_id': 'human-copy-1',
+            'source_terminal_id': source_terminal_id,
+            'source_file_id': source_entry['file_id'],
+            'destination_terminal_id': destination_terminal_id,
+            'destination_directory': str(destination_dir),
+            'destination_filename': 'reference.bin',
+            'conflict_mode': 'ask',
+        })
+        destination_path = destination_dir / 'reference.bin'
+        wait_until(destination_path.exists, 'human Files copy did not publish the destination')
+        wait_until(
+            lambda: any(job.get('status') == 'completed' for job in standterm.files_copy_jobs.values()),
+            'human Files copy did not reach a completed transaction state',
+        )
+        all_events = client.get_received()
+        events = [event for event in all_events if event['name'] == standterm.FILES_COPY_RESULT_EVENT]
+        payloads = [event['args'][0] for event in events]
+        assert payloads[0]['status'] == 'running'
+        assert payloads[-1]['status'] == 'completed'
+        assert payloads[-1]['source_path'] == str(source_path)
+        assert payloads[-1]['destination_path'] == str(destination_path)
+        assert payloads[-1]['bytes_copied'] == len(b'human-copy')
+        assert destination_path.read_bytes() == b'human-copy'
+        assert source_path.read_bytes() == b'human-copy'
+        assert not [event for event in all_events if event['name'] == standterm.AGENT_EVENT_ACTION_REQUEST]
+
+        completed_copy_id = payloads[-1]['copy_id']
+        completed_job_count = len(standterm.files_copy_jobs)
+        client.emit(standterm.FILES_COPY_REQUEST_EVENT, {
+            'request_id': 'human-copy-1',
+            'source_terminal_id': source_terminal_id,
+            'source_file_id': source_entry['file_id'],
+            'destination_terminal_id': destination_terminal_id,
+            'destination_directory': str(destination_dir),
+            'destination_filename': 'reference.bin',
+            'conflict_mode': 'ask',
+        })
+        duplicate = last_payload(client, standterm.FILES_COPY_RESULT_EVENT)
+        assert duplicate['status'] == 'completed'
+        assert duplicate['copy_id'] == completed_copy_id
+        assert len(standterm.files_copy_jobs) == completed_job_count
+
+        client.emit(standterm.FILES_COPY_REQUEST_EVENT, {
+            'request_id': 'human-copy-1',
+            'source_terminal_id': source_terminal_id,
+            'source_file_id': source_entry['file_id'],
+            'destination_terminal_id': destination_terminal_id,
+            'destination_directory': str(destination_dir),
+            'destination_filename': 'another.bin',
+            'conflict_mode': 'ask',
+        })
+        reused = last_payload(client, standterm.FILES_COPY_RESULT_EVENT)
+        assert reused['status'] == 'failed'
+        assert reused['error_code'] == 'files_copy_request_reused'
+        assert not (destination_dir / 'another.bin').exists()
+        assert len(standterm.files_copy_jobs) == completed_job_count
+
+        client.get_received()
+        client.emit(standterm.FILES_COPY_REQUEST_EVENT, {
+            'request_id': 'human-copy-conflict',
+            'source_terminal_id': source_terminal_id,
+            'source_file_id': source_entry['file_id'],
+            'destination_terminal_id': destination_terminal_id,
+            'destination_directory': str(destination_dir),
+            'destination_filename': 'reference.bin',
+            'conflict_mode': 'ask',
+        })
+        conflict = last_payload(client, standterm.FILES_COPY_RESULT_EVENT)
+        assert conflict['status'] == 'conflict'
+        assert conflict['destination_path'] == str(destination_path)
+        assert destination_path.read_bytes() == b'human-copy'
+
+        source_before = source_path.stat()
+        job_count = len(standterm.files_copy_jobs)
+        client.get_received()
+        client.emit(standterm.FILES_COPY_REQUEST_EVENT, {
+            'request_id': 'human-copy-same-path',
+            'source_terminal_id': source_terminal_id,
+            'source_file_id': source_entry['file_id'],
+            'destination_terminal_id': destination_terminal_id,
+            'destination_directory': str(source_dir),
+            'destination_filename': source_path.name,
+            'conflict_mode': 'replace',
+        })
+        same_path = last_payload(client, standterm.FILES_COPY_RESULT_EVENT)
+        assert same_path['status'] == 'failed'
+        assert same_path['error_code'] == 'file_copy_same_path'
+        source_after = source_path.stat()
+        assert source_after.st_ino == source_before.st_ino
+        assert stat.S_IMODE(source_after.st_mode) == stat.S_IMODE(source_before.st_mode)
+        assert source_path.read_bytes() == b'human-copy'
+        assert len(standterm.files_copy_jobs) == job_count
+
+        hardlink_path = destination_dir / 'hardlink.bin'
+        os.link(source_path, hardlink_path)
+        client.get_received()
+        client.emit(standterm.FILES_COPY_REQUEST_EVENT, {
+            'request_id': 'human-copy-hardlink',
+            'source_terminal_id': source_terminal_id,
+            'source_file_id': source_entry['file_id'],
+            'destination_terminal_id': destination_terminal_id,
+            'destination_directory': str(destination_dir),
+            'destination_filename': hardlink_path.name,
+            'conflict_mode': 'replace',
+        })
+        hardlink = last_payload(client, standterm.FILES_COPY_RESULT_EVENT)
+        assert hardlink['status'] == 'failed'
+        assert hardlink['error_code'] == 'file_copy_same_path'
+        assert hardlink_path.stat().st_ino == source_path.stat().st_ino
+        assert hardlink_path.read_bytes() == b'human-copy'
+        assert len(standterm.files_copy_jobs) == job_count
+    client.disconnect()
+
+
+def test_files_copy_request_rejects_same_ssh_endpoint_path():
+    client = make_client()
+    session_token = current_session_token()
+    sid = current_sid_for_session(session_token)
+    source_terminal_id = 'human-ssh-source'
+    destination_terminal_id = 'human-ssh-destination'
+    source_bridge = make_sftp_test_bridge(session_token, source_terminal_id)
+    destination_bridge = make_sftp_test_bridge(session_token, destination_terminal_id)
+    source_bridge.attach(sid)
+    destination_bridge.attach(sid)
+    standterm.set_bridge(session_token, source_terminal_id, source_bridge)
+    standterm.set_bridge(session_token, destination_terminal_id, destination_bridge)
+    source_snapshot = {
+        'directory': '/shared',
+        'filename': 'reference.bin',
+        'path': '/shared/reference.bin',
+        'size': 4,
+        'mtime': 10,
+        'endpoint': source_bridge.sftp_endpoint(),
+    }
+    source_file_id = source_bridge._register_sftp_file_reference(source_snapshot)
+    source_bridge.prepare_sftp_file = lambda directory, filename: dict(source_snapshot)
+    destination_bridge.prepare_sftp_upload = lambda directory, filename, conflict_mode='ask': {
+        'status': 'ready',
+        'directory': '/shared',
+        'filename': 'reference.bin',
+        'destination_path': '/shared/reference.bin',
+        'replace': True,
+        'existing_size': 4,
+        'existing_mtime': 10,
+        'endpoint': destination_bridge.sftp_endpoint(),
+    }
+
+    client.get_received()
+    client.emit(standterm.FILES_COPY_REQUEST_EVENT, {
+        'request_id': 'human-copy-same-ssh-path',
+        'source_terminal_id': source_terminal_id,
+        'source_file_id': source_file_id,
+        'destination_terminal_id': destination_terminal_id,
+        'destination_directory': '/shared',
+        'destination_filename': 'reference.bin',
+        'conflict_mode': 'replace',
+    })
+    result = last_payload(client, standterm.FILES_COPY_RESULT_EVENT)
+    assert result['status'] == 'failed'
+    assert result['error_code'] == 'file_copy_same_path'
+    assert not standterm.files_copy_jobs
+    client.disconnect()
+
+
+def test_files_copy_start_failure_keeps_correlated_terminal_result():
+    client = make_client()
+    session_token = current_session_token()
+    sid = current_sid_for_session(session_token)
+    source_terminal_id = 'human-start-source'
+    destination_terminal_id = 'human-start-destination'
+    source_bridge = make_local_file_test_bridge(session_token, source_terminal_id)
+    destination_bridge = make_local_file_test_bridge(session_token, destination_terminal_id)
+    source_bridge.attach(sid)
+    destination_bridge.attach(sid)
+    standterm.set_bridge(session_token, source_terminal_id, source_bridge)
+    standterm.set_bridge(session_token, destination_terminal_id, destination_bridge)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        source_dir = root / 'source'
+        destination_dir = root / 'destination'
+        source_dir.mkdir()
+        destination_dir.mkdir()
+        source_path = source_dir / 'reference.bin'
+        destination_path = destination_dir / 'reference.bin'
+        source_path.write_bytes(b'not-started')
+        source_entry = source_bridge.browse_local_files(str(source_dir))['files'][0]
+        original_start_background_task = standterm.socketio.start_background_task
+
+        def fail_background_start(*_args, **_kwargs):
+            raise RuntimeError('background start failed')
+
+        standterm.socketio.start_background_task = fail_background_start
+        try:
+            client.get_received()
+            client.emit(standterm.FILES_COPY_REQUEST_EVENT, {
+                'request_id': 'human-copy-start-failure',
+                'source_terminal_id': source_terminal_id,
+                'source_file_id': source_entry['file_id'],
+                'destination_terminal_id': destination_terminal_id,
+                'destination_directory': str(destination_dir),
+                'destination_filename': destination_path.name,
+                'conflict_mode': 'ask',
+            })
+        finally:
+            standterm.socketio.start_background_task = original_start_background_task
+
+        events = received_events(client, standterm.FILES_COPY_RESULT_EVENT)
+        payloads = [event['args'][0] for event in events]
+        assert [payload['status'] for payload in payloads] == ['running', 'failed']
+        assert payloads[0]['copy_id'] == payloads[1]['copy_id']
+        assert payloads[1]['revision'] > payloads[0]['revision']
+        assert payloads[1]['error_code'] == 'files_copy_start_failed'
+        assert standterm.files_copy_jobs[payloads[1]['copy_id']]['status'] == 'failed'
+        assert not destination_path.exists()
+    client.disconnect()
+
+
+def test_files_copy_transition_machine_preserves_terminal_outcomes():
+    failed_job = {'status': 'running', 'revision': 0}
+    assert standterm.transition_files_copy_job(
+        failed_job,
+        standterm.FILES_COPY_EVENT_COMPLETE,
+        result={'bytes_copied': 1},
+    ) is False
+    assert standterm.transition_files_copy_job(
+        failed_job,
+        standterm.FILES_COPY_EVENT_BEGIN_COMMIT,
+    ) is True
+    assert standterm.transition_files_copy_job(
+        failed_job,
+        standterm.FILES_COPY_EVENT_FAIL,
+        error_code='copy_failed',
+        message='Copy failed.',
+    ) is True
+    assert failed_job['status'] == 'failed'
+    failed_revision = failed_job['revision']
+    assert standterm.transition_files_copy_job(
+        failed_job,
+        standterm.FILES_COPY_EVENT_COMPLETE,
+        result={'bytes_copied': 1},
+    ) is False
+    assert failed_job['status'] == 'failed'
+    assert failed_job['revision'] == failed_revision
+
+    completed_job = {'status': 'running', 'revision': 0}
+    assert standterm.transition_files_copy_job(
+        completed_job,
+        standterm.FILES_COPY_EVENT_BEGIN_COMMIT,
+    ) is True
+    assert standterm.transition_files_copy_job(
+        completed_job,
+        standterm.FILES_COPY_EVENT_COMPLETE,
+        result={'bytes_copied': 1},
+    ) is True
+    assert completed_job['status'] == 'completed'
+    completed_revision = completed_job['revision']
+    assert standterm.transition_files_copy_job(
+        completed_job,
+        standterm.FILES_COPY_EVENT_FAIL,
+        error_code='late_failure',
+        message='Late failure.',
+    ) is False
+    assert completed_job['status'] == 'completed'
+    assert completed_job['revision'] == completed_revision
+
+
 def test_agent_scp_posts_file_copy_and_waits_for_typed_result():
     args = SimpleNamespace(
         url='https://127.0.0.1:5010',
@@ -7636,6 +7979,11 @@ def main():
         test_agent_file_copy_transition_machine_preserves_terminal_outcomes,
         test_external_agent_sftp_copy_revalidates_destination_before_approval,
         test_external_agent_file_copy_supports_local_shell_endpoints,
+        test_local_shell_files_supports_browse_transfer_rename_and_delete,
+        test_files_copy_request_runs_human_local_copy_without_agent_approval,
+        test_files_copy_request_rejects_same_ssh_endpoint_path,
+        test_files_copy_start_failure_keeps_correlated_terminal_result,
+        test_files_copy_transition_machine_preserves_terminal_outcomes,
         test_agent_scp_posts_file_copy_and_waits_for_typed_result,
         test_sftp_bridge_browses_direct_endpoint_and_replaces_atomically,
         test_sftp_socket_ticket_streams_one_file_and_is_single_use,

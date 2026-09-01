@@ -749,6 +749,13 @@ that the user requested a copy as authorization. The authorizing viewer shows
 file-copy approval globally even when another terminal tab is active; ordinary
 terminal-input approvals remain scoped to their terminal tab.
 
+The browser Files UI has a separate human-initiated **Copy to…** path. Its final
+**Copy** button is the explicit authorization for that one browser transaction,
+so it does not create an Agent action. It shares the bounded backend stream,
+snapshot revalidation, progress, conflict, and atomic-publish mechanisms with
+Agent copies. This browser path does not change the mandatory approval contract
+for the external `file-copy` operation.
+
 `conflict_mode` is one of `fail`, `keep_both`, or `replace`. `fail` is the safe
 default and never writes when the destination existed during preflight.
 `keep_both` approves the exact backend-selected alternate path. `replace`

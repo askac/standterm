@@ -5,6 +5,7 @@ import select
 import stat
 import sys
 import threading
+import time
 from pathlib import Path
 
 from .base import BackendSettingSchema, BackendStartFieldSchema, TerminalBackendPlugin, TerminalBridge
@@ -37,6 +38,11 @@ class LocalFileTransferError(Exception):
         self.error_code = error_code
 
 
+LOCAL_FILE_REFERENCE_TTL_SECONDS = 5 * 60
+LOCAL_FILE_REFERENCE_MAX_RECORDS = 4096
+LOCAL_FILE_REFERENCE_TOKEN_BYTES = 12
+
+
 class LocalShellBridge(TerminalBridge):
     connection_type = 'local_shell'
 
@@ -60,6 +66,8 @@ class LocalShellBridge(TerminalBridge):
         self.terminal_label = shell_config['terminal_label']
         self._output_decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
         self._file_copy_lock = threading.Lock()
+        self._file_refs_lock = threading.Lock()
+        self._file_refs = {}
 
     def file_copy_endpoint(self):
         return {
@@ -67,6 +75,13 @@ class LocalShellBridge(TerminalBridge):
             'shell': self.shell,
             'platform': sys.platform,
         }
+
+    def files_available(self):
+        try:
+            self._require_anchored_file_copy_support()
+            return True
+        except LocalFileTransferError:
+            return False
 
     @staticmethod
     def _require_anchored_file_copy_support():
@@ -78,7 +93,7 @@ class LocalShellBridge(TerminalBridge):
         ):
             raise LocalFileTransferError(
                 'local_copy_platform_unsupported',
-                'Agent file copy for Local Shell requires anchored POSIX file operations.',
+                'Files for Local Shell requires anchored POSIX file operations.',
             )
 
     @staticmethod
@@ -149,6 +164,228 @@ class LocalShellBridge(TerminalBridge):
                 'Local file path must name a file.',
             )
         return candidate
+
+    @staticmethod
+    def _validate_local_name(name):
+        if not isinstance(name, str) or not name:
+            raise LocalFileTransferError('local_files_invalid_name', 'Local file name is invalid.')
+        if (
+            name in {'.', '..'}
+            or '/' in name
+            or '\\' in name
+            or len(name.encode('utf-8', errors='ignore')) > 255
+            or any(ord(character) < 32 or ord(character) == 127 for character in name)
+        ):
+            raise LocalFileTransferError('local_files_invalid_name', 'Local file name is invalid.')
+        return name
+
+    def validate_files_name(self, name):
+        return self._validate_local_name(name)
+
+    @classmethod
+    def _validate_local_directory_path(cls, path):
+        if not isinstance(path, str) or not path:
+            raise LocalFileTransferError('local_files_invalid_path', 'Local directory path is required.')
+        if len(path.encode('utf-8', errors='ignore')) > 4096 \
+                or any(ord(character) < 32 or ord(character) == 127 for character in path):
+            raise LocalFileTransferError('local_files_invalid_path', 'Local directory path is invalid.')
+        candidate = Path(path)
+        if not candidate.is_absolute():
+            raise LocalFileTransferError(
+                'local_files_absolute_path_required',
+                'Local Shell Files requires an absolute directory path.',
+            )
+        return candidate
+
+    def _register_local_file_reference(self, file_snapshot):
+        now = time.monotonic()
+        with self._file_refs_lock:
+            for existing_id, record in list(self._file_refs.items()):
+                if record['expires_at'] <= now:
+                    self._file_refs.pop(existing_id, None)
+            while len(self._file_refs) >= LOCAL_FILE_REFERENCE_MAX_RECORDS:
+                self._file_refs.pop(next(iter(self._file_refs)))
+            file_id = 'localf_' + secrets.token_urlsafe(LOCAL_FILE_REFERENCE_TOKEN_BYTES)
+            while file_id in self._file_refs:
+                file_id = 'localf_' + secrets.token_urlsafe(LOCAL_FILE_REFERENCE_TOKEN_BYTES)
+            self._file_refs[file_id] = {
+                **file_snapshot,
+                'expires_at': now + LOCAL_FILE_REFERENCE_TTL_SECONDS,
+            }
+        return file_id
+
+    def resolve_local_file_reference(self, file_id):
+        if not isinstance(file_id, str) or len(file_id) > 128:
+            raise LocalFileTransferError(
+                'local_files_reference_invalid',
+                'The local file selection is invalid.',
+            )
+        now = time.monotonic()
+        with self._file_refs_lock:
+            record = self._file_refs.get(file_id)
+            if not record or record['expires_at'] <= now:
+                self._file_refs.pop(file_id, None)
+                raise LocalFileTransferError(
+                    'local_files_reference_expired',
+                    'The local file selection expired. Refresh the directory and try again.',
+                )
+            return {
+                key: value
+                for key, value in record.items()
+                if key != 'expires_at'
+            }
+
+    def browse_local_files(self, path=None, *, child=None, parent=False, max_entries=1000):
+        self._require_anchored_file_copy_support()
+        requested_path = Path.home() if path is None else self._validate_local_directory_path(path)
+        if child is not None:
+            requested_path = requested_path / self._validate_local_name(child)
+        elif parent:
+            requested_path = requested_path.parent
+        try:
+            canonical_path = requested_path.resolve(strict=True)
+            attributes = canonical_path.stat()
+            if not stat.S_ISDIR(attributes.st_mode):
+                raise LocalFileTransferError(
+                    'local_files_not_directory',
+                    'Local path is not a directory.',
+                )
+            directories = []
+            files = []
+            truncated = False
+            with os.scandir(canonical_path) as entries:
+                for entry in entries:
+                    try:
+                        entry_name = self._validate_local_name(entry.name)
+                        entry_attributes = entry.stat(follow_symlinks=False)
+                    except (LocalFileTransferError, OSError):
+                        continue
+                    is_directory = stat.S_ISDIR(entry_attributes.st_mode)
+                    is_regular_file = stat.S_ISREG(entry_attributes.st_mode)
+                    if not is_directory and not is_regular_file:
+                        continue
+                    if len(directories) + len(files) >= max_entries:
+                        truncated = True
+                        break
+                    if is_directory:
+                        directories.append({'name': entry_name})
+                        continue
+                    file_path = canonical_path / entry_name
+                    file_snapshot = self._local_file_snapshot(file_path, entry_attributes)
+                    file_snapshot.update(self._directory_snapshot(canonical_path))
+                    file_snapshot['endpoint'] = self.file_copy_endpoint()
+                    files.append({
+                        'file_id': self._register_local_file_reference(file_snapshot),
+                        'name': entry_name,
+                        'size': entry_attributes.st_size,
+                        'mtime': entry_attributes.st_mtime,
+                    })
+            directories.sort(key=lambda item: item['name'].casefold())
+            files.sort(key=lambda item: item['name'].casefold())
+            return {
+                'path': str(canonical_path),
+                'directories': directories,
+                'files': files,
+                'truncated': truncated,
+                'endpoint': self.file_copy_endpoint(),
+            }
+        except LocalFileTransferError:
+            raise
+        except FileNotFoundError as exc:
+            raise LocalFileTransferError(
+                'local_files_directory_not_found',
+                'The local directory does not exist.',
+            ) from exc
+        except OSError as exc:
+            raise LocalFileTransferError(
+                'local_files_browse_failed',
+                'The local directory could not be opened.',
+            ) from exc
+
+    def rename_local_file(self, file_snapshot, new_filename):
+        new_filename = self._validate_local_name(new_filename)
+        if new_filename == file_snapshot.get('filename'):
+            raise LocalFileTransferError(
+                'local_files_rename_unchanged',
+                'Enter a different file name.',
+            )
+        with self._file_copy_lock:
+            directory_descriptor = self._open_anchored_directory(file_snapshot)
+            try:
+                source_attributes = os.stat(
+                    file_snapshot['filename'],
+                    dir_fd=directory_descriptor,
+                    follow_symlinks=False,
+                )
+                self._validate_local_snapshot(source_attributes, file_snapshot)
+                try:
+                    os.stat(new_filename, dir_fd=directory_descriptor, follow_symlinks=False)
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise LocalFileTransferError(
+                        'local_files_rename_destination_exists',
+                        'A file or directory with the new name already exists.',
+                    )
+                os.rename(
+                    file_snapshot['filename'],
+                    new_filename,
+                    src_dir_fd=directory_descriptor,
+                    dst_dir_fd=directory_descriptor,
+                )
+                return {
+                    'status': 'completed',
+                    'action': 'rename',
+                    'source_path': file_snapshot['path'],
+                    'destination_path': str(Path(file_snapshot['directory']) / new_filename),
+                    'filename': new_filename,
+                }
+            except LocalFileTransferError:
+                raise
+            except FileNotFoundError as exc:
+                raise LocalFileTransferError(
+                    'local_files_file_not_found',
+                    'The local file no longer exists.',
+                ) from exc
+            except OSError as exc:
+                raise LocalFileTransferError(
+                    'local_files_rename_failed',
+                    'The local file could not be renamed.',
+                ) from exc
+            finally:
+                os.close(directory_descriptor)
+
+    def delete_local_file(self, file_snapshot):
+        with self._file_copy_lock:
+            directory_descriptor = self._open_anchored_directory(file_snapshot)
+            try:
+                source_attributes = os.stat(
+                    file_snapshot['filename'],
+                    dir_fd=directory_descriptor,
+                    follow_symlinks=False,
+                )
+                self._validate_local_snapshot(source_attributes, file_snapshot)
+                os.unlink(file_snapshot['filename'], dir_fd=directory_descriptor)
+                return {
+                    'status': 'completed',
+                    'action': 'delete',
+                    'deleted_path': file_snapshot['path'],
+                    'filename': file_snapshot['filename'],
+                }
+            except LocalFileTransferError:
+                raise
+            except FileNotFoundError as exc:
+                raise LocalFileTransferError(
+                    'local_files_file_not_found',
+                    'The local file no longer exists.',
+                ) from exc
+            except OSError as exc:
+                raise LocalFileTransferError(
+                    'local_files_delete_failed',
+                    'The local file could not be deleted.',
+                ) from exc
+            finally:
+                os.close(directory_descriptor)
 
     @staticmethod
     def _local_file_snapshot(path, attributes):

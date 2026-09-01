@@ -65,8 +65,9 @@ pulling large changes.
 
 - Runs SSH, Local Shell, and UART sessions inside browser terminal tabs.
 - Supports multiple persistent terminal tabs while the server process is alive.
-- Provides a lightweight SFTP File Manager for direct SSH sessions, including
-  upload, download, rename, and carefully confirmed permanent deletion.
+- Provides StandTerm Files for direct SSH and supported Local Shell sessions,
+  including upload, download, rename, carefully confirmed permanent deletion,
+  and explicit cross-tab file copies.
 - Opens URLs and image links in an in-page overlay, and can pop a terminal into
   system Picture-in-Picture when the browser supports it.
 - Provides Windows Terminal-inspired themes, IBM 5153 colors, 256-color, and
@@ -270,26 +271,43 @@ cancels the path without falling back to a password automatically.
 Browser-side rejection details are sanitized and length-limited before they are
 returned with the connection failure.
 
-### Lightweight SFTP File Manager
+### StandTerm Files
 
-For a connected SSH tab, use the folder button in the status bar, the terminal
-context menu, or the folder button in Terminal Picture-in-Picture. StandTerm
-opens a compact SFTP File Manager in Picture-in-Picture. When opened from a
-terminal PiP, the terminal first returns to its tab so the single Document PiP
-window can switch cleanly to the file manager.
+For a connected SSH or supported Local Shell tab, use the folder button in the
+status bar, the terminal context menu, or the folder button in Terminal
+Picture-in-Picture. StandTerm opens a compact Files window in
+Picture-in-Picture. When opened from a terminal PiP, the terminal first returns
+to its tab so the single Document PiP window can switch cleanly to Files.
 
-The file manager supports a flat directory listing with manual path navigation,
-drag-and-drop upload, download, rename, and permanent deletion. Upload conflicts
-offer **Keep Both** or atomic **Replace**. Delete uses two distinct confirmation
-steps with deliberately separated actions. It operates only on the direct SSH
-endpoint represented by the tab; it does not follow nested interactive SSH
-sessions, recursively browse directory trees, or act as a full SFTP client.
+Files browses one directory at a time and supports manual path navigation,
+drag-and-drop upload, explicit download, rename, and permanent deletion.
+Selecting a file only highlights it and prepares the available actions; it does
+not start a download. Upload conflicts offer **Keep Both** or atomic
+**Replace**. Delete uses two distinct confirmation steps with deliberately
+separated actions.
 
-Remote file actions use short-lived opaque references and transfer tickets bound
-to the browser session, socket, terminal, and live SSH bridge. Displayed paths
-and file names remain data rather than control authority. Downloads and file
-actions accept regular files only; symbolic links and other non-regular entries
-are rejected.
+Choose **Copy to…** on a selected file to slide out a destination browser. Pick
+another connected SSH or Files-capable Local Shell tab, browse to the target
+directory, choose the destination name, and press **Copy**. That final browser
+click is the human authorization for this copy. The backend streams the file
+between the two live endpoints with structured progress and an atomic publish;
+the source is preserved. Agent-initiated copies use the same bounded transfer
+core but still require their separate, fresh **Approve copy** decision.
+If the backend cannot determine whether an SSH publish succeeded, inspect the
+destination before retrying; a blind retry may duplicate or replace a file that
+was already published.
+
+Each tab represents its direct backend endpoint. Files does not follow a nested
+interactive SSH session shown inside a terminal or recursively browse directory
+trees. Local Shell Files is enabled only where StandTerm can use anchored POSIX
+file operations; unsupported platforms show the capability as unavailable.
+
+Existing-file source actions use short-lived opaque references and transfer
+tickets bound to the browser session, socket, terminal, and live backend bridge.
+Requested browse, upload, and copy destinations use structured paths and names
+that the backend canonicalizes, validates, and rechecks before publish.
+Downloads, copies, and file actions accept regular files only; symbolic links
+and other non-regular entries are rejected.
 
 **Settings > General > Import & Export** transfers browser preferences, SSH
 profiles and order, SSH history, and persistent UI layout in a versioned JSON

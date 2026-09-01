@@ -639,6 +639,7 @@ def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
                         connection_type: 'ssh',
                         terminal_label: 'SSH',
                         term: 'xterm-256color',
+                        files_available: true,
                         connected: true
                     },
                     {
@@ -646,6 +647,7 @@ def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
                         connection_type: 'local_shell',
                         terminal_label: 'bash',
                         term: 'xterm-256color',
+                        files_available: true,
                         connected: true
                     }
                 ]
@@ -667,14 +669,14 @@ def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
             available_status == {
                 'hidden': False,
                 'disabled': False,
-                'title': 'Open SFTP File Manager',
+                'title': 'Open Files',
                 'text': '📁',
             },
             'connected SSH status bar did not expose the SFTP action',
         )
         page.click('#sftp-status-btn')
         page.wait_for_function(
-            "() => documentPictureInPicture.window?.document.querySelector('.sftp-pip-title')?.textContent === 'SFTP File Manager'",
+            "() => documentPictureInPicture.window?.document.querySelector('.sftp-pip-title')?.textContent === 'Files'",
             timeout=5000,
         )
         page.evaluate('() => documentPictureInPicture.window.close()')
@@ -696,13 +698,13 @@ def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
         )
         check(unavailable_status['hidden'] is False, 'unavailable SFTP status action disappeared')
         check(unavailable_status['disabled'] is True, 'unavailable SFTP status action remained enabled')
-        check(unavailable_status['title'] == 'SFTP not available', 'unavailable SFTP status hint was unclear')
+        check(unavailable_status['title'] == 'Files not available', 'unavailable Files status hint was unclear')
         check('×' in unavailable_status['text'], 'unavailable SFTP status action omitted its cross mark')
         check(unavailable_status['markColor'] == 'rgb(255, 69, 58)', 'unavailable SFTP cross was not red')
         unavailable_menu = page.evaluate("() => window.terminalTest.showContextMenuForTest('main')")
         check(unavailable_menu['sftpVisible'] is True, 'unavailable SSH context action disappeared')
         check(unavailable_menu['sftpDisabled'] is True, 'unavailable SSH context action remained enabled')
-        check('SFTP not available' in unavailable_menu['sftpText'], 'unavailable SSH context action hint was unclear')
+        check('Files not available' in unavailable_menu['sftpText'], 'unavailable SSH context action hint was unclear')
 
         page.evaluate("() => window.terminalTest.setSftpAvailabilityForTest('main', null)")
         page.evaluate("() => window.terminalTest.showContextMenuForTest('main')")
@@ -723,7 +725,7 @@ def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
             pip_action == {
                 'hidden': False,
                 'disabled': False,
-                'title': 'Open SFTP File Manager',
+                'title': 'Open Files',
                 'text': '📁',
             },
             'Terminal PiP did not expose the SFTP action',
@@ -731,7 +733,7 @@ def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
 
         page.evaluate("() => documentPictureInPicture.window.document.querySelector('.pip-sftp-button').click()")
         page.wait_for_function(
-            "() => documentPictureInPicture.window?.document.querySelector('.sftp-pip-title')?.textContent === 'SFTP File Manager'",
+            "() => documentPictureInPicture.window?.document.querySelector('.sftp-pip-title')?.textContent === 'Files'",
             timeout=5000,
         )
         restored = page.evaluate("() => window.terminalTest.getTerminalTabsState()")
@@ -750,19 +752,30 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
     try:
         page.evaluate(
             """() => window.terminalTest.applyTerminalListForTest({
-                terminals: [{
-                    terminal_id: 'main',
-                    connection_type: 'ssh',
-                    terminal_label: 'SSH',
-                    term: 'xterm-256color',
-                    connected: true
-                }]
+                terminals: [
+                    {
+                        terminal_id: 'main',
+                        connection_type: 'ssh',
+                        terminal_label: 'hcbox',
+                        term: 'xterm-256color',
+                        files_available: true,
+                        connected: true
+                    },
+                    {
+                        terminal_id: 'term-2',
+                        connection_type: 'local_shell',
+                        terminal_label: 'Local Shell',
+                        term: 'xterm-256color',
+                        files_available: true,
+                        connected: true
+                    }
+                ]
             })"""
         )
         ssh_menu = page.evaluate("() => window.terminalTest.showContextMenuForTest('main')")
         check(ssh_menu['terminalId'] == 'main', 'SFTP context action targeted the wrong terminal')
         check(ssh_menu['sftpVisible'] is True, 'connected SSH tab did not show SFTP send action')
-        check('SFTP File Manager' in ssh_menu['sftpText'], 'SFTP context action label was unclear')
+        check('Files' in ssh_menu['sftpText'], 'Files context action label was unclear')
         check(page.evaluate('() => !!window.documentPictureInPicture'), 'Document PiP is unavailable in the test browser')
         page.click('#sftp-send-option')
         page.wait_for_function('() => !!window.documentPictureInPicture.window', timeout=5000)
@@ -774,13 +787,13 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                 hasPathInput: !!documentPictureInPicture.window.document.querySelector('.sftp-path-input')
             })"""
         )
-        check(pip_state['title'] == 'SFTP File Manager', 'SFTP PiP title was missing')
+        check(pip_state['title'] == 'Files', 'Files PiP title was missing')
         check('Nested SSH sessions' in pip_state['hint'], 'SFTP PiP did not explain the direct endpoint boundary')
         check(pip_state['hasDropZone'] is True, 'SFTP PiP did not expose a file drop zone')
         check(pip_state['hasPathInput'] is True, 'SFTP PiP did not expose destination path navigation')
 
         page.wait_for_function(
-            "() => documentPictureInPicture.window.document.querySelector('.sftp-transfer-status')?.textContent !== 'Opening SFTP…'",
+            "() => documentPictureInPicture.window.document.querySelector('.sftp-transfer-status')?.textContent !== 'Opening Files…'",
             timeout=5000,
         )
         rendered = page.evaluate(
@@ -821,15 +834,23 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                     operationVisible: pipDocument.querySelector('.sftp-file-operation-box').classList.contains('visible'),
                     actions: [...pipDocument.querySelectorAll('.sftp-file-operation-actions button')].map(button => button.innerText),
                     preparing,
-                    downloadReady: !pipDocument.querySelector('.sftp-file-download').disabled
+                    downloadReady: !pipDocument.querySelector('.sftp-file-download').disabled,
+                    selected: files[0].classList.contains('selected'),
+                    selectedPressed: files[0].getAttribute('aria-pressed'),
+                    status: pipDocument.querySelector('.sftp-transfer-status').innerText
                 };
             }"""
         )
         check(file_ui['fileCount'] == 2, 'SFTP PiP did not list regular files')
         check(file_ui['operationVisible'] is True, 'selecting an SFTP file did not open file actions')
-        check(file_ui['actions'] == ['Download', 'Rename…', 'Delete…', 'Close'], 'SFTP file actions were incomplete')
+        check(file_ui['actions'] == ['Download', 'Copy to…', 'Rename…', 'Delete…', 'Close'], 'Files actions were incomplete')
         check(file_ui['preparing'] == {'disabled': True, 'text': 'Preparing…'}, 'SFTP Download was enabled before its ticket was ready')
         check(file_ui['downloadReady'] is True, 'SFTP Download was not enabled after its ticket became ready')
+        check(file_ui['selected'] is True and file_ui['selectedPressed'] == 'true', 'selected Files row was not highlighted')
+        check(
+            file_ui['status'] == 'Selected reference.txt. Click Download to save it.',
+            'selecting a file implied that it had already downloaded',
+        )
 
         download_requests = get_emitted(page, 'sftp_download_ticket_request')
         check(len(download_requests) == 1, 'selecting an SFTP file did not prepare one download ticket')
@@ -879,6 +900,95 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
         check(any(message.startswith('[sftp] Download ticket ready') for message in browser_console), 'SFTP browser log omitted the ready ticket')
         check(any(message.startswith('[sftp] Download button clicked') for message in browser_console), 'SFTP browser log omitted the explicit click')
         check(any(message.startswith('[sftp] Download link dispatched') for message in browser_console), 'SFTP browser log omitted the link dispatch')
+
+        clear_emitted(page)
+        copy_picker = page.evaluate(
+            """() => {
+                const pipDocument = documentPictureInPicture.window.document;
+                pipDocument.querySelector('.sftp-file-copy').click();
+                const request = window.terminalTest.getEmitted()
+                    .find(item => item.event === 'sftp_browse_request' && item.args[0].terminal_id === 'term-2');
+                window.terminalTest.handleSftpBrowseResultForTest({
+                    request_id: request.args[0].request_id,
+                    terminal_id: 'term-2',
+                    status: 'ready',
+                    path: '/home/local',
+                    endpoint: { route: 'local', shell: 'bash', platform: 'linux' },
+                    directories: [{ name: 'work' }],
+                    files: [],
+                    truncated: false,
+                    max_upload_bytes: 1024
+                });
+                return {
+                    open: pipDocument.querySelector('.sftp-files-workspace').classList.contains('copy-open'),
+                    title: pipDocument.querySelector('.sftp-destination-title').innerText,
+                    sessions: [...pipDocument.querySelector('.sftp-session-select').options].map(option => option.value),
+                    path: pipDocument.querySelector('.sftp-destination-pane .sftp-path-input').value,
+                    filename: pipDocument.querySelector('.sftp-copy-name-input').value,
+                    endpoint: pipDocument.querySelector('.sftp-destination-pane .sftp-endpoint-value').innerText
+                };
+            }"""
+        )
+        check(copy_picker['open'] is True, 'Copy to did not slide out the destination Files pane')
+        check(copy_picker['title'] == 'Choose destination', 'destination Files pane title was unclear')
+        check(copy_picker['sessions'] == ['term-2'], 'destination Files pane listed an invalid session')
+        check(copy_picker['path'] == '/home/local', 'destination Files pane did not browse the selected session')
+        check(copy_picker['filename'] == 'reference.txt', 'destination Files pane did not preserve the source name')
+        check(copy_picker['endpoint'].startswith('Local Shell'), 'destination Files pane did not identify Local Shell')
+
+        clear_emitted(page)
+        page.evaluate("() => documentPictureInPicture.window.document.querySelector('.sftp-copy-confirm').click()")
+        copy_requests = get_emitted(page, 'files_copy_request')
+        check(len(copy_requests) == 1, 'Copy did not emit one typed Files copy request')
+        copy_payload = copy_requests[0]['args'][0]
+        check(copy_payload['source_terminal_id'] == 'main', 'Files copy lost the source terminal')
+        check(copy_payload['source_file_id'] == 'sftpf_random_a', 'Files copy did not use the opaque source file reference')
+        check(copy_payload['destination_terminal_id'] == 'term-2', 'Files copy lost the destination terminal')
+        check(copy_payload['destination_directory'] == '/home/local', 'Files copy lost the canonical destination view')
+        check(copy_payload['destination_filename'] == 'reference.txt', 'Files copy lost the destination filename')
+        check('source_path' not in copy_payload, 'Files copy trusted the displayed source path as authority')
+        copy_result_ui = page.evaluate(
+            """payload => {
+                window.terminalTest.handleFilesCopyResultForTest({
+                    request_id: payload.request_id,
+                    copy_id: 'filesc_test',
+                    status: 'running',
+                    revision: 0,
+                    source_size: 9,
+                    bytes_copied: 0,
+                    total_bytes: 9,
+                    destination_path: '/home/local/reference.txt'
+                });
+                window.terminalTest.handleFilesCopyResultForTest({
+                    request_id: payload.request_id,
+                    copy_id: 'filesc_foreign',
+                    status: 'failed',
+                    revision: 99,
+                    message: 'Foreign copy failed.'
+                });
+                const statusAfterForeign = documentPictureInPicture.window.document
+                    .querySelector('.sftp-destination-pane .sftp-transfer-status').innerText;
+                window.terminalTest.handleFilesCopyResultForTest({
+                    request_id: payload.request_id,
+                    copy_id: 'filesc_test',
+                    status: 'completed',
+                    revision: 1,
+                    source_size: 9,
+                    bytes_copied: 9,
+                    total_bytes: 9,
+                    destination_path: '/home/local/reference.txt'
+                });
+                return {
+                    statusAfterForeign,
+                    progressHidden: !documentPictureInPicture.window.document
+                        .querySelector('.sftp-destination-pane .sftp-progress').classList.contains('visible')
+                };
+            }""",
+            copy_payload,
+        )
+        check(copy_result_ui['statusAfterForeign'].startswith('Copying '), 'Files copy accepted a foreign copy_id with the same request_id')
+        check(copy_result_ui['progressHidden'] is True, 'Files copy did not accept its bound terminal result')
+        page.evaluate("() => documentPictureInPicture.window.document.querySelector('.sftp-destination-close').click()")
 
         page.evaluate("() => documentPictureInPicture.window.document.querySelector('.sftp-file-rename').click()")
         rename_initial = page.evaluate(
@@ -1022,12 +1132,15 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                     connection_type: 'local_shell',
                     terminal_label: 'bash',
                     term: 'xterm-256color',
+                    files_available: true,
                     connected: true
                 }]
             })"""
         )
         local_menu = page.evaluate("() => window.terminalTest.showContextMenuForTest('main')")
-        check(local_menu['sftpVisible'] is False, 'local shell tab exposed the SFTP send action')
+        check(local_menu['sftpVisible'] is True, 'local shell tab did not expose Files')
+        check(local_menu['sftpDisabled'] is False, 'Files was disabled for a capable local shell tab')
+        check('Files' in local_menu['sftpText'], 'local shell Files label was unclear')
     finally:
         close_context(context)
 
