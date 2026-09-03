@@ -277,7 +277,10 @@ class SSHBridge(TerminalBridge):
                         truncated = True
                         break
                     if is_directory:
-                        directories.append({'name': entry_name})
+                        directories.append({
+                            'name': entry_name,
+                            'mtime': entry.st_mtime,
+                        })
                     elif entry.st_size is not None and entry.st_mtime is not None:
                         file_snapshot = {
                             'directory': canonical_path,
