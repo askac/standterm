@@ -73,6 +73,7 @@ class LocalShellBridge(TerminalBridge):
         return {
             'route': 'local',
             'shell': self.shell,
+            'command': self.shell_command[0] if self.shell_command else self.shell,
             'platform': sys.platform,
         }
 
@@ -268,7 +269,10 @@ class LocalShellBridge(TerminalBridge):
                         truncated = True
                         break
                     if is_directory:
-                        directories.append({'name': entry_name})
+                        directories.append({
+                            'name': entry_name,
+                            'mtime': entry_attributes.st_mtime,
+                        })
                         continue
                     file_path = canonical_path / entry_name
                     file_snapshot = self._local_file_snapshot(file_path, entry_attributes)

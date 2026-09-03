@@ -5073,9 +5073,11 @@ def test_local_shell_files_supports_browse_transfer_rename_and_delete():
 
         listing = bridge.browse_local_files(str(root))
         assert listing['path'] == str(root.resolve())
-        assert listing['directories'] == [{'name': 'folder'}]
+        assert listing['directories'][0]['name'] == 'folder'
+        assert isinstance(listing['directories'][0]['mtime'], float)
         assert [file['name'] for file in listing['files']] == ['source.txt']
         assert listing['endpoint']['route'] == 'local'
+        assert listing['endpoint']['command'] == 'sh'
         source_entry = listing['files'][0]
         assert source_entry['file_id'].startswith('localf_')
         assert 'source.txt' not in source_entry['file_id']
@@ -5741,7 +5743,7 @@ def test_sftp_bridge_browses_direct_endpoint_and_replaces_atomically():
     bridge._open_sftp = open_sftp
     browse = bridge.browse_sftp()
     assert browse['path'] == 'C:/Users/tester'
-    assert browse['directories'] == [{'name': 'docs'}]
+    assert browse['directories'] == [{'name': 'docs', 'mtime': 1}]
     assert len(browse['files']) == 1
     assert browse['files'][0]['name'] == 'reference.txt'
     assert browse['files'][0]['file_id'].startswith('sftpf_')

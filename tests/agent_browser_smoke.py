@@ -676,7 +676,7 @@ def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
         )
         page.click('#sftp-status-btn')
         page.wait_for_function(
-            "() => documentPictureInPicture.window?.document.querySelector('.sftp-pip-title')?.textContent === 'Files'",
+            "() => documentPictureInPicture.window?.document.querySelector('.sftp-pip-title')?.textContent === 'StandTerm - Files'",
             timeout=5000,
         )
         page.evaluate('() => documentPictureInPicture.window.close()')
@@ -733,7 +733,7 @@ def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
 
         page.evaluate("() => documentPictureInPicture.window.document.querySelector('.pip-sftp-button').click()")
         page.wait_for_function(
-            "() => documentPictureInPicture.window?.document.querySelector('.sftp-pip-title')?.textContent === 'Files'",
+            "() => documentPictureInPicture.window?.document.querySelector('.sftp-pip-title')?.textContent === 'StandTerm - Files'",
             timeout=5000,
         )
         restored = page.evaluate("() => window.terminalTest.getTerminalTabsState()")
@@ -782,15 +782,25 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
         pip_state = page.evaluate(
             """() => ({
                 title: documentPictureInPicture.window.document.querySelector('.sftp-pip-title')?.textContent,
+                documentTitle: documentPictureInPicture.window.document.title,
                 hint: documentPictureInPicture.window.document.querySelector('.sftp-direct-hint')?.textContent,
                 hasDropZone: !!documentPictureInPicture.window.document.querySelector('.sftp-drop-zone'),
-                hasPathInput: !!documentPictureInPicture.window.document.querySelector('.sftp-path-input')
+                hasPathInput: !!documentPictureInPicture.window.document.querySelector('.sftp-path-input'),
+                innerCloseCount: documentPictureInPicture.window.document.querySelectorAll('.sftp-pip-close').length,
+                navigationTitles: [...documentPictureInPicture.window.document.querySelectorAll('.sftp-path-controls .sftp-icon-button')]
+                    .map(button => button.title)
             })"""
         )
-        check(pip_state['title'] == 'Files', 'Files PiP title was missing')
+        check(pip_state['title'] == 'StandTerm - Files', 'Files PiP title was missing')
+        check(pip_state['documentTitle'] == 'StandTerm - Files', 'Files document title was missing')
         check('Nested SSH sessions' in pip_state['hint'], 'SFTP PiP did not explain the direct endpoint boundary')
         check(pip_state['hasDropZone'] is True, 'SFTP PiP did not expose a file drop zone')
         check(pip_state['hasPathInput'] is True, 'SFTP PiP did not expose destination path navigation')
+        check(pip_state['innerCloseCount'] == 0, 'Files kept a duplicate close control')
+        check(
+            pip_state['navigationTitles'] == ['Home directory', 'Parent directory', 'Refresh files list'],
+            'Files navigation icons did not expose clear descriptions',
+        )
 
         page.wait_for_function(
             "() => documentPictureInPicture.window.document.querySelector('.sftp-transfer-status')?.textContent !== 'Opening Files…'",
@@ -799,7 +809,7 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
         rendered = page.evaluate(
             """() => window.terminalTest.renderSftpEntriesForTest({
                 path: '/home/tester',
-                directories: [{ name: 'docs' }],
+                directories: [{ name: 'docs', mtime: 20 }],
                 files: [
                     { file_id: 'sftpf_random_a', name: 'reference.txt', size: 9, mtime: 25 },
                     { file_id: 'sftpf_random_b', name: 'existing.txt', size: 4, mtime: 26 }
@@ -808,11 +818,51 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
         )
         check(rendered is True, 'SFTP PiP test fixture could not render remote files')
         clear_emitted(page)
+        page.evaluate("() => documentPictureInPicture.window.document.querySelector('.sftp-refresh').click()")
+        refresh_requests = get_emitted(page, 'sftp_browse_request')
+        check(len(refresh_requests) == 1, 'Files Refresh did not request a new directory listing')
+        refresh_payload = refresh_requests[0]['args'][0]
+        check(refresh_payload['path'] == '/home/tester', 'Files Refresh did not keep the current directory')
+        page.evaluate(
+            """payload => window.terminalTest.handleSftpBrowseResultForTest({
+                request_id: payload.request_id,
+                terminal_id: 'main',
+                status: 'ready',
+                path: '/home/tester',
+                endpoint: { user: 'tester', host: 'host.example', port: 22, route: 'direct' },
+                directories: [{ name: 'docs', mtime: 20 }],
+                files: [
+                    { file_id: 'sftpf_random_a', name: 'reference.txt', size: 9, mtime: 25 },
+                    { file_id: 'sftpf_random_b', name: 'existing.txt', size: 4, mtime: 26 }
+                ],
+                truncated: false,
+                max_upload_bytes: 1024
+            })""",
+            refresh_payload,
+        )
+        clear_emitted(page)
         file_ui = page.evaluate(
             """() => {
                 const pipDocument = documentPictureInPicture.window.document;
+                const rows = () => [...pipDocument.querySelectorAll('.sftp-directory-entry')]
+                    .map(button => button.dataset.entryName);
+                const sort = column => pipDocument.querySelector(`[data-sort-column="${column}"]`).click();
+                const initialRows = rows();
+                sort('size');
+                sort('size');
+                const sizeDescendingRows = rows();
+                sort('date');
+                sort('date');
+                const dateDescendingRows = rows();
+                sort('name');
+                const list = pipDocument.querySelector('.sftp-directory-list');
+                list.focus();
+                list.dispatchEvent(new KeyboardEvent('keydown', { key: 'r', bubbles: true }));
+                list.dispatchEvent(new KeyboardEvent('keydown', { key: 'e', bubbles: true }));
+                const typeaheadMatch = pipDocument.activeElement?.dataset.entryName;
                 const files = [...pipDocument.querySelectorAll('.sftp-file-entry')];
-                files[0].click();
+                const reference = files.find(button => button.dataset.entryName === 'reference.txt');
+                reference.click();
                 const preparing = {
                     disabled: pipDocument.querySelector('.sftp-file-download').disabled,
                     text: pipDocument.querySelector('.sftp-file-download').innerText
@@ -831,19 +881,34 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                 });
                 return {
                     fileCount: files.length,
+                    columnHeaders: [...pipDocument.querySelectorAll('.sftp-sort-button')].map(button => button.innerText),
+                    initialRows,
+                    sizeDescendingRows,
+                    dateDescendingRows,
+                    typeaheadMatch,
                     operationVisible: pipDocument.querySelector('.sftp-file-operation-box').classList.contains('visible'),
-                    actions: [...pipDocument.querySelectorAll('.sftp-file-operation-actions button')].map(button => button.innerText),
+                    actions: [...pipDocument.querySelectorAll('.sftp-file-operation-box .sftp-file-operation-actions button')]
+                        .map(button => button.innerText),
+                    operationPath: pipDocument.querySelector('.sftp-file-operation-path').innerText,
+                    operationMeta: pipDocument.querySelector('.sftp-file-operation-meta').innerText,
                     preparing,
                     downloadReady: !pipDocument.querySelector('.sftp-file-download').disabled,
-                    selected: files[0].classList.contains('selected'),
-                    selectedPressed: files[0].getAttribute('aria-pressed'),
+                    selected: reference.classList.contains('selected'),
+                    selectedPressed: reference.getAttribute('aria-pressed'),
                     status: pipDocument.querySelector('.sftp-transfer-status').innerText
                 };
             }"""
         )
         check(file_ui['fileCount'] == 2, 'SFTP PiP did not list regular files')
+        check(file_ui['columnHeaders'] == ['Name ▲', 'Size', 'Date'], 'Files list did not expose sortable columns')
+        check(file_ui['initialRows'] == ['docs', 'existing.txt', 'reference.txt'], 'Files Name sort did not keep folders first')
+        check(file_ui['sizeDescendingRows'] == ['docs', 'reference.txt', 'existing.txt'], 'Files Size toggle did not sort descending')
+        check(file_ui['dateDescendingRows'] == ['docs', 'existing.txt', 'reference.txt'], 'Files Date toggle did not sort descending')
+        check(file_ui['typeaheadMatch'] == 'reference.txt', 'Files typeahead did not accumulate a quick prefix')
         check(file_ui['operationVisible'] is True, 'selecting an SFTP file did not open file actions')
-        check(file_ui['actions'] == ['Download', 'Copy to…', 'Rename…', 'Delete…', 'Close'], 'Files actions were incomplete')
+        check(file_ui['actions'] == ['Download', 'Copy to…', 'Rename…', 'Delete…'], 'Files actions were incomplete')
+        check(file_ui['operationPath'] == '/home/tester/reference.txt', 'selected file card omitted the full path')
+        check('9 B (9 bytes)' in file_ui['operationMeta'] and '1970' in file_ui['operationMeta'], 'selected file card omitted exact file metadata')
         check(file_ui['preparing'] == {'disabled': True, 'text': 'Preparing…'}, 'SFTP Download was enabled before its ticket was ready')
         check(file_ui['downloadReady'] is True, 'SFTP Download was not enabled after its ticket became ready')
         check(file_ui['selected'] is True and file_ui['selectedPressed'] == 'true', 'selected Files row was not highlighted')
@@ -901,6 +966,27 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
         check(any(message.startswith('[sftp] Download button clicked') for message in browser_console), 'SFTP browser log omitted the explicit click')
         check(any(message.startswith('[sftp] Download link dispatched') for message in browser_console), 'SFTP browser log omitted the link dispatch')
 
+        selection_toggle = page.evaluate(
+            """() => {
+                const pipDocument = documentPictureInPicture.window.document;
+                const row = [...pipDocument.querySelectorAll('.sftp-file-entry')]
+                    .find(button => button.dataset.entryName === 'reference.txt');
+                row.click();
+                const hiddenAfterToggle = !pipDocument.querySelector('.sftp-file-operation-box').classList.contains('visible');
+                row.click();
+                return {
+                    hiddenAfterToggle,
+                    visibleAfterToggle: pipDocument.querySelector('.sftp-file-operation-box').classList.contains('visible'),
+                    selectedAfterToggle: row.classList.contains('selected')
+                };
+            }"""
+        )
+        check(selection_toggle == {
+            'hiddenAfterToggle': True,
+            'visibleAfterToggle': True,
+            'selectedAfterToggle': True,
+        }, 'clicking the selected file did not toggle selection without another action')
+
         clear_emitted(page)
         copy_picker = page.evaluate(
             """() => {
@@ -914,33 +1000,40 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                     status: 'ready',
                     path: '/home/local',
                     endpoint: { route: 'local', shell: 'bash', platform: 'linux' },
-                    directories: [{ name: 'work' }],
+                    directories: [{ name: 'work', mtime: 40 }],
                     files: [],
                     truncated: false,
                     max_upload_bytes: 1024
                 });
                 return {
                     open: pipDocument.querySelector('.sftp-files-workspace').classList.contains('copy-open'),
+                    sourceHidden: pipDocument.defaultView.getComputedStyle(pipDocument.querySelector('.sftp-source-pane')).display === 'none',
                     title: pipDocument.querySelector('.sftp-destination-title').innerText,
+                    sourcePath: pipDocument.querySelector('.sftp-copy-source-path').innerText,
+                    sourceMeta: pipDocument.querySelector('.sftp-copy-source-meta').innerText,
                     sessions: [...pipDocument.querySelector('.sftp-session-select').options].map(option => option.value),
                     path: pipDocument.querySelector('.sftp-destination-pane .sftp-path-input').value,
                     filename: pipDocument.querySelector('.sftp-copy-name-input').value,
                     endpoint: pipDocument.querySelector('.sftp-destination-pane .sftp-endpoint-value').innerText,
-                    innerCloseCount: pipDocument.querySelectorAll('.sftp-destination-close').length,
+                    innerCloseCount: pipDocument.querySelectorAll('.sftp-pip-close, .sftp-destination-close').length,
                     cancelText: pipDocument.querySelector('.sftp-copy-cancel').innerText,
-                    lifecycle: pipDocument.querySelector('.sftp-copy-lifecycle-hint').innerText
+                    lifecycle: pipDocument.querySelector('.sftp-copy-lifecycle-hint').innerText,
+                    duplicateSummaryCount: pipDocument.querySelectorAll('.sftp-copy-summary').length
                 };
             }"""
         )
-        check(copy_picker['open'] is True, 'Copy to did not slide out the destination Files pane')
+        check(copy_picker['open'] is True and copy_picker['sourceHidden'] is True, 'Copy to did not switch to the destination Files pane')
         check(copy_picker['title'] == 'Choose destination', 'destination Files pane title was unclear')
+        check(copy_picker['sourcePath'] == '/home/tester/reference.txt', 'destination Files pane omitted the source file path')
+        check('9 B (9 bytes)' in copy_picker['sourceMeta'], 'destination Files pane omitted exact source file metadata')
         check(copy_picker['sessions'] == ['term-2'], 'destination Files pane listed an invalid session')
         check(copy_picker['path'] == '/home/local', 'destination Files pane did not browse the selected session')
         check(copy_picker['filename'] == 'reference.txt', 'destination Files pane did not preserve the source name')
         check(copy_picker['endpoint'].startswith('Local Shell'), 'destination Files pane did not identify Local Shell')
         check(copy_picker['innerCloseCount'] == 0, 'destination Files pane kept a duplicate close icon')
         check(copy_picker['cancelText'] == 'Cancel', 'destination Files pane did not provide one clear pre-copy exit')
-        check('closes this destination pane' in copy_picker['lifecycle'], 'destination Files pane did not explain pre-copy cancellation')
+        check('returns to the previous pane' in copy_picker['lifecycle'], 'destination Files pane did not explain pre-copy cancellation')
+        check(copy_picker['duplicateSummaryCount'] == 0, 'destination Files pane kept a duplicate instruction card')
 
         clear_emitted(page)
         page.evaluate("() => documentPictureInPicture.window.document.querySelector('.sftp-copy-confirm').click()")
@@ -974,10 +1067,6 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                 });
                 const statusAfterForeign = documentPictureInPicture.window.document
                     .querySelector('.sftp-destination-pane .sftp-transfer-status').innerText;
-                documentPictureInPicture.window.document.querySelector('.sftp-pip-header .sftp-pip-close').click();
-                const closeBlocked = !!documentPictureInPicture.window.document.querySelector('.sftp-destination-pane');
-                const closeExplanation = documentPictureInPicture.window.document
-                    .querySelector('.sftp-copy-lifecycle-hint').innerText;
                 window.terminalTest.handleFilesCopyResultForTest({
                     request_id: payload.request_id,
                     copy_id: 'filesc_test',
@@ -1020,8 +1109,6 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                 });
                 return {
                     statusAfterForeign,
-                    closeBlocked,
-                    closeExplanation,
                     publishing,
                     terminalButtonText: documentPictureInPicture.window.document
                         .querySelector('.sftp-copy-cancel').innerText,
@@ -1032,14 +1119,22 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
             copy_payload,
         )
         check(copy_result_ui['statusAfterForeign'].startswith('Copying '), 'Files copy accepted a foreign copy_id with the same request_id')
-        check(copy_result_ui['closeBlocked'] is True, 'Files closed without distinguishing close from copy cancellation')
-        check('Cancel the copy first' in copy_result_ui['closeExplanation'], 'Files close did not explain how to stop the copy')
         check(copy_result_ui['publishing']['text'] == 'Publishing…', 'commit barrier did not replace the cancel action')
         check(copy_result_ui['publishing']['disabled'] is True, 'commit barrier still allowed cancellation')
         check('cannot be cancelled' in copy_result_ui['publishing']['lifecycle'], 'commit barrier did not explain its cancellation boundary')
         check(copy_result_ui['terminalButtonText'] == 'Close', 'completed Files copy did not provide a clear close action')
         check(copy_result_ui['progressHidden'] is True, 'Files copy did not accept its bound terminal result')
-        page.evaluate("() => documentPictureInPicture.window.document.querySelector('.sftp-copy-cancel').click()")
+        back_navigation = page.evaluate(
+            """() => {
+                const pipDocument = documentPictureInPicture.window.document;
+                pipDocument.querySelector('.sftp-copy-cancel').click();
+                return {
+                    destinationClosed: !pipDocument.querySelector('.sftp-destination-pane'),
+                    sourceVisible: pipDocument.defaultView.getComputedStyle(pipDocument.querySelector('.sftp-source-pane')).display !== 'none'
+                };
+            }"""
+        )
+        check(back_navigation == {'destinationClosed': True, 'sourceVisible': True}, 'destination Close did not return to the source pane')
 
         clear_emitted(page)
         page.evaluate(
@@ -1125,6 +1220,72 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
         check('cancelled before publishing' in cancelled_ui['status'], 'Files copy did not show the cancellation boundary')
         check('You can close Files' in cancelled_ui['lifecycle'], 'Files copy did not explain the terminal cancellation state')
         check(cancelled_ui['closed'] is True, 'cancelled Files copy destination pane did not close')
+
+        clear_emitted(page)
+        local_file_picker = page.evaluate(
+            """() => {
+                const pipDocument = documentPictureInPicture.window.document;
+                const input = pipDocument.querySelector('.sftp-file-input');
+                const transfer = new DataTransfer();
+                transfer.items.add(new File(['upload'], 'local-upload.txt', {
+                    type: 'text/plain',
+                    lastModified: Date.UTC(2026, 8, 2, 2, 20)
+                }));
+                input.files = transfer.files;
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                const card = pipDocument.querySelector('.sftp-selected-file');
+                const result = {
+                    visible: card.classList.contains('visible'),
+                    path: pipDocument.querySelector('.sftp-selected-file-path').innerText,
+                    meta: pipDocument.querySelector('.sftp-selected-file-meta').innerText,
+                    actions: [...card.querySelectorAll('button')].map(button => button.innerText)
+                };
+                pipDocument.querySelector('.sftp-local-copy').click();
+                const request = window.terminalTest.getEmitted()
+                    .find(item => item.event === 'sftp_browse_request' && item.args[0].terminal_id === 'main');
+                window.terminalTest.handleSftpBrowseResultForTest({
+                    request_id: request.args[0].request_id,
+                    terminal_id: 'main',
+                    status: 'ready',
+                    path: '/home/tester',
+                    endpoint: { user: 'tester', host: 'host.example', port: 22, route: 'direct' },
+                    directories: [],
+                    files: [],
+                    truncated: false,
+                    max_upload_bytes: 1024
+                });
+                result.sessions = [...pipDocument.querySelector('.sftp-session-select').options]
+                    .map(option => option.value);
+                result.sourcePath = pipDocument.querySelector('.sftp-copy-source-path').innerText;
+                return result;
+            }"""
+        )
+        check(local_file_picker['visible'] is True, 'selected local file card was not shown')
+        check(local_file_picker['path'] == 'local-upload.txt', 'selected local file card omitted the browser file name')
+        check('6 B (6 bytes)' in local_file_picker['meta'] and '2026' in local_file_picker['meta'], 'selected local file card omitted exact metadata')
+        check(local_file_picker['actions'] == ['Send', 'Copy to…'], 'selected local file card actions were unclear')
+        check(local_file_picker['sessions'] == ['main', 'term-2'], 'local file Copy to omitted an eligible Files destination')
+        check(local_file_picker['sourcePath'] == 'local-upload.txt', 'local file destination pane omitted its source card')
+        clear_emitted(page)
+        page.evaluate("() => documentPictureInPicture.window.document.querySelector('.sftp-copy-confirm').click()")
+        local_upload_requests = get_emitted(page, 'sftp_upload_ticket_request')
+        check(len(local_upload_requests) == 1, 'local file Copy to did not request an upload ticket')
+        local_upload_payload = local_upload_requests[0]['args'][0]
+        check(local_upload_payload['terminal_id'] == 'main', 'local file Copy to targeted the wrong Files session')
+        check(local_upload_payload['directory'] == '/home/tester', 'local file Copy to lost the destination folder')
+        check(local_upload_payload['filename'] == 'local-upload.txt', 'local file Copy to lost the destination name')
+        page.evaluate(
+            """payload => {
+                window.terminalTest.handleSftpUploadTicketResultForTest({
+                    request_id: payload.request_id,
+                    terminal_id: payload.terminal_id,
+                    status: 'failed',
+                    message: 'Test stopped before upload.'
+                });
+                documentPictureInPicture.window.document.querySelector('.sftp-copy-cancel').click();
+            }""",
+            local_upload_payload,
+        )
 
         page.evaluate("() => documentPictureInPicture.window.document.querySelector('.sftp-file-rename').click()")
         rename_initial = page.evaluate(
@@ -1277,6 +1438,27 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
         check(local_menu['sftpVisible'] is True, 'local shell tab did not expose Files')
         check(local_menu['sftpDisabled'] is False, 'Files was disabled for a capable local shell tab')
         check('Files' in local_menu['sftpText'], 'local shell Files label was unclear')
+        page.click('#sftp-send-option')
+        page.wait_for_function('() => !!window.documentPictureInPicture.window', timeout=5000)
+        reopened_files = page.evaluate(
+            """() => {
+                const pipDocument = documentPictureInPicture.window.document;
+                return {
+                    title: pipDocument.title,
+                    destinationOpen: !!pipDocument.querySelector('.sftp-destination-pane'),
+                    selectedLocalVisible: pipDocument.querySelector('.sftp-selected-file').classList.contains('visible'),
+                    selectedRemoteVisible: pipDocument.querySelector('.sftp-file-operation-box').classList.contains('visible')
+                };
+            }"""
+        )
+        check(reopened_files == {
+            'title': 'StandTerm - Files',
+            'destinationOpen': False,
+            'selectedLocalVisible': False,
+            'selectedRemoteVisible': False,
+        }, 'reopened Files did not reset to its initial source state')
+        page.evaluate('() => documentPictureInPicture.window.close()')
+        page.wait_for_function('() => !window.documentPictureInPicture.window', timeout=5000)
     finally:
         close_context(context)
 

@@ -121,31 +121,21 @@
         }
         .sftp-pip-header { display: flex; align-items: center; gap: 8px; }
         .sftp-pip-title { flex: 1; color: #fff; font-size: 14px; font-weight: 700; }
-        .sftp-pip-close {
-            width: 26px; height: 26px; padding: 0; border: 1px solid #444; border-radius: 5px;
-            background: #252527; color: #ddd; cursor: pointer; font-size: 17px; line-height: 1;
-        }
-        .sftp-pip-close:hover { border-color: #ff453a; color: #fff; }
         .sftp-files-workspace {
             flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr);
             gap: 10px; overflow: hidden;
         }
-        .sftp-files-workspace.copy-open { grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr); }
+        .sftp-files-workspace.copy-open { grid-template-columns: minmax(0, 1fr); }
+        .sftp-files-workspace.copy-open .sftp-source-pane { display: none; }
         .sftp-source-pane, .sftp-destination-pane {
             min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 10px; overflow: hidden;
         }
         .sftp-destination-pane {
-            padding-left: 10px; border-left: 1px solid #3a3a3c;
             animation: sftp-destination-slide 0.16s ease-out;
         }
         @keyframes sftp-destination-slide {
             from { opacity: 0; transform: translateX(18px); }
             to { opacity: 1; transform: translateX(0); }
-        }
-        @media (max-width: 760px) {
-            .sftp-files-workspace.copy-open { grid-template-columns: minmax(0, 1fr); }
-            .sftp-files-workspace.copy-open .sftp-source-pane { display: none; }
-            .sftp-destination-pane { border-left: 0; padding-left: 0; }
         }
         .sftp-destination-header { display: flex; align-items: center; gap: 8px; }
         .sftp-destination-title { flex: 1; color: #fff; font-size: 13px; font-weight: 700; }
@@ -155,17 +145,24 @@
         }
         .sftp-session-select { width: 100%; }
         .sftp-copy-name-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; align-items: center; }
-        .sftp-copy-summary {
+        .sftp-source-file-card {
             padding: 8px 10px; border: 1px solid #3a3a3c; border-radius: 6px;
-            background: #202022; color: #ddd; overflow-wrap: anywhere;
+            background: #202022; color: #ddd;
         }
+        .sftp-source-file-label { margin-bottom: 4px; color: #aaa; font-size: 11px; }
+        .sftp-file-detail-path {
+            min-width: 0; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            font: 12px/1.35 ui-monospace, SFMono-Regular, Consolas, monospace;
+        }
+        .sftp-file-detail-meta { margin-top: 3px; color: #aaa; text-align: right; white-space: nowrap; }
         .sftp-copy-lifecycle-hint { color: #aaa; font-size: 11px; line-height: 1.4; }
         .sftp-endpoint-card {
             padding: 8px 10px; border: 1px solid #3a3a3c; border-radius: 6px; background: #202022;
         }
         .sftp-endpoint-value { color: #fff; font: 12px/1.35 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
         .sftp-direct-hint { margin-top: 3px; color: #ffcc00; font-size: 11px; }
-        .sftp-path-controls { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: 6px; }
+        .sftp-path-controls { display: grid; grid-template-columns: auto auto auto minmax(0, 1fr) auto; gap: 6px; }
+        .sftp-path-controls .sftp-icon-button { width: 32px; padding: 7px 0; font-size: 15px; }
         .sftp-path-controls button, .sftp-pip-actions button, .sftp-conflict-actions button,
         .sftp-file-operation-actions button, .sftp-rename-controls button, .sftp-delete-actions button {
             margin: 0; padding: 7px 10px; border: 1px solid #444; border-radius: 5px;
@@ -190,16 +187,27 @@
             flex: 1; min-height: 90px; overflow: auto; border: 1px solid #343437;
             border-radius: 6px; background: #101011;
         }
+        .sftp-list-header, .sftp-directory-entry {
+            display: grid; grid-template-columns: minmax(0, 1fr) 92px 138px; align-items: center; gap: 10px;
+        }
+        .sftp-list-header {
+            position: sticky; top: 0; z-index: 1; border-bottom: 1px solid #444; background: #252527;
+        }
+        .sftp-sort-button {
+            min-width: 0; margin: 0; padding: 6px 10px; border: 0; background: transparent; color: #aaa;
+            cursor: pointer; text-align: left; font-size: 11px; white-space: nowrap;
+        }
+        .sftp-sort-button:hover, .sftp-sort-button.active { color: #fff; background: #303033; }
+        .sftp-sort-button:focus-visible { outline: 2px solid #72b5e5; outline-offset: -2px; }
         .sftp-directory-entry {
-            display: block; width: 100%; box-sizing: border-box; margin: 0; padding: 7px 10px;
+            width: 100%; box-sizing: border-box; margin: 0; padding: 7px 10px;
             border: 0; border-bottom: 1px solid #242426; background: transparent; color: #ddd;
             cursor: pointer; text-align: left; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
         }
         .sftp-directory-entry:hover { background: #183452; color: #fff; }
         .sftp-directory-entry.selected { background: #0a4f86; color: #fff; box-shadow: inset 3px 0 #72b5e5; }
-        .sftp-file-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; }
         .sftp-file-entry-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .sftp-file-entry-size { color: #888; white-space: nowrap; }
+        .sftp-file-entry-size, .sftp-file-entry-date { color: #888; white-space: nowrap; }
         .sftp-directory-list.busy .sftp-directory-entry { pointer-events: none; opacity: 0.45; }
         .sftp-directory-empty { padding: 12px; color: #777; text-align: center; }
         .sftp-file-operation-box {
@@ -207,11 +215,9 @@
             background: #202022; color: #ddd;
         }
         .sftp-file-operation-box.visible { display: block; }
-        .sftp-file-operation-path {
-            margin: 4px 0 8px; color: #fff; overflow-wrap: anywhere;
-            font: 12px/1.35 ui-monospace, SFMono-Regular, Consolas, monospace;
-        }
+        .sftp-file-operation-path { margin-bottom: 3px; }
         .sftp-file-operation-actions { display: flex; justify-content: flex-end; gap: 7px; }
+        .sftp-file-detail-meta + .sftp-file-operation-actions { margin-top: 8px; }
         .sftp-file-operation-actions .danger, .sftp-delete-actions .danger { border-color: #8f2d2d; color: #ff8a83; }
         .sftp-rename-controls { display: none; grid-template-columns: minmax(0, 1fr) auto auto; gap: 7px; }
         .sftp-rename-controls.visible { display: grid; }
@@ -236,7 +242,10 @@
         }
         .sftp-drop-zone:hover, .sftp-drop-zone:focus-visible { border-color: #72b5e5; background: #1b496f; outline: none; }
         .sftp-drop-zone.dragging { border-color: #8dceff; background: #205a86; color: #fff; }
-        .sftp-selected-file { min-height: 17px; color: #bbb; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .sftp-selected-file {
+            display: none; padding: 9px; border: 1px solid #3a3a3c; border-radius: 6px; background: #202022;
+        }
+        .sftp-selected-file.visible { display: block; }
         .sftp-transfer-status { min-height: 18px; color: #aaa; overflow-wrap: anywhere; }
         .sftp-transfer-status.error { color: #ff6b61; }
         .sftp-transfer-status.success { color: #34c759; }
@@ -244,7 +253,9 @@
         .sftp-progress.visible { display: block; }
         .sftp-progress-bar { width: 0; height: 100%; background: #0a84ff; transition: width 0.1s linear; }
         .sftp-pip-actions, .sftp-conflict-actions { display: flex; justify-content: flex-end; gap: 7px; }
-        .sftp-pip-actions .primary { border-color: #0a84ff; background: #0a84ff; color: #fff; font-weight: 700; }
+        .sftp-pip-actions .primary, .sftp-file-operation-actions .primary {
+            border-color: #0a84ff; background: #0a84ff; color: #fff; font-weight: 700;
+        }
         .sftp-conflict-box { display: none; padding: 9px; border: 1px solid #7a5b12; border-radius: 6px; background: #2b2515; color: #ffdd83; }
         .sftp-conflict-box.visible { display: block; }
         .sftp-conflict-actions { margin-top: 8px; }
@@ -5791,6 +5802,10 @@
                         handleSftpDownloadTicketResult(cloneForTest(payload));
                         return true;
                     },
+                    handleSftpUploadTicketResultForTest(payload) {
+                        handleSftpUploadTicketResult(cloneForTest(payload));
+                        return true;
+                    },
                     handleFilesCopyResultForTest(payload) {
                         handleFilesCopyResult(cloneForTest(payload));
                         return true;
@@ -7218,7 +7233,10 @@
             function formatSftpEndpoint(endpoint) {
                 if (!endpoint || typeof endpoint !== 'object') return 'Direct endpoint';
                 if (endpoint.route === 'local') {
-                    const shell = typeof endpoint.shell === 'string' && endpoint.shell ? ` (${endpoint.shell})` : '';
+                    const command = typeof endpoint.command === 'string' && endpoint.command
+                        ? endpoint.command
+                        : endpoint.shell;
+                    const shell = typeof command === 'string' && command ? ` (${command})` : '';
                     return `Local Shell${shell}`;
                 }
                 const user = typeof endpoint.user === 'string' ? endpoint.user : '';
@@ -7238,6 +7256,30 @@
                     unit = units[index];
                 }
                 return `${size.toFixed(size >= 10 ? 1 : 2)} ${unit}`;
+            }
+
+            function formatSftpDetailedBytes(value) {
+                const bytes = Math.max(0, Math.trunc(Number(value) || 0));
+                return `${formatSftpBytes(bytes)} (${bytes} bytes)`;
+            }
+
+            function formatSftpModified(value) {
+                const seconds = Number(value);
+                if (!Number.isFinite(seconds) || seconds < 0) return '';
+                const date = new Date(seconds * 1000);
+                if (Number.isNaN(date.getTime())) return '';
+                const parts = new Intl.DateTimeFormat('en-US', {
+                    year: 'numeric',
+                    month: 'short',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: false,
+                }).formatToParts(date).reduce((result, part) => {
+                    result[part.type] = part.value;
+                    return result;
+                }, {});
+                return `${parts.hour}:${parts.minute} ${parts.month} ${parts.day} ${parts.year}`;
             }
 
             function nextSftpRequestId(prefix) {
@@ -7282,38 +7324,46 @@
                 state.busy = !!busy;
                 if (state.mode === 'destination') {
                     const copying = !!state.copying;
+                    const uploading = !!state.uploading;
+                    const transferring = copying || uploading;
                     const copyPhase = state.copyPhase || 'idle';
-                    state.elements.home.disabled = busy || copying;
-                    state.elements.up.disabled = busy || copying || !state.currentPath;
-                    state.elements.go.disabled = busy || copying;
-                    state.elements.path.disabled = busy || copying;
-                    state.elements.session.disabled = busy || copying;
-                    state.elements.filename.disabled = busy || copying;
-                    state.elements.copy.disabled = busy || copying || !state.currentPath || !state.elements.filename.value;
-                    state.elements.cancel.textContent = state.cancelPending
+                    state.elements.home.disabled = busy || transferring;
+                    state.elements.up.disabled = busy || transferring || !state.currentPath;
+                    state.elements.refresh.disabled = busy || transferring || !state.currentPath;
+                    state.elements.go.disabled = busy || transferring;
+                    state.elements.path.disabled = busy || transferring;
+                    state.elements.session.disabled = busy || transferring;
+                    state.elements.filename.disabled = busy || transferring;
+                    state.elements.copy.disabled = busy || transferring || !state.currentPath || !state.elements.filename.value;
+                    state.elements.cancel.textContent = uploading
+                        ? 'Cancel upload'
+                        : (state.cancelPending
                         ? 'Cancelling…'
                         : (copyPhase === 'committing'
                             ? 'Publishing…'
-                            : (copying ? 'Cancel copy' : (state.finished ? 'Close' : 'Cancel')));
-                    state.elements.cancel.disabled = copying
+                            : (copying ? 'Cancel copy' : (state.finished ? 'Close' : 'Cancel'))));
+                    state.elements.cancel.disabled = uploading
+                        ? false
+                        : (copying
                         ? copyPhase !== 'running' || state.cancelPending || !state.copyId || !socket || !socket.connected
-                        : (busy && !state.finished);
-                    state.elements.conflictCancel.disabled = busy || copying;
-                    state.elements.conflictKeep.disabled = busy || copying;
-                    state.elements.conflictReplace.disabled = busy || copying;
-                    state.elements.directoryList.classList.toggle('busy', busy || copying);
+                        : (busy && !state.finished));
+                    state.elements.conflictCancel.disabled = busy || transferring;
+                    state.elements.conflictKeep.disabled = busy || transferring;
+                    state.elements.conflictReplace.disabled = busy || transferring;
+                    state.elements.directoryList.classList.toggle('busy', busy || transferring);
                     state.elements.directoryList.querySelectorAll('button').forEach(button => {
-                        button.disabled = busy || copying || button.dataset.fileEntry === 'true';
+                        button.disabled = busy || transferring || button.dataset.fileEntry === 'true';
                     });
                     return;
                 }
                 const uploading = !!state.uploading;
                 state.elements.home.disabled = busy || uploading;
                 state.elements.up.disabled = busy || uploading || !state.currentPath;
+                state.elements.refresh.disabled = busy || uploading || !state.currentPath;
                 state.elements.go.disabled = busy || uploading;
                 state.elements.path.disabled = busy || uploading;
                 state.elements.send.disabled = busy || uploading || !state.file || !state.currentPath;
-                state.elements.close.disabled = busy || uploading;
+                state.elements.localCopy.disabled = busy || uploading || !state.file;
                 state.elements.conflictCancel.disabled = busy || uploading;
                 state.elements.conflictKeep.disabled = busy || uploading;
                 state.elements.conflictReplace.disabled = busy || uploading;
@@ -7334,9 +7384,12 @@
 
             function updateSftpSelectedFile(state) {
                 if (!state || !state.elements) return;
-                state.elements.selectedFile.textContent = state.file
-                    ? `${state.file.name} · ${formatSftpBytes(state.file.size)}`
-                    : 'No file selected.';
+                const selected = !!state.file;
+                state.elements.selectedFile.classList.toggle('visible', selected);
+                state.elements.selectedFilePath.textContent = selected ? state.file.name : '';
+                state.elements.selectedFileMeta.textContent = selected
+                    ? `${formatSftpDetailedBytes(state.file.size)}  ${formatSftpModified(state.file.lastModified / 1000)}`
+                    : '';
                 setSftpPipBusy(state, state.busy);
             }
 
@@ -7369,7 +7422,11 @@
 
             function closeSftpFileOperation(state, restoreFocus = true) {
                 if (!state || !state.elements) return;
-                if (state.copyDestinationState && !state.copyDestinationState.copying) {
+                if (
+                    state.copyDestinationState
+                    && !state.copyDestinationState.copying
+                    && !state.copyDestinationState.uploading
+                ) {
                     closeSftpCopyDestination(state, false);
                 }
                 state.elements.fileOperation.classList.remove('visible');
@@ -7396,7 +7453,19 @@
 
             function showSftpFileOperation(state, file, sourceButton) {
                 if (!state || !state.elements || state.busy || state.uploading) return;
-                if (state.copyDestinationState && !state.copyDestinationState.copying) {
+                if (
+                    state.selectedRemoteFile
+                    && state.selectedRemoteFile.fileId === file.fileId
+                    && state.selectedRemoteFileButton === sourceButton
+                ) {
+                    closeSftpFileOperation(state);
+                    return;
+                }
+                if (
+                    state.copyDestinationState
+                    && !state.copyDestinationState.copying
+                    && !state.copyDestinationState.uploading
+                ) {
                     closeSftpCopyDestination(state, false);
                 }
                 if (state.selectedRemoteFileButton && state.selectedRemoteFileButton !== sourceButton) {
@@ -7408,6 +7477,7 @@
                 sourceButton.classList.add('selected');
                 sourceButton.setAttribute('aria-pressed', 'true');
                 state.elements.fileOperationPath.textContent = getSftpRemoteFilePath(state, file);
+                state.elements.fileOperationMeta.textContent = `${formatSftpDetailedBytes(file.size)}  ${formatSftpModified(file.mtime)}`;
                 state.elements.fileOperation.classList.add('visible');
                 state.elements.fileOperationActions.hidden = false;
                 state.elements.renameControls.classList.remove('visible');
@@ -7415,7 +7485,6 @@
                 state.preparedDownload = null;
                 state.downloadConsumed = false;
                 prepareSftpDownloadTicket(state, file);
-                state.elements.fileRename.focus();
             }
 
             function getSftpRenameValidation(state) {
@@ -7476,67 +7545,167 @@
                 state.elements.fileDelete.focus();
             }
 
-            function renderSftpEntries(state, directories, files, truncated) {
+            function compareSftpEntries(left, right, column, direction, directories = false) {
+                let comparison = 0;
+                if (column === 'size' && !directories) comparison = left.size - right.size;
+                else if (column === 'date') comparison = (left.mtime || 0) - (right.mtime || 0);
+                if (comparison === 0 || (column === 'size' && directories)) {
+                    comparison = left.name.localeCompare(right.name, undefined, {
+                        numeric: true,
+                        sensitivity: 'base',
+                    });
+                }
+                return direction === 'desc' ? -comparison : comparison;
+            }
+
+            function sortSftpEntries(state, column) {
+                if (!state || !['name', 'size', 'date'].includes(column)) return;
+                if (state.sortColumn === column) state.sortDirection = state.sortDirection === 'asc' ? 'desc' : 'asc';
+                else {
+                    state.sortColumn = column;
+                    state.sortDirection = 'asc';
+                }
+                renderSftpEntries(
+                    state,
+                    state.currentDirectories,
+                    state.currentFiles,
+                    state.currentListTruncated,
+                    { preserveSelection: true },
+                );
+            }
+
+            function handleSftpTypeahead(state, event) {
+                if (
+                    !state
+                    || event.defaultPrevented
+                    || event.ctrlKey
+                    || event.metaKey
+                    || event.altKey
+                    || event.key.length !== 1
+                ) return;
+                const now = performance.now();
+                state.typeaheadBuffer = now - state.typeaheadAt <= 500
+                    ? `${state.typeaheadBuffer}${event.key}`
+                    : event.key;
+                state.typeaheadAt = now;
+                const prefix = state.typeaheadBuffer.toLocaleLowerCase();
+                const match = [...state.elements.directoryList.querySelectorAll('.sftp-directory-entry')]
+                    .find(button => (button.dataset.entryName || '').toLocaleLowerCase().startsWith(prefix));
+                if (!match) return;
+                event.preventDefault();
+                match.focus({ preventScroll: true });
+                match.scrollIntoView({ block: 'nearest' });
+            }
+
+            function createSftpEntryCell(state, className, text) {
+                const cell = state.window.document.createElement('span');
+                cell.className = className;
+                cell.textContent = text;
+                return cell;
+            }
+
+            function renderSftpEntries(state, directories, files, truncated, options = {}) {
                 if (!state || !state.elements) return;
                 const list = state.elements.directoryList;
-                if (state.mode !== 'destination') closeSftpFileOperation(state, false);
+                const selectedFileId = options.preserveSelection && state.selectedRemoteFile
+                    ? state.selectedRemoteFile.fileId
+                    : null;
+                if (state.mode !== 'destination' && !options.preserveSelection) closeSftpFileOperation(state, false);
                 list.replaceChildren();
-                const safeDirectories = Array.isArray(directories) ? directories : [];
+                state.currentDirectories = (Array.isArray(directories) ? directories : []).filter(entry => (
+                    entry && typeof entry.name === 'string'
+                )).map(entry => ({
+                    name: entry.name,
+                    mtime: Number.isFinite(Number(entry.mtime)) ? Number(entry.mtime) : null,
+                }));
                 state.currentFiles = (Array.isArray(files) ? files : []).filter(file => (
                     file
-                    && typeof file.file_id === 'string'
+                    && typeof (file.file_id || file.fileId) === 'string'
                     && typeof file.name === 'string'
                     && Number.isFinite(Number(file.size))
                     && Number.isFinite(Number(file.mtime))
                 )).map(file => ({
-                    fileId: file.file_id,
+                    fileId: file.file_id || file.fileId,
                     name: file.name,
                     size: Number(file.size),
                     mtime: Number(file.mtime),
                 }));
+                state.currentListTruncated = truncated === true;
                 state.currentEntryNames = new Set([
-                    ...safeDirectories.filter(entry => entry && typeof entry.name === 'string').map(entry => entry.name),
+                    ...state.currentDirectories.map(entry => entry.name),
                     ...state.currentFiles.map(file => file.name),
                 ]);
-                if (safeDirectories.length === 0 && state.currentFiles.length === 0) {
+
+                const header = state.window.document.createElement('div');
+                header.className = 'sftp-list-header';
+                [['name', 'Name'], ['size', 'Size'], ['date', 'Date']].forEach(([column, label]) => {
+                    const button = state.window.document.createElement('button');
+                    button.type = 'button';
+                    button.className = `sftp-sort-button${state.sortColumn === column ? ' active' : ''}`;
+                    button.dataset.sortColumn = column;
+                    button.textContent = `${label}${state.sortColumn === column ? (state.sortDirection === 'asc' ? ' ▲' : ' ▼') : ''}`;
+                    button.setAttribute('aria-label', `Sort by ${label}`);
+                    button.setAttribute('aria-pressed', state.sortColumn === column ? 'true' : 'false');
+                    button.addEventListener('click', () => sortSftpEntries(state, column));
+                    header.appendChild(button);
+                });
+                list.appendChild(header);
+
+                const directoriesToRender = [...state.currentDirectories].sort((left, right) => (
+                    compareSftpEntries(left, right, state.sortColumn, state.sortDirection, true)
+                ));
+                const filesToRender = [...state.currentFiles].sort((left, right) => (
+                    compareSftpEntries(left, right, state.sortColumn, state.sortDirection, false)
+                ));
+                if (directoriesToRender.length === 0 && filesToRender.length === 0) {
                     const empty = state.window.document.createElement('div');
                     empty.className = 'sftp-directory-empty';
                     empty.textContent = 'No subdirectories or files.';
                     list.appendChild(empty);
                 } else {
-                    safeDirectories.forEach(entry => {
-                        if (!entry || typeof entry.name !== 'string') return;
+                    directoriesToRender.forEach(entry => {
                         const button = state.window.document.createElement('button');
                         button.type = 'button';
                         button.className = 'sftp-directory-entry';
-                        button.textContent = `📁 ${entry.name}`;
+                        button.dataset.entryName = entry.name;
                         button.title = entry.name;
+                        button.setAttribute('aria-label', `Folder ${entry.name}${entry.mtime === null ? '' : `, modified ${formatSftpModified(entry.mtime)}`}.`);
+                        button.append(
+                            createSftpEntryCell(state, 'sftp-file-entry-name', `📁 ${entry.name}`),
+                            createSftpEntryCell(state, 'sftp-file-entry-size', ''),
+                            createSftpEntryCell(state, 'sftp-file-entry-date', formatSftpModified(entry.mtime)),
+                        );
                         button.addEventListener('click', () => requestSftpBrowse(state, {
                             path: state.currentPath,
                             child: entry.name,
                         }));
                         list.appendChild(button);
                     });
-                    state.currentFiles.forEach(file => {
+                    filesToRender.forEach(file => {
                         const button = state.window.document.createElement('button');
                         button.type = 'button';
                         button.className = 'sftp-directory-entry sftp-file-entry';
                         button.dataset.fileEntry = 'true';
+                        button.dataset.entryName = file.name;
                         button.title = getSftpRemoteFilePath(state, file);
-                        button.setAttribute('aria-label', `File ${file.name}, ${formatSftpBytes(file.size)}. Open file actions.`);
+                        button.setAttribute('aria-label', `File ${file.name}, ${formatSftpBytes(file.size)}, modified ${formatSftpModified(file.mtime)}. Open file actions.`);
                         button.setAttribute('aria-pressed', 'false');
-                        const name = state.window.document.createElement('span');
-                        name.className = 'sftp-file-entry-name';
-                        name.textContent = `📄 ${file.name}`;
-                        const size = state.window.document.createElement('span');
-                        size.className = 'sftp-file-entry-size';
-                        size.textContent = formatSftpBytes(file.size);
-                        button.append(name, size);
+                        button.append(
+                            createSftpEntryCell(state, 'sftp-file-entry-name', `📄 ${file.name}`),
+                            createSftpEntryCell(state, 'sftp-file-entry-size', formatSftpBytes(file.size)),
+                            createSftpEntryCell(state, 'sftp-file-entry-date', formatSftpModified(file.mtime)),
+                        );
                         if (state.mode === 'destination') {
                             button.disabled = true;
-                            button.setAttribute('aria-label', `Existing file ${file.name}, ${formatSftpBytes(file.size)}.`);
+                            button.setAttribute('aria-label', `Existing file ${file.name}, ${formatSftpBytes(file.size)}, modified ${formatSftpModified(file.mtime)}.`);
                         } else {
                             button.addEventListener('click', () => showSftpFileOperation(state, file, button));
+                            if (file.fileId === selectedFileId) {
+                                state.selectedRemoteFile = file;
+                                state.selectedRemoteFileButton = button;
+                                button.classList.add('selected');
+                                button.setAttribute('aria-pressed', 'true');
+                            }
                         }
                         list.appendChild(button);
                     });
@@ -7611,8 +7780,29 @@
                 }
             }
 
+            function getSftpUploadFilename(state) {
+                if (!state || !state.file) return '';
+                if (state.mode === 'destination' && state.elements && state.elements.filename) {
+                    return state.elements.filename.value;
+                }
+                return state.file.name;
+            }
+
             function requestSftpUploadTicket(state, conflictMode = 'ask') {
                 if (!state || !state.file || !state.currentPath || state.busy || state.uploading || !socket || !socket.connected) return;
+                const filename = getSftpUploadFilename(state);
+                if (
+                    !filename
+                    || filename === '.'
+                    || filename === '..'
+                    || filename.includes('/')
+                    || filename.includes('\\')
+                    || /[\u0000-\u001f\u007f]/.test(filename)
+                    || new TextEncoder().encode(filename).length > 255
+                ) {
+                    setSftpPipStatus(state, 'Enter a valid destination file name.', 'error');
+                    return;
+                }
                 const requestId = nextSftpRequestId('sftp-upload');
                 state.pendingTicketRequestId = requestId;
                 setSftpPipBusy(state, true);
@@ -7622,7 +7812,7 @@
                     request_id: requestId,
                     terminal_id: state.terminalId,
                     directory: state.elements.path.value,
-                    filename: state.file.name,
+                    filename,
                     size: state.file.size,
                     conflict_mode: conflictMode,
                 });
@@ -7633,11 +7823,15 @@
                 const file = state.file;
                 state.uploading = true;
                 state.busy = false;
+                state.finished = false;
                 state.destinationPath = data.destination_path;
                 state.elements.progress.classList.add('visible');
                 state.elements.progressBar.style.width = file.size === 0 ? '100%' : '0%';
                 setSftpPipBusy(state, false);
                 setSftpPipStatus(state, `Sending to ${data.destination_path}…`);
+                if (state.mode === 'destination') {
+                    state.elements.lifecycle.textContent = 'Uploading through the browser. Use Cancel upload to stop the request.';
+                }
 
                 const xhr = new XMLHttpRequest();
                 state.xhr = xhr;
@@ -7662,33 +7856,66 @@
                         state.elements.progressBar.style.width = '0%';
                     }
                     if (xhr.status >= 200 && xhr.status < 300 && result && result.status === 'completed') {
-                        state.file = null;
-                        updateSftpSelectedFile(state);
+                        if (state.mode === 'destination') {
+                            state.finished = true;
+                            state.elements.lifecycle.textContent = 'Upload finished. Close returns to the previous pane.';
+                        } else {
+                            state.file = null;
+                            updateSftpSelectedFile(state);
+                        }
                         setSftpPipStatus(state, `Uploaded to ${result.destination_path}.`, 'success');
                     } else {
+                        if (state.mode === 'destination') {
+                            state.finished = true;
+                            state.elements.lifecycle.textContent = 'Upload stopped. Check the destination before retrying.';
+                        }
                         setSftpPipStatus(state, (result && result.message) || 'File upload failed.', 'error');
                     }
                     setSftpPipBusy(state, false);
                     if (!state.window || state.window.closed) {
                         if (xhr.status >= 200 && xhr.status < 300) alert(`SFTP upload completed: ${result.destination_path}`);
-                        sftpPipState = null;
+                        if (sftpPipState === state) sftpPipState = null;
                     }
                 };
                 xhr.onerror = () => {
                     state.uploading = false;
                     state.xhr = null;
+                    if (state.mode === 'destination') {
+                        state.finished = true;
+                        state.elements.lifecycle.textContent = 'Upload stopped. Check the destination before retrying.';
+                    }
                     setSftpPipStatus(state, 'File upload failed because the connection was interrupted.', 'error');
                     setSftpPipBusy(state, false);
                     if (!state.window || state.window.closed) {
                         alert('SFTP upload failed because the connection was interrupted.');
-                        sftpPipState = null;
+                        if (sftpPipState === state) sftpPipState = null;
                     }
+                };
+                xhr.onabort = () => {
+                    state.uploading = false;
+                    state.xhr = null;
+                    state.finished = true;
+                    if (state.elements) {
+                        state.elements.progress.classList.remove('visible');
+                        state.elements.progressBar.style.width = '0%';
+                        if (state.mode === 'destination') {
+                            state.elements.lifecycle.textContent = 'Upload request stopped. Check the destination before retrying.';
+                        }
+                    }
+                    setSftpPipStatus(state, 'Upload request cancelled. Check the destination before retrying.');
+                    setSftpPipBusy(state, false);
                 };
                 xhr.send(file);
             }
 
             function handleSftpUploadTicketResult(data) {
-                const state = sftpPipState;
+                const state = [sftpPipState, sftpPipState && sftpPipState.copyDestinationState]
+                    .find(candidate => (
+                        candidate
+                        && data
+                        && data.terminal_id === candidate.terminalId
+                        && data.request_id === candidate.pendingTicketRequestId
+                    ));
                 if (
                     !state
                     || !data
@@ -7919,36 +8146,24 @@
                 requestSftpBrowse(state, { path: state.currentPath, successMessage: completedMessage });
             }
 
-            function getSftpCopyDestinationTerminals(sourceTerminalId) {
+            function getSftpCopyDestinationTerminals(sourceTerminalId, includeSource = false) {
                 return [...terminals.values()].filter(state => (
-                    state.id !== sourceTerminalId
+                    (includeSource || state.id !== sourceTerminalId)
                     && canUseSftpFileManager(state)
                 ));
-            }
-
-            function updateSftpCopySummary(state) {
-                if (!state || state.mode !== 'destination' || !state.elements) return;
-                const sourceState = state.sourceState;
-                const sourceFile = sourceState && sourceState.selectedRemoteFile;
-                const destinationName = state.elements.filename.value;
-                const destinationPath = state.currentPath && destinationName
-                    ? `${state.currentPath.endsWith('/') ? state.currentPath : `${state.currentPath}/`}${destinationName}`
-                    : 'Choose a destination folder.';
-                state.elements.summary.textContent = sourceFile
-                    ? `${getSftpRemoteFilePath(sourceState, sourceFile)} → ${destinationPath}`
-                    : destinationPath;
-                setSftpPipBusy(state, state.busy);
             }
 
             function closeSftpCopyDestination(sourceState, restoreFocus = true) {
                 if (!sourceState || !sourceState.copyDestinationState) return;
                 const destinationState = sourceState.copyDestinationState;
-                if (destinationState.copying) {
+                if (destinationState.copying || destinationState.uploading) {
                     destinationState.elements.lifecycle.textContent = destinationState.cancelPending
                         ? 'Cancellation requested. Wait for backend confirmation before closing Files.'
+                        : (destinationState.uploading
+                            ? 'Cancel the upload before returning to the previous pane.'
                         : (destinationState.copyPhase === 'committing'
                             ? 'Publishing cannot be cancelled. Wait for the result before closing Files.'
-                            : 'Cancel the copy first. Closing Files does not cancel it.');
+                            : 'Cancel the copy first. Closing Files does not cancel it.'));
                     return;
                 }
                 if (destinationState.elements && destinationState.elements.pane.isConnected) {
@@ -7958,18 +8173,21 @@
                 if (sourceState.elements && sourceState.elements.workspace) {
                     sourceState.elements.workspace.classList.remove('copy-open');
                 }
-                try {
-                    if (sourceState.window && !sourceState.window.closed) sourceState.window.resizeTo(500, 620);
-                } catch (_error) {}
-                if (restoreFocus && sourceState.elements && sourceState.elements.fileCopy) {
-                    sourceState.elements.fileCopy.focus();
+                if (restoreFocus && sourceState.elements) {
+                    const focusTarget = destinationState.sourceKind === 'browser'
+                        ? sourceState.elements.localCopy
+                        : sourceState.elements.fileCopy;
+                    if (focusTarget) focusTarget.focus();
                 }
             }
 
             function selectSftpCopyDestinationTerminal(state, terminalId) {
                 if (!state || state.copying) return;
                 const terminalState = terminals.get(terminalId);
-                if (!canUseSftpFileManager(terminalState) || terminalId === state.sourceState.terminalId) {
+                if (
+                    !canUseSftpFileManager(terminalState)
+                    || (state.sourceKind !== 'browser' && terminalId === state.sourceState.terminalId)
+                ) {
                     setSftpPipStatus(state, 'Choose another connected Files session.', 'error');
                     return;
                 }
@@ -7979,7 +8197,6 @@
                 state.pendingBrowseRequestId = null;
                 state.elements.endpoint.textContent = formatSftpEndpoint(state.endpoint);
                 requestSftpBrowse(state);
-                updateSftpCopySummary(state);
             }
 
             function requestSftpCopy(state, conflictMode = 'ask') {
@@ -8133,12 +8350,23 @@
                 setSftpPipStatus(state, failureMessage, 'error');
             }
 
-            function openSftpCopyDestination(sourceState) {
-                if (!sourceState || !sourceState.selectedRemoteFile || !sourceState.elements) return;
-                if (sourceState.copyDestinationState) return;
-                const destinationTerminals = getSftpCopyDestinationTerminals(sourceState.terminalId);
+            function openSftpCopyDestination(sourceState, sourceKind = 'remote') {
+                const sourceFile = sourceKind === 'browser'
+                    ? sourceState && sourceState.file
+                    : sourceState && sourceState.selectedRemoteFile;
+                if (!sourceState || !sourceFile || !sourceState.elements || sourceState.copyDestinationState) return;
+                const destinationTerminals = getSftpCopyDestinationTerminals(
+                    sourceState.terminalId,
+                    sourceKind === 'browser',
+                );
                 if (!destinationTerminals.length) {
-                    setSftpPipStatus(sourceState, 'Open another SSH or Local Shell tab to copy this file.', 'error');
+                    setSftpPipStatus(
+                        sourceState,
+                        sourceKind === 'browser'
+                            ? 'No connected Files destination is available.'
+                            : 'Open another SSH or Local Shell tab to copy this file.',
+                        'error',
+                    );
                     return;
                 }
                 const pane = sourceState.window.document.createElement('div');
@@ -8147,23 +8375,28 @@
                     <div class="sftp-destination-header">
                         <div class="sftp-destination-title">Choose destination</div>
                     </div>
+                    <div class="sftp-source-file-card">
+                        <div class="sftp-source-file-label">Source file</div>
+                        <div class="sftp-file-detail-path sftp-copy-source-path"></div>
+                        <div class="sftp-file-detail-meta sftp-copy-source-meta"></div>
+                    </div>
                     <select class="sftp-session-select" aria-label="Destination session"></select>
                     <div class="sftp-endpoint-card">
-                        <div>Destination endpoint</div>
                         <div class="sftp-endpoint-value">Direct endpoint</div>
+                        <div class="sftp-direct-hint">Direct SSH or Local Shell endpoint. Nested SSH sessions inside the terminal are not used.</div>
                     </div>
                     <div class="sftp-path-controls">
-                        <button type="button" class="sftp-home">Home</button>
-                        <button type="button" class="sftp-up">Up</button>
+                        <button type="button" class="sftp-home sftp-icon-button" title="Home directory" aria-label="Home directory">⌂</button>
+                        <button type="button" class="sftp-up sftp-icon-button" title="Parent directory" aria-label="Parent directory">↑</button>
+                        <button type="button" class="sftp-refresh sftp-icon-button" title="Refresh files list" aria-label="Refresh files list">↻</button>
                         <input class="sftp-path-input" type="text" spellcheck="false" aria-label="Destination folder">
                         <button type="button" class="sftp-go">Go</button>
                     </div>
-                    <div class="sftp-directory-list" aria-label="Destination directories and files"></div>
+                    <div class="sftp-directory-list" tabindex="0" aria-label="Destination directories and files"></div>
                     <div class="sftp-copy-name-row">
                         <label>File name</label>
                         <input class="sftp-copy-name-input" type="text" spellcheck="false" aria-label="Destination file name">
                     </div>
-                    <div class="sftp-copy-summary"></div>
                     <div class="sftp-conflict-box">
                         <div class="sftp-conflict-text"></div>
                         <div class="sftp-conflict-actions">
@@ -8174,7 +8407,7 @@
                     </div>
                     <div class="sftp-progress"><div class="sftp-progress-bar"></div></div>
                     <div class="sftp-transfer-status" role="status" aria-live="polite">Choose a destination.</div>
-                    <div class="sftp-copy-lifecycle-hint">Cancel closes this destination pane before copying.</div>
+                    <div class="sftp-copy-lifecycle-hint">Cancel returns to the previous pane before copying.</div>
                     <div class="sftp-pip-actions">
                         <button type="button" class="sftp-copy-cancel">Cancel</button>
                         <button type="button" class="sftp-copy-confirm primary">Copy</button>
@@ -8184,32 +8417,45 @@
                     mode: 'destination',
                     window: sourceState.window,
                     sourceState,
+                    sourceKind,
+                    file: sourceKind === 'browser' ? sourceFile : null,
                     terminalId: destinationTerminals[0].id,
                     endpoint: destinationTerminals[0].sftpEndpoint,
                     currentPath: null,
+                    currentDirectories: [],
                     currentFiles: [],
+                    currentListTruncated: false,
                     currentEntryNames: new Set(),
+                    sortColumn: 'name',
+                    sortDirection: 'asc',
+                    typeaheadBuffer: '',
+                    typeaheadAt: 0,
                     busy: false,
                     copying: false,
+                    uploading: false,
                     copyPhase: 'idle',
                     cancelPending: false,
                     finished: false,
                     pendingBrowseRequestId: null,
                     pendingBrowseStatus: null,
+                    pendingTicketRequestId: null,
                     pendingCopyRequestId: null,
                     copyId: null,
                     copyRevision: -1,
+                    xhr: null,
                     elements: {
                         pane,
                         session: pane.querySelector('.sftp-session-select'),
+                        sourcePath: pane.querySelector('.sftp-copy-source-path'),
+                        sourceMeta: pane.querySelector('.sftp-copy-source-meta'),
                         endpoint: pane.querySelector('.sftp-endpoint-value'),
                         home: pane.querySelector('.sftp-home'),
                         up: pane.querySelector('.sftp-up'),
+                        refresh: pane.querySelector('.sftp-refresh'),
                         path: pane.querySelector('.sftp-path-input'),
                         go: pane.querySelector('.sftp-go'),
                         directoryList: pane.querySelector('.sftp-directory-list'),
                         filename: pane.querySelector('.sftp-copy-name-input'),
-                        summary: pane.querySelector('.sftp-copy-summary'),
                         conflict: pane.querySelector('.sftp-conflict-box'),
                         conflictText: pane.querySelector('.sftp-conflict-text'),
                         conflictCancel: pane.querySelector('.sftp-conflict-cancel'),
@@ -8229,14 +8475,20 @@
                     option.textContent = `${terminalState.title || terminalState.label || terminalState.id} · ${terminalState.id}`;
                     destinationState.elements.session.appendChild(option);
                 });
-                destinationState.elements.filename.value = sourceState.selectedRemoteFile.name;
+                destinationState.elements.sourcePath.textContent = sourceKind === 'browser'
+                    ? sourceFile.name
+                    : getSftpRemoteFilePath(sourceState, sourceFile);
+                destinationState.elements.sourceMeta.textContent = sourceKind === 'browser'
+                    ? `${formatSftpDetailedBytes(sourceFile.size)}  ${formatSftpModified(sourceFile.lastModified / 1000)}`
+                    : `${formatSftpDetailedBytes(sourceFile.size)}  ${formatSftpModified(sourceFile.mtime)}`;
+                destinationState.elements.filename.value = sourceFile.name;
                 destinationState.elements.endpoint.textContent = formatSftpEndpoint(destinationState.endpoint);
                 sourceState.copyDestinationState = destinationState;
                 sourceState.elements.workspace.appendChild(pane);
                 sourceState.elements.workspace.classList.add('copy-open');
-                try { sourceState.window.resizeTo(960, 620); } catch (_error) {}
                 destinationState.elements.cancel.addEventListener('click', () => {
-                    if (destinationState.copying) requestFilesCopyCancel(destinationState);
+                    if (destinationState.uploading && destinationState.xhr) destinationState.xhr.abort();
+                    else if (destinationState.copying) requestFilesCopyCancel(destinationState);
                     else closeSftpCopyDestination(sourceState);
                 });
                 destinationState.elements.session.addEventListener('change', () => {
@@ -8247,6 +8499,9 @@
                     path: destinationState.currentPath,
                     parent: true,
                 }));
+                destinationState.elements.refresh.addEventListener('click', () => requestSftpBrowse(destinationState, {
+                    path: destinationState.currentPath,
+                }));
                 destinationState.elements.go.addEventListener('click', () => requestSftpBrowse(destinationState, {
                     path: destinationState.elements.path.value,
                 }));
@@ -8255,63 +8510,60 @@
                         path: destinationState.elements.path.value,
                     });
                 });
-                destinationState.elements.filename.addEventListener('input', () => updateSftpCopySummary(destinationState));
-                destinationState.elements.copy.addEventListener('click', () => requestSftpCopy(destinationState));
+                destinationState.elements.filename.addEventListener('input', () => {
+                    setSftpPipBusy(destinationState, destinationState.busy);
+                });
+                destinationState.elements.copy.addEventListener('click', () => {
+                    if (destinationState.sourceKind === 'browser') requestSftpUploadTicket(destinationState);
+                    else requestSftpCopy(destinationState);
+                });
                 destinationState.elements.conflictCancel.addEventListener('click', () => {
                     destinationState.elements.conflict.classList.remove('visible');
                     setSftpPipStatus(destinationState, 'Copy cancelled.');
                 });
-                destinationState.elements.conflictKeep.addEventListener('click', () => requestSftpCopy(destinationState, 'keep_both'));
-                destinationState.elements.conflictReplace.addEventListener('click', () => requestSftpCopy(destinationState, 'replace'));
-                updateSftpCopySummary(destinationState);
+                destinationState.elements.conflictKeep.addEventListener('click', () => {
+                    if (destinationState.sourceKind === 'browser') requestSftpUploadTicket(destinationState, 'keep_both');
+                    else requestSftpCopy(destinationState, 'keep_both');
+                });
+                destinationState.elements.conflictReplace.addEventListener('click', () => {
+                    if (destinationState.sourceKind === 'browser') requestSftpUploadTicket(destinationState, 'replace');
+                    else requestSftpCopy(destinationState, 'replace');
+                });
+                destinationState.elements.directoryList.addEventListener('keydown', event => handleSftpTypeahead(destinationState, event));
                 requestSftpBrowse(destinationState);
-            }
-
-            function closeSftpPip(state) {
-                if (!state) return;
-                const destinationState = state.copyDestinationState;
-                if (destinationState && destinationState.copying) {
-                    closeSftpCopyDestination(state, false);
-                    return;
-                }
-                if (state.busy || state.uploading) return;
-                const pipWindow = state.window;
-                if (pipWindow && !pipWindow.closed) pipWindow.close();
-                if (sftpPipState === state) sftpPipState = null;
             }
 
             function createSftpPipShell(state) {
                 const pipDocument = state.window.document;
+                pipDocument.title = 'StandTerm - Files';
                 const shell = pipDocument.createElement('div');
                 shell.className = 'sftp-pip-shell';
                 shell.innerHTML = `
                     <div class="sftp-pip-header">
-                        <div class="sftp-pip-title">Files</div>
-                        <button type="button" class="sftp-pip-close" title="Close">&times;</button>
+                        <div class="sftp-pip-title">StandTerm - Files</div>
                     </div>
                     <div class="sftp-files-workspace">
                     <div class="sftp-source-pane">
                     <div class="sftp-endpoint-card">
-                        <div>Session endpoint</div>
                         <div class="sftp-endpoint-value">Direct endpoint</div>
                         <div class="sftp-direct-hint">Direct SSH or Local Shell endpoint. Nested SSH sessions inside the terminal are not used.</div>
                     </div>
                     <div class="sftp-path-controls">
-                        <button type="button" class="sftp-home">Home</button>
-                        <button type="button" class="sftp-up">Up</button>
+                        <button type="button" class="sftp-home sftp-icon-button" title="Home directory" aria-label="Home directory">⌂</button>
+                        <button type="button" class="sftp-up sftp-icon-button" title="Parent directory" aria-label="Parent directory">↑</button>
+                        <button type="button" class="sftp-refresh sftp-icon-button" title="Refresh files list" aria-label="Refresh files list">↻</button>
                         <input class="sftp-path-input" type="text" spellcheck="false" aria-label="Remote destination folder">
                         <button type="button" class="sftp-go">Go</button>
                     </div>
-                    <div class="sftp-directory-list" aria-label="Remote directories and files"></div>
+                    <div class="sftp-directory-list" tabindex="0" aria-label="Remote directories and files"></div>
                     <div class="sftp-file-operation-box" role="dialog" aria-label="Remote file actions">
-                        <div>Selected remote file</div>
-                        <div class="sftp-file-operation-path"></div>
+                        <div class="sftp-file-operation-path sftp-file-detail-path"></div>
+                        <div class="sftp-file-operation-meta sftp-file-detail-meta"></div>
                         <div class="sftp-file-operation-actions">
                             <button type="button" class="sftp-file-download">Download</button>
                             <button type="button" class="sftp-file-copy">Copy to&hellip;</button>
                             <button type="button" class="sftp-file-rename">Rename&hellip;</button>
                             <button type="button" class="sftp-file-delete danger">Delete&hellip;</button>
-                            <button type="button" class="sftp-file-operation-close">Close</button>
                         </div>
                         <div class="sftp-rename-controls">
                             <input class="sftp-rename-input" type="text" spellcheck="false" aria-label="New remote file name" aria-describedby="sftp-rename-hint">
@@ -8339,7 +8591,14 @@
                     </div>
                     <div class="sftp-drop-zone" tabindex="0">Drop one file here or click to choose</div>
                     <input class="sftp-file-input" type="file" hidden>
-                    <div class="sftp-selected-file">No file selected.</div>
+                    <div class="sftp-selected-file">
+                        <div class="sftp-file-detail-path sftp-selected-file-path"></div>
+                        <div class="sftp-file-detail-meta sftp-selected-file-meta"></div>
+                        <div class="sftp-file-operation-actions">
+                            <button type="button" class="sftp-send primary" disabled>Send</button>
+                            <button type="button" class="sftp-local-copy" disabled>Copy to&hellip;</button>
+                        </div>
+                    </div>
                     <div class="sftp-conflict-box">
                         <div class="sftp-conflict-text"></div>
                         <div class="sftp-conflict-actions">
@@ -8350,7 +8609,6 @@
                     </div>
                     <div class="sftp-progress"><div class="sftp-progress-bar"></div></div>
                     <div class="sftp-transfer-status" role="status" aria-live="polite">Opening Files…</div>
-                    <div class="sftp-pip-actions"><button type="button" class="sftp-send primary" disabled>Send</button></div>
                     </div>
                     </div>
                 `;
@@ -8359,21 +8617,21 @@
                     shell,
                     workspace: shell.querySelector('.sftp-files-workspace'),
                     sourcePane: shell.querySelector('.sftp-source-pane'),
-                    close: shell.querySelector('.sftp-pip-close'),
                     endpoint: shell.querySelector('.sftp-endpoint-value'),
                     home: shell.querySelector('.sftp-home'),
                     up: shell.querySelector('.sftp-up'),
+                    refresh: shell.querySelector('.sftp-refresh'),
                     path: shell.querySelector('.sftp-path-input'),
                     go: shell.querySelector('.sftp-go'),
                     directoryList: shell.querySelector('.sftp-directory-list'),
                     fileOperation: shell.querySelector('.sftp-file-operation-box'),
                     fileOperationPath: shell.querySelector('.sftp-file-operation-path'),
+                    fileOperationMeta: shell.querySelector('.sftp-file-operation-meta'),
                     fileOperationActions: shell.querySelector('.sftp-file-operation-actions'),
                     fileDownload: shell.querySelector('.sftp-file-download'),
                     fileCopy: shell.querySelector('.sftp-file-copy'),
                     fileRename: shell.querySelector('.sftp-file-rename'),
                     fileDelete: shell.querySelector('.sftp-file-delete'),
-                    fileOperationClose: shell.querySelector('.sftp-file-operation-close'),
                     renameControls: shell.querySelector('.sftp-rename-controls'),
                     renameInput: shell.querySelector('.sftp-rename-input'),
                     renameConfirm: shell.querySelector('.sftp-rename-confirm'),
@@ -8390,6 +8648,8 @@
                     drop: shell.querySelector('.sftp-drop-zone'),
                     fileInput: shell.querySelector('.sftp-file-input'),
                     selectedFile: shell.querySelector('.sftp-selected-file'),
+                    selectedFilePath: shell.querySelector('.sftp-selected-file-path'),
+                    selectedFileMeta: shell.querySelector('.sftp-selected-file-meta'),
                     conflict: shell.querySelector('.sftp-conflict-box'),
                     conflictText: shell.querySelector('.sftp-conflict-text'),
                     conflictCancel: shell.querySelector('.sftp-conflict-cancel'),
@@ -8399,15 +8659,15 @@
                     progressBar: shell.querySelector('.sftp-progress-bar'),
                     status: shell.querySelector('.sftp-transfer-status'),
                     send: shell.querySelector('.sftp-send'),
+                    localCopy: shell.querySelector('.sftp-local-copy'),
                 };
-                state.elements.close.addEventListener('click', () => closeSftpPip(state));
                 state.elements.home.addEventListener('click', () => requestSftpBrowse(state));
                 state.elements.up.addEventListener('click', () => requestSftpBrowse(state, { path: state.currentPath, parent: true }));
+                state.elements.refresh.addEventListener('click', () => requestSftpBrowse(state, { path: state.currentPath }));
                 state.elements.go.addEventListener('click', () => requestSftpBrowse(state, { path: state.elements.path.value }));
                 state.elements.path.addEventListener('keydown', event => {
                     if (event.key === 'Enter') requestSftpBrowse(state, { path: state.elements.path.value });
                 });
-                state.elements.fileOperationClose.addEventListener('click', () => closeSftpFileOperation(state));
                 state.elements.fileDownload.addEventListener('click', () => startPreparedSftpDownload(state));
                 state.elements.fileCopy.addEventListener('click', () => openSftpCopyDestination(state));
                 state.elements.fileRename.addEventListener('click', () => showSftpRename(state));
@@ -8447,12 +8707,14 @@
                 }));
                 state.elements.drop.addEventListener('drop', event => selectSftpFile(state, event.dataTransfer.files));
                 state.elements.send.addEventListener('click', () => requestSftpUploadTicket(state));
+                state.elements.localCopy.addEventListener('click', () => openSftpCopyDestination(state, 'browser'));
                 state.elements.conflictCancel.addEventListener('click', () => {
                     state.elements.conflict.classList.remove('visible');
                     setSftpPipStatus(state, 'Upload cancelled.');
                 });
                 state.elements.conflictKeep.addEventListener('click', () => requestSftpUploadTicket(state, 'keep_both'));
                 state.elements.conflictReplace.addEventListener('click', () => requestSftpUploadTicket(state, 'replace'));
+                state.elements.directoryList.addEventListener('keydown', event => handleSftpTypeahead(state, event));
                 shell.addEventListener('keydown', event => {
                     if (event.key !== 'Escape') return;
                     if (state.elements.deleteConfirmation.classList.contains('visible')) {
@@ -8476,15 +8738,22 @@
                     if (sftpPipState.window && !sftpPipState.window.closed) sftpPipState.window.focus();
                     return;
                 }
-                const pipWindow = await window.documentPictureInPicture.requestWindow({ width: 480, height: 620 });
+                const pipWindow = await window.documentPictureInPicture.requestWindow({ width: 720, height: 620 });
                 const transferState = {
+                    mode: 'source',
                     window: pipWindow,
                     terminalId: state.id,
                     endpoint: state.sftpEndpoint,
                     currentPath: null,
                     maxUploadBytes: null,
+                    currentDirectories: [],
                     currentFiles: [],
+                    currentListTruncated: false,
                     currentEntryNames: new Set(),
+                    sortColumn: 'name',
+                    sortDirection: 'asc',
+                    typeaheadBuffer: '',
+                    typeaheadAt: 0,
                     file: null,
                     selectedRemoteFile: null,
                     selectedRemoteFileButton: null,
@@ -8510,7 +8779,7 @@
                 pipWindow.addEventListener('pagehide', () => {
                     transferState.window = null;
                     transferState.elements = null;
-                    if (!transferState.uploading && sftpPipState === transferState) sftpPipState = null;
+                    if (sftpPipState === transferState) sftpPipState = null;
                 }, { once: true });
                 requestSftpBrowse(transferState);
             }
