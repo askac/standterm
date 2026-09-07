@@ -63,6 +63,12 @@ pulling large changes.
 
 ## What It Does
 
+An optional [Electron desktop evaluation](desktop/README.md) can launch its own
+backend and open a standalone window without manual token entry. It retains
+Core browser settings and keys per origin and backend mode, and is intended
+for local evaluation. About shows Desktop and Core versions separately;
+the Core version is maintained in `core_version.py`.
+
 - Runs SSH, Local Shell, and UART sessions inside browser terminal tabs.
 - Supports multiple persistent terminal tabs while the server process is alive.
 - Provides StandTerm Files for direct SSH and supported Local Shell sessions,
@@ -360,6 +366,45 @@ To authorize a browser from the WSL IP URL:
 Accepted browser keys are stored in `authorized/browsers.json`. Delete that file
 or remove an entry to revoke access.
 
+### Platform Session Recovery
+
+StandTerm can register a platform passkey backed by Windows Hello, Touch ID, or
+another browser-supported platform authenticator. The passkey restores the
+`HttpOnly` cookie for the live backend session for which it was most recently
+armed after a browser loses its cookie; it does not expose or persist the
+access token or session token.
+
+WebAuthn requires a hostname-based relying-party ID. An IP URL such as
+`https://172.x.x.x:5000` cannot register or use platform recovery. On the same
+Windows or macOS host, open the launcher-provided `localhost` Access URL
+instead, such as `https://localhost:5000` for the default WSL setup or
+`http://localhost:5000` for a native loopback-only server. For access from
+another device, use a stable hostname with trusted HTTPS.
+
+To enable recovery:
+
+1. Sign in through the stable hostname Access URL.
+2. Open **Settings > Server > Platform session recovery**.
+3. Select **Register platform passkey** and complete the system verification
+   prompt.
+4. If a later backend process must be authorized again with the access token,
+   select **Arm existing passkey** before relying on recovery for that live
+   process.
+
+When the session cookie is missing, select **Recover live session with device**
+on the Access Required page or in the in-app recovery prompt. Recovery succeeds
+only while that session remains active in the same `app.py` process. A backend
+restart, expired session, closed terminal bridge, or disconnected remote host
+cannot be reconstructed by the passkey.
+
+Credential IDs, public keys, counters, and non-secret authenticator metadata are
+stored separately in `authorized/session_recovery_credentials.json`. Platform
+private keys remain in the authenticator. Use **Revoke recovery** to remove the
+server-side credential records; the operating system may retain its passkey.
+Synced platform passkeys may be available on other devices, so the feature is
+described as platform recovery rather than a guaranteed hardware-bound device
+identity.
+
 For multiple Windows browsers connecting to WSL, open the full Access URL
 printed by `run.sh` in each browser, including `?token=...`. Copying the
 post-redirect `/` URL from one browser to another does not carry access.
@@ -599,12 +644,19 @@ Each example directory includes `skill_prompt.txt` for installing the skill and
 the intended installation prompt shape is:
 
 ```text
-Read docs/examples/standterm-external-agent-skill/SKILL.md and add the standterm-external-agent local skill.
+Install docs/examples/standterm-external-agent-skill/ as the standterm-external-agent local skill, including SKILL.md and references/ with relative paths intact.
 ```
 
 Use the matching workflow `boot_prompt.txt` together with the installed
 `standterm-external-agent` skill. Workflow skills do not duplicate handoff,
 token, TLS, or terminal I/O mechanics.
+
+The external-agent entrypoint covers routine low-output operations. Load its
+connection, terminal-workflow or persistent-client references only when needed;
+do not flatten the references into the installed entrypoint. This reorganizes
+usage guidance without changing helper/API behavior or authorization. CLI/MCP
+tail cursors still need explicit continuation, and compact shell output is not
+a reliable command exit status or a complete approval/paging response.
 
 The skill tells an agent to:
 
@@ -631,15 +683,61 @@ after the skill exists, paste `boot_prompt.txt` into the assisting agent.
 
 ## Configuration
 
+Shortcut launchers (`run.sh`, `run.bat`, and their WSL wrappers) load a saved
+port from `tools/launcher-settings.json`, next to the platform venvs. An explicit
+`STANDTERM_PORT` overrides this setting. Without a saved setting or override,
+the launcher selects an automatic port and remembers it after binding succeeds.
+It does not default to `5000`,
+which may be needed by another service. Existing saved ports (including `5000`)
+are preserved rather than silently changing the browser origin.
+When a port is occupied, an interactive launch suggests an automatic candidate and
+asks before retrying. After binding successfully, it offers to remember the new
+port. The local, Git-ignored settings file stores only its format version and
+port, never authentication data, and survives venv recreation. It is shared by
+Windows and WSL shortcuts using the same checkout; it does not merge their Core
+instances. Direct `app.py` execution retains its `5000` default and does not load
+this file. Desktop follows the same first-allocation/reuse policy using separate
+per-mode settings in its own user-data directory.
+
+On a port conflict, non-interactive launches fail with a suggested `STANDTERM_PORT` instead of
+waiting for input or silently changing ports. No existing service is stopped or
+automatically reused. Browser opening and access URL publication happen only
+after the listener is bound. Changing ports changes the browser origin, so
+existing browser preferences and SSH keys are not automatically migrated.
+
+Automatic selection (including conflict suggestions) uses the IANA
+Dynamic/Private range `49152–65535`, excludes built-in known fixed TCP uses and
+TCP entries in the backend OS services file, and then attempts actual binding.
+Linux/WSL/macOS use `/etc/services`; native Windows uses
+`%SystemRoot%\System32\drivers\etc\services`. If the file cannot be read, Python
+emits a warning and selection still uses the private range and built-in list.
+No services file is modified, and startup performs no online lookup. Selection
+tries at most 20 distinct candidates; exhaustion fails without saving a port.
+The final listener stays bound through startup notification, preventing a
+probe-close-rebind race on first launch. Conflict suggestions remain provisional
+and are checked again when bound after operator approval.
+
+The offline policy in `server_startup.py` records its sources and review date:
+[IANA's range definitions](https://www.iana.org/assignments/service-names-port-numbers/)
+avoid the assigned-port space without bundling the entire registry;
+[Apple's documented fixed TCP uses](https://support.apple.com/en-us/103229)
+add `5000`, `6000`, `7000` and `62078` to the built-in exclusions (reviewed
+2026-09-07). Broad dynamic-use ranges in vendor documentation are not treated
+as fixed reservations. This reduces conflicts; it cannot reserve future
+availability or account for every unregistered application. Explicit/saved ports
+are not silently filtered, changed or migrated by this automatic-selection policy.
+
 Common settings:
 
 | Setting | Purpose |
 | --- | --- |
 | `STANDTERM_HOST` | Bind host used by the launcher when set. |
-| `STANDTERM_PORT` | Default port, usually `5000`. |
+| `STANDTERM_PORT` | Explicit port override (1–65535); takes precedence over saved launcher settings. Shortcuts allocate and save a port on first launch; direct `app.py` defaults to `5000`. |
+| `STANDTERM_OPEN_BROWSER=0` | Disable automatic browser opening from the shortcut launchers. |
 | `STANDTERM_HTTPS=1` | Force HTTPS. |
 | `STANDTERM_DISABLE_AUTO_HTTPS=1` | Disable automatic HTTPS for non-loopback binds. |
 | `STANDTERM_CERTS_DIR` | Override local certificate storage. |
+| `STANDTERM_SESSION_RECOVERY_STORE` | Override the platform session-recovery public credential store. |
 | `STANDTERM_ALLOW_REMOTE_SSH=1` | Acknowledge SSH while listening on a non-loopback address. |
 | `STANDTERM_ALLOW_REMOTE_LOCAL_SHELL=1` | Acknowledge Local Shell while listening on a non-loopback address. |
 | `STANDTERM_ALLOW_REMOTE_UART=1` | Acknowledge UART while listening on a non-loopback address. |

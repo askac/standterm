@@ -64,6 +64,7 @@ def debug_url(access_url):
 
 def start_server():
     port = find_free_port()
+    session_recovery_dir = tempfile.mkdtemp(prefix='standterm-session-recovery-browser-smoke-')
     env = os.environ.copy()
     env.update({
         'STANDTERM_HOST': '127.0.0.1',
@@ -73,6 +74,7 @@ def start_server():
         'STANDTERM_ASYNC_MODE': 'threading',
         'STANDTERM_ACCESS_UI': 'off',
         'STANDTERM_OPERATOR_OBSERVATION_DIR': tempfile.mkdtemp(prefix='standterm-observation-smoke-'),
+        'STANDTERM_SESSION_RECOVERY_STORE': str(Path(session_recovery_dir) / 'credentials.json'),
     })
     proc = subprocess.Popen(
         [str(PYTHON), 'app.py', '--force-connection', 'local-shell'],
@@ -392,8 +394,9 @@ def test_invalid_session_reconnect_prompts_for_current_token(browser, access_url
             })"""
         )
         check(recovery['serverState'] == 'session_required', 'invalid session did not use the structured session-required state')
-        check(recovery['title'] == 'Access token required', 'session recovery did not ask for an access token')
-        check('server restarted or your session expired' in recovery['detail'], 'session recovery did not explain why the token is required')
+        check(recovery['title'] == 'Recover StandTerm session', 'session recovery title is incorrect')
+        check('registered device' in recovery['detail'], 'session recovery did not offer device verification')
+        check('restarted server' in recovery['detail'], 'session recovery did not explain the backend restart boundary')
         check('current StandTerm launcher' in recovery['message'], 'session recovery did not request the current launcher token')
 
         page.fill('#session-recovery-token', token)
@@ -407,6 +410,103 @@ def test_invalid_session_reconnect_prompts_for_current_token(browser, access_url
             'valid current token did not restore the server connection',
         )
     finally:
+        close_context(context)
+
+
+def test_platform_passkey_recovers_live_session_without_access_token(browser, access_url):
+    parsed = urllib.parse.urlparse(access_url)
+    localhost_access_url = urllib.parse.urlunparse(parsed._replace(
+        netloc=f'localhost:{parsed.port}',
+    ))
+    base_url = urllib.parse.urlunparse(parsed._replace(
+        netloc=f'localhost:{parsed.port}',
+        query='',
+        fragment='',
+    ))
+    context = browser.new_context(viewport={'width': 1280, 'height': 800})
+    page = context.new_page()
+    cdp = context.new_cdp_session(page)
+    try:
+        cdp.send('WebAuthn.enable')
+        authenticator = cdp.send('WebAuthn.addVirtualAuthenticator', {
+            'options': {
+                'protocol': 'ctap2',
+                'ctap2Version': 'ctap2_1',
+                'transport': 'internal',
+                'hasResidentKey': True,
+                'hasUserVerification': True,
+                'isUserVerified': True,
+                'automaticPresenceSimulation': True,
+            },
+        })
+        page.goto(debug_url(localhost_access_url), wait_until='domcontentloaded')
+        page.wait_for_function('() => !!window.terminalTest', timeout=10000)
+        page.wait_for_function(
+            "() => window.terminalTest.getSocketState().connected === true",
+            timeout=10000,
+        )
+        page.wait_for_selector('#connectBtn:not([disabled])', timeout=10000)
+        page.click('#connectBtn')
+        page.wait_for_function(
+            '() => window.terminalTest.getActiveAgentState()?.connected === true',
+            timeout=10000,
+        )
+
+        page.click('#quick-settings')
+        page.click('.settings-nav-item[data-tab="server"]')
+        page.wait_for_function(
+            "() => document.getElementById('platform-recovery-status').innerText.includes('0 registered')",
+            timeout=5000,
+        )
+        page.click('#platform-recovery-register')
+        page.wait_for_function(
+            "() => document.getElementById('platform-recovery-status').innerText.includes('1 registered, 1 armed')",
+            timeout=10000,
+        )
+        registered_credentials = cdp.send('WebAuthn.getCredentials', {
+            'authenticatorId': authenticator['authenticatorId'],
+        }).get('credentials', [])
+        check(len(registered_credentials) == 1, 'virtual platform authenticator did not retain the recovery credential')
+        check(
+            page.locator('#platform-recovery-status').inner_text().endswith('RP ID: localhost'),
+            'platform recovery did not bind the passkey to the localhost RP ID',
+        )
+
+        context.clear_cookies()
+        page.goto(debug_url(base_url), wait_until='domcontentloaded')
+        page.wait_for_selector('#access-recovery-button', timeout=5000)
+        check(
+            page.locator('#access-token').is_visible(),
+            'access-required page did not retain the access-token fallback',
+        )
+        page.click('#access-recovery-button')
+        page.wait_for_function('() => !!window.terminalTest', timeout=10000)
+        page.wait_for_function(
+            "() => window.terminalTest.getSocketState().connected === true",
+            timeout=10000,
+        )
+        page.wait_for_function(
+            "() => window.terminalTest.getTerminalTabsState().tabs.length === 1",
+            timeout=5000,
+        )
+        page.wait_for_function(
+            '() => window.terminalTest.getActiveAgentState()?.connected === true',
+            timeout=10000,
+        )
+        recovered = page.evaluate(
+            """() => ({
+                url: window.location.href,
+                tabs: window.terminalTest.getTerminalTabsState().tabs,
+                connected: window.terminalTest.getActiveAgentState()?.connected
+            })"""
+        )
+        check('token=' not in recovered['url'], 'platform recovery exposed an access token in the URL')
+        check(recovered['connected'] is True, 'platform recovery did not restore the live terminal bridge')
+    finally:
+        try:
+            cdp.send('WebAuthn.disable')
+        except Exception:
+            pass
         close_context(context)
 
 
@@ -2353,6 +2453,64 @@ def test_file_copy_approval_is_global_and_decision_is_single_shot(browser, acces
         close_context(context)
 
 
+def test_file_copy_approval_keeps_controls_visible_with_long_paths(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        # Debug instrumentation exposes the fixture API, but its overlay is not
+        # part of the operator's normal approval layout.
+        page.add_style_tag(content='#debug-hud, #payload-log { display: none !important; }')
+        attach_agent(page)
+        set_agent_mode(page, 'direct', 'direct_active')
+        payload = {
+            'action_id': 'copy-long-layout', 'proposal_id': 'copy-long-proposal',
+            'action_type': 'file_copy', 'status': 'pending_approval',
+            'terminal_id': TERMINAL_ID, 'destination_terminal_id': 'term-2',
+            'source_endpoint': {'route': 'direct', 'user': 'source', 'host': 'source.example', 'port': 22},
+            'destination_endpoint': {'route': 'direct', 'user': 'destination', 'host': 'destination.example', 'port': 22},
+            'source_path': '/source/' + 'long-directory/' * 100 + 'image.bin',
+            'destination_path': '/destination/' + 'another-directory/' * 100 + 'image.bin',
+            'source_size': 1536, 'conflict_mode': 'replace', 'destination_exists': True,
+            'destination_existing_size': 64, 'escaped_preview': 'Copy plan\n' * 100,
+        }
+        for width, height in [(640, 480), (360, 300)]:
+            page.set_viewport_size({'width': width, 'height': height})
+            page.evaluate('payload => window.terminalTest.applyAgentActionPayloadForTest(payload)', payload)
+            page.wait_for_selector('#agent-action-box.visible')
+            geometry = page.evaluate("""() => {
+                const panel = document.getElementById('agent-panel').getBoundingClientRect();
+                const content = document.getElementById('agent-action-content');
+                const buttons = ['agent-approve-btn', 'agent-reject-btn', 'agent-action-pause-btn'].map(id => {
+                    const button = document.getElementById(id);
+                    const r = button.getBoundingClientRect();
+                    return r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth
+                        && document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === button;
+                });
+                return { buttons, panel: { top: panel.top, bottom: panel.bottom, height: panel.height },
+                    hits: ['agent-approve-btn', 'agent-reject-btn', 'agent-action-pause-btn'].map(id => {
+                        const r = document.getElementById(id).getBoundingClientRect();
+                        const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+                        return { id: hit?.id, tag: hit?.tagName };
+                    }),
+                    controls: document.getElementById('agent-action-controls').getBoundingClientRect().toJSON(),
+                    panelFits: panel.top >= 0 && panel.bottom <= innerHeight,
+                    scrollable: content.scrollHeight > content.clientHeight,
+                    noHorizontalOverflow: content.scrollWidth <= content.clientWidth + 1 };
+            }""")
+            check(all(geometry['buttons']), f'long copy details hid or covered an approval control: {geometry}')
+            check(geometry['panelFits'], 'approval panel exceeded the viewport')
+            check(geometry['scrollable'], 'long copy details were not scrollable')
+            check(geometry['noHorizontalOverflow'], 'long paths caused horizontal overflow')
+            page.evaluate("document.getElementById('agent-action-content').scrollTop = 999999")
+            check('atomically replace' in page.locator('#agent-file-copy-warning').inner_text(), 'replace warning was lost')
+            page.locator('#agent-approve-btn').click(trial=True)
+            page.locator('#agent-reject-btn').click(trial=True)
+        clear_emitted(page)
+        page.click('#agent-reject-btn')
+        check(len(get_emitted(page, 'agent_action_reject')) == 1, 'visible reject did not emit one decision')
+    finally:
+        close_context(context)
+
+
 def test_cjk_width_compatibility_defaults_off(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
@@ -2369,7 +2527,8 @@ def test_cjk_width_compatibility_defaults_off(browser, access_url):
 
 
 def test_windows_font_fallback_defaults_and_migrates_legacy(browser, access_url):
-    expected = 'Consolas, "Cascadia Mono", "Courier New", monospace'
+    powerline = '"StandTerm Powerline Symbols", '
+    expected = powerline + 'Consolas, "Cascadia Mono", "Courier New", monospace'
     legacy = 'Consolas, "Courier New", monospace'
     custom = 'Custom Mono, monospace'
     context, page = new_page(browser, access_url)
@@ -2405,27 +2564,36 @@ def test_windows_font_fallback_defaults_and_migrates_legacy(browser, access_url)
             timeout=10000,
         )
         preserved = page.evaluate("() => window.terminalTest.getActiveTerminalOptions().fontFamily")
-        check(preserved == custom, 'custom terminal font face was overwritten by default migration')
+        check(preserved == powerline + custom, 'custom terminal font face was overwritten by default migration')
     finally:
         close_context(context)
 
 
-def test_powerline_symbol_fallback_is_optional_and_applies_immediately(browser, access_url):
+def test_powerline_symbol_fallback_defaults_on_and_preserves_opt_out(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
         initial = page.evaluate("() => window.terminalTest.getActiveTerminalOptions()")
         check(
-            not initial['fontFamily'].startswith('"StandTerm Powerline Symbols"'),
-            'Powerline symbol fallback defaulted on',
+            initial['fontFamily'].startswith('"StandTerm Powerline Symbols"'),
+            'Powerline symbol fallback did not default on',
         )
 
         page.click('#quick-settings')
         page.wait_for_selector('#settings-modal.open', timeout=5000)
         page.click('.settings-nav-item[data-tab="appearance"]')
         check(
-            page.locator('#pref-powerlineSymbols').is_checked() is False,
-            'Powerline symbol fallback checkbox defaulted on',
+            page.locator('#pref-powerlineSymbols').is_checked() is True,
+            'Powerline symbol fallback checkbox did not default on',
         )
+        page.uncheck('#pref-powerlineSymbols')
+        page.click('#settings-save')
+        page.wait_for_function(
+            "() => !window.terminalTest.getActiveTerminalOptions().fontFamily.startsWith('\\\"StandTerm Powerline Symbols\\\"')",
+            timeout=5000,
+        )
+        page.click('#quick-settings')
+        page.wait_for_selector('#settings-modal.open', timeout=5000)
+        page.click('.settings-nav-item[data-tab="appearance"]')
         page.check('#pref-powerlineSymbols')
         page.click('#settings-save')
         page.wait_for_function(
@@ -2489,6 +2657,24 @@ def test_powerline_symbol_fallback_is_optional_and_applies_immediately(browser, 
             disabled['options']['mirrorFontFamily'] == disabled['options']['fontFamily'],
             'disabling Powerline symbol fallback did not update the agent mirror',
         )
+        page.click('#quick-settings')
+        page.wait_for_selector('#settings-modal.open', timeout=5000)
+        page.click('.settings-nav-item[data-tab="appearance"]')
+        page.uncheck('#pref-showTerminalTitleInStatusBar')
+        page.click('#settings-save')
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_function(
+            '() => !!window.terminalTest && window.terminalTest.getActiveTerminalOptions() !== null',
+            timeout=10000,
+        )
+        restored = page.evaluate("() => window.terminalTest.getActiveTerminalOptions()")
+        check(restored['fontFamily'] == disabled['options']['fontFamily'], 'saved Powerline opt-out was overwritten on reload')
+        check(restored['mirrorFontFamily'] == restored['fontFamily'], 'agent mirror ignored the restored Powerline opt-out')
+        page.click('#quick-settings')
+        page.wait_for_selector('#settings-modal.open', timeout=5000)
+        page.click('.settings-nav-item[data-tab="appearance"]')
+        check(page.locator('#pref-powerlineSymbols').is_checked() is False, 'saved Powerline opt-out checkbox was overwritten')
+        check(page.locator('#pref-showTerminalTitleInStatusBar').is_checked() is False, 'saved terminal title opt-out was overwritten')
     finally:
         close_context(context)
 
@@ -3975,6 +4161,7 @@ def main():
         test_server_unavailable_waits_for_reconnect,
         test_retry_now_resubscribes_after_socket_disconnect,
         test_invalid_session_reconnect_prompts_for_current_token,
+        test_platform_passkey_recovers_live_session_without_access_token,
         test_agent_panel_can_be_dragged,
         test_terminal_pip_hides_selected_tab_and_keeps_background_tab,
         test_sftp_status_actions_and_terminal_pip_transition,
@@ -3991,9 +4178,10 @@ def main():
         test_approval_payload_and_stale_rejections,
         test_file_copy_approval_shows_canonical_plan,
         test_file_copy_approval_is_global_and_decision_is_single_shot,
+        test_file_copy_approval_keeps_controls_visible_with_long_paths,
         test_cjk_width_compatibility_defaults_off,
         test_windows_font_fallback_defaults_and_migrates_legacy,
-        test_powerline_symbol_fallback_is_optional_and_applies_immediately,
+        test_powerline_symbol_fallback_defaults_on_and_preserves_opt_out,
         test_webgl_renderer_closes_block_glyph_row_gaps,
         test_unicode_provider_keeps_emoji_text_in_separate_cells,
         test_cursor_type_setting_updates_existing_and_new_terminals,

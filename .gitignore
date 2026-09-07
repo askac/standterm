@@ -1,12 +1,16 @@
 # Virtual Environments
 tools/.venv*/
 tools/python-embed/
+tools/launcher-settings.json
+tools/.launcher-settings-*
 tools/.ms-playwright/
 .venv/
 .venv_wsl/
 venv/
 
 # Python Cache
+desktop/node_modules/
+desktop/dist/
 __pycache__/
 *.pyc
 *.pyo

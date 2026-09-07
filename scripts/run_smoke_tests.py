@@ -8,6 +8,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 COMPILE_TARGETS = [
     'app.py',
+    'session_recovery.py',
+    'server_startup.py',
+    'tests/server_startup_smoke.py',
     'scripts/agent_cli.py',
     'scripts/agent_jsonl.py',
     'scripts/agent_repl.py',
@@ -22,6 +25,7 @@ COMPILE_TARGETS = [
 ]
 
 HEADLESS_SMOKE_TESTS = [
+    'tests/server_startup_smoke.py',
     'tests/external_agent_boundary_smoke.py',
     'tests/agent_repl_smoke.py',
     'tests/agent_backend_smoke.py',

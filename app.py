@@ -21,6 +21,7 @@ import atexit
 import tempfile
 from collections import deque
 from pathlib import Path
+from core_version import CORE_VERSION
 from flask import Flask, Response, render_template, request, abort, make_response, redirect, send_file, jsonify, stream_with_context
 from flask_socketio import SocketIO, ConnectionRefusedError
 from external_agent_dispatch import ExternalAgentCommandDispatcher
@@ -75,6 +76,11 @@ from terminal_backends import (
     UARTBridge,
 )
 from runtime_logging import log_message
+from session_recovery import (
+    SessionRecoveryCredentialStore,
+    SessionRecoveryError,
+    SessionRecoveryService,
+)
 
 paramiko = None
 serial_module = None
@@ -129,7 +135,10 @@ SSH_HOST = '127.0.0.1'
 SSH_PORT = 22
 SSH_USER = os.getenv('USER', 'aska')
 DEFAULT_BIND_HOST = get_prefixed_env('HOST').strip()
-DEFAULT_PORT = int(get_prefixed_env('PORT', '5000'))
+try:
+    DEFAULT_PORT = int(get_prefixed_env('PORT', '5000'))
+except ValueError:
+    raise SystemExit('STANDTERM_PORT must be an integer from 1 to 65535.') from None
 AGENT_EXTERNAL_DEV_TOKEN_ENABLED = is_prefixed_env_enabled('AGENT_DEV_TOKEN')
 
 def parse_optional_seconds_env(name, default=None):
@@ -655,6 +664,13 @@ EXTERNAL_AGENT_HANDOFF_PATH = EXTERNAL_AGENT_INSTANCE_DIR / 'standterm_external_
 EXTERNAL_AGENT_INFO_PATH = EXTERNAL_AGENT_INSTANCE_DIR / 'standterm_agentinfo.json'
 AUTHORIZED_DIR = APP_DIR / 'authorized'
 AUTHORIZED_BROWSERS_PATH = AUTHORIZED_DIR / 'browsers.json'
+SESSION_RECOVERY_CREDENTIALS_PATH = Path(
+    get_prefixed_env('SESSION_RECOVERY_STORE').strip()
+    or AUTHORIZED_DIR / 'session_recovery_credentials.json'
+).expanduser()
+session_recovery_service = SessionRecoveryService(
+    SessionRecoveryCredentialStore(SESSION_RECOVERY_CREDENTIALS_PATH)
+)
 
 def resolve_external_agent_current_info_path(runtime_root=None, env=None):
     env = os.environ if env is None else env
@@ -5449,6 +5465,7 @@ def is_valid_session(session_token):
         return False
     if time.time() > expires_at:
         active_sessions.pop(session_token, None)
+        session_recovery_service.unbind_session(session_token)
         close_all_terminal_bridges(session_token)
         agent_session_ids.pop(session_token, None)
         return False
@@ -5463,6 +5480,7 @@ def cleanup_expired_sessions():
     ]
     for session_token in expired_tokens:
         active_sessions.pop(session_token, None)
+        session_recovery_service.unbind_session(session_token)
         close_all_terminal_bridges(session_token)
         for sid, sid_session_token in list(socket_session_tokens.items()):
             if sid_session_token == session_token:
@@ -5554,6 +5572,20 @@ def build_access_required_response():
       cursor: pointer;
       font-weight: 700;
     }
+    button.secondary {
+      margin-top: 10px;
+      background: #2c2c2e;
+      border: 1px solid #4a4a4f;
+    }
+    .divider {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 16px 0 6px;
+      color: #777;
+      font-size: 0.8rem;
+    }
+    .divider::before, .divider::after { content: ""; height: 1px; flex: 1; background: #3a3a3c; }
     .hint { margin-top: 14px; font-size: 0.85rem; color: #8e8e93; }
     #access-login-status { min-height: 18px; color: #ff9f0a; }
   </style>
@@ -5567,7 +5599,10 @@ def build_access_required_response():
       <input id="access-token" name="token" type="password" autofocus required>
       <button type="submit">Unlock</button>
     </form>
+    <div id="access-recovery-divider" class="divider">or</div>
+    <button id="access-recovery-button" class="secondary" type="button">Recover live session with device</button>
     <p id="access-login-status" class="hint" role="status"></p>
+    <p class="hint">Device recovery uses Windows Hello, Touch ID, or another platform passkey previously registered for this hostname. It only restores a session still running in this StandTerm process.</p>
     <p class="hint">For Windows browsers connecting to a WSL IP over HTTPS, the browser may also require trusting the StandTerm local CA.</p>
   </main>
   <script>
@@ -5575,7 +5610,97 @@ def build_access_required_response():
       const form = document.getElementById('access-login-form');
       const tokenInput = document.getElementById('access-token');
       const statusEl = document.getElementById('access-login-status');
+      const recoveryButton = document.getElementById('access-recovery-button');
+      const recoveryDivider = document.getElementById('access-recovery-divider');
       if (!form || !tokenInput) return;
+
+      const base64urlToBytes = value => {
+        const padding = '='.repeat((4 - (value.length % 4)) % 4);
+        const binary = atob(value.replace(/-/g, '+').replace(/_/g, '/') + padding);
+        return Uint8Array.from(binary, character => character.charCodeAt(0));
+      };
+      const bytesToBase64url = value => {
+        const bytes = new Uint8Array(value);
+        let binary = '';
+        bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+        return btoa(binary).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/g, '');
+      };
+      const prepareRequestOptions = source => {
+        const options = { ...source };
+        delete options.ceremony_id;
+        options.challenge = base64urlToBytes(options.challenge);
+        if (Array.isArray(options.allowCredentials)) {
+          options.allowCredentials = options.allowCredentials.map(item => ({
+            ...item,
+            id: base64urlToBytes(item.id),
+          }));
+        }
+        return options;
+      };
+      const serializeAssertion = credential => ({
+        id: credential.id,
+        rawId: bytesToBase64url(credential.rawId),
+        type: credential.type,
+        authenticatorAttachment: credential.authenticatorAttachment || undefined,
+        clientExtensionResults: credential.getClientExtensionResults(),
+        response: {
+          authenticatorData: bytesToBase64url(credential.response.authenticatorData),
+          clientDataJSON: bytesToBase64url(credential.response.clientDataJSON),
+          signature: bytesToBase64url(credential.response.signature),
+          userHandle: credential.response.userHandle
+            ? bytesToBase64url(credential.response.userHandle)
+            : null,
+        },
+      });
+      const readJsonResponse = async response => {
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload.status !== 'ok') {
+          throw new Error(payload.message || 'Platform recovery failed.');
+        }
+        return payload;
+      };
+
+      if (!window.isSecureContext || !window.PublicKeyCredential || !navigator.credentials) {
+        if (recoveryButton) recoveryButton.hidden = true;
+        if (recoveryDivider) recoveryDivider.hidden = true;
+      }
+
+      if (recoveryButton) recoveryButton.addEventListener('click', async () => {
+        recoveryButton.disabled = true;
+        if (statusEl) statusEl.textContent = 'Waiting for device verification...';
+        try {
+          const optionsResponse = await fetch('/session-recovery/authenticate/options', {
+            method: 'POST',
+            headers: { 'Accept': 'application/json' },
+          });
+          const optionsPayload = await readJsonResponse(optionsResponse);
+          const sourceOptions = optionsPayload.public_key || {};
+          const ceremonyId = sourceOptions.ceremony_id;
+          const credential = await navigator.credentials.get({
+            publicKey: prepareRequestOptions(sourceOptions),
+          });
+          const completeResponse = await fetch('/session-recovery/authenticate/complete', {
+            method: 'POST',
+            headers: {
+              'Accept': 'application/json',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              ceremony_id: ceremonyId,
+              credential: serializeAssertion(credential),
+            }),
+          });
+          await readJsonResponse(completeResponse);
+          const appUrl = new URL(window.location.href);
+          appUrl.searchParams.delete('token');
+          window.location.replace(`${appUrl.pathname}${appUrl.search}${appUrl.hash}` || '/');
+        } catch (exc) {
+          if (statusEl) statusEl.textContent = exc && exc.message
+            ? exc.message
+            : 'Platform recovery was cancelled or failed.';
+          recoveryButton.disabled = false;
+        }
+      });
 
       form.addEventListener('submit', async event => {
         event.preventDefault();
@@ -5982,6 +6107,7 @@ def build_index_response():
         ssh_term=SSH_TERM,
         terminal_policy=build_terminal_policy(),
         launcher_instance_id=LAUNCHER_INSTANCE_ID,
+        desktop_floating_windows=app.config.get('DESKTOP_FLOATING_WINDOWS', False) is True,
     ))
 
 def build_session_response():
@@ -6054,6 +6180,165 @@ def renew_session():
         }, status_code=403)
     return renew_session_response(session_token)
 
+def get_session_recovery_request_payload():
+    content_length = request.content_length
+    if content_length is not None and content_length > 64 * 1024:
+        raise SessionRecoveryError(
+            'session_recovery_payload_too_large',
+            'The platform recovery response is too large.',
+            413,
+        )
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        raise SessionRecoveryError(
+            'session_recovery_invalid_request',
+            'The platform recovery request is invalid.',
+        )
+    return data
+
+def session_recovery_error_response(error):
+    return external_agent_json_response({
+        'status': 'failed',
+        'error_code': error.error_code,
+        'message': error.message,
+    }, status_code=error.status_code)
+
+@app.route('/session-recovery/status', methods=['GET'])
+def session_recovery_status():
+    session_token = get_request_session_token()
+    if not session_token:
+        return external_agent_json_response({
+            'status': 'failed',
+            'error_code': 'session_required',
+            'message': 'A current StandTerm session is required.',
+        }, status_code=403)
+    try:
+        payload = session_recovery_service.get_status(request.url_root, session_token)
+    except SessionRecoveryError as exc:
+        return external_agent_json_response({
+            'status': 'ok',
+            'available': False,
+            'error_code': exc.error_code,
+            'message': exc.message,
+            'scope': 'live_backend_session',
+        })
+    return external_agent_json_response(payload)
+
+@app.route('/session-recovery/register/options', methods=['POST'])
+def session_recovery_register_options():
+    session_token = get_request_session_token()
+    if not session_token:
+        return external_agent_json_response({
+            'status': 'failed',
+            'error_code': 'session_required',
+            'message': 'A current StandTerm session is required.',
+        }, status_code=403)
+    try:
+        payload = session_recovery_service.begin_registration(
+            request.url_root,
+            session_token,
+            get_request_client_ip(),
+        )
+    except SessionRecoveryError as exc:
+        return session_recovery_error_response(exc)
+    return external_agent_json_response({'status': 'ok', 'public_key': payload})
+
+@app.route('/session-recovery/register/complete', methods=['POST'])
+def session_recovery_register_complete():
+    session_token = get_request_session_token()
+    if not session_token:
+        return external_agent_json_response({
+            'status': 'failed',
+            'error_code': 'session_required',
+            'message': 'A current StandTerm session is required.',
+        }, status_code=403)
+    try:
+        data = get_session_recovery_request_payload()
+        result = session_recovery_service.finish_registration(
+            request.url_root,
+            session_token,
+            data.get('ceremony_id'),
+            data.get('credential'),
+        )
+    except SessionRecoveryError as exc:
+        return session_recovery_error_response(exc)
+    return external_agent_json_response(result)
+
+@app.route('/session-recovery/authenticate/options', methods=['POST'])
+def session_recovery_authenticate_options():
+    try:
+        payload = session_recovery_service.begin_authentication(
+            request.url_root,
+            get_request_client_ip(),
+            bound_only=not bool(get_request_session_token()),
+        )
+    except SessionRecoveryError as exc:
+        return session_recovery_error_response(exc)
+    return external_agent_json_response({'status': 'ok', 'public_key': payload})
+
+@app.route('/session-recovery/authenticate/complete', methods=['POST'])
+def session_recovery_authenticate_complete():
+    try:
+        data = get_session_recovery_request_payload()
+        verification = session_recovery_service.finish_authentication(
+            request.url_root,
+            data.get('ceremony_id'),
+            data.get('credential'),
+        )
+    except SessionRecoveryError as exc:
+        return session_recovery_error_response(exc)
+
+    current_session_token = get_request_session_token()
+    if current_session_token:
+        session_recovery_service.bind(
+            verification['rp_id'],
+            verification['credential_id'],
+            current_session_token,
+        )
+        return external_agent_json_response({
+            'status': 'ok',
+            'result': 'armed',
+            'scope': 'live_backend_session',
+        })
+
+    recovered_session_token = session_recovery_service.get_binding(
+        verification['rp_id'],
+        verification['credential_id'],
+    )
+    if not is_valid_session(recovered_session_token):
+        session_recovery_service.unbind_credential(
+            verification['rp_id'],
+            verification['credential_id'],
+        )
+        return external_agent_json_response({
+            'status': 'failed',
+            'error_code': 'session_recovery_no_live_session',
+            'message': 'No live StandTerm session is available for this platform credential. Enter the current access token.',
+        }, status_code=409)
+
+    active_sessions[recovered_session_token] = time.time() + SESSION_COOKIE_MAX_AGE
+    response = jsonify({
+        'status': 'ok',
+        'result': 'recovered',
+        'scope': 'live_backend_session',
+    })
+    set_session_cookie(response, recovered_session_token)
+    return add_common_headers(response)
+
+@app.route('/session-recovery/credentials/remove', methods=['POST'])
+def session_recovery_remove_credentials():
+    if not get_request_session_token():
+        return external_agent_json_response({
+            'status': 'failed',
+            'error_code': 'session_required',
+            'message': 'A current StandTerm session is required.',
+        }, status_code=403)
+    try:
+        result = session_recovery_service.remove_credentials(request.url_root)
+    except SessionRecoveryError as exc:
+        return session_recovery_error_response(exc)
+    return external_agent_json_response(result)
+
 def build_current_access_url():
     return urllib.parse.urljoin(request.url_root, f'?token={ACCESS_TOKEN}')
 
@@ -6088,6 +6373,7 @@ def build_launcher_status_payload():
         'status': 'ok',
         'app': APP_NAME,
         'runtime': get_runtime_name(),
+        'core_version': CORE_VERSION,
         'instance_id': LAUNCHER_INSTANCE_ID,
         'uptime_seconds': max(0, int(time.time() - SERVER_STARTED_AT)),
         'sessions': len(active_sessions),
@@ -10449,6 +10735,8 @@ def get_access_host(bind_host):
         return get_wsl_ip()
     if bind_host in {"0.0.0.0", "::"}:
         return get_primary_ip()
+    if is_loopback_bind(bind_host):
+        return "localhost"
 
     return bind_host
 
@@ -10456,7 +10744,7 @@ def get_url_scheme():
     return "https" if HTTPS_ENABLED else "http"
 
 def get_localhost_access_url(port):
-    return f"{get_url_scheme()}://127.0.0.1:{port}/?token={ACCESS_TOKEN}"
+    return f"{get_url_scheme()}://localhost:{port}/?token={ACCESS_TOKEN}"
 
 def get_ssl_context(bind_host, access_host):
     if CLI_ARGS.certfile or CLI_ARGS.keyfile:
@@ -11102,13 +11390,7 @@ def start_access_window(access_url, access_token):
     log_message('[*] Access window started.')
     return True
 
-if __name__ == '__main__':
-    log_message("[*] Python imports completed; resolving bind host...")
-    bind_host = get_bind_host()
-    access_host = get_access_host(bind_host)
-    port = DEFAULT_PORT
-    HTTPS_ENABLED = should_enable_https(bind_host)
-    ssl_context = get_ssl_context(bind_host, access_host)
+def announce_server_started(bind_host, access_host, port):
     scheme = get_url_scheme()
     log_message("="*60)
     log_message(f"{APP_NAME} Server Starting...")
@@ -11160,18 +11442,43 @@ if __name__ == '__main__':
     start_console_copy_shortcuts(access_url, ACCESS_TOKEN)
     start_access_window(access_url, ACCESS_TOKEN)
     log_message("="*60)
-    
     sys.stdout.flush()
+    if is_prefixed_env_enabled('OPEN_BROWSER'):
+        from server_startup import open_browser
+        try:
+            open_browser(access_url, wsl=is_wsl())
+        except OSError as exc:
+            log_message(f'[!] Could not open a browser. Use the Access URL above: {exc}')
 
-    run_kwargs = {'host': bind_host, 'port': port, 'log_output': False}
-    if ssl_context:
-        run_kwargs['ssl_context'] = ssl_context
-    if ASYNC_MODE == 'threading':
-        run_kwargs['allow_unsafe_werkzeug'] = True
 
+def main():
+    global DEFAULT_PORT, HTTPS_ENABLED
+    from server_startup import LAUNCHER_SETTINGS, launch_server, load_port
+
+    log_message("[*] Python imports completed; resolving bind host...")
     try:
-        socketio.run(app, **run_kwargs)
+        port = load_port(5000, os.environ, log_message, LAUNCHER_SETTINGS)
+        bind_host = get_bind_host()
+        access_host = get_access_host(bind_host)
+        HTTPS_ENABLED = should_enable_https(bind_host)
+        ssl_context = get_ssl_context(bind_host, access_host)
+        settings_path = LAUNCHER_SETTINGS if is_prefixed_env_enabled('LAUNCHER') else None
+        with launch_server(app, socketio, bind_host, port, ssl_context, log_message,
+                           settings_path=settings_path) as (actual_port, serve):
+            DEFAULT_PORT = actual_port
+            announce_server_started(bind_host, access_host, actual_port)
+            serve()
+    except KeyboardInterrupt:
+        return 130
+    except (OSError, RuntimeError, ValueError) as exc:
+        log_message(f'[!] StandTerm could not start: {exc}', file=sys.stderr)
+        return 1
     finally:
         cleanup_external_agent_runtime_artifacts()
         cleanup_access_window()
         cleanup_windows_proxy_bypass()
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
