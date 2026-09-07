@@ -247,12 +247,14 @@ exit /b 0
 
 :start
 echo [*] Starting StandTerm server...
-:: Run python with unbuffered output, then watch the first "Access URL:" line and
-:: open it in the default browser on the first launch.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$o=$false; & '%RUNTIME_PYTHON%' -u '%APP_FILE%' %APP_ARGS% 2>&1 | ForEach-Object { Write-Host $_; if (-not $o -and $_ -match 'Access URL:\s*(\S+)') { Start-Process $matches[1]; $o=$true } }"
+REM Preserve console input for port prompts; Core opens the browser after bind.
+set "STANDTERM_LAUNCHER=1"
+if not defined STANDTERM_OPEN_BROWSER set "STANDTERM_OPEN_BROWSER=1"
+"%RUNTIME_PYTHON%" -u "%APP_FILE%" %APP_ARGS%
+set "APP_EXIT_CODE=%errorlevel%"
 
 pause
-exit /b 0
+exit /b %APP_EXIT_CODE%
 
 :fatal
 echo.

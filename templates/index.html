@@ -481,6 +481,8 @@
             bottom: calc(var(--status-bar-height) + 10px);
             z-index: 4500;
             width: min(380px, calc(100vw - 20px));
+            max-height: calc(100dvh - var(--status-bar-height) - 20px);
+            box-sizing: border-box;
             display: none;
             opacity: 0.9;
             background: rgba(22, 22, 22, 0.97);
@@ -490,10 +492,10 @@
             box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
             font-size: 12px;
         }
-        #agent-panel.visible { display: block; }
+        #agent-panel.visible { display: flex; flex-direction: column; }
         #agent-panel.dragging { user-select: none; }
         #agent-panel.operator-observing { border-color: #ff453a; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 69, 58, 0.35); }
-        #agent-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border-bottom: 1px solid #2c2c2e; cursor: move; touch-action: none; user-select: none; }
+        #agent-panel-header { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border-bottom: 1px solid #2c2c2e; cursor: move; touch-action: none; user-select: none; }
         #agent-panel.operator-observing #agent-panel-header { border-bottom-color: #5a1d1d; background: #2a1010; }
         #agent-panel-title { color: #fff; font-weight: 700; }
         #agent-panel-state { color: #aaa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -512,7 +514,7 @@
             flex: 0 0 auto;
         }
         #agent-panel-close-btn:hover { color: #fff; border-color: #0a84ff; background: #252b33; }
-        #agent-panel-body { padding: 10px; display: grid; gap: 10px; }
+        #agent-panel-body { padding: 10px; display: grid; gap: 10px; min-height: 0; overflow: auto; order: 2; }
         #agent-access-row { display: flex; align-items: center; gap: 8px; }
         #agent-access-toggle-btn {
             width: auto;
@@ -621,9 +623,18 @@
             border-radius: 6px;
             background: #211b12;
             padding: 9px;
+            margin: 10px 10px 0;
+            min-height: 0;
+            max-height: 60dvh;
+            box-sizing: border-box;
+            flex: 0 0 auto;
+            overflow: hidden;
+            order: 1;
         }
-        #agent-action-box.visible { display: grid; gap: 8px; }
-        #agent-action-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; color: #bbb; }
+        #agent-action-box.visible { display: flex; flex-direction: column; gap: 8px; }
+        #agent-action-content { display: grid; gap: 8px; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+        #agent-action-controls { flex-shrink: 0; }
+        #agent-action-meta { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px 10px; color: #bbb; overflow-wrap: anywhere; }
         #agent-file-copy-details {
             display: none;
             gap: 6px;
@@ -749,6 +760,11 @@
             background: #2c2c2e; color: #fff; border: 1px solid #4a4a4f;
             border-radius: 5px; cursor: pointer; font-weight: 700;
         }
+        #session-recovery-platform {
+            width: 100%; margin-top: 10px; padding: 10px 12px;
+            background: #2c2c2e; color: #fff; border: 1px solid #4a4a4f;
+            border-radius: 5px; cursor: pointer; font-weight: 700;
+        }
         #session-recovery-message { min-height: 18px; margin-top: 10px; color: #ff9f0a; font-size: 12px; }
         @media (max-width: 620px) {
             .settings-nav { width: 104px; }
@@ -793,7 +809,7 @@
             <img id="overlay-img" style="max-width: 100%; max-height: 100%; object-fit: contain; display: none;" referrerpolicy="no-referrer" />
             <div id="overlay-fallback" style="display:none; position:absolute; top:0; left:0; right:0; bottom:0; background:#1a1a1a; flex-direction:column; align-items:center; justify-content:center; gap:16px; padding:20px; text-align:center; color:#ddd;">
                 <div style="font-size:36px;">&#x26A0;</div>
-                <div style="font-size:14px; color:#aaa;">Site blocked embedding or refused to connect.</div>
+                <div id="overlay-fallback-message" style="font-size:14px; color:#aaa;">Site blocked embedding or refused to connect.</div>
                 <div id="overlay-fallback-url" style="font-size:11px; color:#555; word-break:break-all; max-width:90%;"></div>
                 <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:center;">
                     <button id="overlay-fallback-popup" style="background:#0a84ff; color:white; border:none; border-radius:6px; padding:10px 24px; cursor:pointer; font-size:13px; font-weight:bold;">Open as Popup &#x29C9;</button>
@@ -939,6 +955,16 @@
                             </div>
                             <div class="settings-status" id="server-access-status">Access URL is fetched only when requested.</div>
                             <div class="settings-secret-value" id="server-access-url"></div>
+                        </fieldset>
+                        <fieldset class="settings-fieldset">
+                            <legend>Platform session recovery</legend>
+                            <div class="settings-status" id="platform-recovery-status">Loading platform recovery status...</div>
+                            <div class="settings-transfer-actions">
+                                <button type="button" id="platform-recovery-register">Register platform passkey</button>
+                                <button type="button" id="platform-recovery-arm">Arm existing passkey</button>
+                                <button type="button" class="danger" id="platform-recovery-remove">Revoke recovery</button>
+                            </div>
+                            <div class="settings-status">Windows Hello, Touch ID, or another platform passkey can restore only a session that remains live in this StandTerm process. No access or session token is stored.</div>
                         </fieldset>
                         <fieldset class="settings-fieldset">
                             <legend>Low-risk runtime settings</legend>
@@ -1160,7 +1186,9 @@
                     <button type="button" id="agent-provider-run-btn">Run</button>
                 </div>
             </details>
-            <div id="agent-action-box">
+        </div>
+        <div id="agent-action-box">
+            <div id="agent-action-content" tabindex="0" aria-label="Agent action details">
                 <div class="agent-preview" id="agent-action-preview"></div>
                 <div id="agent-file-copy-details">
                     <div>source: <span id="agent-file-copy-source"></span></div>
@@ -1177,23 +1205,24 @@
                     <span>control: <span id="agent-action-control">no</span></span>
                     <span>status: <span id="agent-action-status">--</span></span>
                 </div>
-                <div id="agent-action-controls">
-                    <button type="button" id="agent-approve-btn">Approve</button>
-                    <button type="button" id="agent-reject-btn">Reject</button>
-                    <button type="button" id="agent-action-pause-btn">Pause</button>
-                </div>
+            </div>
+            <div id="agent-action-controls">
+                <button type="button" id="agent-approve-btn">Approve</button>
+                <button type="button" id="agent-reject-btn">Reject</button>
+                <button type="button" id="agent-action-pause-btn">Pause</button>
             </div>
         </div>
     </div>
 
     <div id="session-recovery-modal">
         <div class="session-recovery-box">
-            <h3>Access token required</h3>
-            <p>The StandTerm server restarted or your session expired. Enter the access token printed by the current launcher to continue.</p>
+            <h3>Recover StandTerm session</h3>
+            <p>Use a registered device to recover a live session, or enter the access token printed by the current launcher. A restarted server always requires its current token.</p>
             <form id="session-recovery-form" autocomplete="off">
                 <input id="session-recovery-token" name="token" type="password" required>
                 <button type="submit">Unlock</button>
             </form>
+            <button id="session-recovery-platform" type="button">Recover live session with device</button>
             <button id="session-recovery-remembered-token" type="button">Use remembered token</button>
             <div id="session-recovery-message"></div>
         </div>
@@ -1280,7 +1309,7 @@
             saveSshHistory: true,
             urlClickAction: 'overlay',
             fontFace: getDefaultTerminalFontFace(),
-            powerlineSymbols: false,
+            powerlineSymbols: true,
             fontSize: 14,
             // macOS grayscale antialiasing renders thin bright glyphs dimmer
             // than Windows ClearType, so default to a slightly heavier weight
@@ -2003,12 +2032,17 @@
             const sessionRecoveryModal = document.getElementById('session-recovery-modal');
             const sessionRecoveryForm = document.getElementById('session-recovery-form');
             const sessionRecoveryToken = document.getElementById('session-recovery-token');
+            const sessionRecoveryPlatformBtn = document.getElementById('session-recovery-platform');
             const sessionRecoveryRememberedTokenBtn = document.getElementById('session-recovery-remembered-token');
             const sessionRecoveryMessage = document.getElementById('session-recovery-message');
             const serverAccessCopyBtn = document.getElementById('server-access-copy-btn');
             const serverAccessShowBtn = document.getElementById('server-access-show-btn');
             const serverAccessStatus = document.getElementById('server-access-status');
             const serverAccessUrl = document.getElementById('server-access-url');
+            const platformRecoveryStatus = document.getElementById('platform-recovery-status');
+            const platformRecoveryRegisterBtn = document.getElementById('platform-recovery-register');
+            const platformRecoveryArmBtn = document.getElementById('platform-recovery-arm');
+            const platformRecoveryRemoveBtn = document.getElementById('platform-recovery-remove');
             const connectionDiagnosticsStatus = document.getElementById('connection-diagnostics-status');
             const connectionDiagnosticsLog = document.getElementById('connection-diagnostics-log');
             const connectionDiagnosticsCopyBtn = document.getElementById('connection-diagnostics-copy');
@@ -2020,6 +2054,7 @@
             const settingsImportBtn = document.getElementById('settings-import');
             const settingsImportFile = document.getElementById('settings-import-file');
             const debugEnabled = (new URLSearchParams(window.location.search)).get('debug') === '1';
+            const useDesktopFloatingWindows = {{ desktop_floating_windows | default(false) | tojson }};
             const CONNECTION_DIAGNOSTICS_STORAGE_KEY = 'standterm-connection-diagnostics-v1';
             const CONNECTION_DIAGNOSTICS_LIMIT = 100;
             const CONNECTION_DIAGNOSTIC_DETAIL_KEYS = new Set([
@@ -3010,7 +3045,6 @@
                     agentPanelTerminalIdOverride = null;
                 }
                 agentPanel.classList.toggle('visible', usable && agentPanelVisible);
-                if (usable && agentPanelVisible) applyAgentPanelPosition();
                 agentToggleBtn.disabled = !usable;
                 agentToggleBtn.innerText = agentPanelVisible ? 'Hide Agent Panel' : 'Show Agent Panel';
                 agentToggleBtn.title = agentPanelVisible ? 'Hide Agent panel' : 'Show Agent panel';
@@ -3044,6 +3078,7 @@
                 renderAgentStatusPanel(state);
                 renderAgentActionPanel(state);
                 updateOperatorObservationUi();
+                if (usable && agentPanelVisible) applyAgentPanelPosition();
             }
 
             function resetAgentClientState(state) {
@@ -5760,6 +5795,10 @@
                     canMoveActiveTerminalToPip() {
                         return canMoveActiveTerminalToPip();
                     },
+                    getFloatingWindowForTest() {
+                        return (sftpPipState && sftpPipState.window)
+                            || (pipTerminalState && pipTerminalState.pipWindow) || null;
+                    },
                     showContextMenuForTest(terminalId) {
                         const state = terminals.get(terminalId);
                         if (!state) return null;
@@ -6407,6 +6446,192 @@
                 );
             }
 
+            function platformRecoverySupported() {
+                return !!(
+                    window.isSecureContext
+                    && window.PublicKeyCredential
+                    && navigator.credentials
+                );
+            }
+
+            function base64urlToUint8Array(value) {
+                const source = String(value || '');
+                const padding = '='.repeat((4 - (source.length % 4)) % 4);
+                const binary = atob(source.replace(/-/g, '+').replace(/_/g, '/') + padding);
+                return Uint8Array.from(binary, character => character.charCodeAt(0));
+            }
+
+            function arrayBufferToBase64url(value) {
+                const bytes = new Uint8Array(value);
+                let binary = '';
+                bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+                return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+            }
+
+            function preparePlatformRecoveryCreationOptions(source) {
+                const options = { ...source };
+                delete options.ceremony_id;
+                options.challenge = base64urlToUint8Array(options.challenge);
+                options.user = {
+                    ...options.user,
+                    id: base64urlToUint8Array(options.user.id),
+                };
+                if (Array.isArray(options.excludeCredentials)) {
+                    options.excludeCredentials = options.excludeCredentials.map(item => ({
+                        ...item,
+                        id: base64urlToUint8Array(item.id),
+                    }));
+                }
+                return options;
+            }
+
+            function preparePlatformRecoveryRequestOptions(source) {
+                const options = { ...source };
+                delete options.ceremony_id;
+                options.challenge = base64urlToUint8Array(options.challenge);
+                if (Array.isArray(options.allowCredentials)) {
+                    options.allowCredentials = options.allowCredentials.map(item => ({
+                        ...item,
+                        id: base64urlToUint8Array(item.id),
+                    }));
+                }
+                return options;
+            }
+
+            function serializePlatformCredential(credential) {
+                const response = {
+                    clientDataJSON: arrayBufferToBase64url(credential.response.clientDataJSON),
+                };
+                if (credential.response.attestationObject) {
+                    response.attestationObject = arrayBufferToBase64url(credential.response.attestationObject);
+                    response.transports = typeof credential.response.getTransports === 'function'
+                        ? credential.response.getTransports()
+                        : [];
+                } else {
+                    response.authenticatorData = arrayBufferToBase64url(credential.response.authenticatorData);
+                    response.signature = arrayBufferToBase64url(credential.response.signature);
+                    response.userHandle = credential.response.userHandle
+                        ? arrayBufferToBase64url(credential.response.userHandle)
+                        : null;
+                }
+                return {
+                    id: credential.id,
+                    rawId: arrayBufferToBase64url(credential.rawId),
+                    type: credential.type,
+                    authenticatorAttachment: credential.authenticatorAttachment || undefined,
+                    clientExtensionResults: credential.getClientExtensionResults(),
+                    response,
+                };
+            }
+
+            async function readPlatformRecoveryResponse(response) {
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok || payload.status !== 'ok') {
+                    const error = new Error(payload.message || 'Platform session recovery failed.');
+                    error.errorCode = payload.error_code || null;
+                    throw error;
+                }
+                return payload;
+            }
+
+            function formatPlatformRecoveryError(error) {
+                if (error && error.name === 'NotAllowedError') {
+                    return 'Device verification was cancelled or no matching passkey is available.';
+                }
+                return error && error.message ? error.message : 'Platform session recovery failed.';
+            }
+
+            async function registerPlatformRecoveryCredential() {
+                if (!platformRecoverySupported()) {
+                    throw new Error('Platform passkeys are unavailable in this browser context.');
+                }
+                const optionsResponse = await fetch('/session-recovery/register/options', {
+                    method: 'POST',
+                    headers: { 'Accept': 'application/json' },
+                });
+                const optionsPayload = await readPlatformRecoveryResponse(optionsResponse);
+                const sourceOptions = optionsPayload.public_key || {};
+                const credential = await navigator.credentials.create({
+                    publicKey: preparePlatformRecoveryCreationOptions(sourceOptions),
+                });
+                const completeResponse = await fetch('/session-recovery/register/complete', {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        ceremony_id: sourceOptions.ceremony_id,
+                        credential: serializePlatformCredential(credential),
+                    }),
+                });
+                return readPlatformRecoveryResponse(completeResponse);
+            }
+
+            async function authenticatePlatformRecoveryCredential() {
+                if (!platformRecoverySupported()) {
+                    throw new Error('Platform passkeys are unavailable in this browser context.');
+                }
+                const optionsResponse = await fetch('/session-recovery/authenticate/options', {
+                    method: 'POST',
+                    headers: { 'Accept': 'application/json' },
+                });
+                const optionsPayload = await readPlatformRecoveryResponse(optionsResponse);
+                const sourceOptions = optionsPayload.public_key || {};
+                const credential = await navigator.credentials.get({
+                    publicKey: preparePlatformRecoveryRequestOptions(sourceOptions),
+                });
+                const completeResponse = await fetch('/session-recovery/authenticate/complete', {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        ceremony_id: sourceOptions.ceremony_id,
+                        credential: serializePlatformCredential(credential),
+                    }),
+                });
+                return readPlatformRecoveryResponse(completeResponse);
+            }
+
+            async function recoverSessionWithPlatformCredential() {
+                await authenticatePlatformRecoveryCredential();
+                reconnectAfterSessionRecovery();
+            }
+
+            async function requestPlatformRecoveryStatus() {
+                if (!platformRecoveryStatus) return;
+                if (!platformRecoverySupported()) {
+                    platformRecoveryStatus.textContent = 'Platform passkeys are unavailable in this browser context.';
+                    if (platformRecoveryRegisterBtn) platformRecoveryRegisterBtn.disabled = true;
+                    if (platformRecoveryArmBtn) platformRecoveryArmBtn.disabled = true;
+                    if (platformRecoveryRemoveBtn) platformRecoveryRemoveBtn.disabled = true;
+                    return;
+                }
+                platformRecoveryStatus.textContent = 'Loading platform recovery status...';
+                try {
+                    const response = await fetch('/session-recovery/status', {
+                        headers: { 'Accept': 'application/json' },
+                    });
+                    const payload = await readPlatformRecoveryResponse(response);
+                    const available = payload.available === true;
+                    const configured = Number(payload.configured_credentials) || 0;
+                    const armed = Number(payload.armed_credentials) || 0;
+                    platformRecoveryStatus.textContent = available
+                        ? `${configured} registered, ${armed} armed for this live session. RP ID: ${payload.rp_id}`
+                        : (payload.message || 'Platform recovery is unavailable for this origin.');
+                    if (platformRecoveryRegisterBtn) platformRecoveryRegisterBtn.disabled = !available;
+                    if (platformRecoveryArmBtn) platformRecoveryArmBtn.disabled = !available || configured === 0;
+                    if (platformRecoveryRemoveBtn) platformRecoveryRemoveBtn.disabled = !available || configured === 0;
+                } catch (error) {
+                    platformRecoveryStatus.textContent = formatPlatformRecoveryError(error);
+                    if (platformRecoveryRegisterBtn) platformRecoveryRegisterBtn.disabled = true;
+                    if (platformRecoveryArmBtn) platformRecoveryArmBtn.disabled = true;
+                    if (platformRecoveryRemoveBtn) platformRecoveryRemoveBtn.disabled = true;
+                }
+            }
+
             function clearSessionRenewTimer() {
                 if (!sessionRenewTimer) return;
                 clearTimeout(sessionRenewTimer);
@@ -6426,6 +6651,9 @@
                 clearSessionRenewTimer();
                 if (sessionRecoveryMessage) sessionRecoveryMessage.textContent = message || '';
                 updateSessionRecoveryRememberedTokenButton();
+                if (sessionRecoveryPlatformBtn) {
+                    sessionRecoveryPlatformBtn.style.display = platformRecoverySupported() ? 'block' : 'none';
+                }
                 if (sessionRecoveryModal) sessionRecoveryModal.classList.add('open');
                 if (sessionRecoveryToken) sessionRecoveryToken.focus();
             }
@@ -8730,15 +8958,35 @@
                 });
             }
 
+            let floatingWindowOpening = false;
+            async function requestFloatingWindow(width, height) {
+                if (floatingWindowOpening) return null;
+                floatingWindowOpening = true;
+                try {
+                    if (useDesktopFloatingWindows) {
+                        const child = window.open('about:blank', 'standterm-floating', `popup,width=${width},height=${height}`);
+                        if (!child) throw new Error('Floating window was blocked.');
+                        return await Promise.resolve(child);
+                    }
+                    return await window.documentPictureInPicture.requestWindow({ width, height });
+                } catch {
+                    alert('Could not open the floating window. Window creation may be blocked or unavailable. Please retry or update StandTerm Desktop.');
+                    return null;
+                } finally {
+                    floatingWindowOpening = false;
+                }
+            }
+
             async function openSftpPip(state) {
                 if (!canUseSftpFileManager(state)) return;
-                if (!window.documentPictureInPicture) return alert('PiP not supported.');
+                if (!useDesktopFloatingWindows && !window.documentPictureInPicture) return alert('PiP not supported.');
                 if (pipTerminalState) return alert('Restore the terminal from PiP before opening Files.');
                 if (sftpPipState) {
                     if (sftpPipState.window && !sftpPipState.window.closed) sftpPipState.window.focus();
                     return;
                 }
-                const pipWindow = await window.documentPictureInPicture.requestWindow({ width: 720, height: 620 });
+                const pipWindow = await requestFloatingWindow(720, 620);
+                if (!pipWindow) return;
                 const transferState = {
                     mode: 'source',
                     window: pipWindow,
@@ -8784,9 +9032,14 @@
                 requestSftpBrowse(transferState);
             }
 
-            function openSftpFromTerminalPip(state) {
+            async function openSftpFromTerminalPip(state) {
                 if (!state || pipTerminalState !== state || !canUseSftpFileManager(state)) return;
+                const pipWindow = state.pipWindow;
+                const closing = useDesktopFloatingWindows && pipWindow && !pipWindow.closed
+                    ? new Promise(resolve => pipWindow.addEventListener('pagehide', resolve, { once: true }))
+                    : null;
                 restoreTerminalFromPip(state, { closeWindow: true });
+                if (closing) await closing;
                 openSftpPip(state);
             }
 
@@ -8884,6 +9137,19 @@
                 overlayFallbackUrl.innerText = url;
                 overlayFallbackOpen.onclick = () => openExternalUrl(url);
                 overlayFallbackPopup.onclick = () => openUrlPopup(url);
+                if (useDesktopFloatingWindows) {
+                    document.getElementById('overlay-fallback-message').textContent = 'External previews are disabled in Desktop. Open this link in your browser.';
+                    document.getElementById('external-link').title = 'Open in browser';
+                    overlayIframe.src = 'about:blank';
+                    overlayImg.removeAttribute('src');
+                    overlayIframe.style.display = 'none';
+                    overlayImg.style.display = 'none';
+                    overlayFallbackPopup.style.display = 'none';
+                    overlayFallbackOpen.textContent = 'Open in browser \u2197';
+                    overlayFallback.style.display = 'flex';
+                    urlOverlay.style.display = 'flex';
+                    return;
+                }
                 const isImg = IMAGE_EXTENSIONS.some(ext => url.toLowerCase().includes(ext));
                 if (isImg && !prefs.enablePicPreview) { openExternalUrl(url); return; }
                 overlayIframe.style.display = isImg ? 'none' : 'block';
@@ -9220,14 +9486,15 @@
             pipOption.addEventListener('click', async () => {
                 contextMenu.style.display = 'none';
                 if (!canMoveActiveTerminalToPip()) return;
-                if (!window.documentPictureInPicture) return alert("PiP not supported.");
+                if (!useDesktopFloatingWindows && !window.documentPictureInPicture) return alert("PiP not supported.");
                 if (sftpPipState) return alert('Close the SFTP transfer window before moving a terminal to PiP.');
                 const state = getActiveTerminalState();
                 if (!state) return;
                 if (pipTerminalState && pipTerminalState !== state) {
                     restoreTerminalFromPip(pipTerminalState, { closeWindow: true });
                 }
-                const pipWindow = await window.documentPictureInPicture.requestWindow({ width: 800, height: 480 });
+                const pipWindow = await requestFloatingWindow(800, 480);
+                if (!pipWindow) return;
                 pipTerminalState = state;
                 state.pipWindow = pipWindow;
                 state.pipReturnNextSibling = state.container.nextSibling;
@@ -9591,6 +9858,7 @@
                 settingsModal.classList.add('open');
                 renderConnectionDiagnostics();
                 requestServerSettingsSnapshot();
+                requestPlatformRecoveryStatus();
             };
             document.getElementById('settings-option').onclick = openSettings;
             document.getElementById('quick-settings').onclick = openSettings;
@@ -9620,6 +9888,19 @@
                         });
                 };
             }
+            if (sessionRecoveryPlatformBtn) {
+                sessionRecoveryPlatformBtn.onclick = () => {
+                    sessionRecoveryPlatformBtn.disabled = true;
+                    if (sessionRecoveryMessage) sessionRecoveryMessage.textContent = 'Waiting for device verification...';
+                    recoverSessionWithPlatformCredential()
+                        .catch(error => {
+                            if (sessionRecoveryMessage) {
+                                sessionRecoveryMessage.textContent = formatPlatformRecoveryError(error);
+                            }
+                        })
+                        .finally(() => { sessionRecoveryPlatformBtn.disabled = false; });
+                };
+            }
             if (serverAccessCopyBtn) {
                 serverAccessCopyBtn.onclick = () => {
                     serverAccessCopyBtn.disabled = true;
@@ -9641,6 +9922,62 @@
                         .finally(() => { serverAccessShowBtn.disabled = false; });
                 };
             }
+            if (platformRecoveryRegisterBtn) {
+                platformRecoveryRegisterBtn.onclick = () => {
+                    platformRecoveryRegisterBtn.disabled = true;
+                    if (platformRecoveryStatus) platformRecoveryStatus.textContent = 'Waiting for device registration...';
+                    registerPlatformRecoveryCredential()
+                        .then(() => {
+                            if (platformRecoveryStatus) {
+                                platformRecoveryStatus.textContent = 'Platform recovery is armed for this live session.';
+                            }
+                        })
+                        .catch(error => {
+                            if (platformRecoveryStatus) {
+                                platformRecoveryStatus.textContent = formatPlatformRecoveryError(error);
+                            }
+                        })
+                        .finally(() => requestPlatformRecoveryStatus());
+                };
+            }
+            if (platformRecoveryArmBtn) {
+                platformRecoveryArmBtn.onclick = () => {
+                    platformRecoveryArmBtn.disabled = true;
+                    if (platformRecoveryStatus) platformRecoveryStatus.textContent = 'Waiting for device verification...';
+                    authenticatePlatformRecoveryCredential()
+                        .then(() => {
+                            if (platformRecoveryStatus) {
+                                platformRecoveryStatus.textContent = 'Platform recovery is armed for this live session.';
+                            }
+                        })
+                        .catch(error => {
+                            if (platformRecoveryStatus) {
+                                platformRecoveryStatus.textContent = formatPlatformRecoveryError(error);
+                            }
+                        })
+                        .finally(() => requestPlatformRecoveryStatus());
+                };
+            }
+            if (platformRecoveryRemoveBtn) {
+                platformRecoveryRemoveBtn.onclick = async () => {
+                    if (!window.confirm('Revoke all platform recovery registrations for this hostname? Passkeys may remain in the operating system.')) return;
+                    platformRecoveryRemoveBtn.disabled = true;
+                    if (platformRecoveryStatus) platformRecoveryStatus.textContent = 'Removing platform recovery passkeys...';
+                    try {
+                        const response = await fetch('/session-recovery/credentials/remove', {
+                            method: 'POST',
+                            headers: { 'Accept': 'application/json' },
+                        });
+                        await readPlatformRecoveryResponse(response);
+                    } catch (error) {
+                        if (platformRecoveryStatus) {
+                            platformRecoveryStatus.textContent = formatPlatformRecoveryError(error);
+                        }
+                    } finally {
+                        requestPlatformRecoveryStatus();
+                    }
+                };
+            }
             if (connectionDiagnosticsCopyBtn) {
                 connectionDiagnosticsCopyBtn.onclick = () => {
                     copyToClipboard(buildConnectionDiagnosticsText());
@@ -9658,7 +9995,10 @@
                     document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
                     item.classList.add('active'); document.getElementById('tab-' + item.dataset.tab).classList.add('active');
                     if (item.dataset.tab === 'ssh-sessions') renderSshProfileManager();
-                    if (item.dataset.tab === 'server') requestServerSettingsSnapshot();
+                    if (item.dataset.tab === 'server') {
+                        requestServerSettingsSnapshot();
+                        requestPlatformRecoveryStatus();
+                    }
                     if (item.dataset.tab === 'diagnostics') renderConnectionDiagnostics();
                 };
             });

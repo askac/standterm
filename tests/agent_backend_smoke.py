@@ -22,7 +22,22 @@ import scripts.access_window as access_window
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import agent_cli
 import agent_scp
+from session_recovery import (
+    SessionRecoveryCeremonyStore,
+    SessionRecoveryCredentialStore,
+    SessionRecoveryError,
+    SessionRecoveryService,
+    build_webauthn_context,
+)
 from terminal_backends.ssh import BrowserEd25519Key, BrowserSSHKeyError
+
+
+SESSION_RECOVERY_TEST_DIR = tempfile.TemporaryDirectory(prefix='standterm-session-recovery-smoke-')
+standterm.session_recovery_service = SessionRecoveryService(
+    SessionRecoveryCredentialStore(
+        Path(SESSION_RECOVERY_TEST_DIR.name) / 'session_recovery_credentials.json'
+    )
+)
 
 
 def make_test_png_base64(width, height):
@@ -109,6 +124,7 @@ def reset_state():
     standterm.settings_admin_grants.clear()
     standterm.settings_audit_store.clear()
     standterm.reset_runtime_settings_for_test()
+    standterm.session_recovery_service.clear_runtime_state()
     standterm.agent_states.clear()
     standterm.agent_session_ids.clear()
     standterm.agent_viewer_ids.clear()
@@ -229,6 +245,182 @@ def test_session_renew_rejects_missing_or_expired_session():
     assert response.status_code == 403
     assert response.get_json()['error_code'] == 'session_required'
     assert session_token not in standterm.active_sessions
+
+
+def test_session_recovery_context_requires_hostname_and_secure_origin():
+    assert build_webauthn_context('http://localhost:5000/') == {
+        'rp_id': 'localhost',
+        'origin': 'http://localhost:5000',
+    }
+    assert build_webauthn_context('https://standterm.example:5443/') == {
+        'rp_id': 'standterm.example',
+        'origin': 'https://standterm.example:5443',
+    }
+
+    for url_root, expected_error in (
+        ('https://172.20.1.2:5000/', 'session_recovery_ip_origin_unsupported'),
+        ('http://standterm.example:5000/', 'session_recovery_secure_origin_required'),
+    ):
+        try:
+            build_webauthn_context(url_root)
+        except SessionRecoveryError as exc:
+            assert exc.error_code == expected_error
+        else:
+            raise AssertionError(f'{url_root} unexpectedly enabled platform recovery')
+
+
+def test_native_loopback_access_host_uses_localhost_for_webauthn():
+    original_is_wsl = standterm.is_wsl
+    try:
+        standterm.is_wsl = lambda: False
+        assert standterm.get_access_host('127.0.0.1') == 'localhost'
+        assert standterm.get_access_host('::1') == 'localhost'
+        assert standterm.get_access_host('192.0.2.10') == '192.0.2.10'
+    finally:
+        standterm.is_wsl = original_is_wsl
+
+
+def test_session_recovery_registration_options_require_live_session_and_hostname():
+    flask_client = standterm.app.test_client()
+    response = flask_client.post('/session-recovery/register/options', base_url='http://localhost')
+    assert response.status_code == 403
+    assert response.get_json()['error_code'] == 'session_required'
+
+    flask_client = make_flask_client()
+    response = flask_client.post('/session-recovery/register/options', base_url='http://localhost')
+    assert response.status_code == 200
+    payload = response.get_json()['public_key']
+    assert payload['rp']['id'] == 'localhost'
+    assert payload['authenticatorSelection']['authenticatorAttachment'] == 'platform'
+    assert payload['authenticatorSelection']['residentKey'] == 'required'
+    assert payload['authenticatorSelection']['userVerification'] == 'required'
+    assert isinstance(payload['ceremony_id'], str)
+
+    ip_client = standterm.app.test_client()
+    response = ip_client.get(
+        '/?token=' + standterm.ACCESS_TOKEN,
+        base_url='https://172.20.1.2:5000',
+    )
+    assert response.status_code == 200
+    response = ip_client.get('/session-recovery/status', base_url='https://172.20.1.2:5000')
+    payload = response.get_json()
+    assert response.status_code == 200
+    assert payload['available'] is False
+    assert payload['error_code'] == 'session_recovery_ip_origin_unsupported'
+
+
+def test_session_recovery_store_excludes_session_and_access_tokens():
+    store_path = Path(SESSION_RECOVERY_TEST_DIR.name) / 'isolated_credentials.json'
+    store = SessionRecoveryCredentialStore(store_path)
+    store.save({
+        'credential_id': 'credential-public-id',
+        'credential_public_key': 'public-key-material',
+        'sign_count': 0,
+        'rp_id': 'localhost',
+        'created_at': 1,
+        'device_type': 'single_device',
+        'backed_up': False,
+        'transports': ['internal'],
+        'session_token': 'must-not-persist',
+        'access_token': 'must-not-persist',
+    })
+    stored_text = store_path.read_text(encoding='utf-8')
+    assert 'credential-public-id' in stored_text
+    assert 'session_token' not in stored_text
+    assert 'access_token' not in stored_text
+    assert stat.S_IMODE(store_path.stat().st_mode) & 0o077 == 0
+
+
+def test_session_recovery_ceremonies_expire_and_are_single_use():
+    current_time = [100.0]
+    store = SessionRecoveryCeremonyStore(time_func=lambda: current_time[0])
+    ceremony_id = store.create('authentication', 'local-client', challenge=b'challenge')
+    assert store.consume(ceremony_id, 'authentication')['challenge'] == b'challenge'
+
+    try:
+        store.consume(ceremony_id, 'authentication')
+    except SessionRecoveryError as exc:
+        assert exc.error_code == 'session_recovery_ceremony_invalid'
+    else:
+        raise AssertionError('a platform recovery ceremony was accepted twice')
+
+    ceremony_id = store.create('authentication', 'local-client', challenge=b'challenge')
+    current_time[0] += 121
+    try:
+        store.consume(ceremony_id, 'authentication')
+    except SessionRecoveryError as exc:
+        assert exc.error_code == 'session_recovery_ceremony_invalid'
+    else:
+        raise AssertionError('an expired platform recovery ceremony was accepted')
+
+
+def test_session_recovery_unauthenticated_options_offer_only_armed_credentials():
+    store_path = Path(SESSION_RECOVERY_TEST_DIR.name) / 'armed_credentials.json'
+    service = SessionRecoveryService(SessionRecoveryCredentialStore(store_path))
+    credential_id = base64.urlsafe_b64encode(b'credential-id').decode('ascii').rstrip('=')
+    service.credential_store.save({
+        'credential_id': credential_id,
+        'credential_public_key': base64.urlsafe_b64encode(b'public-key').decode('ascii').rstrip('='),
+        'sign_count': 0,
+        'rp_id': 'localhost',
+        'created_at': 1,
+        'device_type': 'single_device',
+        'backed_up': False,
+        'transports': ['internal'],
+    })
+    try:
+        service.begin_authentication(
+            'http://localhost:5000/',
+            '127.0.0.1',
+            bound_only=True,
+        )
+    except SessionRecoveryError as exc:
+        assert exc.error_code == 'session_recovery_no_live_session'
+    else:
+        raise AssertionError('unarmed credential was offered to an unauthenticated recovery page')
+
+    service.bind('localhost', credential_id, 'live-session')
+    options = service.begin_authentication(
+        'http://localhost:5000/',
+        '127.0.0.1',
+        bound_only=True,
+    )
+    assert options['allowCredentials'] == [{'id': credential_id, 'type': 'public-key'}]
+
+
+def test_session_recovery_complete_restores_bound_live_session_cookie():
+    owner_client = make_flask_client()
+    owner_session = flask_session_cookie_value(owner_client)
+    service = standterm.session_recovery_service
+    service.bind('localhost', 'credential-id', owner_session)
+    original_finish = service.finish_authentication
+    service.finish_authentication = lambda *_args, **_kwargs: {
+        'credential_id': 'credential-id',
+        'rp_id': 'localhost',
+        'backed_up': False,
+    }
+    try:
+        recovery_client = standterm.app.test_client()
+        response = recovery_client.post(
+            '/session-recovery/authenticate/complete',
+            base_url='http://localhost',
+            json={'ceremony_id': 'test', 'credential': {}},
+        )
+        assert response.status_code == 200
+        assert response.get_json()['result'] == 'recovered'
+        assert flask_session_cookie_value(recovery_client) == owner_session
+    finally:
+        service.finish_authentication = original_finish
+
+
+def test_expired_session_discards_platform_recovery_binding():
+    flask_client = make_flask_client()
+    session_token = flask_session_cookie_value(flask_client)
+    service = standterm.session_recovery_service
+    service.bind('localhost', 'credential-id', session_token)
+    standterm.active_sessions[session_token] = standterm.time.time() - 1
+    assert standterm.is_valid_session(session_token) is False
+    assert service.get_binding('localhost', 'credential-id') is None
 
 
 def test_access_url_endpoint_requires_session_and_is_no_store():
@@ -7980,6 +8172,14 @@ def main():
         test_access_required_page_rejects_invalid_login_token,
         test_session_renew_extends_existing_cookie_session,
         test_session_renew_rejects_missing_or_expired_session,
+        test_session_recovery_context_requires_hostname_and_secure_origin,
+        test_native_loopback_access_host_uses_localhost_for_webauthn,
+        test_session_recovery_registration_options_require_live_session_and_hostname,
+        test_session_recovery_store_excludes_session_and_access_tokens,
+        test_session_recovery_ceremonies_expire_and_are_single_use,
+        test_session_recovery_unauthenticated_options_offer_only_armed_credentials,
+        test_session_recovery_complete_restores_bound_live_session_cookie,
+        test_expired_session_discards_platform_recovery_binding,
         test_access_url_endpoint_requires_session_and_is_no_store,
         test_pause_blocks_pending_approval,
         test_operator_observation_logs_metadata_without_input_preview,

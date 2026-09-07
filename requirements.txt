@@ -4,6 +4,7 @@ simple-websocket
 paramiko
 eventlet
 cryptography
+webauthn>=3,<4
 ptyprocess; sys_platform != "win32"
 pywinpty<3; sys_platform == "win32"
 pyserial

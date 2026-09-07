@@ -394,37 +394,10 @@ fi
 
 ensure_wsl_windows_uart_helper
 
-open_browser() {
-    local url="$1"
-    case "$PLATFORM_NAME" in
-        WSL)
-            (cmd.exe /c start "" "$url" >/dev/null 2>&1 &) >/dev/null 2>&1
-            ;;
-        macOS)
-            (open "$url" >/dev/null 2>&1 &) >/dev/null 2>&1
-            ;;
-        Linux)
-            if command -v xdg-open >/dev/null 2>&1; then
-                (xdg-open "$url" >/dev/null 2>&1 &) >/dev/null 2>&1
-            fi
-            ;;
-    esac
-}
-
 echo "[*] Starting StandTerm server..."
 echo "[*] Loading Python modules; first startup from /mnt/* may take a few seconds..."
-# Run python with unbuffered output so we can detect the access URL line and open
-# the browser once on the first launch.
-python -u "$APP_FILE" "$@" 2>&1 | {
-    browser_opened=
-    while IFS= read -r line; do
-        printf '%s\n' "$line"
-        if [[ -z "$browser_opened" && "$line" == *"Access URL:"* ]]; then
-            url="${line##*Access URL: }"
-            url="${url%%[[:space:]]*}"
-            browser_opened=1
-            open_browser "$url"
-        fi
-    done
-}
-exit "${PIPESTATUS[0]}"
+# Keep stdin attached for port-conflict prompts. Core opens the browser only
+# after binding its listener; display output is not a launcher control channel.
+export STANDTERM_LAUNCHER=1
+export STANDTERM_OPEN_BROWSER="${STANDTERM_OPEN_BROWSER:-1}"
+exec python -u "$APP_FILE" "$@"

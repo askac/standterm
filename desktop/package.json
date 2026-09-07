@@ -1,0 +1,23 @@
+{
+  "name": "standterm-desktop-evaluation",
+  "version": "0.4.1",
+  "private": true,
+  "productName": "StandTerm Desktop",
+  "author": "ASKA C.",
+  "license": "MIT",
+  "description": "Evaluation shell for the StandTerm Python backend",
+  "main": "main.cjs",
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.cjs",
+    "smoke": "electron . --desktop-smoke",
+    "smoke:capture": "electron . --desktop-capture-smoke",
+    "stage:win": "node stage-windows.cjs",
+    "make:win": "electron-builder --config electron-builder.cjs --win nsis --x64 --publish never"
+  },
+  "devDependencies": {
+    "electron-builder": "26.15.3",
+    "electron": "44.2.0"
+  }
+}
