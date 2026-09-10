@@ -5,7 +5,46 @@ sessions, and controlled external-agent access. It is designed for WSL2, native
 Windows, macOS, and Linux, with browser-based terminal tabs that stay attached
 to the StandTerm server process across page reloads.
 
-![StandTerm Demo](standterm_demo.gif)
+**Desktop evaluation builds are available for Windows x64 and macOS Apple Silicon.**
+[Download and install StandTerm Desktop](#desktop-downloads-evaluation), or use
+the [browser-based Core quick start](#quick-start).
+
+![StandTerm Desktop with terminal rendering tests, local and SSH tabs, and a floating PowerShell terminal](standterm_desktop.png)
+
+*Desktop development preview. The toolbar shown above is newer than the published
+Desktop 0.4.3 installers.*
+
+## Desktop Downloads (Evaluation)
+
+[StandTerm Desktop 0.4.3](https://github.com/askac/standterm/releases/tag/desktop-v0.4.3)
+is available as an evaluation pre-release, not a production-qualified release.
+
+| Platform | Download | Required before installation |
+| --- | --- | --- |
+| Windows x64, including Windows + WSL | [Windows installer (.exe)](https://github.com/askac/standterm/releases/download/desktop-v0.4.3/StandTerm-Desktop-0.4.3-win32-x64-Setup.exe) | Python 3.10+ with venv/ensurepip in each selected environment; WSL mode also needs an existing WSL distribution. |
+| macOS Apple Silicon | [macOS installer (.dmg)](https://github.com/askac/standterm/releases/download/desktop-v0.4.3/StandTerm-Desktop-0.4.3-mac-arm64.dmg) | Native arm64 Python 3.10+ with venv/ensurepip. Intel/Rosetta is not qualified. |
+
+Packages include Electron and Core. **Git, Node.js and npm are not required**;
+Python and its virtual environment are not bundled.
+
+1. Download the package for your platform and check the release's
+   [SHA256SUMS](https://github.com/askac/standterm/releases/download/desktop-v0.4.3/SHA256SUMS).
+2. On Windows, run the installer and choose **Windows only**, **Windows + WSL**
+   or **WSL only**. Native Windows mode needs 64-bit Windows Python; installing
+   Windows Python does not satisfy WSL mode. On macOS, copy the app to a
+   user-owned Applications folder, then launch it.
+3. Approve environment preparation and wait for Core's private venv and Python
+   dependencies to finish installing. This requires network access. StandTerm
+   does not install system Python or WSL automatically.
+
+Windows builds are unsigned; macOS builds are ad-hoc signed without notarization,
+so OS security warnings or launch restrictions are possible. Checksums detect
+corruption but do not replace publisher signing. Before upgrading, save your work
+and fully quit Desktop, including tray windows; updates are installed manually.
+
+See the [Desktop guide](desktop/README.md) for setup, shortcuts, diagnostics and
+known limitations. For browser-based use or platforms without a Desktop package,
+continue with Core below.
 
 ## Quick Start
 

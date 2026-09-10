@@ -27,6 +27,8 @@ function fixture({ supported = true, audio = false } = {}) {
       this.state = 'inactive';
     }
     start(slice) { assert.equal(slice, 1000); this.state = 'recording'; }
+    pause() { this.state = 'paused'; }
+    resume() { this.state = 'recording'; }
     stop() { this.state = 'inactive'; this.dispatchEvent(new Event('stop')); }
     chunk(data) {
       const event = new Event('dataavailable'); event.data = data;
@@ -84,4 +86,19 @@ test('private recorder rejects missing codecs or unexpected audio tracks', async
   const audio = fixture({ audio: true });
   await assert.rejects(audio.api.start(), /video-only/);
   assert.ok(audio.stoppedTracks() > 0);
+});
+
+test('private recorder can pause, resume, and stop while paused', async () => {
+  const f = fixture();
+  await f.api.start();
+  f.api.pause();
+  assert.equal(f.encoder().state, 'paused');
+  f.api.pause();
+  f.api.resume();
+  assert.equal(f.encoder().state, 'recording');
+  f.api.pause();
+  await f.api.stop();
+  assert.equal(f.encoder().state, 'inactive');
+  f.api.resume();
+  assert.equal(f.encoder().state, 'inactive');
 });

@@ -47,6 +47,19 @@ test('diagnostic rotation is bounded and write failure does not block startup', 
   assert.equal(blocked.available, false);
 });
 
+test('capture diagnostics record window state without error payloads', t => {
+  const { logger } = fixture(t);
+  logger.write('capture_failed', { width: 624, height: 561, visible: true, minimized: false,
+    focused: true, message: 'private path or terminal data', screenshot: 'private bytes' });
+  const entry = logger.snapshot()[0];
+  assert.equal(entry.width, 624);
+  assert.equal(entry.height, 561);
+  assert.equal(entry.visible, true);
+  assert.equal(entry.minimized, false);
+  assert.equal(entry.focused, true);
+  assert.ok(!JSON.stringify(entry).includes('private'));
+});
+
 test('diagnostics menu shows the actual owned endpoint without an access URL', t => {
   const { logger } = fixture(t);
   const options = { origin: 'http://127.0.0.1:64487', mode: 'wsl', version: '0.3.3', logger,
