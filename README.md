@@ -5,7 +5,7 @@ sessions, and controlled external-agent access. It is designed for WSL2, native
 Windows, macOS, and Linux, with browser-based terminal tabs that stay attached
 to the StandTerm server process across page reloads.
 
-![StandTerm Demo](standterm_demo.gif)
+![StandTerm Desktop with terminal rendering tests, local and SSH tabs, and a floating PowerShell terminal](standterm_desktop.png)
 
 ## Quick Start
 
