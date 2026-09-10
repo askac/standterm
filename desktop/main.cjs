@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, Menu, Tray, nativeImage, dialog, session, shell, clipboard } = require('electron');
+const { app, BrowserWindow, WebContentsView, Menu, Tray, nativeImage, dialog, session, shell, clipboard } = require('electron');
 const { spawn } = require('node:child_process');
 const http = require('node:http');
 const path = require('node:path');
@@ -19,6 +19,9 @@ const { agentMenu } = require('./agent-menu.cjs');
 const { browserSessionOptions, resetBrowserAuthentication } = require('./browser-session.cjs');
 const { createStatusWindow } = require('./diagnostics-window.cjs');
 const { createExternalOpener } = require('./external-links.cjs');
+const { createUiCommands } = require('./ui-commands.cjs');
+const { installToolbar } = require('./toolbar.cjs');
+const { createBrowserAccess } = require('./browser-access.cjs');
 
 let maintenance;
 try { maintenance = installerRequest(process.argv); } catch (error) {
@@ -278,6 +281,9 @@ async function start() {
     httpOnly: true, sameSite: 'strict', path: '/',
   });
   handoff.session_token = '';
+  // Retain launcher authority only in the main process for explicit native
+  // Browser Access actions; it is never passed to either renderer or persisted.
+  const launcherToken = handoff.launcher_token;
   handoff.launcher_token = '';
   let icon;
   if (!smoke) {
@@ -287,21 +293,45 @@ async function start() {
     title: MODES[mode], width: 1280, height: 850,
     minWidth: 640, minHeight: 480, show: false, icon,
     webPreferences: {
-      session: desktopSession, nodeIntegration: false, contextIsolation: true,
+      partition: 'standterm-desktop-toolbar', preload: path.join(__dirname, 'toolbar-preload.cjs'),
+      nodeIntegration: false, contextIsolation: true,
       sandbox: true, webSecurity: true, webviewTag: false,
       allowRunningInsecureContent: false, devTools: true,
     },
   });
+  const coreView = new WebContentsView({ webPreferences: {
+    session: desktopSession, nodeIntegration: false, contextIsolation: true,
+    sandbox: true, webSecurity: true, webviewTag: false, allowRunningInsecureContent: false, devTools: true,
+  } });
+  const contents = coreView.webContents;
+  const commands = createUiCommands(win, contents, handoff.origin);
+  let toolbar;
   const updateTitle = () => {
     if (!win.isDestroyed()) win.setTitle(`${captureTitle ? `[${captureTitle}] ` : ''}${MODES[mode]} - ${pageTitle}`);
   };
   capture = new DesktopCapture(win, {
-    onChange: value => { captureTitle = value; updateTitle(); },
+    contents,
+    onDiagnostic: state => diagnostics.write('capture_failed', state),
+    onChange: (value, state) => { captureTitle = value; updateTitle(); toolbar?.send(state); },
+    notify: async (message, error) => toolbar?.notify(message, error),
     ...(smoke ? { notify: async (message, error) => {
       if (error) console.error(message);
     } } : {}),
   });
-  win.on('page-title-updated', (event, title) => {
+  toolbar = installToolbar(win, coreView, capture, commands);
+  const browserAccess = createBrowserAccess({ origin: handoff.origin, session: desktopSession, launcherToken,
+    available: () => !win.isDestroyed() && !contents.isDestroyed() && allowedNavigation(contents.getURL(), handoff.origin),
+    confirm: async () => {
+      const result = await dialog.showMessageBox(win, { type: 'warning', title: 'Authorize another browser',
+        message: 'Allow another browser to access this StandTerm instance?',
+        detail: 'The authorization URL contains sensitive access information. Share it only with your own trusted browser. Opening it may store it in browser history. A new authorization link replaces the previous unused link.',
+        buttons: ['Cancel', 'Continue'], defaultId: 0, cancelId: 0, noLink: true });
+      return result.response === 1;
+    },
+    copy: value => clipboard.writeText(value), open: value => shell.openExternal(value), notify: toolbar.notify,
+  });
+  win.once('closed', browserAccess.dispose);
+  contents.on('page-title-updated', (event, title) => {
     event.preventDefault();
     pageTitle = title;
     updateTitle();
@@ -321,27 +351,35 @@ async function start() {
     ['Platform', `${process.platform} / ${process.arch}`],
     ['Electron / Chromium / Node', `${process.versions.electron} / ${process.versions.chrome} / ${process.versions.node}`],
     ['Backend process', child && child.exitCode === null && child.signalCode === null ? 'Running' : 'Stopped'],
-    ['Renderer process', win.webContents.isCrashed() ? 'Crashed' : 'Running'],
+    ['Renderer process', contents.isCrashed() ? 'Crashed' : 'Running'],
     ['Browser storage', smoke ? 'Temporary test profile' : 'Persistent per origin; same as Core'],
     ['Profile directory', app.getPath('userData')], ['Port settings', settingsPath],
     ['Diagnostic log', diagnostics.file], ['Log writable', diagnostics.available ? 'Yes' : 'No'],
-    ['Security', 'Sandbox on; Node/preload off; external preview network blocked'],
+    ['Security', 'Core sandbox on; Node/preload off; isolated Desktop toolbar; external preview network blocked'],
   ], events: diagnostics.snapshot() }), {
     copyUrl: () => clipboard.writeText(connectionInfo.base_url),
     copyConnectionInfo: () => clipboard.writeText(JSON.stringify(connectionInfo, null, 2)),
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate([
-    ...(process.platform === 'darwin' ? [{ role: 'appMenu' }] : []),
-    { label: 'StandTerm', submenu: [
+    { id: 'standterm', label: 'StandTerm', submenu: [
+      commands.item('settings'),
+      { label: 'Capture Settings...', click: () => capture.configure() },
+      browserAccess.menu,
+      { type: 'separator' },
+      commands.item('newTab'), commands.item('closeTab'), commands.item('closeAll'),
+      commands.item('files'), commands.item('pip'),
+      { type: 'separator' },
       { id: 'desktop-about', label: 'About StandTerm Desktop', click: () => dialog.showMessageBox(win, {
         type: 'info', title: 'About StandTerm Desktop', message: `StandTerm Desktop ${app.getVersion()}`,
         detail: aboutDetails, buttons: ['OK'], noLink: true,
       }) },
       { label: 'Show window', click: showWindow },
+      ...(process.platform === 'darwin' ? [{ role: 'services' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }] : []),
       { label: 'Quit StandTerm', accelerator: 'CommandOrControl+Q', click: () => app.quit() },
     ] },
-    { role: 'editMenu' },
+    { id: 'edit', role: 'editMenu' },
     agentMenu({ origin: handoff.origin, mode, instanceId: handoff.instance_id,
+      uiItems: [commands.item('agentPanel'), commands.item('pauseAgent'), { type: 'separator' }],
       copyText: text => clipboard.writeText(text),
       showHelp: () => dialog.showMessageBox(win, {
         type: 'info', title: 'StandTerm Agent', message: 'Give your agent a StandTerm prompt',
@@ -354,8 +392,10 @@ async function start() {
         buttons: ['OK'], noLink: true,
       }),
     }),
-    capture.menu(),
-    { label: 'View', submenu: [{ role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }] },
+    { id: 'view', label: 'View', submenu: [{ role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' },
+      { type: 'separator' },
+      ...capture.menu().submenu,
+    ] },
     diagnosticsMenu({ origin: handoff.origin, mode, instanceId: handoff.instance_id,
       version: app.getVersion(), coreVersion: handoff.core_version, logger: diagnostics, persistent: !smoke,
       copyText: text => clipboard.writeText(text),
@@ -367,7 +407,7 @@ async function start() {
         if (error) await dialog.showMessageBox(win, { type: 'warning', message: 'Could not open the diagnostics folder.', detail: diagnostics.directory });
       },
       openTools: async () => {
-        const opened = await openDeveloperTools(win.webContents, async () => {
+        const opened = await openDeveloperTools(contents, async () => {
           const answer = await dialog.showMessageBox(win, { type: 'warning', title: 'Developer Tools',
             message: 'Open Developer Tools for this authenticated terminal UI?',
             detail: 'Console code can read page data and operate connected terminals. Only run code you trust. '
@@ -379,7 +419,7 @@ async function start() {
       },
     }),
   ]));
-  const openExternal = createExternalOpener({ origin: handoff.origin, owner: win.webContents,
+  const openExternal = createExternalOpener({ origin: handoff.origin, owner: contents,
     confirm: async url => {
       const answer = await dialog.showMessageBox(win, { type: 'question', title: 'Open in default browser',
         message: `Open ${new URL(url).host} in your default browser?`,
@@ -391,14 +431,14 @@ async function start() {
     notify: () => dialog.showMessageBox(win, { type: 'warning', message: 'Could not open the default browser.',
       detail: 'Check the default HTTP/HTTPS browser in your operating system settings.' }),
   });
-  installFloatingWindows(win, handoff.origin, openExternal);
-  win.webContents.on('will-navigate', (event, url) => {
+  installFloatingWindows(win, handoff.origin, openExternal, contents);
+  contents.on('will-navigate', (event, url) => {
     if (!allowedNavigation(url, handoff.origin)) event.preventDefault();
   });
-  win.webContents.on('will-redirect', (event, url) => {
+  contents.on('will-redirect', (event, url) => {
     if (!allowedNavigation(url, handoff.origin)) event.preventDefault();
   });
-  win.webContents.on('will-attach-webview', event => event.preventDefault());
+  contents.on('will-attach-webview', event => event.preventDefault());
   win.on('close', event => {
     if (capture.active) {
       event.preventDefault();
@@ -421,21 +461,27 @@ async function start() {
   win.on('minimize', () => { if (capture.active) void capture.stop(); });
   win.on('hide', () => { if (capture.active) void capture.stop(); });
   win.on('enter-full-screen', () => { if (capture.active) void capture.stop(); });
-  win.webContents.on('did-start-navigation', (_event, _url, _inPlace, isMainFrame) => {
+  contents.on('did-start-navigation', (_event, _url, _inPlace, isMainFrame) => {
     if (isMainFrame && capture.active) void capture.stop();
   });
-  win.webContents.on('render-process-gone', () => {
+  contents.on('render-process-gone', () => {
     exitCode = 1;
     app.quit();
   });
-  await win.loadURL(`${handoff.origin}/${smoke ? '?debug=1' : ''}`);
+  await win.loadURL(toolbar.url);
+  if (process.platform !== 'darwin') win.setMenuBarVisibility(false);
+  toolbar.layout();
+  await contents.loadURL(`${handoff.origin}/${smoke ? '?debug=1' : ''}`);
   diagnostics.write('window_ready', { port: Number(new URL(handoff.origin).port) });
   booting = false;
   if (smoke) {
-    await require('./smoke.cjs').run(win, handoff.origin);
+    // WebContentsView visibility follows its owner; exercise a real visible UI.
+    showWindow();
+    contents.focus();
+    await require('./smoke.cjs').run(win, handoff.origin, contents, browserAccess);
     if (captureSmoke) {
       showWindow();
-      await require('./test/capture-smoke.cjs').run(win, capture);
+      await require('./test/capture-smoke.cjs').run(win, capture, contents);
     }
     console.log('Desktop smoke: authenticated terminal, sandbox and navigation checks passed.');
     app.quit();
@@ -498,7 +544,7 @@ if (!app.requestSingleInstanceLock()) {
     diagnostics.write('startup_failed', { code: error.code });
     if (error.code === 'SETUP_CANCELED') { app.quit(); return; }
     exitCode = 1;
-    if (smoke) console.error(error.message);
+    if (smoke) console.error(error.stack || error.message);
     else dialog.showErrorBox('StandTerm Desktop could not start', `${error.message}\n\nDiagnostics: ${diagnostics.file}`);
     app.quit();
   });

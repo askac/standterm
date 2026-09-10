@@ -70,6 +70,14 @@ window.recorder = (() => {
       return { chunks: data, error, stopped };
     },
 
+    pause() {
+      if (recorder?.state === 'recording') recorder.pause();
+    },
+
+    resume() {
+      if (recorder?.state === 'paused') recorder.resume();
+    },
+
     async stop() {
       if (recorder && recorder.state !== 'inactive') recorder.stop();
       if (stoppedPromise) await stoppedPromise;

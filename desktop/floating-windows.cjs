@@ -2,28 +2,28 @@
 
 const { allowedFloatingWindow, allowedFilesDownload, allowedNavigation } = require('./policy.cjs');
 
-function installFloatingWindows(opener, origin, openExternal = () => {}) {
+function installFloatingWindows(opener, origin, openExternal = () => {}, contents = opener.webContents) {
   const children = new Set();
   const closing = new WeakSet();
-  const download = (contents, details) => {
-    if (!details.postBody && allowedNavigation(opener.webContents.getURL(), origin)) {
-      if (allowedFilesDownload(details.url, origin)) contents.downloadURL(details.url);
-      else void openExternal(details.url, contents);
+  const download = (target, details) => {
+    if (!details.postBody && allowedNavigation(contents.getURL(), origin)) {
+      if (allowedFilesDownload(details.url, origin)) target.downloadURL(details.url);
+      else void openExternal(details.url, target);
     }
     return { action: 'deny' };
   };
-  opener.webContents.setWindowOpenHandler(details => {
-    if (allowedFilesDownload(details.url, origin)) return download(opener.webContents, details);
-    if (details.url !== 'about:blank') return download(opener.webContents, details);
+  contents.setWindowOpenHandler(details => {
+    if (allowedFilesDownload(details.url, origin)) return download(contents, details);
+    if (details.url !== 'about:blank') return download(contents, details);
     if ([...children].some(child => !closing.has(child))
-        || !allowedFloatingWindow(details, opener.webContents.getURL(), origin)) return { action: 'deny' };
+        || !allowedFloatingWindow(details, contents.getURL(), origin)) return { action: 'deny' };
     // about:blank inherits the opener's sandbox, no-Node/no-preload preferences
     // and private session. Do not create a second privileged renderer bridge.
     return { action: 'allow', outlivesOpener: false,
       overrideBrowserWindowOptions: { autoHideMenuBar: true, alwaysOnTop: true,
         minimizable: false, maximizable: false, fullscreenable: false } };
   });
-  opener.webContents.on('did-create-window', child => {
+  contents.on('did-create-window', child => {
     children.add(child);
     child.removeMenu();
     child.webContents.setWindowOpenHandler(details => download(child.webContents, details));
@@ -42,11 +42,11 @@ function installFloatingWindows(opener, origin, openExternal = () => {}) {
   const closeChildren = () => {
     for (const child of children) if (!child.isDestroyed()) child.close();
   };
-  opener.webContents.on('did-start-navigation', (_event, _url, inPlace, isMainFrame) => {
+  contents.on('did-start-navigation', (_event, _url, inPlace, isMainFrame) => {
     if (isMainFrame && !inPlace) closeChildren();
   });
   opener.once('closed', closeChildren);
-  opener.webContents.once('render-process-gone', closeChildren);
+  contents.once('render-process-gone', closeChildren);
 }
 
 module.exports = { installFloatingWindows };

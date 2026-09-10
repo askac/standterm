@@ -26,6 +26,10 @@ const shellFiles = [
   'browser-session.cjs',
   'diagnostics-window.cjs', 'external-links.cjs',
   'test/external-links-smoke.cjs',
+  'capture-settings.cjs', 'ui-commands.cjs', 'toolbar.cjs', 'toolbar-preload.cjs',
+  'toolbar.html', 'toolbar.js', 'toolbar.css',
+  'test/toolbar-smoke.cjs',
+  'browser-access.cjs',
 ];
 fs.mkdirSync(path.join(__dirname, 'dist'), { recursive: true });
 const stage = fs.mkdtempSync(path.join(__dirname, 'dist', `${platform}-build-`));

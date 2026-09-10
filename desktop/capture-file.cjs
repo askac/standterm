@@ -49,7 +49,7 @@ class CaptureFile {
     if (!this.bytes) throw new Error('No capture frames were recorded.');
     if (this.handle) await this.handle.sync();
     await this.close();
-    // Publish without overwriting a file created after the Save dialog. A hard
+    // Publish without overwriting a file created after capture started. A hard
     // link in the same directory does not copy the recording's data again.
     await fs.link(this.partial, this.destination);
     await fs.unlink(this.partial);

@@ -26,11 +26,12 @@ const PROMPTS = {
     + 'Do not fall back to terminal-stream rescue without a new explicit instruction. ',
 };
 
-function agentMenu({ origin, mode, instanceId, copyText, showHelp }) {
+function agentMenu({ origin, mode, instanceId, copyText, showHelp, uiItems = [] }) {
   const info = agentConnectionInfo({ origin, mode, instanceId });
   const json = JSON.stringify(info, null, 2);
   const prompt = kind => PROMPTS[kind] + BOUNDARY + '\n\n' + json;
   return { id: 'agent-menu', label: 'Agent', submenu: [
+    ...uiItems,
     { id: 'agent-help', label: 'Getting started...', click: showHelp },
     { type: 'separator' },
     { id: 'agent-copy-usage', label: 'Copy usage prompt', click: () => copyText(prompt('usage')) },

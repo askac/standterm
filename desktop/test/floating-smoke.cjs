@@ -3,8 +3,15 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-async function run(win, origin) {
-  const evaluate = script => win.webContents.executeJavaScript(script, true);
+async function run(win, origin, contents = win.webContents) {
+  const evaluate = async script => {
+    let timer;
+    try {
+      return await Promise.race([contents.executeJavaScript(script, true), new Promise((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`Floating script timed out: ${script.slice(0, 180)}`)), 10000);
+      })]);
+    } finally { clearTimeout(timer); }
+  };
   async function until(script) {
     const end = Date.now() + 15000;
     while (Date.now() < end) {
@@ -21,7 +28,7 @@ async function run(win, origin) {
   }
   const created = [];
   const record = child => created.push(child);
-  win.webContents.on('did-create-window', record);
+  contents.on('did-create-window', record);
   try {
     await evaluate('window.__floatingAlerts = []; window.alert = message => window.__floatingAlerts.push(message); void 0');
     const terminalId = await evaluate('window.terminalTest.getTerminalTabsState().activeTerminalId');
@@ -46,7 +53,7 @@ async function run(win, origin) {
     await evaluate('window.open = window.__countedOpen; void 0');
     assert.equal(created.length, 1, 'real PiP must be covered by did-create-window guards');
     const child = created.at(-1);
-    assert.equal(child.webContents.session, win.webContents.session);
+    assert.equal(child.webContents.session, contents.session);
     const prefs = child.webContents.getLastWebPreferences();
     assert.equal(prefs.sandbox, true);
     assert.equal(prefs.contextIsolation, true);
@@ -70,21 +77,28 @@ async function run(win, origin) {
       await child.webContents.executeJavaScript("document.querySelector('[data-entry-name=\"fixture.bin\"]').click()", true);
       await until("!window.terminalTest.getFloatingWindowForTest().document.querySelector('.sftp-file-download').disabled");
       const output = path.join(fixture, 'downloaded.bin');
-      let item;
+      const downloadSession = child.webContents.session;
+      let item, timer, onDownload;
       const completed = new Promise(resolve => {
-        const onDownload = (_event, download) => {
+        onDownload = (_event, download) => {
           item = download;
           download.setSavePath(output);
           download.once('done', (_doneEvent, state) => resolve(state));
         };
-        child.webContents.session.once('will-download', onDownload);
-        setTimeout(() => {
-          child.webContents.session.removeListener('will-download', onDownload);
+        downloadSession.once('will-download', onDownload);
+        timer = setTimeout(() => {
+          downloadSession.removeListener('will-download', onDownload);
           resolve('timeout');
         }, 15000).unref();
       });
-      await child.webContents.executeJavaScript("document.querySelector('.sftp-file-download').click()", true);
-      const result = await completed;
+      let result;
+      try {
+        await child.webContents.executeJavaScript("document.querySelector('.sftp-file-download').click()", true);
+        result = await completed;
+      } finally {
+        clearTimeout(timer);
+        downloadSession.removeListener('will-download', onDownload);
+      }
       console.log(`Floating smoke: download ${result}.`);
       if (result !== 'completed') item?.cancel();
       assert.equal(result, 'completed', 'Files ticket download must complete using the private session');
@@ -92,7 +106,9 @@ async function run(win, origin) {
       assert.equal(created.length, 1, 'Download must not create another window');
     }
     assert.equal(await child.webContents.executeJavaScript("window.open('about:blank') === null"), true);
-    assert.equal(await evaluate("window.open('https://example.com') === null && window.open('about:blank') === null"), true);
+    // External URLs are covered by the consent test above; do not open a real
+    // browser-confirmation dialog outside its scoped dialog/OS-open mocks.
+    assert.equal(await evaluate("window.open('about:blank') === null"), true);
     for (const destination of ['https://example.com/', 'data:text/html,blocked', `${origin}/?forbidden=1`]) {
       const attempts = [];
       const recordNavigation = event => attempts.push(event.defaultPrevented);
@@ -122,10 +138,13 @@ async function run(win, origin) {
     }
     assert.equal(await evaluate('window.__floatingAlerts.length'), 0);
     const beforeReload = created.at(-1);
-    await win.loadURL(`${origin}/?debug=1`);
+    console.log('Floating smoke: reloading Core with an open child.');
+    await contents.loadURL(`${origin}/?debug=1`);
     await until('!!window.terminalTest && window.terminalTest.getSocketState().connected');
+    console.log('Floating smoke: Core reloaded.');
     assert.equal(beforeReload.isDestroyed(), true, 'opener reload must not orphan its child');
     await evaluate("if (window.terminalTest.getTerminalTabsState().tabs.length < 2) document.getElementById('new-tab-btn').click()");
+    console.log('Floating smoke: checking blocked-window fallback.');
     await evaluate(`window.terminalTest.switchTerminalForTest(${JSON.stringify(terminalId)});
       window.__floatingAlerts = []; window.__originalAlert = window.alert;
       window.alert = message => window.__floatingAlerts.push(message);
@@ -136,6 +155,7 @@ async function run(win, origin) {
       await evaluate("document.getElementById('sftp-send-option').click()");
       await until('window.__floatingAlerts.length === 1');
     }
+    console.log('Floating smoke: checking blocked PiP fallback.');
     await evaluate("document.getElementById('pip-option').click()");
     await until(`window.__floatingAlerts.length === ${filesAvailable ? 2 : 1}`);
     assert.equal(await evaluate('window.terminalTest.getTerminalTabsState().tabs.some(tab => tab.inPip)'), false);
@@ -145,7 +165,7 @@ async function run(win, origin) {
     console.error(error.stack);
     throw error;
   } finally {
-    win.webContents.removeListener('did-create-window', record);
+    contents.removeListener('did-create-window', record);
     for (const child of created) if (!child.isDestroyed()) child.destroy();
   }
 }

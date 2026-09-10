@@ -1,0 +1,19 @@
+:root { color-scheme: dark; font: 12px system-ui, sans-serif; }
+body { margin: 0; height: 36px; display: flex; align-items: center; gap: 6px; padding: 0 8px; background: #202020; color: #ddd; box-sizing: border-box; border-bottom: 1px solid #3b3b3b; overflow: hidden; }
+nav, #capture-tools { display: flex; align-items: center; flex-shrink: 0; }
+button { font: inherit; color: inherit; background: transparent; border: 0; border-radius: 4px; height: 28px; padding: 0 8px; cursor: pointer; }
+button:hover { background: #414141; }
+button:focus-visible { outline: 2px solid #5ea8ff; outline-offset: -2px; }
+button:disabled { opacity: .4; cursor: default; }
+[hidden] { display: none !important; }
+#notice-area { flex: 1; min-width: 26px; height: 26px; box-sizing: border-box; display: flex; align-items: center; gap: 6px; padding: 0 7px; border: 1px solid #45617b; border-radius: 4px; background: #283a4a; color: #d6eaff; opacity: 0; visibility: hidden; transition: opacity 350ms ease, visibility 0s linear 350ms; }
+#notice-area.visible { opacity: 1; visibility: visible; transition-delay: 0s; }
+#notice-area.error { border-color: #995453; background: #4b2c2d; color: #ffd9d6; }
+#notice { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#notice-indicator { flex-shrink: 0; font-weight: bold; }
+#recording-status { white-space: nowrap; color: #ff9393; }
+#capture-tools { border-left: 1px solid #555; padding-left: 6px; margin-left: auto; }
+svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; vertical-align: middle; }
+#record svg, #stop svg { fill: #ed6666; stroke: #ed6666; }
+@media (max-width: 750px) { button { padding: 0 5px; } }
+@media (prefers-reduced-motion: reduce) { #notice-area { transition: none; } }

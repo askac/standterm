@@ -1,10 +1,12 @@
 'use strict';
 
-const { app, BrowserWindow, Menu, clipboard, ClipboardItem, dialog, session } = require('electron');
+const { app, BrowserWindow, Menu, clipboard, ClipboardItem, dialog, session, shell } = require('electron');
+const fs = require('node:fs/promises');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { randomUUID } = require('node:crypto');
 const { CaptureFile, MAX_CHUNK_BYTES } = require('./capture-file.cjs');
+const { CaptureSettings, captureName } = require('./capture-settings.cjs');
 
 const RECORDER_URL = pathToFileURL(path.join(__dirname, 'recorder.html')).href;
 const RECORDER_SCRIPT_URL = pathToFileURL(path.join(__dirname, 'recorder.js')).href;
@@ -20,15 +22,19 @@ async function bounded(promise) {
 }
 
 class DesktopCapture {
-  constructor(win, { onChange = () => {}, notify = null } = {}) {
+  constructor(win, { contents = win.webContents, onChange = () => {}, onDiagnostic = () => {}, notify = null } = {}) {
     this.win = win;
+    this.contents = contents;
     this.onChange = onChange;
+    this.onDiagnostic = onDiagnostic;
     this.notify = notify || ((message, error = false) => dialog.showMessageBox(win, {
       type: error ? 'error' : 'info', title: 'StandTerm Capture', message,
     }));
     this.state = 'idle';
     this.job = null;
     this.directory = app.getPath('downloads');
+    this.settings = new CaptureSettings(path.join(app.getPath('userData'), 'capture-settings.json'));
+    this.folderSelection = null;
     this.screenshotBusy = false;
     // Reuse one private partition; Electron retains sessions for the app lifetime.
     this.recorderPartition = `standterm-recorder-${randomUUID()}`;
@@ -38,25 +44,27 @@ class DesktopCapture {
 
   update() {
     const menu = Menu.getApplicationMenu();
-    const elapsed = this.job?.startedAt ? Math.floor((Date.now() - this.job.startedAt) / 1000) : 0;
+    const elapsed = this.job?.startedAt ? Math.floor(((this.job.pausedAt || Date.now()) - this.job.startedAt - (this.job.pausedMs || 0)) / 1000) : 0;
     const clock = `${Math.floor(elapsed / 60).toString().padStart(2, '0')}:${(elapsed % 60).toString().padStart(2, '0')}`;
-    const label = this.state === 'recording' ? `Recording ${clock}`
+    const label = this.state === 'paused' ? `Recording paused ${clock}` : this.state === 'recording' ? `Recording ${clock}`
       : this.state === 'idle' ? 'Not recording' : `${this.state === 'starting' ? 'Starting' : 'Saving'} recording...`;
     const status = menu?.getMenuItemById('capture-status');
     if (status) status.label = label;
     const start = menu?.getMenuItemById('capture-start');
     if (start) start.enabled = !this.active;
     const stop = menu?.getMenuItemById('capture-stop');
-    if (stop) stop.enabled = this.state === 'recording';
-    this.onChange(this.active ? `REC ${clock}` : '');
+    if (stop) stop.enabled = ['recording', 'paused'].includes(this.state);
+    this.onChange(this.active ? `${this.state === 'paused' ? 'PAUSED' : 'REC'} ${clock}` : '', {
+      state: this.state, label, screenshotBusy: this.screenshotBusy,
+    });
   }
 
   menu() {
     return { label: 'Capture', submenu: [
       { label: 'Copy screenshot', accelerator: 'CommandOrControl+Alt+S', click: () => this.screenshot('clipboard') },
-      { label: 'Save screenshot as PNG...', click: () => this.screenshot('file') },
+      { label: 'Save screenshot (PNG)', click: () => this.screenshot('file') },
       { type: 'separator' },
-      { id: 'capture-start', label: 'Start recording (WebM)...', click: () => this.start() },
+      { id: 'capture-start', label: 'Start recording (WebM)', click: () => this.start() },
       { id: 'capture-stop', label: 'Stop and save recording', accelerator: 'CommandOrControl+Alt+R',
         enabled: false, click: () => this.stop() },
       { id: 'capture-status', label: 'Not recording', enabled: false },
@@ -64,32 +72,79 @@ class DesktopCapture {
   }
 
   async chooseFile(extension) {
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const result = await dialog.showSaveDialog(this.win, {
-      title: extension === 'png' ? 'Save StandTerm screenshot' : 'Save silent StandTerm recording',
-      message: 'Choose a new filename. Existing files are not replaced.',
-      defaultPath: path.join(this.directory, `StandTerm-${stamp}.${extension}`),
-      filters: [{ name: extension.toUpperCase(), extensions: [extension] }],
-      buttonLabel: extension === 'png' ? 'Save screenshot' : 'Start recording',
-    });
-    if (result.canceled || !result.filePath) return null;
-    const destination = result.filePath.toLowerCase().endsWith(`.${extension}`)
-      ? result.filePath : `${result.filePath}.${extension}`;
-    this.directory = path.dirname(destination);
-    return destination;
+    let directory = this.settings.get(extension);
+    if (directory) {
+      try {
+        if (!(await fs.stat(directory)).isDirectory()) throw new Error('Not a folder.');
+        await fs.access(directory, fs.constants.W_OK);
+      } catch {
+        await this.notify('The saved capture folder is unavailable. Choose a writable folder again.', true);
+        directory = null;
+      }
+    }
+    if (!directory) directory = await this.chooseDirectory(extension);
+    return directory ? path.join(directory, captureName(extension)) : null;
+  }
+
+  async chooseDirectory(extension) {
+    if (this.folderSelection) { await this.folderSelection; return this.settings.get(extension); }
+    this.folderSelection = (async () => {
+      const result = await dialog.showOpenDialog(this.win, {
+        title: extension === 'png' ? 'Choose screenshot folder' : 'Choose recording folder',
+        message: 'Future captures save here automatically. Change this in StandTerm > Capture Settings.',
+        defaultPath: this.settings.get(extension) || this.directory,
+        properties: ['openDirectory', 'createDirectory'], buttonLabel: 'Use this folder',
+      });
+      if (result.canceled || !result.filePaths?.[0]) return null;
+      const directory = result.filePaths[0];
+      if (!(await fs.stat(directory)).isDirectory()) throw new Error('Choose a folder.');
+      await fs.access(directory, fs.constants.W_OK);
+      this.settings.set(extension, directory);
+      return directory;
+    })();
+    try { return await this.folderSelection; } finally { this.folderSelection = null; }
+  }
+
+  async configure() {
+    try {
+      const { response } = await dialog.showMessageBox(this.win, {
+        title: 'Capture Settings', message: 'Desktop capture folders',
+        detail: `Screenshots: ${this.settings.get('png') || 'Choose on first save'}\nRecordings: ${this.settings.get('webm') || 'Choose on first recording'}\n\nPNG screenshots and silent WebM recordings are saved automatically.`,
+        buttons: ['Done', 'Screenshot folder...', 'Recording folder...', 'Open screenshot folder', 'Open recording folder'],
+        defaultId: 0, cancelId: 0, noLink: true,
+      });
+      if (response === 1 || response === 2) await this.chooseDirectory(response === 1 ? 'png' : 'webm');
+      if (response === 3 || response === 4) {
+        const directory = this.settings.get(response === 3 ? 'png' : 'webm');
+        if (!directory) return;
+        const error = await shell.openPath(directory);
+        if (error) throw new Error('Could not open the capture folder.');
+      }
+    } catch (error) { await this.notify(error.message, true); }
   }
 
   async screenshot(kind, destination = null) {
     if (this.screenshotBusy) return;
     this.screenshotBusy = true;
+    this.update();
     let output;
     try {
       if (this.win.isDestroyed() || !this.win.isVisible() || this.win.isMinimized()) {
         throw new Error('Show the StandTerm window before capturing it.');
       }
       // Capture before opening a dialog so the saved image is the requested view.
-      const image = await this.win.webContents.capturePage();
-      if (image.isEmpty()) throw new Error('The window did not produce an image.');
+      let image;
+      try {
+        image = await bounded(this.contents.capturePage());
+        if (image.isEmpty()) throw new Error('Empty capture.');
+      } catch (error) {
+        if (!this.win.isDestroyed()) {
+          const [width, height] = this.win.getContentSize();
+          this.onDiagnostic({ width, height, visible: this.win.isVisible(),
+            minimized: this.win.isMinimized(), focused: this.win.isFocused() });
+        }
+        throw new Error('The terminal view could not be captured. Bring StandTerm to the foreground and retry. Window state is available in Diagnostics.', { cause: error });
+      }
       const png = image.toPNG();
       if (kind === 'clipboard') {
         await clipboard.write([new ClipboardItem({ 'image/png': new Blob([png], { type: 'image/png' }) })]);
@@ -109,7 +164,7 @@ class DesktopCapture {
       await output?.close().catch(() => {});
       await this.notify(`${error.message}${output?.partial ? `\nUnfinished file retained at:\n${output.partial}` : ''}`, true);
       return { error: true };
-    } finally { this.screenshotBusy = false; }
+    } finally { this.screenshotBusy = false; this.update(); }
   }
 
   start(destination = null) {
@@ -154,7 +209,7 @@ class DesktopCapture {
           && request.frame?.url === RECORDER_URL && !this.win.isDestroyed();
         if (!allowed) { callback({}); return; }
         job.grantPending = false;
-        callback({ video: this.win.webContents.mainFrame });
+        callback({ video: this.contents.mainFrame });
       });
       isolated.webRequest.onBeforeRequest((details, callback) => callback({
         cancel: ![RECORDER_URL, RECORDER_SCRIPT_URL].includes(details.url),
@@ -168,7 +223,7 @@ class DesktopCapture {
       job.recorder.webContents.on('will-attach-webview', event => event.preventDefault());
       job.recorder.webContents.on('render-process-gone', () => {
         job.error = new Error('The recording process stopped unexpectedly.');
-        if (this.state === 'recording') void this.stop();
+        if (['recording', 'paused'].includes(this.state)) void this.stop();
       });
       await bounded(job.recorder.loadURL(RECORDER_URL));
       job.grantPending = true;
@@ -198,11 +253,11 @@ class DesktopCapture {
       await job.output.write(new Uint8Array(chunk));
     }
     if (data.error) throw new Error(`Recording stopped: ${data.error}`);
-    if (data.stopped && this.state === 'recording') throw new Error('The recording stream ended.');
+    if (data.stopped && ['recording', 'paused'].includes(this.state)) throw new Error('The recording stream ended.');
   }
 
   async pump(job) {
-    if (this.job !== job || this.state !== 'recording' || job.pumping) return;
+    if (this.job !== job || !['recording', 'paused'].includes(this.state) || job.pumping) return;
     job.pumping = this.drain(job);
     try { await job.pumping; } catch (error) {
       job.error = error;
@@ -232,6 +287,22 @@ class DesktopCapture {
       }
     })();
     try { return await this.stopping; } finally { this.stopping = null; }
+  }
+
+  async togglePause() {
+    const job = this.job;
+    if (!job || this.pausePending || !['recording', 'paused'].includes(this.state)) return;
+    const pause = this.state === 'recording';
+    this.pausePending = true;
+    try {
+      await bounded(job.recorder.webContents.executeJavaScript(`window.recorder.${pause ? 'pause' : 'resume'}()`));
+      if (this.job !== job || !['recording', 'paused'].includes(this.state)) return;
+      if (pause) job.pausedAt = Date.now();
+      else { job.pausedMs = (job.pausedMs || 0) + Date.now() - job.pausedAt; job.pausedAt = null; }
+      this.state = pause ? 'paused' : 'recording';
+      this.update();
+    } catch (error) { job.error = error; if (this.job === job) await this.stop(); }
+    finally { this.pausePending = false; }
   }
 
   async finish(job, publish) {

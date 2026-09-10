@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>StandTerm Desktop</title>
+  <link rel="stylesheet" href="toolbar.css">
+</head>
+<body>
+  <nav id="menus" aria-label="Application menu">
+    <button data-menu="standterm">StandTerm</button><button data-menu="edit">Edit</button><button data-menu="agent-menu">Agent</button><button data-menu="view">View</button><button data-menu="diagnostics">Diagnostics</button>
+  </nav>
+  <span id="mac-title" hidden>StandTerm Desktop</span>
+  <span id="notice-area" role="status" aria-live="polite" aria-atomic="true">
+    <span id="notice-indicator" aria-hidden="true"></span>
+    <span id="notice"></span>
+  </span>
+  <span id="recording-status" role="status"></span>
+  <div id="capture-tools" role="toolbar" aria-label="Capture the StandTerm terminal view">
+    <!-- Original StandTerm geometric SVG artwork; no third-party icon paths. -->
+    <button id="save" data-action="screenshot-file" title="Save screenshot (PNG)" aria-label="Save screenshot (PNG)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4H3v15h9M3 14l4-4 5 5 2-2M18 9v12m-4-4 4 4 4-4"/><circle cx="11" cy="8" r="1"/></svg></button>
+    <button id="copy" data-action="screenshot-clipboard" title="Copy screenshot to clipboard" aria-label="Copy screenshot to clipboard"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5H3v14h7M3 14l4-4 3 3M14 7h-3v15h11V7h-3"/><rect x="14" y="5" width="5" height="4" rx="1"/></svg></button>
+    <button id="record" data-action="record" title="Start silent recording (WebM)" aria-label="Start silent recording (WebM)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/></svg></button>
+    <button id="pause" data-action="pause-recording" title="Pause recording" aria-label="Pause recording" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path id="pause-shape" d="M8 5v14M16 5v14"/></svg></button>
+    <button id="stop" data-action="stop-recording" title="Stop and save recording" aria-label="Stop and save recording" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="1"/></svg></button>
+  </div>
+  <script src="toolbar.js"></script>
+</body>
+</html>

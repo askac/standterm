@@ -7,8 +7,8 @@ module.exports = {
   // Keep development app copies out of macOS Spotlight application results.
   directories: { output: process.platform === 'darwin' ? 'out.noindex' : 'out', buildResources: '.' },
   asar: true,
-  files: ['*.cjs', '*.html', 'recorder.js', 'package.json', 'README.md', 'LICENSE',
-    'test/capture-smoke.cjs', 'test/floating-smoke.cjs', 'test/external-links-smoke.cjs', '!electron-builder.cjs', '!stage-windows.cjs', '!build-icon.cjs'],
+  files: ['*.cjs', '*.html', 'recorder.js', 'toolbar.js', 'toolbar.css', 'package.json', 'README.md', 'LICENSE',
+    'test/capture-smoke.cjs', 'test/floating-smoke.cjs', 'test/external-links-smoke.cjs', 'test/toolbar-smoke.cjs', '!electron-builder.cjs', '!stage-windows.cjs', '!build-icon.cjs'],
   extraResources: [{ from: 'bundle', to: 'bundle' }],
   mac: {
     icon: 'standterm.icns',

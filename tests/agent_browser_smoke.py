@@ -564,6 +564,40 @@ def attach_agent(page):
     return wait_for_agent(page, "state.mode === 'observe'")
 
 
+def test_toolbar_pause_targets_main_tab_not_panel_override(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        attach_agent(page)
+        set_agent_mode(page, 'direct', 'direct_active')
+        page.click('#new-tab-btn')
+        other_id = page.evaluate('() => window.terminalTest.getTerminalTabsState().activeTerminalId')
+        page.click('#connectBtn')
+        page.wait_for_function('() => window.terminalTest.getActiveAgentState()?.connected === true')
+        emit_socket(page, 'agent_attach', {'terminal_id': other_id})
+        page.wait_for_function("() => window.terminalTest.getActiveAgentState()?.mode === 'observe'")
+        page.evaluate('id => window.terminalTest.switchTerminalForTest(id)', TERMINAL_ID)
+        page.evaluate('id => window.terminalTest.setAgentPanelTargetForTest(id)', other_id)
+        page.set_viewport_size({'width': 640, 'height': 600})
+        for selector in ['#new-tab-btn', '#agent-pause-btn', '#agent-toggle-btn', '#quick-settings']:
+            bounds = page.locator(selector).bounding_box()
+            check(bounds is not None and bounds['x'] >= 0 and bounds['x'] + bounds['width'] <= 640,
+                  f'{selector} is clipped in the compact toolbar')
+        page.evaluate('() => window.terminalTest.clearEmitted()')
+        page.click('#agent-pause-btn')
+        wait_for_agent(page, "state.mode === 'paused'")
+        events = page.evaluate('() => window.terminalTest.getEmitted()')
+        paused = [event['args'][0]['terminal_id'] for event in events if event['event'] == 'agent_pause']
+        check(paused == [TERMINAL_ID], 'main-toolbar Pause targeted the overridden Agent Panel')
+        check(page.evaluate('id => window.terminalTest.getAgentStateForTest(id).mode', other_id) == 'observe',
+              'main-toolbar Pause changed the other terminal')
+        page.click('#agent-toggle-btn')
+        tabs = page.evaluate('() => window.terminalTest.getTerminalTabsState()')
+        check(tabs['agentPanelTerminalId'] == TERMINAL_ID, 'main Agent button retained the panel override')
+        check(page.locator('#agent-panel').is_visible(), 'main Agent button hid the overridden panel instead of opening the main panel')
+    finally:
+        close_context(context)
+
+
 def test_agent_panel_can_be_dragged(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
@@ -4163,6 +4197,7 @@ def main():
         test_invalid_session_reconnect_prompts_for_current_token,
         test_platform_passkey_recovers_live_session_without_access_token,
         test_agent_panel_can_be_dragged,
+        test_toolbar_pause_targets_main_tab_not_panel_override,
         test_terminal_pip_hides_selected_tab_and_keeps_background_tab,
         test_sftp_status_actions_and_terminal_pip_transition,
         test_sftp_send_context_action_is_limited_to_connected_ssh_tabs,

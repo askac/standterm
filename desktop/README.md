@@ -344,11 +344,13 @@ layout is shared with Core Web and does not change approval policy or payloads.
 
 ## Capture (desktop-only add-on)
 
-Use the native **Capture** menu:
+Use the direct capture buttons in the Desktop toolbar. Capture shortcuts are
+also available under **View**; there is no separate Capture dropdown:
 
 - **Copy screenshot** (Ctrl/Cmd+Alt+S): PNG to the OS clipboard.
-- **Save screenshot as PNG...**: choose a new file with the native Save dialog.
-- **Start recording (WebM)...**: choose a new file before recording starts.
+- **Save screenshot (PNG)**: save directly to the configured screenshot folder.
+- **Start recording (WebM)**: record directly to the configured recording folder.
+- **Pause / resume recording**: suspend capture without finishing the file.
 - **Stop and save recording** (Ctrl/Cmd+Alt+R): finalize the silent WebM.
 
 Capture includes the visible StandTerm page, including any open in-page panels
@@ -357,7 +359,8 @@ native dialogs, detached PiP windows, off-screen scrollback, microphone or syste
 audio. Review visible secrets before sharing a capture. Switching StandTerm tabs
 while recording records the newly visible tab as well.
 
-The native title shows `[REC mm:ss]` and the menu shows recording status. Closing
+The native title and Desktop toolbar show recording status and elapsed active
+recording time. The stop button remains available while paused. Closing
 or quitting asks whether to keep recording or stop and save. Hiding, minimizing,
 reloading or entering fullscreen stops and saves automatically, because hidden
 pages can stop producing frames or hide the indicator. Leave fullscreen before
@@ -380,16 +383,82 @@ If publication fails, the error reports the retained partial file. Unix files
 are created with mode `0600`; Windows access follows the destination directory's
 ACL. Screenshot files use the same no-overwrite publication policy.
 
-The save directory starts at the desktop OS Downloads directory and remembers
-the last selection for this app run only. With Windows Electron + WSL Core,
+The first save uses a native folder chooser, initially suggesting Downloads.
+Canceling does not save a file or start a recording. The chosen folder is shared
+by PNG and WebM until customized in **StandTerm > Capture Settings...**. Folder
+preferences persist in `capture-settings.json` in Desktop's user-data directory,
+independent of backend origins/ports; settings contain paths only, no credentials.
+Captures use timestamped, randomized filenames. An unavailable folder prompts for
+a replacement rather than silently changing destinations. With Windows Electron + WSL Core,
 captures and clipboard belong to **Windows**, not the WSL filesystem/clipboard.
-Format, save dialogs and clipboard behavior stay entirely in `desktop/`; Core,
+Format, folder dialogs and clipboard behavior stay entirely in `desktop/`; Core,
 browser UI and external agents gain no capture API or filesystem authority.
 
 Video runs in a separate app-owned, sandboxed local recorder page with no backend
 cookies, Node access, preload or IPC bridge. A one-use main-process grant selects
 only the existing StandTerm main frame; it never enumerates desktop windows or
 grants camera/microphone access. The terminal page cannot initiate capture.
+
+## Desktop menus and shared terminal toolbar
+
+Core and Web use the same persistent tab row: adjacent New Tab, an independently
+reachable Pause Agent button, and right-aligned Agent Panel, Files, Settings and
+More actions. Close all terminal tabs retains confirmation; the last terminal's
+individual close button is hidden. Main-toolbar Pause always targets the main
+active terminal; Panel and PiP Pause target their own terminal.
+
+Desktop adds Settings, tab actions, Files and Agent controls to native menus.
+Terminal-scoped commands require the main window to be focused and recheck Core's
+typed action availability and terminal ID at invocation. Core reloads and older
+Core versions without the action interface disable those commands. Query-string
+flags never grant native capabilities.
+
+**StandTerm > Browser Access** offers Open in browser, Copy browser authorization
+URL, Copy access URL and Copy access token. Token/URL copies are sensitive and
+requested on demand from the authenticated Core session, never copied from its
+session cookie. Authorizing another browser requires confirmation and the existing
+launcher-authorized endpoint; the launcher credential stays only in the main
+process. The link contains an access token as well as a one-time authorization
+grant, so the entire URL must not be described as short-lived. These actions do
+not relax the separate external-link opener's loopback restrictions. Diagnostics
+and Agent connection info remain credential-free.
+
+The Desktop toolbar is a bundled local page, separate from the authenticated Core
+WebContentsView. Only the toolbar has a narrowly scoped preload; its private
+session has no backend cookies, no network access, and no camera/microphone grants.
+IPC validates the exact sender and main frame, and accepts only fixed menu/capture
+actions. Core and floating windows remain sandboxed with no Node or preload.
+Windows/Linux show menu buttons beside capture controls; macOS retains its system
+application menu and shows capture controls in the window's Desktop toolbar.
+
+Toolbar SVG artwork is original StandTerm geometric artwork under the project
+license. No third-party icon paths, icon package, web font or remote image is used.
+Transient toolbar messages use a blue-gray bordered status area, distinct from
+menu buttons. Normal notices fade after five seconds; red error notices remain
+for ten seconds. The reserved space prevents controls from shifting. Long text
+is truncated with the full message available on hover, and reduced-motion
+preferences disable the fade animation. Recording updates do not replay old
+messages. This shared renderer behavior leaves the macOS system menu unchanged.
+
+The toolbar change is a local evaluation snapshot, not the published 0.4.3 release. Source validation
+covers Windows Electron with both native Windows and WSL Core, native menu target guards, browser access,
+compact layout, PNG/clipboard and decodable silent WebM with pause/resume. The Core
+browser suite includes a regression for main-toolbar Pause with a different Agent
+Panel target. WSLg floating/capture checks run, but its window manager can refuse
+automated main-window activation; the focus-sensitive smoke remains unqualified
+there rather than bypassing the guard. Native macOS toolbar placement, Retina
+rendering, menu focus and folder dialogs still require a Mac acceptance run.
+The final Windows and Windows-with-WSL source runs passed screenshot and video
+checks, as did the packaged Windows-with-WSL run. The native Windows packaged smoke
+still intermittently fails its Core preview with Chromium `UnknownVizError`; its
+native cause is not established and this remains an evaluation limitation.
+Separately, the WSL test's stale download timer and unintended native browser
+prompt were corrected; those test dialogs could interrupt subsequent checks.
+Screenshot requests now have a bounded timeout and record only window
+dimensions and visibility/focus flags on failure, never image or terminal content.
+Recording elapsed time is shown in the toolbar; it freezes while paused and
+excludes paused intervals after resuming. Both the timer logic and real toolbar
+display are covered by tests.
 
 ## Agent prompts and bundled Core
 
@@ -490,11 +559,14 @@ profile may write a cookie to disk during a run, so this is not a promise that
 credentials never touch disk. HTTP cache is disabled. The desktop bootstrap
 does not pass authentication secrets through
 URLs, arguments, environment variables or renderer JavaScript. The existing
-user-requested **Show/Copy Access URL** action remains available. Other clients still need normal
+user-requested **Show/Copy Access URL** action remains available. Explicit native
+**Browser Access** actions can copy sensitive access information or open an
+authorization URL in the OS browser after confirmation; this is separate from
+the credential-free Desktop startup URL. Other clients still need normal
 StandTerm authentication. External-agent discovery files retain their existing
 permission model and are separate from desktop-login credentials.
 
-The UI has Node integration disabled, context isolation, renderer sandboxing
+The authenticated Core UI has Node integration disabled, context isolation, renderer sandboxing
 and web security enabled, and no preload or IPC bridge. Network requests are
 limited to the owned loopback HTTP/WebSocket origin and local data/blob images.
 Other navigation, arbitrary page-created child windows, webviews and device permissions are denied.

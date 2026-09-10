@@ -15,9 +15,18 @@
         }
         :root { --status-bar-height: 26px; --tab-bar-height: 34px; }
         body { margin: 0; background: #000; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-        #terminal-tabs { position: absolute; top: 0; left: 0; right: 0; height: var(--tab-bar-height); box-sizing: border-box; background: #151515; border-bottom: 1px solid #2a2a2a; display: none; align-items: center; gap: 4px; padding: 4px 8px; z-index: 40; overflow: hidden; }
+        #terminal-tabs { position: absolute; top: 0; left: 0; right: 0; height: var(--tab-bar-height); box-sizing: border-box; background: #151515; border-bottom: 1px solid #2a2a2a; display: none; align-items: center; gap: 6px; padding: 4px 8px; z-index: 40; }
         body.has-terminal-tabs #terminal-tabs { display: flex; }
-        #tabs-list { display: flex; align-items: center; gap: 4px; min-width: 0; overflow-x: auto; overflow-y: hidden; flex: 1; height: 100%; }
+        #tab-strip { display: flex; min-width: 0; flex: 0 1 auto; align-items: center; gap: 4px; height: 100%; }
+        #tabs-list { display: flex; align-items: center; gap: 4px; min-width: 0; overflow-x: auto; overflow-y: hidden; height: 100%; }
+        #tabs-list .terminal-tab { flex-shrink: 0; }
+        #terminal-tools { display: flex; align-items: center; gap: 4px; margin-left: auto; flex-shrink: 0; }
+        #tab-more { position: relative; }
+        #tab-more > summary { display: flex; align-items: center; list-style: none; }
+        #tab-more > summary::-webkit-details-marker { display: none; }
+        #tab-more-actions { position: absolute; right: 0; top: 29px; padding: 8px; background: #202020; border: 1px solid #444; border-radius: 5px; white-space: nowrap; }
+        #terminal-tabs button:focus-visible, #tab-more > summary:focus-visible { outline: 2px solid #0a84ff; outline-offset: 1px; }
+        .tab-close[hidden] { display: none; }
         .terminal-tab { height: 25px; min-width: 120px; max-width: 220px; display: flex; align-items: center; gap: 6px; border: 1px solid #333; background: #202020; color: #aaa; border-radius: 5px; padding: 0 4px 0 10px; cursor: pointer; user-select: none; font-size: 12px; box-sizing: border-box; }
         .terminal-tab.active { color: #fff; background: #2c2c2e; border-color: #0a84ff; }
         .terminal-tab.connected .tab-state { background: #34c759; }
@@ -38,13 +47,13 @@
         .status-sftp.unavailable:disabled { opacity: 1; }
         .sftp-icon-muted { filter: grayscale(1); opacity: 0.45; }
         .sftp-unavailable-mark { color: #ff453a; font-weight: 800; margin-left: 1px; }
-        #agent-pause-btn { display: none; margin-left: auto; border-color: #7a1f1f; background: #3a1212; color: #ff6b6b; font-weight: bold; }
+        #agent-pause-btn { display: none; flex-shrink: 0; border-color: #7a1f1f; background: #3a1212; color: #ff6b6b; font-weight: bold; }
         #agent-pause-btn:hover { border-color: #ff453a; background: #4a1616; color: #fff; }
         #agent-pause-btn.visible { display: inline-flex; align-items: center; justify-content: center; }
         #agent-toggle-btn.shifted { margin-left: 0; }
         .agent-status-mint { display: none; }
         .agent-status-mint.visible { display: inline-flex; align-items: center; justify-content: center; }
-        #new-tab-btn { margin-left: auto; }
+        #new-tab-btn { width: 26px; padding: 0; font-size: 20px; }
         body.operator-observing #status-bar { background: #5a1010; border-top-color: #ff453a; color: #fff; }
         #terminal { position: absolute; top: 0; left: 0; right: 0; height: calc(100vh - var(--status-bar-height)); width: 100vw; background: #000; z-index: 1; display: none; }
         body.has-terminal-tabs #terminal { top: var(--tab-bar-height); height: calc(100vh - var(--status-bar-height) - var(--tab-bar-height)); }
@@ -1109,7 +1118,20 @@
     </div>
     
     <div id="terminal-tabs">
-        <div id="tabs-list"></div>
+        <div id="tab-strip">
+            <div id="tabs-list"></div>
+            <button id="new-tab-btn" class="status-action" type="button" title="New terminal tab" aria-label="New terminal tab">+</button>
+        </div>
+        <button id="agent-pause-btn" class="status-action" type="button" title="Pause Agent terminal input">Pause Agent</button>
+        <div id="terminal-tools">
+            <button id="agent-toggle-btn" class="status-action" type="button" title="Show Agent panel">Show Agent Panel</button>
+            <button id="sftp-status-btn" class="status-action status-sftp" type="button" title="Open Files" aria-label="Open Files" hidden>&#x1F4C1;</button>
+            <button id="quick-settings" class="status-action" type="button" title="Settings" aria-label="Settings">&#x2699;&#xFE0F;</button>
+            <details id="tab-more">
+                <summary class="status-action" title="More terminal actions" aria-label="More terminal actions">&#x22EF;</summary>
+                <div id="tab-more-actions"><button id="close-tabs-btn" class="status-action" type="button">Close all terminal tabs&hellip;</button></div>
+            </details>
+        </div>
     </div>
     <div id="terminal"></div>
     <div id="status-bar">
@@ -1123,14 +1145,8 @@
         <span class="sb-sep">|</span>
         <span class="sb-item" id="clock-display"></span>
         <span id="uptime-section" class="sb-item" style="display:none"><span class="sb-sep">|</span>connected:&nbsp;<span id="uptime-display"></span></span>
-        <button id="agent-pause-btn" class="status-action" title="Pause Agent terminal input">PAUSE</button>
-        <button id="agent-toggle-btn" class="status-action" title="Show Agent panel">Show Agent Panel</button>
         <button id="agent-status-mint-btn" class="status-action agent-status-mint" title="Mint a standard external-agent token for the active terminal">Mint Agent</button>
         <button id="agent-status-mint-3x-btn" class="status-action agent-status-mint" title="Mint a 3x idle-time external-agent token for the active terminal">Mint Agent 3&times;</button>
-        <button id="new-tab-btn" class="status-action" title="New terminal tab">Add tab</button>
-        <button id="close-tabs-btn" class="status-action" title="Close all terminal tabs">Close tabs</button>
-        <button id="sftp-status-btn" class="status-action status-sftp" type="button" title="Open Files" aria-label="Open Files" hidden>&#x1F4C1;</button>
-        <div id="quick-settings" title="Settings">&#x2699;&#xFE0F;</div>
     </div>
     <div id="policy-debug-panel"></div>
     <div id="debug-hud"></div>
@@ -2529,6 +2545,8 @@
                 agentPauseBtn.classList.toggle('visible', visible);
                 agentToggleBtn.classList.toggle('shifted', visible);
                 agentPauseBtn.disabled = !(visible && socket && socket.connected && state && state.connected);
+                agentPauseBtn.title = state ? `Pause Agent input for ${getTerminalDisplayLabel(state)} (${state.id})` : 'Pause Agent input';
+                agentPauseBtn.setAttribute('aria-label', agentPauseBtn.title);
                 updatePipStatus(pipTerminalState);
             }
 
@@ -3045,9 +3063,10 @@
                     agentPanelTerminalIdOverride = null;
                 }
                 agentPanel.classList.toggle('visible', usable && agentPanelVisible);
-                agentToggleBtn.disabled = !usable;
-                agentToggleBtn.innerText = agentPanelVisible ? 'Hide Agent Panel' : 'Show Agent Panel';
-                agentToggleBtn.title = agentPanelVisible ? 'Hide Agent panel' : 'Show Agent panel';
+                const mainPanelVisible = agentPanelVisible && !agentPanelTerminalIdOverride;
+                agentToggleBtn.disabled = !canUseAgentPanel(getActiveTerminalState());
+                agentToggleBtn.innerText = mainPanelVisible ? 'Hide Agent Panel' : 'Show Agent Panel';
+                agentToggleBtn.title = mainPanelVisible ? 'Hide Agent panel' : 'Show Agent panel';
                 const agent = state ? state.agent : null;
                 const mode = agent ? agent.mode : AGENT_MODE_DISABLED;
                 const pending = agent ? agent.pendingActions : 0;
@@ -5264,7 +5283,10 @@
             }
 
             function updateTabBarVisibility() {
-                document.body.classList.toggle('has-terminal-tabs', getVisibleTerminalStates().length > 1);
+                document.body.classList.toggle('has-terminal-tabs', terminals.size > 0);
+                terminals.forEach(state => {
+                    state.tabEl.querySelector('.tab-close').hidden = terminals.size <= 1;
+                });
             }
 
             function updateTerminalActions() {
@@ -5340,6 +5362,7 @@
                 if (previousState) previousState.container.classList.remove('active');
                 activeTerminalId = terminalId;
                 nextState.container.classList.add('active');
+                nextState.tabEl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
                 hideActionPrompt();
                 hideError();
                 updateActiveTerminalUi();
@@ -7036,7 +7059,7 @@
             }
 
             agentPauseBtn.onclick = () => {
-                pauseAgentForState(getAgentPanelTerminalState());
+                pauseAgentForState(getActiveTerminalState());
             };
             agentAccessToggleBtn.onclick = () => {
                 const state = getAgentPanelTerminalState();
@@ -7219,7 +7242,7 @@
                 socket.emit('agent_action_reject', buildAgentActionDecisionPayload(state, action));
             };
             agentActionPauseBtn.onclick = () => {
-                agentPauseBtn.click();
+                pauseAgentForState(getAgentPanelTerminalState());
             };
             agentPanelCloseBtn.addEventListener('pointerdown', event => {
                 event.stopPropagation();
@@ -7238,13 +7261,15 @@
                 updateAgentPanel();
                 updatePipStatus(pipTerminalState);
             };
-            agentToggleBtn.onclick = () => {
+            function toggleMainAgentPanel() {
                 if (!canUseAgentPanel(getActiveTerminalState())) return;
+                const wasMainPanelVisible = agentPanelVisible && !agentPanelTerminalIdOverride;
                 agentPanelTerminalIdOverride = null;
                 restoreAgentPanelToMainDocument();
-                agentPanelVisible = !agentPanelVisible;
+                agentPanelVisible = !wasMainPanelVisible;
                 updateAgentPanel();
-            };
+            }
+            agentToggleBtn.onclick = toggleMainAgentPanel;
             operatorObservationStartBtn.onclick = () => {
                 const state = getAgentPanelTerminalState();
                 if (!state || !state.connected || !socket || !socket.connected) return;
@@ -7270,20 +7295,23 @@
                 applyAgentPanelPosition();
                 saveAgentPanelPosition(agentPanelPosition);
             });
-            newTabBtn.onclick = () => {
+            function newTerminalTab() {
                 const terminalId = allocateTerminalId();
                 const terminalIndex = getTerminalIndex(terminalId) || nextTerminalIndex;
                 const state = createTerminalTab(terminalId, `Terminal ${terminalIndex}`);
                 switchTerminal(state.id);
                 resetSshFormFields();
-            };
-            closeTabsBtn.onclick = () => {
+            }
+            newTabBtn.onclick = newTerminalTab;
+            function closeAllTerminalTabs() {
+                document.getElementById('tab-more').open = false;
                 const hasCloseableTerminal = [...terminals.values()].some(state => state.connected || state.connecting) || terminals.size > 1;
                 if (!socket || !socket.connected || !hasCloseableTerminal) return;
                 if (!window.confirm('Close all terminal tabs?')) return;
                 if (socket && socket.connected) socket.emit('close_all_terminals');
                 resetTerminalWorkspace();
-            };
+            }
+            closeTabsBtn.onclick = closeAllTerminalTabs;
             modeInputs.forEach(input => {
                 input.addEventListener('change', () => {
                     userSelectedConnectionType = normalizeConnectionType(input.value);
@@ -9483,7 +9511,7 @@
                 });
             }
 
-            pipOption.addEventListener('click', async () => {
+            async function moveActiveTerminalToPip() {
                 contextMenu.style.display = 'none';
                 if (!canMoveActiveTerminalToPip()) return;
                 if (!useDesktopFloatingWindows && !window.documentPictureInPicture) return alert("PiP not supported.");
@@ -9510,7 +9538,8 @@
                 requestAnimationFrame(() => fitTerminalState(state));
                 pipWindow.addEventListener('resize', state.pipResizeHandler);
                 pipWindow.addEventListener('pagehide', state.pipPagehideHandler);
-            });
+            }
+            pipOption.addEventListener('click', moveActiveTerminalToPip);
 
             function formatSettingsFlag(value) {
                 return value ? 'Allowed' : 'Denied';
@@ -9862,6 +9891,46 @@
             };
             document.getElementById('settings-option').onclick = openSettings;
             document.getElementById('quick-settings').onclick = openSettings;
+            // This interface exposes only existing page actions, not native privileges.
+            // Desktop checks its own window/origin before invoking it. Targets are IDs,
+            // never terminal labels or other display text.
+            window.standtermUi = Object.freeze({
+                version: 1,
+                snapshot() {
+                    const state = getActiveTerminalState();
+                    const ready = !!(socket && socket.connected);
+                    return {
+                        version: 1, ready, terminalId: state?.id || null,
+                        actions: {
+                            settings: ready, newTab: ready,
+                            closeTab: ready && terminals.size > 1,
+                            closeAll: ready && !closeTabsBtn.disabled,
+                            files: ready && canUseSftpFileManager(state),
+                            agentPanel: ready && canUseAgentPanel(state),
+                            pauseAgent: ready && !!state?.connected && hasAgentPauseCapability(state),
+                            pip: ready && canMoveActiveTerminalToPip() && !sftpPipState,
+                        },
+                    };
+                },
+                async run(action, terminalId) {
+                    const snapshot = this.snapshot();
+                    if (!Object.hasOwn(snapshot.actions, action) || !snapshot.actions[action]) return false;
+                    if (!['settings', 'newTab', 'closeAll'].includes(action) && terminalId !== snapshot.terminalId) return false;
+                    const state = getActiveTerminalState();
+                    switch (action) {
+                        case 'settings': openSettings(); break;
+                        case 'newTab': newTerminalTab(); break;
+                        case 'closeTab': closeTerminalState(state); break;
+                        case 'closeAll': closeAllTerminalTabs(); break;
+                        case 'files': await openSftpPip(state); break;
+                        case 'agentPanel': toggleMainAgentPanel(); break;
+                        case 'pauseAgent': pauseAgentForState(state); break;
+                        case 'pip': await moveActiveTerminalToPip(); break;
+                        default: return false;
+                    }
+                    return true;
+                },
+            });
             document.getElementById('settings-close').onclick = () => settingsModal.classList.remove('open');
             if (sessionRecoveryForm) {
                 sessionRecoveryForm.onsubmit = event => {
