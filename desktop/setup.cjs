@@ -5,6 +5,7 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const { macPythonCandidates, validMacPython, MACOS_HELP } = require('./macos-python.cjs');
 
 const SETUP_URL = pathToFileURL(path.join(__dirname, 'setup.html')).href;
 const HELP = 'Install WSL and Python 3.10+ with venv support in the selected distribution first.\n\n'
@@ -15,7 +16,7 @@ const WINDOWS_HELP = 'Install 64-bit Python 3.10+ with venv support on Windows f
   + 'are not launched automatically. No system Python installation or administrator access is requested.';
 const PYTHON_PROBE = 'import sys, struct, importlib.util, json; print(json.dumps({"type":"python_info",'
   + '"executable":sys.executable,"platform":sys.platform,"version":list(sys.version_info[:2]),'
-  + '"bits":struct.calcsize("P")*8,"venv":bool(importlib.util.find_spec("venv") and importlib.util.find_spec("ensurepip"))}))';
+  + '"machine":__import__("platform").machine(),"bits":struct.calcsize("P")*8,"venv":bool(importlib.util.find_spec("venv") and importlib.util.find_spec("ensurepip"))}))';
 const ERRORS = {
   python_required: HELP,
   venv_failed: `Python could not create the private venv.\n\n${HELP}`,
@@ -41,7 +42,7 @@ function cancelSetup() { canceled = true; current?.cancelSetup?.(); }
 async function stopSetup() { cancelSetup(); await executionFinished; }
 
 function modeProfile(mode) {
-  if (!['windows', 'wsl'].includes(mode)) throw new Error('Invalid desktop mode.');
+  if (!['windows', 'wsl', 'macos'].includes(mode)) throw new Error('Invalid desktop mode.');
   return path.join(app.getPath('appData'), 'StandTermDesktopEvaluation', mode);
 }
 
@@ -164,10 +165,33 @@ async function windowsPython(saved) {
   return probe(selected.filePaths[0]);
 }
 
+async function macosPython(saved) {
+  async function probe(candidate) {
+    if (!path.posix.isAbsolute(candidate) || /[\r\n\0]/.test(candidate) || candidate === '/usr/bin/python3') {
+      throw new Error(MACOS_HELP);
+    }
+    const result = await execute(candidate, ['-I', '-c', PYTHON_PROBE], { stream: true, help: MACOS_HELP });
+    if (!validMacPython(result, process.arch)) throw new Error(MACOS_HELP);
+    return result.executable;
+  }
+  for (const candidate of macPythonCandidates(saved, process.env)) {
+    try { return await probe(candidate); } catch { if (canceled) throw canceledError(); }
+  }
+  const answer = await dialog.showMessageBox({ type: 'info', title: 'StandTerm Desktop: Python required',
+    message: MACOS_HELP, buttons: ['Cancel', 'Select installed Python...'], defaultId: 0, cancelId: 0 });
+  if (answer.response !== 1) throw canceledError();
+  const selected = await dialog.showOpenDialog({ title: 'Select a native macOS Python 3.10+ interpreter',
+    properties: ['openFile'] });
+  if (selected.canceled || selected.filePaths.length !== 1) throw canceledError();
+  return probe(selected.filePaths[0]);
+}
+
 async function preparePackagedBackend(mode, { installer = false } = {}) {
-  if (!['windows', 'wsl'].includes(mode)) throw new Error('Choose a supported desktop backend.');
-  const native = mode === 'windows';
-  const help = native ? WINDOWS_HELP : HELP;
+  if (!['windows', 'wsl', 'macos'].includes(mode)) throw new Error('Choose a supported desktop backend.');
+  const windows = mode === 'windows';
+  const macos = mode === 'macos';
+  const native = windows || macos;
+  const help = macos ? MACOS_HELP : windows ? WINDOWS_HELP : HELP;
   const bundle = path.join(process.resourcesPath, 'bundle');
   const metadata = JSON.parse(await fs.readFile(path.join(bundle, 'manifest.json'), 'utf8'));
   if (!/^[a-f0-9]{64}$/.test(metadata.id)) throw new Error(ERRORS.invalid_bundle);
@@ -182,7 +206,7 @@ async function preparePackagedBackend(mode, { installer = false } = {}) {
   let args;
   let saved;
   if (native) {
-    executable = await windowsPython(settings?.python);
+    executable = await (macos ? macosPython(settings?.python) : windowsPython(settings?.python));
     args = ['-I', path.join(bundle, 'bootstrap.py'), '--bundle', bundle];
     saved = { version: 1, python: executable };
   } else {
@@ -220,9 +244,9 @@ async function preparePackagedBackend(mode, { installer = false } = {}) {
   if (result.type === 'needs_setup') {
     const answer = await dialog.showMessageBox({
       type: 'question', title: 'Prepare StandTerm Core',
-      message: `Create a private StandTerm environment in ${native ? 'Windows' : distro}?`,
-      detail: `Requires Python 3.10+ and venv support ${native ? 'on Windows (64-bit)' : 'inside WSL'}.\n\n`
-        + `This copies the bundled Core into ${native ? '%LOCALAPPDATA%\\StandTermDesktop\\runtimes\\' : '~/.local/share/standterm-desktop/runtimes/'}, creates its own venv, `
+      message: `Create a private StandTerm environment in ${macos ? 'macOS' : windows ? 'Windows' : distro}?`,
+      detail: `Requires Python 3.10+ and venv support ${macos ? 'on native macOS' : windows ? 'on Windows (64-bit)' : 'inside WSL'}.\n\n`
+        + `This copies the bundled Core into ${macos ? '~/Library/Application Support/StandTermDesktop/runtimes/' : windows ? '%LOCALAPPDATA%\\StandTermDesktop\\runtimes\\' : '~/.local/share/standterm-desktop/runtimes/'}, creates its own venv, `
         + 'and downloads and installs Python dependencies from your configured package index. '
         + 'Dependencies can execute installation code. Internet access and disk space are required.\n\n'
         + 'No system Python installation, sudo, Git checkout changes or existing-session interruption. '
@@ -249,7 +273,7 @@ async function preparePackagedBackend(mode, { installer = false } = {}) {
     try {
       await window.loadURL(SETUP_URL);
       await window.webContents.executeJavaScript(`document.getElementById('requirements').textContent = ${JSON.stringify(
-        native ? 'Preparing Core for native Windows.' : `Preparing Core inside WSL: ${distro}.`)}`);
+        macos ? 'Preparing Core for native macOS.' : windows ? 'Preparing Core for native Windows.' : `Preparing Core inside WSL: ${distro}.`)}`);
       result = await execute(executable, [...args, '--prepare'], { stream: true, timeout: 30 * 60 * 1000, help, progress: stage => {
         const labels = { copy: 'Copying verified Core files...', venv: 'Creating the private Python environment...',
           dependencies: 'Installing Python dependencies. This can take several minutes...', verify: 'Verifying the installed dependencies...' };
@@ -264,11 +288,11 @@ async function preparePackagedBackend(mode, { installer = false } = {}) {
       setupFinished = null;
     }
   }
-  const runtimePath = native ? path.win32 : path.posix;
+  const runtimePath = windows ? path.win32 : path.posix;
   if (result.type !== 'ready' || result.bundle_id !== metadata.id
       || typeof result.root !== 'string' || !runtimePath.isAbsolute(result.root)
-      || result.python !== (native ? runtimePath.join(result.root, 'tools', '.venv_win', 'Scripts', 'python.exe')
-        : `${result.root}/tools/.venv_wsl/bin/python`)) throw new Error('Invalid managed runtime response.');
+      || result.python !== (windows ? runtimePath.join(result.root, 'tools', '.venv_win', 'Scripts', 'python.exe')
+        : runtimePath.join(result.root, 'tools', macos ? '.venv_macos' : '.venv_wsl', 'bin', 'python'))) throw new Error('Invalid managed runtime response.');
   await fs.mkdir(path.dirname(settingsPath), { recursive: true });
   // This file contains only non-secret launcher metadata, never credentials.
   const temporary = `${settingsPath}.tmp`;
@@ -280,6 +304,7 @@ async function preparePackagedBackend(mode, { installer = false } = {}) {
 }
 
 async function cleanupManagedVenvs(mode) {
+  if (!['windows', 'wsl'].includes(mode)) throw new Error('Environment cleanup is available through the Windows installer only.');
   // Only the configured interpreter/distribution is considered. Never discover
   // other projects or provision a WSL distribution during uninstallation.
   const settingsPath = path.join(modeProfile(mode), 'launcher.json');

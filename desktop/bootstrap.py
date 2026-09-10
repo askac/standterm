@@ -39,8 +39,7 @@ def linked(path):
 
 
 def environment_python(root):
-    return (root / 'tools' / '.venv_win' / 'Scripts' / 'python.exe' if WINDOWS
-            else root / 'tools' / '.venv_wsl' / 'bin' / 'python')
+    return runtime.venv_path(root) / ('Scripts/python.exe' if WINDOWS else 'bin/python')
 
 
 def stop_child(process):

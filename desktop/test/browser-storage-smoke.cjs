@@ -165,14 +165,15 @@ async function parent() {
     return JSON.parse(line);
   }
   try {
+    const primaryMode = process.platform === 'darwin' ? 'macos' : 'wsl';
     let handoff = await start();
     const port = Number(new URL(handoff.origin).port);
-    const expected = await phase(handoff, 'wsl', 'write');
+    const expected = await phase(handoff, primaryMode, 'write');
     const oldToken = handoff.session_token;
     await stop();
     handoff = await start(port);
     assert.notEqual(handoff.session_token, oldToken);
-    await phase(handoff, 'wsl', 'read', expected);
+    await phase(handoff, primaryMode, 'read', expected);
     await phase(handoff, 'windows', 'empty', expected);
     await stop();
     for (let attempt = 0; attempt < 5; attempt++) {
@@ -181,7 +182,7 @@ async function parent() {
       await stop();
     }
     assert.notEqual(Number(new URL(handoff.origin).port), port, 'Could not allocate a different test origin');
-    await phase(handoff, 'wsl', 'empty', expected);
+    await phase(handoff, primaryMode, 'empty', expected);
     console.log('Storage smoke passed: full process/backend restart, preferences, profiles, both CryptoKeys, stale-cookie reset and mode/origin isolation.');
   } finally { await stop(); }
 }

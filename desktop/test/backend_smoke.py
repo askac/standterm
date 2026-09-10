@@ -44,6 +44,16 @@ def main():
             origin = frame['origin']
             assert urllib.parse.urlparse(origin).hostname == '127.0.0.1'
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(origin + '/agentinfo', timeout=5) as response:
+                agentinfo = json.load(response)
+            assert agentinfo['instance_id'] == frame['instance_id']
+            assert agentinfo['launch_dir'] == str(ROOT)
+            for skill in agentinfo['skills'].values():
+                assert skill['available'] is True
+                for key in ('path', 'boot_prompt_path', 'install_prompt_path'):
+                    assert Path(skill[key]).is_file()
+            for helper in agentinfo['scripts'].values():
+                assert Path(helper).is_file()
             try:
                 opener.open(origin, timeout=5)
             except urllib.error.HTTPError as exc:

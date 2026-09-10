@@ -37,12 +37,15 @@ def read_marker(path):
 
 
 def runtime_base():
+    if sys.platform == 'darwin':
+        return Path.home() / 'Library' / 'Application Support' / 'StandTermDesktop'
     return (Path(os.environ['LOCALAPPDATA']) / 'StandTermDesktop' if sys.platform == 'win32'
             else Path.home() / '.local' / 'share' / 'standterm-desktop')
 
 
 def venv_path(root):
-    return root / 'tools' / ('.venv_win' if sys.platform == 'win32' else '.venv_wsl')
+    name = '.venv_win' if sys.platform == 'win32' else '.venv_macos' if sys.platform == 'darwin' else '.venv_wsl'
+    return root / 'tools' / name
 
 
 @contextmanager

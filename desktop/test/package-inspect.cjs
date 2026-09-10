@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 const { createHash } = require('node:crypto');
+const { validateCoreFiles } = require('../core-files.cjs');
 const [resourcesArg, stageArg, asarModule] = process.argv.slice(2);
 if (!resourcesArg || !stageArg || !asarModule) throw new Error('Pass resources, stage and @electron/asar module paths.');
 const resources = path.resolve(resourcesArg);
@@ -15,6 +16,7 @@ const archive = path.join(resources, 'app.asar');
 const manifest = JSON.parse(fs.readFileSync(path.join(resources, 'bundle', 'manifest.json'), 'utf8'));
 const stagedManifest = JSON.parse(fs.readFileSync(path.join(stage, 'bundle', 'manifest.json'), 'utf8'));
 assert.deepEqual(manifest, stagedManifest);
+validateCoreFiles(path.join(resources, 'bundle', 'core'), Object.keys(manifest.files));
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 for (const [file, expected] of Object.entries(manifest.files)) {
   assert.equal(hash(fs.readFileSync(path.join(resources, 'bundle', 'core', file))), expected, file);
@@ -28,7 +30,7 @@ for (const name of names) {
     assert.deepEqual(asar.extractFile(archive, relative), fs.readFileSync(input), relative);
   }
 }
-for (const file of ['main.cjs', 'browser-session.cjs', 'diagnostics.cjs', 'diagnostics-window.cjs',
+for (const file of ['main.cjs', 'agent-menu.cjs', 'browser-session.cjs', 'diagnostics.cjs', 'diagnostics-window.cjs',
   'external-links.cjs', 'floating-windows.cjs', 'test/external-links-smoke.cjs']) {
   assert.ok(names.includes('/' + file), `Missing ${file}`);
 }

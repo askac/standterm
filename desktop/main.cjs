@@ -15,6 +15,7 @@ const { startWithPort, parsePortConflict, checkHostPort } = require('./port.cjs'
 const { installerRequest, runInstaller } = require('./installer.cjs');
 const { installFloatingWindows } = require('./floating-windows.cjs');
 const { createDiagnostics, diagnosticsMenu, agentConnectionInfo, openDeveloperTools } = require('./diagnostics.cjs');
+const { agentMenu } = require('./agent-menu.cjs');
 const { browserSessionOptions, resetBrowserAuthentication } = require('./browser-session.cjs');
 const { createStatusWindow } = require('./diagnostics-window.cjs');
 const { createExternalOpener } = require('./external-links.cjs');
@@ -55,6 +56,9 @@ if (process.platform === 'win32') app.setAppUserModelId(`${APP_ID}.${mode}`);
 app.enableSandbox();
 const captureSmoke = process.argv.includes('--desktop-capture-smoke');
 const smoke = process.argv.includes('--desktop-smoke') || captureSmoke;
+// Denied camera/microphone probes must not enumerate the operator's real devices.
+// This supplies synthetic devices, not permission grants or a fake chooser.
+if (smoke) app.commandLine.appendSwitch('use-fake-device-for-media-stream');
 // Tests must never focus an existing operator window through the instance lock.
 if (smoke) app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'standterm-desktop-test-')));
 else if (app.isPackaged) {
@@ -102,7 +106,7 @@ function launchBackend(preparedCommand, port = 0) {
     let buffer = '';
     let received = false;
     const timer = setTimeout(() => reject(new Error(
-      'Backend startup timed out. Check the selected Python environment and WSL availability.',
+      'Backend startup timed out. Check the selected Python environment and backend availability.',
     )), 60000);
     child.once('error', error => {
       diagnostics.write('backend_spawn_failed', { code: error.code });
@@ -337,6 +341,19 @@ async function start() {
       { label: 'Quit StandTerm', accelerator: 'CommandOrControl+Q', click: () => app.quit() },
     ] },
     { role: 'editMenu' },
+    agentMenu({ origin: handoff.origin, mode, instanceId: handoff.instance_id,
+      copyText: text => clipboard.writeText(text),
+      showHelp: () => dialog.showMessageBox(win, {
+        type: 'info', title: 'StandTerm Agent', message: 'Give your agent a StandTerm prompt',
+        detail: 'First time: choose Agent > Copy skill installation prompt and paste it into your agent. '
+          + 'For an existing setup, use Copy usage prompt or Copy file-transfer prompt and describe your task.\n\n'
+          + 'Prompts identify this instance without credentials. The agent reads bundled Core documents and helpers; '
+          + 'it needs access to the backend environment (macOS, Windows or WSL).\n\n'
+          + 'When ready, enable External Agent in the intended terminal tab and mint a token. '
+          + 'Copying a prompt does not install anything, grant terminal access or approve transfers.',
+        buttons: ['OK'], noLink: true,
+      }),
+    }),
     capture.menu(),
     { label: 'View', submenu: [{ role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }] },
     diagnosticsMenu({ origin: handoff.origin, mode, instanceId: handoff.instance_id,

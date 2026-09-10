@@ -17,7 +17,7 @@ function createDiagnostics(directory, { mode, version }) {
   function write(event, details = {}) {
     if (!EVENTS.has(event)) return;
     const record = { time: new Date().toISOString(), event,
-      mode: mode === 'wsl' ? 'wsl' : 'windows' };
+      mode: ['wsl', 'macos'].includes(mode) ? mode : 'windows' };
     if (/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version)) record.version = version;
     // Whitelist structured fields. Never persist errors, stdout/stderr, URLs,
     // terminal data, environment values, credential objects or arbitrary text.
@@ -43,7 +43,7 @@ function agentConnectionInfo({ origin, mode, instanceId }) {
   const url = new URL(origin);
   if (url.origin !== origin || url.protocol !== 'http:' || url.hostname !== '127.0.0.1'
       || !url.port || url.username || url.password) throw new Error('Invalid diagnostic origin.');
-  if (!['windows', 'wsl'].includes(mode) || typeof instanceId !== 'string'
+  if (!['windows', 'wsl', 'macos'].includes(mode) || typeof instanceId !== 'string'
       || !/^[A-Za-z0-9_-]{1,256}$/.test(instanceId)) throw new Error('Invalid connection identity.');
   return { schema: 'standterm_agent_connection', schema_version: 1,
     base_url: origin, agentinfo_url: `${origin}/agentinfo`, instance_id: instanceId, backend_mode: mode };

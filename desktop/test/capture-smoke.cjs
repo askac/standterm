@@ -55,6 +55,7 @@ async function run(win, capture) {
   await new Promise(resolve => setTimeout(resolve, 300));
   await capture.screenshot('file', path.join(directory, 'source.png'));
   const started = await capture.start(video);
+  console.log('Capture smoke: recording started.');
   assert.equal(started.destination, video);
   assert.equal(capture.state, 'recording');
   assert.equal(Menu.getApplicationMenu().getMenuItemById('capture-start').enabled, false);
@@ -72,18 +73,21 @@ async function run(win, capture) {
       stream.getTracks().forEach(track => track.stop()); return false;
     }, () => true)`, true);
   assert.equal(denied, true, 'a second media request must not reuse the native recording grant');
+  console.log('Capture smoke: repeated display capture denied.');
   for (const contents of [win.webContents, capture.job.recorder.webContents]) {
     const cameraDenied = await contents.executeJavaScript(`
       navigator.mediaDevices.getUserMedia({video: true, audio: true}).then(stream => {
         stream.getTracks().forEach(track => track.stop()); return false;
       }, () => true)`, true);
     assert.equal(cameraDenied, true, 'camera/microphone access must remain denied');
+    console.log('Capture smoke: camera/microphone request denied.');
   }
   const pageDenied = await win.webContents.executeJavaScript(`
     navigator.mediaDevices.getDisplayMedia({video: true}).then(stream => {
       stream.getTracks().forEach(track => track.stop()); return false;
     }, () => true)`, true);
   assert.equal(pageDenied, true, 'the terminal page must not start a capture');
+  console.log('Capture smoke: terminal display capture denied.');
   const originalMessage = dialog.showMessageBox;
   dialog.showMessageBox = async () => ({ response: 0 });
   try {

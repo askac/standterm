@@ -18,7 +18,7 @@ spec.loader.exec_module(bootstrap)
 
 class BootstrapTests(unittest.TestCase):
     def fixture(self, lease_aware=False):
-        root = Path(tempfile.mkdtemp(prefix='standterm-bootstrap-test-'))
+        root = Path(tempfile.mkdtemp(prefix='standterm-bootstrap-test-')).resolve()
         bundle = root / 'bundle'
         files = {}
         names = ['app.py', 'desktop/backend.py', 'requirements.txt']
@@ -147,8 +147,7 @@ class BootstrapTests(unittest.TestCase):
         try:
             bootstrap.stop_child(child)
             self.assertIsNotNone(child.poll())
-            state = Path(f'/proc/{descendant}/stat')
-            self.assertTrue(not state.exists() or state.read_text().split()[2] == 'Z')
+            self.assert_process_dead(descendant)
         finally:
             if child.poll() is None:
                 bootstrap.stop_child(child)
@@ -171,9 +170,14 @@ class BootstrapTests(unittest.TestCase):
             child.stdout.close()
 
     def assert_process_dead(self, pid):
-        state = Path(f'/proc/{pid}/stat')
         deadline = time.monotonic() + 5
-        while state.exists() and state.read_text().split()[2] != 'Z':
+        while True:
+            # macOS has no /proc; inspect only the child PID owned by this test.
+            result = subprocess.run(['ps', '-p', str(pid), '-o', 'stat='],
+                                    capture_output=True, text=True, timeout=5)
+            if result.returncode == 1 or result.stdout.strip().startswith('Z'):
+                return
+            self.assertEqual(result.returncode, 0, result.stderr)
             if time.monotonic() >= deadline:
                 self.fail(f'Owned descendant {pid} is still running')
             time.sleep(0.02)

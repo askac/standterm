@@ -9,6 +9,7 @@ const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 
 async function fixture({ consent = true, pythonMissing = false, ready = false, native = false,
+  macos = false, machine = 'arm64', wrongVenv = false,
   holdPrepare = false, cleanupConfirm = false, closeDecision = async () => ({ response: 0 }) } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'standterm-setup-test-'));
   await fs.mkdir(path.join(root, 'bundle'));
@@ -55,8 +56,8 @@ async function fixture({ consent = true, pythonMissing = false, ready = false, n
       }
       dialogs++;
       assert.equal(options.cancelId, options.defaultId);
-      if (!native && dialogs === 1) return { response: 0 };
-      if (options.message.includes('Install 64-bit')) return { response: 0 };
+      if (!native && !macos && dialogs === 1) return { response: 0 };
+      if (options.title === 'StandTerm Desktop: Python required') return { response: 0 };
       assert.match(options.detail, /Requires Python 3.10\+/);
       return { response: consent ? 1 : 0 };
     } },
@@ -64,7 +65,8 @@ async function fixture({ consent = true, pythonMissing = false, ready = false, n
       webRequest: { onBeforeRequest() {} } }) },
   };
   const spawn = (executable, args, options) => {
-    assert.ok(native ? ['where.exe', 'C:\\Python\\python.exe'].includes(executable) : executable === 'wsl.exe');
+    assert.ok(macos ? executable.startsWith('/') && !executable.startsWith('/usr/bin/')
+      : native ? ['where.exe', 'C:\\Python\\python.exe'].includes(executable) : executable === 'wsl.exe');
     assert.equal(options.shell, false);
     calls.push(args);
     const child = new EventEmitter();
@@ -82,10 +84,12 @@ async function fixture({ consent = true, pythonMissing = false, ready = false, n
       else if (args.includes('wslpath')) bytes = Buffer.from('/mnt/c/Program Files/bundle\n');
       else if (pythonMissing) { bytes = Buffer.alloc(0); code = 127; }
       else if (args.includes('-c')) bytes = Buffer.from(JSON.stringify({ type: 'python_info',
-        executable: 'C:\\Python\\python.exe', platform: 'win32', bits: 64, venv: true, version: [3, 12] }) + '\n');
+        executable: macos ? '/opt/local/bin/python3' : 'C:\\Python\\python.exe', platform: macos ? 'darwin' : 'win32',
+        machine, bits: 64, venv: true, version: [3, 12] }) + '\n');
       else if (args.includes('--prepare') || ready) bytes = Buffer.from(JSON.stringify({
         type: 'ready', bundle_id: id, root: native ? 'C:\\Runtime' : '/home/test/runtime',
-        python: native ? 'C:\\Runtime\\tools\\.venv_win\\Scripts\\python.exe' : '/home/test/runtime/tools/.venv_wsl/bin/python',
+        python: native ? 'C:\\Runtime\\tools\\.venv_win\\Scripts\\python.exe'
+          : `/home/test/runtime/tools/${macos && !wrongVenv ? '.venv_macos' : '.venv_wsl'}/bin/python`,
       }) + '\n');
       else bytes = Buffer.from(JSON.stringify({ type: 'needs_setup', bundle_id: id }) + '\n');
       const complete = () => { child.stdout.emit('data', bytes); child.emit('close', code); };
@@ -98,10 +102,11 @@ async function fixture({ consent = true, pythonMissing = false, ready = false, n
     return child;
   };
   const context = vm.createContext({ module: { exports: {} }, __dirname: path.join(__dirname, '..'),
-    require: name => name === 'electron' ? electron : name === 'node:child_process' ? { spawn } : require(name),
-    process: { resourcesPath: root }, Buffer, setTimeout, clearTimeout });
+    require: name => name === 'electron' ? electron : name === 'node:child_process' ? { spawn }
+      : name === './macos-python.cjs' ? require('../macos-python.cjs') : require(name),
+    process: { resourcesPath: root, arch: 'arm64', env: {} }, Buffer, setTimeout, clearTimeout });
   vm.runInContext(await fs.readFile(path.join(__dirname, '..', 'setup.cjs'), 'utf8'), context);
-  return { run: options => context.module.exports.preparePackagedBackend(native ? 'windows' : 'wsl', options), root, calls,
+  return { run: options => context.module.exports.preparePackagedBackend(macos ? 'macos' : native ? 'windows' : 'wsl', options), root, calls,
     cleanup: () => context.module.exports.cleanupManagedVenvs(native ? 'windows' : 'wsl'),
     preparing, window: () => progressWindow, child: () => preparedChild, complete: () => completePrepare(),
     closeDialogs: () => closeDialogs, quit: () => context.module.exports.confirmSetupQuit() };
@@ -130,6 +135,29 @@ test('ready managed environments are reused without running pip again', async ()
   const f = await fixture({ ready: true });
   await f.run();
   assert.equal(f.calls.some(args => args.includes('--prepare')), false);
+});
+
+test('macOS prepares a native runtime and reuses it with only Python launcher metadata', async () => {
+  for (const ready of [false, true]) {
+    const f = await fixture({ macos: true, ready });
+    const command = await f.run();
+    assert.equal(command.executable, '/home/test/runtime/tools/.venv_macos/bin/python');
+    assert.deepEqual(Array.from(command.args), ['-u', '/home/test/runtime/desktop/backend.py']);
+    assert.equal(f.calls.filter(args => args.includes('--prepare')).length, Number(!ready));
+    assert.equal(f.calls.some(args => args.includes('--distribution')), false);
+    assert.deepEqual(JSON.parse(await fs.readFile(path.join(f.root, 'launcher.json'), 'utf8')),
+      { version: 1, python: '/opt/local/bin/python3' });
+  }
+});
+
+test('macOS refuses missing or mismatched Python, cancellation and WSL runtime responses', async () => {
+  for (const options of [{ pythonMissing: true }, { machine: 'x86_64' }, { consent: false },
+    { ready: true, wrongVenv: true }]) {
+    const f = await fixture({ macos: true, ...options });
+    await assert.rejects(f.run(), /canceled|Invalid managed runtime/);
+    assert.equal(f.calls.some(args => args.includes('--prepare')), false);
+    await assert.rejects(fs.stat(path.join(f.root, 'launcher.json')), { code: 'ENOENT' });
+  }
 });
 
 test('native Windows uses its own interpreter and never starts WSL', async () => {

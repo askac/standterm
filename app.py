@@ -1972,11 +1972,14 @@ def get_default_local_shell_config():
 
     shell = os.environ.get('SHELL') or '/bin/sh'
     terminal_kind = get_shell_kind(shell)
+    shell_command = [shell]
+    if sys.platform == 'darwin' and app.config.get('DESKTOP_LOGIN_SHELL') and terminal_kind != 'shell':
+        shell_command.append('-l')
     return {
         'shell_kind': terminal_kind,
         'terminal_kind': terminal_kind,
         'terminal_label': get_shell_label(terminal_kind),
-        'shell_command': [shell],
+        'shell_command': shell_command,
         'shell_display': shell,
     }, None
 
@@ -6850,6 +6853,22 @@ def build_external_agentinfo_payload(base_url=None, agentinfo_path=None):
     command_endpoint = command_base_url.rstrip('/') + '/agent/external/command'
     handoff_path = EXTERNAL_AGENT_HANDOFF_PATH
     terminal_handoffs = build_external_agent_terminal_handoff_index()
+    skills = {}
+    for name, directory in (
+        ('standterm-external-agent', 'standterm-external-agent-skill'),
+        ('standterm-file-transfer', 'standterm-file-transfer'),
+        ('standterm-privileged-hitl', 'standterm-privileged-hitl'),
+    ):
+        skill_dir = APP_DIR / 'docs' / 'examples' / directory
+        paths = {
+            'path': skill_dir / 'SKILL.md',
+            'boot_prompt_path': skill_dir / 'boot_prompt.txt',
+            'install_prompt_path': skill_dir / 'skill_prompt.txt',
+        }
+        skills[name] = {
+            **{key: str(value) for key, value in paths.items()},
+            'available': all(value.is_file() for value in paths.values()),
+        }
     transport = {
         'type': 'loopback_http_json',
         'base_url': command_base_url,
@@ -6864,6 +6883,7 @@ def build_external_agentinfo_payload(base_url=None, agentinfo_path=None):
     payload = {
         'schema': 'standterm_agentinfo',
         'schema_version': 1,
+        'instance_id': LAUNCHER_INSTANCE_ID,
         'protocol_version': EXTERNAL_AGENT_PROTOCOL_VERSION,
         'generated_at': time.time(),
         'base_url': command_base_url,
@@ -6888,11 +6908,11 @@ def build_external_agentinfo_payload(base_url=None, agentinfo_path=None):
             'agent_scp': str(APP_DIR / 'scripts' / 'agent_scp.py'),
             'agent_shcmd': str(APP_DIR / 'scripts' / 'agent_shcmd.py'),
             'agent_type': str(APP_DIR / 'scripts' / 'agent_type.py'),
+            'agent_rsfile': str(APP_DIR / 'scripts' / 'agent_rsfile.py'),
+            'agent_mcp': str(APP_DIR / 'scripts' / 'agent_mcp.py'),
         },
-        'skill': {
-            'path': str(APP_DIR / 'docs' / 'examples' / 'standterm-external-agent-skill' / 'SKILL.md'),
-            'boot_prompt_path': str(APP_DIR / 'docs' / 'examples' / 'standterm-external-agent-skill' / 'boot_prompt.txt'),
-        },
+        'skill': skills['standterm-external-agent'],
+        'skills': skills,
         'capabilities': list(EXTERNAL_AGENT_CAPABILITIES),
         'recommended_commands': build_external_agentinfo_recommended_commands(
             agentinfo_path=agentinfo_path,

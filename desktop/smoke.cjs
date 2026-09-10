@@ -32,13 +32,35 @@ async function run(win, origin) {
   try {
     menu.getMenuItemById('diagnostics-copy-origin').click();
     menu.getMenuItemById('diagnostics-copy-agent').click();
+    menu.getMenuItemById('agent-copy-connection').click();
+    menu.getMenuItemById('agent-copy-install').click();
+    menu.getMenuItemById('agent-copy-usage').click();
+    menu.getMenuItemById('agent-copy-transfer').click();
   } finally { clipboard.writeText = originalCopy; }
   assert.equal(copied[0], origin);
   const connection = JSON.parse(copied[1]);
+  assert.equal(copied[2], copied[1]);
+  for (const prompt of copied.slice(3)) {
+    assert.deepEqual(JSON.parse(prompt.slice(prompt.indexOf('{'))), connection);
+    assert.ok(prompt.includes('verify instance_id'));
+  }
   assert.equal(connection.base_url, origin);
   assert.equal(connection.agentinfo_url, origin + '/agentinfo');
   assert.ok(connection.instance_id);
-  assert.ok(['windows', 'wsl'].includes(connection.backend_mode));
+  const agentinfo = await win.webContents.executeJavaScript('fetch("/agentinfo").then(response => response.json())');
+  assert.equal(agentinfo.instance_id, connection.instance_id);
+  assert.equal(agentinfo.agentinfo_url, connection.agentinfo_url);
+  for (const name of ['standterm-external-agent', 'standterm-file-transfer', 'standterm-privileged-hitl']) {
+    const skill = agentinfo.skills[name];
+    assert.equal(skill.available, true, `Missing ${name} in the running Core`);
+    for (const field of ['path', 'boot_prompt_path', 'install_prompt_path']) {
+      assert.equal(typeof skill[field], 'string');
+      assert.ok(skill[field].length);
+    }
+  }
+  assert.deepEqual(agentinfo.skill, agentinfo.skills['standterm-external-agent']);
+  for (const name of ['agent_scp', 'agent_rsfile', 'agent_mcp']) assert.equal(typeof agentinfo.scripts[name], 'string');
+  assert.ok(['windows', 'wsl', 'macos'].includes(connection.backend_mode));
   assert.deepEqual(Object.keys(connection).sort(),
     ['schema', 'schema_version', 'base_url', 'agentinfo_url', 'instance_id', 'backend_mode'].sort());
   assert.equal(win.webContents.isDevToolsOpened(), false);

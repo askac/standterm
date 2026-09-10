@@ -4,11 +4,22 @@ module.exports = {
   appId: 'org.standterm.desktop',
   productName: 'StandTerm Desktop',
   executableName: 'StandTermDesktop',
-  directories: { output: 'out', buildResources: '.' },
+  // Keep development app copies out of macOS Spotlight application results.
+  directories: { output: process.platform === 'darwin' ? 'out.noindex' : 'out', buildResources: '.' },
   asar: true,
   files: ['*.cjs', '*.html', 'recorder.js', 'package.json', 'README.md', 'LICENSE',
     'test/capture-smoke.cjs', 'test/floating-smoke.cjs', 'test/external-links-smoke.cjs', '!electron-builder.cjs', '!stage-windows.cjs', '!build-icon.cjs'],
   extraResources: [{ from: 'bundle', to: 'bundle' }],
+  mac: {
+    icon: 'standterm.icns',
+    target: [{ target: 'dmg', arch: ['arm64'] }],
+    category: 'public.app-category.developer-tools',
+    artifactName: 'StandTerm-Desktop-${version}-mac-${arch}.${ext}',
+    // Local evaluation only: ad-hoc signing never reads a Developer ID identity.
+    identity: '-',
+    notarize: false,
+  },
+  dmg: { sign: false },
   win: { target: [{ target: 'nsis', arch: ['x64'] }], icon: 'standterm.ico',
     artifactName: 'StandTerm-Desktop-${version}-win32-x64-Setup.exe' },
   nsis: {
