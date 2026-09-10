@@ -9,8 +9,8 @@ const { isSquirrelEvent, handleSquirrelEvent, shortcutSpecs } = require('../squi
 const { desktopMode } = require('../desktop-mode.cjs');
 
 test('backend mode selection is explicit and rejects ambiguous or unknown modes', () => {
-  assert.equal(desktopMode(['app']), 'windows');
-  assert.equal(desktopMode(['app', '--backend=wsl']), 'wsl');
+  assert.equal(desktopMode(['app'], 'win32'), 'windows');
+  assert.equal(desktopMode(['app', '--backend=wsl'], 'win32'), 'wsl');
   assert.throws(() => desktopMode(['--backend=windows', '--backend=wsl']));
   assert.throws(() => desktopMode(['--backend=anything']));
   assert.equal(isSquirrelEvent(['app', '--squirrel-install']), true);

@@ -137,6 +137,22 @@ runtime root. Graceful shutdown removes the current instance directory; a
 token left by a crash is invalid after server restart.
 Agents should call `hello` first when possible and branch only on the typed
 `capabilities` field, not on displayed terminal text.
+The tokenless `/agentinfo` document reports `instance_id`, `launch_dir`,
+`python_path` and absolute `scripts` paths for the active backend. `skills` maps
+`standterm-external-agent`, `standterm-file-transfer` and
+`standterm-privileged-hitl` to `path` (SKILL.md), `boot_prompt_path`,
+`install_prompt_path` and `available` (all three entry files exist). The existing
+singular `skill` remains an alias for the external-agent entry. Support helpers
+include `agent_rsfile` and `agent_mcp`; advertising their paths does not enable
+rescue transfers or install optional MCP dependencies.
+
+Clients given a connection prompt must verify the reported instance ID before
+using its paths. Paths belong to the backend OS/filesystem, not necessarily the
+agent's environment. If documents are absent, identity differs or paths cannot
+be accessed, report the limitation rather than guessing endpoints or overwriting
+an existing skill. Desktop bundles include these public documents and helpers;
+skill installation remains separate from terminal authorization.
+
 See `docs/examples/standterm-external-agent-skill/SKILL.md` and the adjacent
 `skill_prompt.txt` for a local skill example that wraps this workflow for CLI
 agents.

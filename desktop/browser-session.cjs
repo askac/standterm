@@ -3,7 +3,7 @@
 const { randomUUID } = require('node:crypto');
 
 function browserSessionOptions(mode, temporary = false) {
-  if (!['windows', 'wsl'].includes(mode)) throw new Error('Invalid browser profile mode.');
+  if (!['windows', 'wsl', 'macos'].includes(mode)) throw new Error('Invalid browser profile mode.');
   return {
     partition: temporary ? `standterm-test-${randomUUID()}` : `persist:standterm-ui-${mode}-v1`,
     options: { cache: false },

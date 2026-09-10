@@ -2,8 +2,65 @@
 
 This Electron evaluation owns a Python backend and opens the existing StandTerm
 UI without asking the local operator to paste an access token. It supports a
-source-run workflow and an unsigned Windows x64 evaluation installer. It is not
+source-run workflow, an unsigned Windows x64 evaluation installer and a native
+Apple Silicon macOS evaluation app/DMG. It is not
 a production release or a replacement for `run.sh` / `run.bat`.
+
+## macOS Apple Silicon evaluation
+
+The arm64 DMG contains `StandTermDesktop.app`, Electron and the verified Core
+snapshot. Copy the app to a user-owned Applications folder before launching it.
+The evaluation uses ad-hoc signing, without Developer ID or notarization; it is
+not a Gatekeeper-qualified public release. No signing account or private key is
+needed for a local build. Intel/Rosetta acceptance is not implied.
+
+Native macOS mode is selected automatically, or explicitly with `--backend=macos`.
+Local shells start as login shells so their usual profiles (for example
+`~/.zprofile` for zsh) supply MacPorts/Homebrew and user command paths even when
+the app starts from Finder. The browser/Core launcher's shell behavior is unchanged.
+First launch locates an existing native Python 3.10+ with venv/ensurepip support
+in MacPorts, Homebrew or PATH, or offers a file chooser. Python must match the
+app architecture. The Apple `/usr/bin/python3` developer-tools stub is skipped;
+StandTerm does not install Python, package managers, Rosetta or OS components.
+
+After confirmation, setup copies Core and prepares its venv under
+`~/Library/Application Support/StandTermDesktop/runtimes/<bundle-sha256>/`.
+The interpreter is `tools/.venv_macos/bin/python`. Launcher settings, saved port,
+diagnostics and the browser profile live under
+`~/Library/Application Support/StandTermDesktopEvaluation/macos/`.
+All mutable state stays outside the `.app`. Later launches verify and reuse the
+runtime. Setup cancellation retains partial files for retry; a changed Core
+bundle uses a new directory. Removing the app retains user data and runtimes.
+The Windows installer's optional cleanup is not a macOS uninstall action.
+
+Build on an Apple Silicon Mac with Node 22.12+ and the checkout's macOS venv:
+
+```sh
+cd desktop
+npm ci
+npm run stage:mac
+# Change to the absolute stage directory printed above, then:
+npm ci
+npm run make:mac
+```
+
+Staging shares the tracked-file allowlist used by Windows, excludes internal
+documents and Git state, and generates the native icon with macOS `sips` and
+`iconutil`. macOS outputs are in the stage's `out.noindex/` directory so local
+development app copies stay out of Spotlight results. The current build uses
+electron-builder 26's [macOS signing options](https://www.electron.build/v26/docs/mac/).
+
+For isolated verification, run `npm test`, `npm run smoke:capture`, the Python
+bootstrap/runtime/backend tests, and `test/browser-storage-smoke.cjs` with the
+checkout Electron executable. Set separate `STANDTERM_AGENT_RUNTIME_DIR` and
+`STANDTERM_SESSION_RECOVERY_STORE` paths for smoke runs. Use a canonical macOS
+temporary root, for example `TMPDIR=/private/tmp`, for the complete Core suite.
+`test/macos-setup-integration.cjs`, launched by checkout Electron with the prepared
+venv Python and stage path as arguments, exercises the real first-run progress
+window and bootstrap in a disposable runtime. Its setup choice is scripted.
+Smoke camera/microphone denial probes use synthetic media devices, keeping them
+independent of the operator's physical audio/video hardware; permission checks
+remain enabled. Real device/OS permission behavior still needs manual acceptance.
 
 ## Windows x64 evaluation installer
 
@@ -152,7 +209,7 @@ that uncommitted changes are already a GitHub release. Build staging never copie
 the development venv or `node_modules`. The new directory gets Windows build
 dependencies; the source checkout's Linux/WSLg `node_modules` is untouched.
 
-The `StandTerm-Desktop-0.4.1-win32-x64-Setup.exe` is under `out/`; the unpacked
+The `StandTerm-Desktop-0.4.3-win32-x64-Setup.exe` is under `out/`; the unpacked
 application is under `out/win-unpacked/`. Packaging uses
 [electron-builder's assisted NSIS target](https://www.electron.build/nsis.html),
 with pinned build dependencies and scoped custom installer hooks. Squirrel
@@ -334,6 +391,37 @@ cookies, Node access, preload or IPC bridge. A one-use main-process grant select
 only the existing StandTerm main frame; it never enumerates desktop windows or
 grants camera/microphone access. The terminal page cannot initiate capture.
 
+## Agent prompts and bundled Core
+
+The top-level **Agent** menu is the first-use entrypoint; no prior StandTerm
+skill installation is required. Choose **Copy skill installation prompt** and
+paste it into your agent. For subsequent sessions, use **Copy usage prompt** or
+**Copy file-transfer prompt** and describe the intended task and terminal.
+**Getting started...** explains token minting and the distinction between setup
+and terminal authority. **Copy connection info (JSON)** and **Copy agentinfo URL**
+remain available for clients that already know the protocol. Existing Diagnostics
+copy actions are preserved.
+
+These actions only copy text or show help. They do not install skills, execute
+helpers, mint tokens or approve transfers. Each prompt contains the exact live
+endpoint and instance ID, never credentials. Agents verify `/agentinfo` identity
+and use its `launch_dir`, `python_path`, `scripts` and `skills` paths. Installation
+prompts ask agents to preserve references and customized skills; agents without
+persistent skill support can read the documents for the current session instead.
+Backend paths belong to the active macOS, Windows or WSL environment. If access fails or
+an older Core lacks discovery metadata, request the correct environment or a
+Core update; do not guess a different endpoint or download arbitrary helpers.
+
+Core staging includes the published runtime, static assets, launch/install
+scripts, README, public documentation, skill prompts/references and support
+helpers. Only Git-tracked release inputs are selected; developer venvs, private
+handoffs, profiles, credentials and unpublished rescue tools are not included.
+`core-files.cjs` checks required inputs and relative skill links before and after
+staging. The extracted-package inspector repeats the checks alongside manifest
+hash verification, so missing skill documents or helpers fail packaging checks.
+The Agent menu and expanded Core payload require a new installer build; existing
+0.4.1 installers do not gain them automatically.
+
 ## Authentication and security boundary
 
 **StandTerm > About StandTerm Desktop** lists Desktop and the running Core
@@ -342,9 +430,11 @@ managed Core bundle SHA-256 identity when available. The same Core details are
 in Diagnostics. Core reports its version from `core_version.py`, independently
 of the Electron package version. Source checkouts have no managed build identity;
 older backends that omit version metadata show Unknown, never an inferred Git
-tag. The current source candidate is Desktop 0.4.1 / Core 2.11.0-dev, not a
-published stable release. Version and copy-info additions postdate the delivered
-0.4.0 installer; they require a new build.
+tag. The current source candidate is Desktop 0.4.3 / Core 2.11.0-dev, not a
+published stable release. The Agent menu and expanded Core payload postdate the
+published 0.4.1 installer and the earlier macOS 0.4.2 candidate; they require a
+new build. The integrated macOS candidate retains native setup, login shells
+and arm64 DMG packaging alongside these additions.
 
 The native **Diagnostics** menu shows the actual backend URL (IP and port),
 backend mode, Desktop version and web-settings storage mode. It opens

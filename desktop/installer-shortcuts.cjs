@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { MODES, APP_ID } = require('./desktop-mode.cjs');
+const { WINDOWS_MODES: MODES, APP_ID } = require('./desktop-mode.cjs');
 
 function shortcutPlan(executable, desktop, programs, selected) {
   if (selected.some(mode => !Object.hasOwn(MODES, mode))) throw new Error('Invalid shortcut mode.');

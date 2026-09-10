@@ -17,8 +17,13 @@ runtime = cleanup.runtime
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_macos_uses_application_support_and_its_own_venv(self):
+        with patch.object(sys, 'platform', 'darwin'), patch.object(Path, 'home', return_value=Path('/Users/test')):
+            self.assertEqual(runtime.runtime_base(), Path('/Users/test/Library/Application Support/StandTermDesktop'))
+            self.assertEqual(runtime.venv_path(Path('/runtime')), Path('/runtime/tools/.venv_macos'))
+
     def fixture(self, marker=True):
-        base = Path(tempfile.mkdtemp(prefix='standterm-runtime-test-'))
+        base = Path(tempfile.mkdtemp(prefix='standterm-runtime-test-')).resolve()
         root = base / 'runtimes' / ('a' * 64)
         venv = runtime.venv_path(root)
         venv.mkdir(parents=True)

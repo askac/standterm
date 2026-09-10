@@ -6,30 +6,29 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const { writeIcon } = require('./build-icon.cjs');
+const { coreFiles: selectCoreFiles, validateCoreFiles } = require('./core-files.cjs');
 
+const platform = process.argv.includes('--macos') ? 'macos' : 'windows';
+if (platform === 'macos' && process.platform !== 'darwin') throw new Error('Stage macOS on a native Mac.');
 const root = path.resolve(__dirname, '..');
 const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean);
-const coreFiles = tracked.filter(file => /^[^/]+\.py$/.test(file)
-  || /^(static|templates|terminal_backends|scripts)\//.test(file)
-  || ['requirements.txt', 'LICENSE', 'THIRD-PARTY-NOTICES.md', 'desktop/backend.py'].includes(file));
-// This new shared lifetime lease is required by the packaged backend even while
-// awaiting its first Git commit. Never include arbitrary untracked Core files.
-if (!coreFiles.includes('desktop/runtime.py')) coreFiles.push('desktop/runtime.py');
+const coreFiles = selectCoreFiles(tracked);
+validateCoreFiles(root, coreFiles);
 const shellFiles = [
   'package.json', 'package-lock.json', 'electron-builder.cjs', 'installer.nsh', 'main.cjs', 'policy.cjs',
-  'capture.cjs', 'capture-file.cjs', 'recorder.html', 'recorder.js', 'setup.cjs',
+  'capture.cjs', 'capture-file.cjs', 'recorder.html', 'recorder.js', 'setup.cjs', 'macos-python.cjs',
   'setup.html', 'README.md', 'smoke.cjs', 'test/capture-smoke.cjs',
   'desktop-mode.cjs', 'squirrel-events.cjs', 'port.cjs',
   'installer.cjs', 'installer-shortcuts.cjs',
   'legacy-install.nsh',
   'floating-windows.cjs', 'test/floating-smoke.cjs',
-  'diagnostics.cjs',
+  'diagnostics.cjs', 'agent-menu.cjs',
   'browser-session.cjs',
   'diagnostics-window.cjs', 'external-links.cjs',
   'test/external-links-smoke.cjs',
 ];
 fs.mkdirSync(path.join(__dirname, 'dist'), { recursive: true });
-const stage = fs.mkdtempSync(path.join(__dirname, 'dist', 'windows-build-'));
+const stage = fs.mkdtempSync(path.join(__dirname, 'dist', `${platform}-build-`));
 function copy(source, destination) {
   if (!fs.lstatSync(source).isFile()) throw new Error(`Not a regular input file: ${source}`);
   fs.mkdirSync(path.dirname(destination), { recursive: true });
@@ -42,11 +41,25 @@ copy(path.join(__dirname, 'windows_job.py'), path.join(stage, 'bundle', 'windows
 copy(path.join(__dirname, 'runtime.py'), path.join(stage, 'bundle', 'runtime.py'));
 copy(path.join(__dirname, 'runtime_cleanup.py'), path.join(stage, 'bundle', 'runtime_cleanup.py'));
 writeIcon(path.join(stage, 'standterm.ico'));
+if (platform === 'macos') {
+  // Reuse the existing terminal glyph at native icon sizes using macOS build tools.
+  const iconset = path.join(stage, 'standterm.iconset');
+  fs.mkdirSync(iconset);
+  for (const size of [16, 32, 128, 256, 512]) {
+    for (const scale of [1, 2]) {
+      execFileSync('/usr/bin/sips', ['-s', 'format', 'png', '-z', String(size * scale), String(size * scale),
+        path.join(stage, 'standterm.ico'), '--out', path.join(iconset, `icon_${size}x${size}${scale === 2 ? '@2x' : ''}.png`)],
+      { stdio: 'pipe' });
+    }
+  }
+  execFileSync('/usr/bin/iconutil', ['-c', 'icns', iconset, '-o', path.join(stage, 'standterm.icns')]);
+}
 const files = {};
 for (const file of coreFiles.sort()) {
   copy(path.join(root, file), path.join(stage, 'bundle', 'core', file));
   files[file] = createHash('sha256').update(fs.readFileSync(path.join(root, file))).digest('hex');
 }
 const id = createHash('sha256').update(JSON.stringify(files)).digest('hex');
+validateCoreFiles(path.join(stage, 'bundle', 'core'), Object.keys(files));
 fs.writeFileSync(path.join(stage, 'bundle', 'manifest.json'), JSON.stringify({ version: 1, id, files }, null, 2), { flag: 'wx' });
 console.log(stage);

@@ -1,6 +1,6 @@
 {
   "name": "standterm-desktop-evaluation",
-  "version": "0.4.1",
+  "version": "0.4.3",
   "private": true,
   "productName": "StandTerm Desktop",
   "author": "ASKA C.",
@@ -14,7 +14,9 @@
     "smoke": "electron . --desktop-smoke",
     "smoke:capture": "electron . --desktop-capture-smoke",
     "stage:win": "node stage-windows.cjs",
-    "make:win": "electron-builder --config electron-builder.cjs --win nsis --x64 --publish never"
+    "make:win": "electron-builder --config electron-builder.cjs --win nsis --x64 --publish never",
+    "stage:mac": "node stage-windows.cjs --macos",
+    "make:mac": "electron-builder --config electron-builder.cjs --mac dmg --arm64 --publish never"
   },
   "devDependencies": {
     "electron-builder": "26.15.3",

@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { MODES, APP_ID } = require('./desktop-mode.cjs');
+const { WINDOWS_MODES: MODES, APP_ID } = require('./desktop-mode.cjs');
 
 const EVENTS = new Set(['--squirrel-install', '--squirrel-updated', '--squirrel-uninstall', '--squirrel-obsolete']);
 function isSquirrelEvent(argv) { return EVENTS.has(argv[1]); }

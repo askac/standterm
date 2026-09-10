@@ -3210,6 +3210,28 @@ def test_external_agentinfo_payload_route_and_pointer_are_tokenless():
     assert '--handoff' in payload['recommended_commands']['render_after_token_mint']
     assert '--handoff' in payload['recommended_commands']['shcmd_after_token_mint']
     assert 'scripts/agent_shcmd.py' in payload['scripts']['agent_shcmd']
+    assert payload['instance_id'] == standterm.LAUNCHER_INSTANCE_ID
+    assert set(payload['skills']) == {
+        'standterm-external-agent', 'standterm-file-transfer', 'standterm-privileged-hitl',
+    }
+    assert payload['skill'] == payload['skills']['standterm-external-agent']
+    for skill in payload['skills'].values():
+        assert skill['available'] is True
+        for key in ('path', 'boot_prompt_path', 'install_prompt_path'):
+            assert Path(skill[key]).is_file()
+            assert Path(skill[key]).is_relative_to(Path(payload['launch_dir']))
+    for helper in payload['scripts'].values():
+        assert Path(helper).is_file()
+        assert Path(helper).is_relative_to(Path(payload['launch_dir']))
+
+    original_app_dir = standterm.APP_DIR
+    with tempfile.TemporaryDirectory(prefix='standterm-missing-skills-') as missing_dir:
+        try:
+            standterm.APP_DIR = Path(missing_dir)
+            missing = standterm.build_external_agentinfo_payload()
+            assert all(skill['available'] is False for skill in missing['skills'].values())
+        finally:
+            standterm.APP_DIR = original_app_dir
 
     blocked = flask_client.get('/agentinfo', environ_overrides={'REMOTE_ADDR': '203.0.113.10'})
     assert blocked.status_code == 403
@@ -7434,7 +7456,9 @@ def test_wsl_uart_scan_lists_windows_and_wsl_devices():
     original_is_wsl = standterm.is_wsl
     original_detect_windows = standterm.detect_windows_serial_ports_for_wsl
     original_get_serial_modules = standterm.get_serial_modules
+    original_platform = sys.platform
     try:
+        sys.platform = 'linux'
         standterm.is_wsl = lambda: True
         standterm.detect_windows_serial_ports_for_wsl = lambda: [{
             'device': 'COM3',
@@ -7450,6 +7474,7 @@ def test_wsl_uart_scan_lists_windows_and_wsl_devices():
         standterm.is_wsl = original_is_wsl
         standterm.detect_windows_serial_ports_for_wsl = original_detect_windows
         standterm.get_serial_modules = original_get_serial_modules
+        sys.platform = original_platform
 
     by_device = {port['device']: port for port in ports}
     assert list(by_device) == ['COM3', '/dev/ttyACM0', '/dev/ttyUSB0']

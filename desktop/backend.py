@@ -56,6 +56,9 @@ def main():
     sys.argv = [str(root / 'app.py')]
     import app as standterm
     standterm.app.config['DESKTOP_FLOATING_WINDOWS'] = True
+    # Finder starts apps without the login-shell environment used by Terminal.
+    # Let each local shell load its own profile (MacPorts/Homebrew/user PATH).
+    standterm.app.config['DESKTOP_LOGIN_SHELL'] = sys.platform == 'darwin'
     from server_startup import address_in_use, bound_server, suggested_port
 
     # Bind before sharing credentials. The parent decides whether to retry a
