@@ -145,6 +145,8 @@ def new_page(browser, access_url):
     context = browser.new_context(viewport={'width': 1280, 'height': 800})
     page = context.new_page()
     page.goto(debug_url(access_url), wait_until='domcontentloaded')
+    # Keep debug-only overlays from covering controls during normal UI tests.
+    page.add_style_tag(content='#debug-hud, #payload-log { display: none !important; }')
     page.wait_for_function('() => !!window.terminalTest', timeout=10000)
     page.wait_for_function(
         "() => window.terminalTest.getSocketState().connected === true",
@@ -2238,6 +2240,155 @@ def test_paste_review_approve_and_cancel(browser, access_url):
         close_context(context)
 
 
+def test_clipboard_paste_targets_and_native_review(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        attach_agent(page)
+        page.evaluate("""() => {
+            Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+                readText: () => new Promise(resolve => { window.resolveFixturePaste = resolve; })
+            }});
+        }""")
+
+        def begin():
+            page.evaluate("document.querySelector('.terminal-pane.active .xterm-helper-textarea').focus()")
+            page.evaluate("document.getElementById('paste-option').click()")
+            return page.evaluate('window.standtermUi.contextPasteRequest()')
+
+        def finish():
+            page.evaluate("window.resolveFixturePaste('')")
+
+        clear_emitted(page)
+        request = begin()
+        check(bool(request), 'context paste did not capture a target')
+        check(page.evaluate("id => window.standtermUi.completeContextPaste(id, ':')", request), 'context paste failed')
+        check(not page.evaluate("id => window.standtermUi.completeContextPaste(id, ':')", request), 'context paste was reusable')
+        finish()
+        check(len(get_emitted(page, 'ssh_input')) == 1, 'context paste did not send exactly once')
+        page.wait_for_function('window.terminalTest.activeTerminalHasFocus()')
+
+        # Web readText uses the same original-state guard when its promise is delayed.
+        clear_emitted(page)
+        begin()
+        page.evaluate("document.getElementById('new-tab-btn').focus()")
+        page.evaluate("window.resolveFixturePaste(':')")
+        check(not get_emitted(page, 'ssh_input'), 'delayed web paste ignored a changed target')
+
+        for mode in ['modal', 'focus', 'tab']:
+            clear_emitted(page)
+            request = begin()
+            check(bool(request), f'{mode} paste did not capture a target')
+            if mode == 'modal':
+                page.evaluate("document.getElementById('settings-modal').classList.add('open')")
+            elif mode == 'focus':
+                page.evaluate("document.getElementById('new-tab-btn').focus()")
+            else:
+                page.evaluate("document.getElementById('new-tab-btn').click()")
+                page.wait_for_function("window.standtermUi.snapshot().terminalId !== 'main'")
+            check(not page.evaluate("id => window.standtermUi.completeContextPaste(id, ':')", request), f'{mode} change accepted stale paste')
+            finish()
+            check(not get_emitted(page, 'ssh_input'), f'{mode} change sent input')
+            page.evaluate("document.getElementById('settings-modal').classList.remove('open')")
+            if mode == 'tab':
+                page.locator('.terminal-tab[data-terminal-id="main"]').click()
+
+        clear_emitted(page)
+        # Synthetic clipboard events exercise real xterm listeners without OS clipboard access.
+        page.evaluate("window.terminalTest.writeTerminalOutput('\\x1b[?2004l')")
+        page.wait_for_timeout(100)
+        for approve in [False, True]:
+            page.evaluate("""() => {
+                const data = new DataTransfer(); data.setData('text/plain', ':\\n:');
+                document.querySelector('.terminal-pane.active .xterm-helper-textarea').dispatchEvent(
+                    new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+            }""")
+            check(page.locator('#paste-review-modal').evaluate("el => el.classList.contains('open')"), 'native two-line paste skipped review')
+            check(not get_emitted(page, 'ssh_input'), 'native paste sent input before review')
+            page.evaluate(f"document.getElementById('paste-review-{'approve' if approve else 'cancel'}').click()")
+        inputs = get_emitted(page, 'ssh_input')
+        check(len(inputs) == 1 and inputs[0]['args'][0]['data'] == ':\r:', 'native paste sent incorrect or duplicate input')
+        check(page.locator('#context-menu').evaluate("el => getComputedStyle(el).userSelect") == 'none', 'context menu text remains selectable')
+
+        clear_emitted(page)
+        page.evaluate("window.terminalTest.writeTerminalOutput('\\x1b[?2004h')")
+        page.wait_for_timeout(100)
+        page.evaluate("""() => {
+            const data = new DataTransfer(); data.setData('text/plain', ':\\n:');
+            document.querySelector('.terminal-pane.active .xterm-helper-textarea').dispatchEvent(
+                new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+        }""")
+        check(not get_emitted(page, 'ssh_input'), 'bracketed paste sent before review')
+        page.evaluate("document.getElementById('paste-review-approve').click()")
+        inputs = get_emitted(page, 'ssh_input')
+        check(len(inputs) == 1 and inputs[0]['args'][0]['data'] == '\x1b[200~:\r:\x1b[201~', 'review lost bracketed paste semantics')
+
+        clear_emitted(page)
+        page.evaluate("""() => document.querySelector('.terminal-pane.active .xterm-helper-textarea').dispatchEvent(
+            new KeyboardEvent('keydown', {key: 'v', code: 'KeyV', keyCode: 86, ctrlKey: true, bubbles: true, cancelable: true}))""")
+        inputs = get_emitted(page, 'ssh_input')
+        check(len(inputs) == 1 and inputs[0]['args'][0]['data'] == '\x16', 'Ctrl+V no longer sends the terminal control code')
+
+        # A previous document's request must not be reusable after a reload.
+        request = begin()
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_function('window.standtermUi?.version === 1')
+        check(not page.evaluate("id => window.standtermUi.completeContextPaste(id, ':')", request), 'reloaded document accepted an old paste request')
+    finally:
+        close_context(context)
+
+
+def test_clipboard_paste_encoding_is_consistent(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        attach_agent(page)
+        for bracketed in [False, True]:
+            page.evaluate("value => window.terminalTest.writeTerminalOutput(value)", '\x1b[?2004' + ('h' if bracketed else 'l'))
+            page.wait_for_timeout(100)
+            for route in ['native', 'web', 'desktop']:
+                for text in [':', ':\n:', ':\r\n:', ':\x1b[201~:', ':\x1b[201~\n:']:
+                    result = page.evaluate("""async ({route, text}) => {
+                        const area = document.querySelector('.terminal-pane.active .xterm-helper-textarea');
+                        area.focus(); window.terminalTest.clearEmitted();
+                        if (route === 'native') {
+                            const data = new DataTransfer(); data.setData('text/plain', text);
+                            area.dispatchEvent(new ClipboardEvent('paste', {clipboardData: data, bubbles: true, cancelable: true}));
+                        } else {
+                            let resolve;
+                            Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {
+                                readText: () => route === 'web' ? Promise.resolve(text)
+                                    : new Promise(done => { resolve = done; })
+                            }});
+                            const pending = document.getElementById('paste-option').onclick({stopPropagation() {}});
+                            if (route === 'desktop') {
+                                const id = window.standtermUi.contextPasteRequest();
+                                if (!id || !window.standtermUi.completeContextPaste(id, text)) throw new Error('Missing paste target');
+                                resolve('');
+                            }
+                            await pending;
+                        }
+                        const open = () => document.getElementById('paste-review-modal').classList.contains('open');
+                        const outputs = () => window.terminalTest.getEmitted()
+                            .filter(entry => entry.event === 'ssh_input').map(entry => entry.args[0].data);
+                        const review = open();
+                        const before = outputs();
+                        const preview = document.getElementById('paste-review-preview').value;
+                        if (review) document.getElementById('paste-review-approve').click();
+                        return {review, before, preview, repeatedReview: open(), outputs: outputs()};
+                    }""", {'route': route, 'text': text})
+                    expected = text.replace('\x1b', '\u241b')
+                    check(result['review'] == ('\n' in text), f'{route}: incorrect paste review decision')
+                    if result['review']:
+                        check(not result['before'], f'{route}: paste sent before approval')
+                        check(result['preview'] == expected.replace('\r\n', '\n'), f'{route}: preview differs from sanitized text')
+                    expected = expected.replace('\r\n', '\r').replace('\n', '\r')
+                    if bracketed:
+                        expected = '\x1b[200~' + expected + '\x1b[201~'
+                    check(result['outputs'] == [expected], f'{route}: paste encoding differs or was sent more than once')
+                    check(not result['repeatedReview'], f'{route}: approved paste was reviewed again')
+    finally:
+        close_context(context)
+
+
 def test_approval_payload_and_stale_rejections(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
@@ -2541,6 +2692,20 @@ def test_file_copy_approval_keeps_controls_visible_with_long_paths(browser, acce
         clear_emitted(page)
         page.click('#agent-reject-btn')
         check(len(get_emitted(page, 'agent_action_reject')) == 1, 'visible reject did not emit one decision')
+    finally:
+        close_context(context)
+
+
+def test_ime_anchor_poc_loads_and_fails_open(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        page.wait_for_selector('.xterm[data-ime-anchor-poc="enabled"]')
+        # The optional PoC asset must not prevent Core startup if unavailable.
+        page.route('**/static/js/standterm-ime-anchor-poc.js', lambda route: route.abort())
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_selector('.xterm')
+        check(page.locator('.xterm[data-ime-anchor-poc]').count() == 0,
+              'Missing PoC asset did not retain native xterm positioning')
     finally:
         close_context(context)
 
@@ -4210,10 +4375,13 @@ def main():
         test_rendered_viewport_snapshot_returns_png,
         test_background_terminal_render_uses_mirror_canvas_png,
         test_paste_review_approve_and_cancel,
+        test_clipboard_paste_targets_and_native_review,
+        test_clipboard_paste_encoding_is_consistent,
         test_approval_payload_and_stale_rejections,
         test_file_copy_approval_shows_canonical_plan,
         test_file_copy_approval_is_global_and_decision_is_single_shot,
         test_file_copy_approval_keeps_controls_visible_with_long_paths,
+        test_ime_anchor_poc_loads_and_fails_open,
         test_cjk_width_compatibility_defaults_off,
         test_windows_font_fallback_defaults_and_migrates_legacy,
         test_powerline_symbol_fallback_defaults_on_and_preserves_opt_out,

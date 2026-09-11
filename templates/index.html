@@ -114,7 +114,7 @@
         #context-menu {
             display: none; position: fixed; z-index: 3000; background: #2c2c2e; color: white;
             border: 1px solid #555; border-radius: 6px; padding: 4px 0; min-width: 210px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.6); font-size: 13px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.6); font-size: 13px; user-select: none;
         }
         #context-menu .menu-item { padding: 8px 16px; cursor: pointer; }
         #context-menu .menu-item:hover { background: #0a84ff; }
@@ -1507,6 +1507,8 @@
         const BROWSER_KEY_ALGORITHM = { name: 'ECDSA', namedCurve: 'P-256' };
         const BROWSER_SIGN_ALGORITHM = { name: 'ECDSA', hash: { name: 'SHA-256' } };
         const URL_PARAMS = new URLSearchParams(window.location.search);
+        // Experimental Core IME positioning. See docs/ime_anchor_poc.md before promotion.
+        const IME_ANCHOR_POC_ENABLED = true;
         const BROWSER_AUTH_GRANT = URL_PARAMS.get('authorize') || '';
         let browserAuthGrantSubmitted = false;
 
@@ -1909,6 +1911,11 @@
                 return;
             }
 
+            if (IME_ANCHOR_POC_ENABLED) {
+                try { await loadScript('/static/js/standterm-ime-anchor-poc.js'); }
+                catch { console.warn('IME anchor PoC unavailable; using native xterm positioning.'); }
+            }
+
             clearInterval(timerInterval);
             document.getElementById('loader-screen').style.display = 'none';
             document.getElementById('terminal').style.display = 'block';
@@ -2123,6 +2130,8 @@
             let sftpPipState = null;
             let contextMenuTerminalId = null;
             let pendingPasteReview = null;
+            let pendingContextPaste = null;
+            let reviewedClipboardPasteState = null;
             let serverSettingsSnapshot = null;
             let currentSettingsAdminGrant = null;
             let sessionRenewTimer = null;
@@ -3741,17 +3750,29 @@
                 focusTerminalAfterPaste(state);
             }
 
-            function startPasteReview(state, text) {
+            function sendReviewedPaste(state, text, clipboardPaste = false) {
+                if (!isCurrentTerminalState(state) || !socket.connected || !state.connected) return;
+                if (!clipboardPaste) { sendTerminalInput(state, text); return; }
+                // Keep xterm's bracketed-paste and line-ending behavior after review.
+                reviewedClipboardPasteState = state;
+                try { state.term.paste(text); }
+                finally { reviewedClipboardPasteState = null; }
+            }
+
+            function startPasteReview(state, text, clipboardPaste = false) {
                 if (!state || !state.connected || typeof text !== 'string' || !text) return false;
+                // Clipboard ESC must not terminate bracketed paste or inject terminal keys.
+                // Sanitize before review so the preview matches the text sent to xterm.
+                if (clipboardPaste) text = text.replace(/\x1b/g, '\u241b');
                 if (!requiresPasteReview(text)) {
-                    sendTerminalInput(state, text);
+                    sendReviewedPaste(state, text, clipboardPaste);
                     focusTerminalAfterPaste(state);
                     return true;
                 }
                 if (pendingPasteReview) endPasteReview(true);
                 pendingPasteReview = {
                     terminalId: state.id,
-                    text
+                    text, clipboardPaste
                 };
                 emitAgentPrivacyState(state, 'paste_review');
                 pasteReviewMeta.innerText = `${state.label || state.id} · ${text.length} bytes · ${countPasteLines(text)} lines`;
@@ -5334,6 +5355,7 @@
 
             function updateActiveTerminalUi() {
                 const state = getActiveTerminalState();
+                if (pendingContextPaste && pendingContextPaste.state !== state) pendingContextPaste = null;
                 updateTabBarVisibility();
                 terminals.forEach(updateTabState);
                 updateTerminalActions();
@@ -5447,6 +5469,9 @@
                 const fitAddon = (typeof FitAddon !== 'undefined') ? new FitAddon.FitAddon() : null;
                 if (fitAddon) term.loadAddon(fitAddon);
                 term.open(container);
+                if (IME_ANCHOR_POC_ENABLED && typeof window.StandTermImeAnchorPoc === 'function') {
+                    term.loadAddon(new window.StandTermImeAnchorPoc());
+                }
 
                 const state = {
                     id: terminalId,
@@ -5506,9 +5531,18 @@
                 configureWebLinks(state);
                 syncAgentTerminalMirrorSize(state);
                 term.onResize(() => notifyTerminalResize(state));
+                // Review the original clipboard text before xterm normalizes LF to CR.
+                // Bind to this pane so the same target guard follows it into PiP.
+                container.addEventListener('paste', event => {
+                    const text = event.clipboardData?.getData('text/plain') || '';
+                    if (!text) return;
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    if (isCurrentTerminalState(state) && socket.connected && state.connected) startPasteReview(state, text, true);
+                }, true);
                 term.onData(data => {
                     if (!socket || !socket.connected || !state.connected) return;
-                    if (requiresPasteReview(data)) startPasteReview(state, data);
+                    if (reviewedClipboardPasteState !== state && requiresPasteReview(data)) startPasteReview(state, data);
                     else sendTerminalInput(state, data);
                 });
                 tabEl.addEventListener('click', () => {
@@ -9206,7 +9240,7 @@
                 const review = pendingPasteReview;
                 if (!review) return;
                 const state = terminals.get(review.terminalId);
-                if (state && state.connected) sendTerminalInput(state, review.text);
+                if (state && state.connected) sendReviewedPaste(state, review.text, review.clipboardPaste);
                 endPasteReview(true);
             };
             pasteReviewCancelBtn.onclick = () => {
@@ -9218,24 +9252,31 @@
                     endPasteReview(true);
                 }
             });
-            terminalContainer.addEventListener('paste', event => {
-                const state = getActiveTerminalState();
-                if (!state || !state.connected) return;
-                const text = event.clipboardData ? event.clipboardData.getData('text/plain') : '';
-                if (!text) return;
-                event.preventDefault();
-                startPasteReview(state, text);
-            });
             document.getElementById('paste-option').onclick = async (e) => {
                 e.stopPropagation(); contextMenu.style.display = 'none';
-                let text = "";
+                const state = getActiveTerminalState();
+                if (pendingContextPaste || !socket.connected || !state?.connected) return;
+                const request = { id: crypto.getRandomValues(new Uint32Array(4)).join('-'), state, focus: document.activeElement };
+                pendingContextPaste = request;
                 try {
-                    if (navigator.clipboard && navigator.clipboard.readText) text = await navigator.clipboard.readText();
-                    else text = prompt("Paste text here:");
-                    const state = getActiveTerminalState();
-                    if (text && socket.connected && state && state.connected) startPasteReview(state, text);
-                } catch(err) {}
+                    const text = navigator.clipboard?.readText ? await navigator.clipboard.readText() : prompt('Paste text here:');
+                    if (pendingContextPaste === request && validContextPasteRequest() && text) startPasteReview(state, text, true);
+                } catch {
+                    if (!useDesktopFloatingWindows) showError('Clipboard access was denied. Use your terminal paste shortcut (Ctrl+Shift+V or Cmd+V).');
+                } finally {
+                    if (pendingContextPaste === request) pendingContextPaste = null;
+                }
             };
+            function validContextPasteRequest() {
+                const request = pendingContextPaste;
+                return !!request && request.state === getActiveTerminalState()
+                    && isCurrentTerminalState(request.state) && !request.state.inPip && request.state.connected && socket.connected
+                    && document.activeElement === request.focus
+                    && !document.querySelector('#settings-modal.open, #paste-review-modal.open, #session-recovery-modal.open, #browser-auth-help-modal.open');
+            }
+            document.addEventListener('focusin', () => {
+                if (pendingContextPaste && document.activeElement !== pendingContextPaste.focus) pendingContextPaste = null;
+            });
             document.getElementById('close-overlay').onclick = (e) => {
                 e.stopPropagation();
                 clearOverlayFallbackTimer();
@@ -9896,6 +9937,15 @@
             // never terminal labels or other display text.
             window.standtermUi = Object.freeze({
                 version: 1,
+                contextPasteRequest() {
+                    return validContextPasteRequest() ? pendingContextPaste.id : null;
+                },
+                completeContextPaste(id, text) {
+                    if (!validContextPasteRequest() || pendingContextPaste.id !== id || typeof text !== 'string') return false;
+                    const state = pendingContextPaste.state;
+                    pendingContextPaste = null;
+                    return !text || startPasteReview(state, text, true);
+                },
                 snapshot() {
                     const state = getActiveTerminalState();
                     const ready = !!(socket && socket.connected);

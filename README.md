@@ -256,6 +256,23 @@ xterm.js 24-bit color support without requiring a less widely installed terminfo
 entry. SSH sessions continue to request the compatible `xterm-256color` PTY;
 remote environment-variable propagation remains controlled by the SSH server.
 
+Windows Local Shell uses pywinpty 3.0.5 to avoid the fixed per-read delay in
+the older 2.x backend. The launchers refresh dependencies when `requirements.txt`
+changes; an existing running server must be restarted to use the new dependency.
+SSH and local-shell output use bounded reads with idle waits, keeping input
+responsive without imposing a timed delay on each available output chunk.
+
+Clipboard paste, including the terminal's right-click Paste action, preserves
+xterm's bracketed-paste mode and normalizes line endings. Multi-line or large
+text still requires review. Clipboard ESC characters become visible `␛` characters
+before review, so pasted text cannot supply its own bracketed-paste terminator.
+Normal terminal key sequences, including Windows/Linux Ctrl+V, are unchanged.
+
+This development build also enables an **experimental IME positioning PoC**:
+the composition overlay follows its starting input line during terminal redraws.
+It is not yet qualified with real Windows/macOS candidate windows. See
+[PoC scope, fallback behavior, and manual checks](docs/ime_anchor_poc.md).
+
 Backend plugin policy, start form metadata, and runtime defaults are documented
 in `docs/backend_plugin_contract.md`.
 

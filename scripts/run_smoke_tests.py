@@ -22,9 +22,12 @@ COMPILE_TARGETS = [
     'tests/agent_repl_smoke.py',
     'tests/agent_rsfile_smoke.py',
     'tests/static_site_smoke.py',
+    'tests/terminal_read_smoke.py',
+    'tests/ime_anchor_browser_smoke.py',
 ]
 
 HEADLESS_SMOKE_TESTS = [
+    'tests/terminal_read_smoke.py',
     'tests/server_startup_smoke.py',
     'tests/external_agent_boundary_smoke.py',
     'tests/agent_repl_smoke.py',
