@@ -32,10 +32,17 @@
         .terminal-tab.connected .tab-state { background: #34c759; }
         .terminal-tab.connecting .tab-state { background: #ffcc00; }
         .terminal-tab.error .tab-state { background: #ff9f0a; }
+        .terminal-tab.agent-token-active { background: #123a35; }
+        .terminal-tab.agent-token-active.active { background: #184b43; }
+        .terminal-tab.agent-token-active .tab-state { background: #40e0d0; }
+        .terminal-tab.agent-token-expired { background: #202b2a; }
+        .terminal-tab.agent-token-expired.active { background: #283936; }
+        .terminal-tab.agent-token-expired .tab-state { background: #47736e; }
         .terminal-tab.operator-observing { border-color: #ff453a; box-shadow: inset 0 -2px 0 #ff453a; }
         .terminal-tab.in-pip { display: none; }
         .tab-state { width: 7px; height: 7px; border-radius: 50%; background: #777; flex: 0 0 auto; }
         .tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+        .tab-agent-countdown { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
         .tab-close { width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border: none; border-radius: 4px; background: transparent; color: #888; cursor: pointer; font-size: 15px; line-height: 1; padding: 0; flex: 0 0 auto; }
         .tab-close:hover { background: #444; color: #fff; }
         .status-action { height: 21px; border: 1px solid #333; border-radius: 5px; background: #202020; color: #b6b6b6; cursor: pointer; font-size: 12px; line-height: 1; padding: 0 8px; flex: 0 0 auto; }
@@ -1123,6 +1130,8 @@
             <button id="new-tab-btn" class="status-action" type="button" title="New terminal tab" aria-label="New terminal tab">+</button>
         </div>
         <button id="agent-pause-btn" class="status-action" type="button" title="Pause Agent terminal input">Pause Agent</button>
+        <button id="agent-status-mint-btn" class="status-action agent-status-mint" title="Mint a standard external-agent token for the active terminal">Mint</button>
+        <button id="agent-status-mint-3x-btn" class="status-action agent-status-mint" title="Mint a 3x idle-time external-agent token for the active terminal">Mint 3&times;</button>
         <div id="terminal-tools">
             <button id="agent-toggle-btn" class="status-action" type="button" title="Show Agent panel">Show Agent Panel</button>
             <button id="sftp-status-btn" class="status-action status-sftp" type="button" title="Open Files" aria-label="Open Files" hidden>&#x1F4C1;</button>
@@ -1145,8 +1154,6 @@
         <span class="sb-sep">|</span>
         <span class="sb-item" id="clock-display"></span>
         <span id="uptime-section" class="sb-item" style="display:none"><span class="sb-sep">|</span>connected:&nbsp;<span id="uptime-display"></span></span>
-        <button id="agent-status-mint-btn" class="status-action agent-status-mint" title="Mint a standard external-agent token for the active terminal">Mint Agent</button>
-        <button id="agent-status-mint-3x-btn" class="status-action agent-status-mint" title="Mint a 3x idle-time external-agent token for the active terminal">Mint Agent 3&times;</button>
     </div>
     <div id="policy-debug-panel"></div>
     <div id="debug-hud"></div>
@@ -2961,8 +2968,8 @@
                     button.classList.toggle('visible', available);
                     button.disabled = !available || minting;
                 });
-                agentStatusMintBtn.innerText = minting ? 'Minting...' : 'Mint Agent';
-                agentStatusMint3xBtn.innerText = minting ? 'Minting...' : 'Mint Agent 3×';
+                agentStatusMintBtn.innerText = minting ? 'Minting...' : 'Mint';
+                agentStatusMint3xBtn.innerText = minting ? 'Minting...' : 'Mint 3×';
                 if (state) {
                     const target = state.label || state.id;
                     agentStatusMintBtn.title = `Mint a standard external-agent token for ${target}`;
@@ -3065,6 +3072,7 @@
             }
 
             function updateAgentPanel() {
+                terminals.forEach(updateTabAgentIndicator);
                 const state = getAgentPanelTerminalState();
                 const usable = canUseAgentPanel(state);
                 if (!usable) {
@@ -5171,6 +5179,8 @@
                 const state = getActiveTerminalState();
                 document.getElementById('clock-display').innerText = now.toLocaleString();
                 if (state && state.connectedAt) document.getElementById('uptime-display').innerText = formatUptime(Math.floor((now - state.connectedAt) / 1000));
+                // Expiry must remain visible even when another tab owns the Agent panel.
+                terminals.forEach(updateTabAgentIndicator);
             }, 1000);
 
             function updateTerminalSizeStatus() {
@@ -5247,6 +5257,32 @@
                 terminalTitleItem.title = title;
             }
 
+            function updateTabAgentIndicator(state) {
+                const token = getCurrentAgentExternalToken(state);
+                const eligible = canUseAgentPanel(state) && !state.connecting && !state.error
+                    && state.agent.mode !== AGENT_MODE_DISABLED && !state.agent.paused
+                    && state.agent.mode !== AGENT_MODE_PAUSED
+                    && token && (token.status === 'active' || token.status === 'attached')
+                    && Number.isFinite(token.expiresAt);
+                const secondsRemaining = eligible ? getAgentExternalTokenSecondsRemaining(state.agent) : null;
+                const active = !!eligible && secondsRemaining > 0;
+                const expired = !!eligible && !active;
+                state.tabEl.classList.toggle('agent-token-active', active);
+                state.tabEl.classList.toggle('agent-token-expired', expired);
+                const label = getTerminalDisplayLabel(state);
+                if (state.titleEl.innerText !== label) state.titleEl.innerText = label;
+                const countdown = active ? `(${secondsRemaining})` : '';
+                if (state.agentCountdownEl.textContent !== countdown) state.agentCountdownEl.textContent = countdown;
+                state.agentCountdownEl.hidden = !active;
+                const title = active
+                    ? `${label}\nExternal agent token active (${formatAgentModeLabel(state.agent.mode)}); ${secondsRemaining}s remaining without activity`
+                    : expired ? `${label}\nExternal agent token expired; mint again to continue` : label;
+                if (state.tabEl.title !== title) {
+                    state.tabEl.title = title;
+                    state.tabEl.setAttribute('aria-label', title);
+                }
+            }
+
             function updateTabState(state) {
                 state.tabEl.classList.toggle('active', state.id === activeTerminalId);
                 state.tabEl.classList.toggle('connected', state.connected);
@@ -5254,9 +5290,7 @@
                 state.tabEl.classList.toggle('error', state.error);
                 state.tabEl.classList.toggle('operator-observing', !!(state.observation && state.observation.active));
                 state.tabEl.classList.toggle('in-pip', !!state.inPip);
-                const displayLabel = getTerminalDisplayLabel(state);
-                state.titleEl.innerText = displayLabel;
-                state.tabEl.title = displayLabel;
+                updateTabAgentIndicator(state);
                 updatePipStatus(state);
             }
 
@@ -5447,12 +5481,15 @@
                 const titleEl = document.createElement('span');
                 titleEl.className = 'tab-title';
                 titleEl.innerText = title;
+                const agentCountdownEl = document.createElement('span');
+                agentCountdownEl.className = 'tab-agent-countdown';
+                agentCountdownEl.hidden = true;
                 const closeBtn = document.createElement('button');
                 closeBtn.type = 'button';
                 closeBtn.className = 'tab-close';
                 closeBtn.title = 'Close terminal tab';
                 closeBtn.innerText = '×';
-                tabEl.append(stateEl, titleEl, closeBtn);
+                tabEl.append(stateEl, titleEl, agentCountdownEl, closeBtn);
                 tabsList.appendChild(tabEl);
 
                 const term = new Terminal({
@@ -5495,6 +5532,7 @@
                     container,
                     tabEl,
                     titleEl,
+                    agentCountdownEl,
                     term,
                     fitAddon,
                     webglAddon: null,
@@ -5766,6 +5804,9 @@
                     },
                     applyAgentActionPayloadForTest(payload) {
                         applyAgentActionPayload(cloneForTest(payload));
+                    },
+                    applyAgentExternalTokenStateForTest(payload) {
+                        applyAgentExternalTokenState(cloneForTest(payload));
                     },
                     activeTerminalHasFocus() {
                         const state = getActiveTerminalState();

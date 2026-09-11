@@ -268,6 +268,16 @@ text still requires review. Clipboard ESC characters become visible `␛` charac
 before review, so pasted text cannot supply its own bracketed-paste terminator.
 Normal terminal key sequences, including Windows/Linux Ctrl+V, are unchanged.
 
+Terminal tabs use a turquoise light and tinted background while their minted
+external-agent token is valid, and dim turquoise when it expires. The tooltip
+states the token status; tab labels include remaining idle seconds, for example
+`SSH - vax (123)`. Expiry hides the countdown but retains the dim tint. The color
+does not mean an agent is currently executing.
+Revocation, invalidation, or disabling access removes the tint, and connection
+warnings take priority. Background tabs update without opening the Agent panel.
+The tab-row Mint and Mint 3× buttons sit beside Pause Agent when the Agent panel
+is hidden, and always target the active terminal.
+
 This development build also enables an **experimental IME positioning PoC**:
 the composition overlay follows its starting input line during terminal redraws.
 It is not yet qualified with real Windows/macOS candidate windows. See

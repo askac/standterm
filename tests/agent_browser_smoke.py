@@ -1922,11 +1922,95 @@ def test_agent_panel_status_gates_and_external_hint(browser, access_url):
         check(status_minted['idleTimeoutMultiplier'] == 3, 'status-bar 3x mint did not retain the structured multiplier')
         check(status_minted['remainingMs'] > 10 * 60 * 1000, 'status-bar 3x mint did not extend the idle lifetime')
         check(status_minted['panelVisible'] is False, 'status-bar mint unexpectedly opened the Agent panel')
+        check(page.locator('#agent-pause-btn + #agent-status-mint-btn + #agent-status-mint-3x-btn').count() == 1,
+              'Mint actions are not adjacent to Pause Agent in the tab row')
 
         page.click('#agent-toggle-btn')
         page.wait_for_selector('#agent-panel.visible', timeout=5000)
         minted_command = page.evaluate("() => document.getElementById('agent-external-command').value")
         check('# terminal handoff:' in minted_command, '3x mint did not expose the stable terminal handoff path')
+    finally:
+        close_context(context)
+
+
+def test_external_token_tab_indicator_tracks_background_lifecycle(browser, access_url):
+    context, page = new_page(browser, access_url)
+    main_tab = '.terminal-tab[data-terminal-id="main"]'
+    try:
+        attach_agent(page)
+        check(page.locator(main_tab + '.agent-token-active').count() == 0,
+              'Enabled access without a minted token acquired the turquoise indicator')
+        page.click('#agent-toggle-btn')
+        page.wait_for_selector('#agent-panel.visible')
+        page.click('#agent-external-token-btn')
+        page.wait_for_selector(main_tab + '.agent-token-active', state='attached')
+        page.click('#new-tab-btn')
+        check(page.locator(main_tab + '.active').count() == 0, 'Fixture did not switch tabs')
+        check(page.locator(main_tab + '.agent-token-active').count() == 1,
+              'Background tab lost its minted-token indicator')
+        check(page.locator('.terminal-tab.active.agent-token-active').count() == 0,
+              'New tab inherited the other terminal token indicator')
+        check('External agent token active' in page.locator(main_tab).get_attribute('title'),
+              'Active token has no text explanation')
+        color = lambda: page.locator(main_tab + ' .tab-state').evaluate(
+            'element => getComputedStyle(element).backgroundColor')
+        check(color() == 'rgb(64, 224, 208)', 'Active token light is not turquoise')
+        check(re.fullmatch(r'\(\d+\)', page.locator(main_tab + ' .tab-agent-countdown').inner_text()),
+              'Active token has no remaining-seconds label')
+        # Control wall time for synthetic expiry; leave the real refresh timer running.
+        page.evaluate('() => { window.tabTokenTestNow = Date.now(); Date.now = () => window.tabTokenTestNow; }')
+
+        def token_event(status, remaining_ms):
+            page.evaluate('payload => window.terminalTest.applyAgentExternalTokenStateForTest(payload)', {
+                'terminal_id': TERMINAL_ID, 'token_status': status,
+                'external_agent_token': {'remaining_idle_ms': remaining_ms},
+            })
+
+        # No active-panel countdown: only the shared clock can dim this background tab.
+        token_event('active', 1000)
+        page.evaluate('() => { window.tabTokenTestNow += 1001; }')
+        page.wait_for_selector(main_tab + '.agent-token-expired', state='attached', timeout=3000)
+        check(color() == 'rgb(71, 115, 110)', 'Expired token light is not dim turquoise')
+        check('expired' in page.locator(main_tab).get_attribute('title'), 'Expiry tooltip is missing')
+        check(page.locator(main_tab + ' .tab-agent-countdown').is_hidden(),
+              'Expired background tab retained a countdown')
+        check(page.locator(main_tab + '.agent-token-active').count() == 0, 'Expired token stayed bright')
+        token_event('attached', 60000)
+        page.wait_for_selector(main_tab + '.agent-token-active', state='attached')
+        check(page.locator(main_tab + ' .tab-agent-countdown').inner_text() == '(60)',
+              'Token activity did not refresh the background countdown')
+        page.evaluate('() => { window.tabTokenTestNow += 1100; }')
+        page.wait_for_function("""() => document.querySelector(
+            '.terminal-tab[data-terminal-id="main"] .tab-agent-countdown').innerText === '(59)'""", timeout=3000)
+        token_event('revoked', 60000)
+        check(page.locator(main_tab + '.agent-token-active').count() == 0, 'Revoked token stayed bright')
+        check(page.locator(main_tab + '.agent-token-expired').count() == 0, 'Revocation was shown as expiry')
+        check('External agent token' not in page.locator(main_tab).get_attribute('title'),
+              'Revoked token tooltip remained stale')
+        check(page.locator(main_tab + ' .tab-agent-countdown').is_hidden(),
+              'Revoked token retained a countdown label')
+        token_event('active', 60000)
+        token_event('invalidated', 60000)
+        check(page.locator(main_tab + '.agent-token-active').count() == 0, 'Invalidated token stayed bright')
+        token_event('active', 60000)
+        emit_socket(page, 'agent_mode_set', {'terminal_id': TERMINAL_ID, 'mode': 'disabled'})
+        page.wait_for_function("() => window.terminalTest.getAgentStateForTest('main').mode === 'disabled'")
+        check(page.locator(main_tab + '.agent-token-active').count() == 0, 'Disabled access stayed bright')
+        check(color() == 'rgb(52, 199, 89)', 'Disabled access lost the normal connected light')
+        page.evaluate('id => window.terminalTest.switchTerminalForTest(id)', TERMINAL_ID)
+        set_agent_mode(page, 'direct', 'direct_active')
+        page.set_viewport_size({'width': 640, 'height': 600})
+        for selector in ['#new-tab-btn', '#agent-pause-btn', '#agent-status-mint-btn',
+                         '#agent-status-mint-3x-btn', '#agent-toggle-btn', '#quick-settings']:
+            bounds = page.locator(selector).bounding_box()
+            check(bounds is not None and bounds['x'] >= 0 and bounds['x'] + bounds['width'] <= 640,
+                  f'{selector} is clipped beside the compact tab row')
+        page.click('#agent-status-mint-btn')
+        page.wait_for_selector(main_tab + '.agent-token-active', state='attached')
+        page.click('#agent-pause-btn')
+        wait_for_agent(page, "state.mode === 'paused'")
+        check(page.locator(main_tab + '.agent-token-active').count() == 0, 'Paused access stayed bright')
+        check(page.locator(main_tab + ' .tab-agent-countdown').is_hidden(), 'Paused token retained a countdown')
     finally:
         close_context(context)
 
@@ -4371,6 +4455,7 @@ def main():
         test_hidden_mirror_ignores_visible_scroll,
         test_privacy_states_block_snapshots_and_agent_runs,
         test_agent_panel_status_gates_and_external_hint,
+        test_external_token_tab_indicator_tracks_background_lifecycle,
         test_session_recovery_new_tab_can_renew_external_agent_token,
         test_rendered_viewport_snapshot_returns_png,
         test_background_terminal_render_uses_mirror_canvas_png,
