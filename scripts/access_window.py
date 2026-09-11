@@ -1,8 +1,10 @@
 import argparse
 import json
 import os
+import queue
 import ssl
 import sys
+import threading
 import tkinter as tk
 import urllib.error
 import urllib.parse
@@ -24,6 +26,7 @@ ERROR_INSTANCE_MISMATCH = 'instance_mismatch'
 ERROR_HTTP = 'http'
 
 LAUNCHER_POLL_INTERVAL_MS = 2000
+LAUNCHER_RESULT_CHECK_MS = 50
 LAUNCHER_OFFLINE_POLL_LIMIT = 5
 
 
@@ -378,20 +381,80 @@ def update_button_states(args, launcher_state, access_buttons, shutdown_button):
         set_button_enabled(shutdown_button, bool(args.shutdown_urls and args.shutdown_token and access_window_can_shutdown(launcher_state)))
 
 
-def poll_launcher_status(root, args, status_text_var, launcher_state, access_buttons, shutdown_button):
-    if access_window_state_name(launcher_state) == UI_STATE_SHUTTING_DOWN:
-        return
-    data, error = fetch_launcher_json_any(args.status_urls, args.shutdown_token, args.instance_id)
-    should_close = update_launcher_poll_lifecycle(launcher_state, error)
-    status_text_var.set(format_launcher_status(data or {}, error=error, state=launcher_state))
-    update_button_states(args, launcher_state, access_buttons, shutdown_button)
-    if should_close:
-        root.destroy()
-        return
-    root.after(
-        LAUNCHER_POLL_INTERVAL_MS,
-        lambda: poll_launcher_status(root, args, status_text_var, launcher_state, access_buttons, shutdown_button),
-    )
+class LauncherStatusPoller:
+    def __init__(self, root, args, status_text_var, launcher_state, access_buttons, shutdown_button):
+        self.root = root
+        self.args = args
+        self.status_text_var = status_text_var
+        self.launcher_state = launcher_state
+        self.access_buttons = access_buttons
+        self.shutdown_button = shutdown_button
+        self.timer = None
+        self.results = None
+        self.closed = False
+        root.bind('<Destroy>', self._on_destroy, add='+')
+
+    def start(self):
+        if not self.closed and self.timer is None and self.results is None:
+            self._schedule(100, self._poll)
+
+    def _schedule(self, delay, callback):
+        self.timer = self.root.after(delay, callback)
+
+    def _on_destroy(self, event):
+        if event.widget is not self.root:
+            return
+        self.closed = True
+        if self.timer is not None:
+            self.root.after_cancel(self.timer)
+            self.timer = None
+        # The daemon may finish its request, but it never calls Tk.
+        self.results = None
+
+    def _poll(self):
+        self.timer = None
+        if self.closed or self.results is not None:
+            return
+        if access_window_state_name(self.launcher_state) == UI_STATE_SHUTTING_DOWN:
+            self._schedule(LAUNCHER_POLL_INTERVAL_MS, self._poll)
+            return
+        results = queue.SimpleQueue()
+        self.results = results
+        urls = list(self.args.status_urls)
+        token, instance_id = self.args.shutdown_token, self.args.instance_id
+
+        def fetch():
+            try:
+                result = fetch_launcher_json_any(urls, token, instance_id)
+            except Exception:
+                result = None, make_launcher_error(ERROR_UNREACHABLE, 'Launcher status request failed.')
+            results.put(result)
+
+        try:
+            threading.Thread(target=fetch, daemon=True).start()
+        except RuntimeError:
+            results.put((None, make_launcher_error(ERROR_UNREACHABLE, 'Launcher status worker could not start.')))
+        self._schedule(LAUNCHER_RESULT_CHECK_MS, self._receive)
+
+    def _receive(self):
+        self.timer = None
+        if self.closed:
+            return
+        try:
+            data, error = self.results.get_nowait()
+        except queue.Empty:
+            self._schedule(LAUNCHER_RESULT_CHECK_MS, self._receive)
+            return
+        self.results = None
+        # A reply started before Shutdown must not re-enable the controls.
+        if access_window_state_name(self.launcher_state) != UI_STATE_SHUTTING_DOWN:
+            should_close = update_launcher_poll_lifecycle(self.launcher_state, error)
+            self.status_text_var.set(format_launcher_status(data or {}, error=error, state=self.launcher_state))
+            update_button_states(self.args, self.launcher_state, self.access_buttons, self.shutdown_button)
+            if should_close:
+                self.root.destroy()
+                return
+        self._schedule(LAUNCHER_POLL_INTERVAL_MS, self._poll)
 
 
 def bind_window_close(root):
@@ -492,17 +555,10 @@ def build_window(args):
 
     root.after(100, root.lift)
     if args.status_urls and args.shutdown_token:
-        root.after(
-            100,
-            lambda: poll_launcher_status(
-                root,
-                args,
-                status_text_var,
-                launcher_state,
-                access_buttons,
-                shutdown_button,
-            ),
+        poller = LauncherStatusPoller(
+            root, args, status_text_var, launcher_state, access_buttons, shutdown_button,
         )
+        poller.start()
     return root
 
 

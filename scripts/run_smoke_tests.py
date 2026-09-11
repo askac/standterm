@@ -10,6 +10,8 @@ COMPILE_TARGETS = [
     'app.py',
     'session_recovery.py',
     'server_startup.py',
+    'scripts/access_window.py',
+    'tests/access_window_smoke.py',
     'tests/server_startup_smoke.py',
     'scripts/agent_cli.py',
     'scripts/agent_jsonl.py',
@@ -27,6 +29,7 @@ COMPILE_TARGETS = [
 ]
 
 HEADLESS_SMOKE_TESTS = [
+    'tests/access_window_smoke.py',
     'tests/terminal_read_smoke.py',
     'tests/server_startup_smoke.py',
     'tests/external_agent_boundary_smoke.py',

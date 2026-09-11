@@ -100,6 +100,12 @@ redirects to `/`.
 Use `./run.sh --force` or `run.bat --force` to rebuild dependency checks after
 pulling large changes.
 
+The optional Tk access window checks backend status in a background worker, so
+slow Windows-to-WSL connections do not block its event loop during polling.
+Only one status request runs per window; closing the window does not wait for
+that request or shut down the server. Authentication, instance checks, URL
+fallback order, and the existing offline-close policy are unchanged.
+
 ## What It Does
 
 An optional [Electron desktop evaluation](desktop/README.md) can launch its own
