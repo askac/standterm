@@ -49,6 +49,8 @@ function installToolbar(win, coreView, capture, commands) {
       return true;
     }
     switch (action) {
+      case 'copy-text': return commands.edit('copy');
+      case 'paste-text': return commands.edit('paste');
       case 'screenshot-file': await capture.screenshot('file'); break;
       case 'screenshot-clipboard': await capture.screenshot('clipboard'); break;
       case 'record': await capture.start(); break;

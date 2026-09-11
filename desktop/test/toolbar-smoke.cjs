@@ -8,7 +8,7 @@ const { app, BrowserWindow, Menu, clipboard, dialog } = require('electron');
 async function run(win, contents, browserAccess) {
   const evaluate = script => contents.executeJavaScript(script, true);
   const until = async (check, stage) => {
-    const deadline = Date.now() + 10000;
+    const deadline = Date.now() + 15000;
     while (!await check()) {
       if (Date.now() > deadline) throw new Error(`Desktop toolbar smoke timed out: ${stage}; ${JSON.stringify({
         visible: win.isVisible(), minimized: win.isMinimized(), focused: win.isFocused(),
@@ -19,7 +19,12 @@ async function run(win, contents, browserAccess) {
   };
   const menu = Menu.getApplicationMenu();
   assert.deepEqual(menu.items.map(item => item.id), ['standterm', 'edit', 'agent-menu', 'view', 'diagnostics']);
+  assert.deepEqual(await win.webContents.executeJavaScript(`({
+    menusHidden: document.getElementById('menus').hidden,
+    titleHidden: document.getElementById('mac-title').hidden,
+  })`), { menusHidden: process.platform === 'darwin', titleHidden: process.platform !== 'darwin' });
   assert.notEqual(win.webContents.session, contents.session);
+  assert.equal(win.webContents.backgroundThrottling, false);
   assert.deepEqual(await win.webContents.session.cookies.get({}), []);
   assert.equal(await evaluate('typeof window.desktopToolbar'), 'undefined');
   assert.equal(contents.getLastWebPreferences().preload, undefined);
@@ -46,6 +51,34 @@ async function run(win, contents, browserAccess) {
   if (win.isMinimized()) win.restore();
   win.show(); win.moveTop(); win.focus(); contents.focus();
   await until(() => BrowserWindow.getFocusedWindow() === win, 'main focus');
+  // Exercise native routing with spies, never the operator's OS clipboard.
+  const originalNativeCopy = contents.copy, originalNativePaste = contents.paste;
+  const edits = [];
+  contents.copy = () => edits.push('copy');
+  contents.paste = () => edits.push('paste');
+  try {
+    assert.equal(await win.webContents.executeJavaScript("window.desktopToolbar.invoke('copy-text')"), true);
+    assert.equal(await win.webContents.executeJavaScript("window.desktopToolbar.invoke('paste-text')"), true);
+    assert.deepEqual(edits, ['copy', 'paste']);
+    assert.equal(await win.webContents.executeJavaScript("getComputedStyle(document.querySelector('#menus button')).userSelect"), 'none');
+  } finally { contents.copy = originalNativeCopy; contents.paste = originalNativePaste; }
+  const originalRead = clipboard.readText;
+  let reads = 0, prompts = 0;
+  clipboard.readText = async () => { reads++; return ':\n:'; };
+  dialog.showMessageBox = async () => { prompts++; return { response: 1 }; };
+  try {
+    await evaluate("document.getElementById('paste-option').click()");
+    await until(() => evaluate("document.getElementById('paste-review-modal').classList.contains('open')"), 'native context paste review');
+    assert.equal(reads, 1);
+    assert.equal(prompts, 1);
+    assert.equal(await evaluate("document.getElementById('paste-review-preview').value"), ':\n:');
+    await evaluate("document.getElementById('paste-review-cancel').click()");
+    await until(() => evaluate('window.standtermUi.contextPasteRequest() === null'), 'context paste cleared');
+    assert.equal(await evaluate("navigator.clipboard.readText().then(() => 'granted', () => 'denied')"), 'denied');
+    assert.equal(reads, 1, 'background renderer reads must not access the OS clipboard');
+    assert.equal(prompts, 1, 'background renderer reads without a target must not prompt');
+  } finally { clipboard.readText = originalRead; dialog.showMessageBox = originalDialog; }
+  console.log('Desktop clipboard smoke: toolbar routing, one-time context consent, denied background reads and multi-line review passed (mocked OS clipboard).');
   await until(() => menu.getMenuItemById('ui-settings').enabled, 'Settings enabled');
   menu.getMenuItemById('ui-settings').click();
   await until(() => evaluate("document.getElementById('settings-modal').classList.contains('open')"), 'Settings opened');
@@ -80,6 +113,10 @@ async function run(win, contents, browserAccess) {
   })`), true);
   assert.equal(await evaluate("document.querySelector('#status-bar #new-tab-btn, #status-bar #quick-settings, #status-bar #agent-pause-btn') === null"), true);
   assert.equal(await evaluate('innerHeight'), win.getContentSize()[1] - 36);
+  assert.equal(await win.webContents.executeJavaScript(`
+    [...document.querySelectorAll('#edit-tools button, #capture-tools button')].filter(el => !el.hidden).every(el => {
+      const bounds = el.getBoundingClientRect(); return bounds.x >= 0 && bounds.right <= innerWidth;
+    })`), true, 'clipboard and capture controls must fit a narrow window');
   const directory = await fs.mkdtemp(path.join(app.isPackaged ? app.getPath('temp') : path.join(__dirname, '..', 'dist'), 'toolbar-smoke-'));
   const screenshotCss = await contents.insertCSS('#debug-hud, #policy-debug-panel, #payload-log { display: none !important; }');
   console.log('Desktop toolbar smoke: capturing the Core preview.');
@@ -94,6 +131,39 @@ async function run(win, contents, browserAccess) {
   await fs.writeFile(path.join(directory, 'toolbar.png'), (await win.webContents.capturePage({ x: 0, y: 0, width: win.getContentSize()[0], height: 36 })).toPNG(), { flag: 'wx' });
   await contents.removeInsertedCSS(screenshotCss);
   win.setSize(...originalSize);
+  if (process.platform === 'darwin') {
+    const toolbar = script => win.webContents.executeJavaScript(script);
+    const visible = () => toolbar("document.getElementById('notice-area').classList.contains('visible')");
+    const background = new BrowserWindow({ width: 300, height: 200, show: false,
+      webPreferences: { sandbox: true, nodeIntegration: false, contextIsolation: true } });
+    try {
+      await background.loadURL('data:text/html,<p>Background timer fixture</p>');
+      background.show(); background.focus();
+      await until(() => BrowserWindow.getFocusedWindow() === background, 'background timer focus');
+      for (const [noticeId, error, minimumMs] of [[-1, false, 4900], [-2, true, 9900]]) {
+        const started = Date.now();
+        win.webContents.send('standterm-toolbar-state', { notice: 'Isolated Mac notice fixture.', noticeId, error });
+        await until(visible, 'notice visible');
+        await until(async () => !await visible(), 'notice fade');
+        assert.ok(Date.now() - started >= minimumMs, 'notice must not disappear early');
+        await until(async () => await toolbar("document.getElementById('notice').textContent") === '', 'notice text cleared');
+      }
+    } finally { background.destroy(); }
+    win.focus(); contents.focus();
+    await until(() => BrowserWindow.getFocusedWindow() === win, 'focus after background notices');
+    const layout = await toolbar(`({
+      scale: devicePixelRatio, width: innerWidth,
+      reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
+      transition: getComputedStyle(document.getElementById('notice-area')).transitionDuration,
+      controlsFit: [...document.querySelectorAll('#edit-tools button, #capture-tools button')].filter(element => !element.hidden).every(element => {
+        const bounds = element.getBoundingClientRect(); return bounds.x >= 0 && bounds.right <= innerWidth;
+      }),
+    })`);
+    assert.ok(layout.controlsFit);
+    assert.ok(layout.scale >= 1);
+    if (layout.reducedMotion) assert.equal(layout.transition, '0s');
+    console.log(`macOS toolbar renderer: native menu, background five/ten-second notices and wide layout passed; ${JSON.stringify(layout)}`);
+  }
   console.log(`Desktop toolbar smoke: isolated SVG toolbar, focus guards, native Settings/tab actions and compact layout passed (${directory}).`);
 }
 

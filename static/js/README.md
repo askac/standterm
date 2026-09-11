@@ -32,3 +32,19 @@ matching stylesheet is copied to `../css/xterm.css` from `@xterm/xterm`.
 xterm.js and its addons are MIT licensed. Keep the matching files under
 `../licenses/` and the xterm.js section in
 `../../THIRD-PARTY-NOTICES.md` when releasing these files.
+
+## StandTerm IME positioning PoC
+
+`standterm-ime-anchor-poc.js` is a separate experimental StandTerm adapter for
+xterm 6.0.0, not a modification of the vendored `xterm.js` bundle. It anchors the
+composition overlay and hidden textarea to the input line at composition start.
+Text, selection, commit, and cancel handling remain owned by xterm. Resize,
+buffer changes, and an unavailable/offscreen anchor restore native positioning
+for the rest of that composition. A composition that begins at a temporary TUI
+drawing cursor can still start in the wrong place.
+
+The development build enables it through `IME_ANCHOR_POC_ENABLED` in
+`templates/index.html`; set that constant to `false` and reload to compare with
+native positioning. It uses guarded private APIs and must be reassessed on an
+xterm upgrade. Synthetic browser checks do not qualify actual OS candidate
+windows. The source checkout includes `docs/ime_anchor_poc.md` with manual checks.

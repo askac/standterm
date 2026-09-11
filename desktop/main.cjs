@@ -22,6 +22,7 @@ const { createExternalOpener } = require('./external-links.cjs');
 const { createUiCommands } = require('./ui-commands.cjs');
 const { installToolbar } = require('./toolbar.cjs');
 const { createBrowserAccess } = require('./browser-access.cjs');
+const { installContextPaste } = require('./context-paste.cjs');
 
 let maintenance;
 try { maintenance = installerRequest(process.argv); } catch (error) {
@@ -294,6 +295,9 @@ async function start() {
     minWidth: 640, minHeight: 480, show: false, icon,
     webPreferences: {
       partition: 'standterm-desktop-toolbar', preload: path.join(__dirname, 'toolbar-preload.cjs'),
+      // The trusted status strip must keep timers/notices current when unfocused.
+      // Capture focus/visibility guards and Core's own preferences stay unchanged.
+      backgroundThrottling: false,
       nodeIntegration: false, contextIsolation: true,
       sandbox: true, webSecurity: true, webviewTag: false,
       allowRunningInsecureContent: false, devTools: true,
@@ -319,6 +323,7 @@ async function start() {
     } } : {}),
   });
   toolbar = installToolbar(win, coreView, capture, commands);
+  installContextPaste(win, contents, handoff.origin, toolbar.notify);
   const browserAccess = createBrowserAccess({ origin: handoff.origin, session: desktopSession, launcherToken,
     available: () => !win.isDestroyed() && !contents.isDestroyed() && allowedNavigation(contents.getURL(), handoff.origin),
     confirm: async () => {

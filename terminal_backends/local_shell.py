@@ -41,6 +41,8 @@ class LocalFileTransferError(Exception):
 LOCAL_FILE_REFERENCE_TTL_SECONDS = 5 * 60
 LOCAL_FILE_REFERENCE_MAX_RECORDS = 4096
 LOCAL_FILE_REFERENCE_TOKEN_BYTES = 12
+LOCAL_SHELL_READ_SIZE = 64 * 1024
+LOCAL_SHELL_IDLE_WAIT_SECONDS = 0.01
 
 
 class LocalShellBridge(TerminalBridge):
@@ -737,7 +739,8 @@ class LocalShellBridge(TerminalBridge):
     def read_loop(self):
         log_message(f"[*] Starting local shell read loop for {self.sid}")
         while True:
-            self.runtime.sleep(0.01)
+            # Yield between bounded reads without delaying already available output.
+            self.runtime.sleep(0)
             if not self.process:
                 break
 
@@ -747,7 +750,7 @@ class LocalShellBridge(TerminalBridge):
                 continue
 
             try:
-                readable, _, _ = select.select([self.process.fd], [], [], 0)
+                readable, _, _ = select.select([self.process.fd], [], [], LOCAL_SHELL_IDLE_WAIT_SECONDS)
                 if not readable:
                     if self.closing:
                         break
@@ -759,7 +762,7 @@ class LocalShellBridge(TerminalBridge):
                         break
                     continue
 
-                data = self.process.read(size=4096)
+                data = self.process.read(size=LOCAL_SHELL_READ_SIZE)
                 if data:
                     decoded = decode_local_shell_output(data, self._output_decoder)
                     if not decoded:
@@ -792,18 +795,21 @@ class LocalShellBridge(TerminalBridge):
 
     def _read_windows_once(self):
         try:
-            data = self.process.read(4096)
+            data = self.process.read(LOCAL_SHELL_READ_SIZE)
             if data:
                 self.emit_output({
                     'message_type': 'terminal',
                     'data': data,
                 })
+                # Process exit can precede buffered output. Drain until EOF.
+                return True
             if not self.process.isalive():
                 self.emit_output({
                     'message_type': 'ssh_closed',
                     'message': 'Local shell session closed.',
                 })
                 return False
+            self.runtime.sleep(LOCAL_SHELL_IDLE_WAIT_SECONDS)
             return True
         except EOFError:
             if self.closing:

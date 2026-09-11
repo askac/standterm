@@ -13,6 +13,13 @@ function createUiCommands(win, contents, origin) {
   let refreshing = false;
   const current = () => !win.isDestroyed() && !contents.isDestroyed() && allowedNavigation(contents.getURL(), origin);
   const focused = () => current() && BrowserWindow.getFocusedWindow() === win;
+  function edit(action) {
+    if (!['copy', 'paste'].includes(action) || !focused() || !win.isVisible() || win.isMinimized()) return false;
+    // Restore the Core editing target, including text fields. Never send Ctrl+C/V.
+    contents.focus();
+    contents[action]();
+    return true;
+  }
   async function snapshot() {
     if (!current()) return null;
     try {
@@ -46,7 +53,7 @@ function createUiCommands(win, contents, origin) {
   win.on('focus', () => { void refresh(); });
   win.on('blur', () => { void refresh(); });
   return {
-    run, refresh,
+    run, refresh, edit,
     item: action => ({ id: `ui-${action}`, label: UI_ACTIONS[action], enabled: false, click: () => run(action) }),
   };
 }

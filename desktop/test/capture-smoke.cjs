@@ -14,6 +14,18 @@ async function until(check) {
 }
 
 async function run(win, capture, contents = win.webContents) {
+  const lifecycle = [];
+  const record = event => { lifecycle.push(event); if (lifecycle.length > 12) lifecycle.shift(); };
+  const originalStop = capture.stop;
+  capture.stop = function (...args) {
+    record({ event: 'stop', state: this.state, stack: new Error('Capture stop call site').stack });
+    return originalStop.apply(this, args);
+  };
+  const observedWindowEvents = ['hide', 'minimize', 'enter-full-screen'].map(event => {
+    const listener = () => record({ event });
+    win.on(event, listener);
+    return [event, listener];
+  });
   const evaluate = async script => {
     let timer;
     try {
@@ -77,7 +89,14 @@ async function run(win, capture, contents = win.webContents) {
   console.log('Capture smoke: recording started.');
   assert.equal(started.destination, video);
   assert.equal(capture.state, 'recording');
-  const timerLabel = () => win.webContents.executeJavaScript("document.getElementById('recording-status').textContent");
+  const timerLabel = async () => {
+    const label = await win.webContents.executeJavaScript("document.getElementById('recording-status').textContent");
+    if (!label) console.error('Capture timer diagnostic:', JSON.stringify({
+      state: capture.state, active: capture.active, jobError: capture.job?.error?.message, lifecycle,
+      visible: win.isVisible(), minimized: win.isMinimized(), focused: win.isFocused(),
+    }));
+    return label;
+  };
   await new Promise(resolve => setTimeout(resolve, 1200));
   assert.match(await timerLabel(), /^Recording 00:0[1-9]$/);
   await capture.togglePause();
@@ -93,6 +112,16 @@ async function run(win, capture, contents = win.webContents) {
   await new Promise(resolve => setTimeout(resolve, 1200));
   assert.match(await timerLabel(), /^Recording /);
   assert.notEqual((await timerLabel()).replace('Recording ', ''), pausedLabel.replace('Recording paused ', ''), 'the timer must resume');
+  for (let cycle = 0; cycle < 4; cycle++) {
+    await capture.togglePause();
+    const frozen = await timerLabel();
+    assert.match(frozen, /^Recording paused /);
+    await new Promise(resolve => setTimeout(resolve, 650));
+    assert.equal(await timerLabel(), frozen);
+    await capture.togglePause();
+    await new Promise(resolve => setTimeout(resolve, 650));
+    assert.match(await timerLabel(), /^Recording /);
+  }
   await fs.writeFile(path.join(directory, 'toolbar-recording.png'), (await win.webContents.capturePage({ x: 0, y: 0, width: win.getContentSize()[0], height: 36 })).toPNG(), { flag: 'wx' });
   assert.equal(Menu.getApplicationMenu().getMenuItemById('capture-start').enabled, false);
   assert.equal(Menu.getApplicationMenu().getMenuItemById('capture-stop').enabled, true);
@@ -205,6 +234,8 @@ async function run(win, capture, contents = win.webContents) {
     assert.ok((await fs.stat(confirmed)).size > 0);
   } finally { dialog.showMessageBox = originalMessage; }
   console.log(`Capture smoke passed: PNG and decodable silent WebM saved in ${directory}`);
+  capture.stop = originalStop;
+  for (const [event, listener] of observedWindowEvents) win.removeListener(event, listener);
 }
 
 module.exports = { run };

@@ -7840,6 +7840,25 @@ def test_stale_epoch_write_is_rejected():
     assert bridge.writes == []
 
 
+def test_transcript_retains_batched_terminal_output_and_utf8_boundaries():
+    reset_state()
+    bridge = DummyBridge('transcript-fixture', standterm.TERMINAL_ID_MAIN)
+    text = 'x' * 8192 + '\u4e2d\u6587\U0001f600' * 3000 + 'END_TRANSCRIPT_FIXTURE'
+    bridge.emit_output({'message_type': 'terminal', 'data': '\x1b[31m' + text + '\x1b[0m'})
+    events = standterm.agent_transcript_store.get_recent('transcript-fixture', standterm.TERMINAL_ID_MAIN)
+    assert ''.join(event['data'] for event in events) == text
+    assert len(events) > 1
+    assert all(event['untrusted'] is True for event in events)
+    assert all(event['byte_length'] == len(event['data'].encode('utf-8')) for event in events)
+    assert all(event['byte_length'] <= standterm.AGENT_TRANSCRIPT_MAX_EVENT_BYTES for event in events)
+
+    bridge.emit_output({'message_type': 'terminal', 'data': 'y' * (standterm.AGENT_TRANSCRIPT_MAX_BYTES * 2) + 'LATEST_TAIL'})
+    events = standterm.agent_transcript_store.get_recent('transcript-fixture', standterm.TERMINAL_ID_MAIN)
+    assert ''.join(event['data'] for event in events).endswith('LATEST_TAIL')
+    assert sum(event['byte_length'] for event in events) <= standterm.AGENT_TRANSCRIPT_MAX_BYTES
+    assert len(events) <= standterm.AGENT_TRANSCRIPT_MAX_EVENTS
+
+
 def test_transcript_store_sanitizes_terminal_output():
     session_token = 'session-a'
     bridge = add_dummy_bridge(session_token)
@@ -8339,6 +8358,7 @@ def main():
         test_disconnect_invalidates_agent_state,
         test_stale_epoch_write_is_rejected,
         test_transcript_store_sanitizes_terminal_output,
+        test_transcript_retains_batched_terminal_output_and_utf8_boundaries,
         test_terminal_bridge_tracks_shared_session_metadata,
         test_ssh_input_records_agent_metadata_after_validation,
         test_agent_input_metadata_bounds_and_sanitized_preview,

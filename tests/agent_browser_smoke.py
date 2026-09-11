@@ -145,6 +145,8 @@ def new_page(browser, access_url):
     context = browser.new_context(viewport={'width': 1280, 'height': 800})
     page = context.new_page()
     page.goto(debug_url(access_url), wait_until='domcontentloaded')
+    # Keep debug-only overlays from covering controls during normal UI tests.
+    page.add_style_tag(content='#debug-hud, #payload-log { display: none !important; }')
     page.wait_for_function('() => !!window.terminalTest', timeout=10000)
     page.wait_for_function(
         "() => window.terminalTest.getSocketState().connected === true",
@@ -1744,6 +1746,7 @@ def test_hidden_mirror_ignores_visible_scroll(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
         attach_agent(page)
+        page.evaluate('() => window.terminalTest.captureTerminalIoForTest()')
         output = ''.join(f'mirror-{index:03d}\\r\\n' for index in range(90))
         page.evaluate(
             """payload => window.terminalTest.writeTerminalOutput(payload.data, payload.output_seq)""",
@@ -1920,11 +1923,95 @@ def test_agent_panel_status_gates_and_external_hint(browser, access_url):
         check(status_minted['idleTimeoutMultiplier'] == 3, 'status-bar 3x mint did not retain the structured multiplier')
         check(status_minted['remainingMs'] > 10 * 60 * 1000, 'status-bar 3x mint did not extend the idle lifetime')
         check(status_minted['panelVisible'] is False, 'status-bar mint unexpectedly opened the Agent panel')
+        check(page.locator('#agent-pause-btn + #agent-status-mint-btn + #agent-status-mint-3x-btn').count() == 1,
+              'Mint actions are not adjacent to Pause Agent in the tab row')
 
         page.click('#agent-toggle-btn')
         page.wait_for_selector('#agent-panel.visible', timeout=5000)
         minted_command = page.evaluate("() => document.getElementById('agent-external-command').value")
         check('# terminal handoff:' in minted_command, '3x mint did not expose the stable terminal handoff path')
+    finally:
+        close_context(context)
+
+
+def test_external_token_tab_indicator_tracks_background_lifecycle(browser, access_url):
+    context, page = new_page(browser, access_url)
+    main_tab = '.terminal-tab[data-terminal-id="main"]'
+    try:
+        attach_agent(page)
+        check(page.locator(main_tab + '.agent-token-active').count() == 0,
+              'Enabled access without a minted token acquired the turquoise indicator')
+        page.click('#agent-toggle-btn')
+        page.wait_for_selector('#agent-panel.visible')
+        page.click('#agent-external-token-btn')
+        page.wait_for_selector(main_tab + '.agent-token-active', state='attached')
+        page.click('#new-tab-btn')
+        check(page.locator(main_tab + '.active').count() == 0, 'Fixture did not switch tabs')
+        check(page.locator(main_tab + '.agent-token-active').count() == 1,
+              'Background tab lost its minted-token indicator')
+        check(page.locator('.terminal-tab.active.agent-token-active').count() == 0,
+              'New tab inherited the other terminal token indicator')
+        check('External agent token active' in page.locator(main_tab).get_attribute('title'),
+              'Active token has no text explanation')
+        color = lambda: page.locator(main_tab + ' .tab-state').evaluate(
+            'element => getComputedStyle(element).backgroundColor')
+        check(color() == 'rgb(64, 224, 208)', 'Active token light is not turquoise')
+        check(re.fullmatch(r'\(\d+\)', page.locator(main_tab + ' .tab-agent-countdown').inner_text()),
+              'Active token has no remaining-seconds label')
+        # Control wall time for synthetic expiry; leave the real refresh timer running.
+        page.evaluate('() => { window.tabTokenTestNow = Date.now(); Date.now = () => window.tabTokenTestNow; }')
+
+        def token_event(status, remaining_ms):
+            page.evaluate('payload => window.terminalTest.applyAgentExternalTokenStateForTest(payload)', {
+                'terminal_id': TERMINAL_ID, 'token_status': status,
+                'external_agent_token': {'remaining_idle_ms': remaining_ms},
+            })
+
+        # No active-panel countdown: only the shared clock can dim this background tab.
+        token_event('active', 1000)
+        page.evaluate('() => { window.tabTokenTestNow += 1001; }')
+        page.wait_for_selector(main_tab + '.agent-token-expired', state='attached', timeout=3000)
+        check(color() == 'rgb(71, 115, 110)', 'Expired token light is not dim turquoise')
+        check('expired' in page.locator(main_tab).get_attribute('title'), 'Expiry tooltip is missing')
+        check(page.locator(main_tab + ' .tab-agent-countdown').is_hidden(),
+              'Expired background tab retained a countdown')
+        check(page.locator(main_tab + '.agent-token-active').count() == 0, 'Expired token stayed bright')
+        token_event('attached', 60000)
+        page.wait_for_selector(main_tab + '.agent-token-active', state='attached')
+        check(page.locator(main_tab + ' .tab-agent-countdown').inner_text() == '(60)',
+              'Token activity did not refresh the background countdown')
+        page.evaluate('() => { window.tabTokenTestNow += 1100; }')
+        page.wait_for_function("""() => document.querySelector(
+            '.terminal-tab[data-terminal-id="main"] .tab-agent-countdown').innerText === '(59)'""", timeout=3000)
+        token_event('revoked', 60000)
+        check(page.locator(main_tab + '.agent-token-active').count() == 0, 'Revoked token stayed bright')
+        check(page.locator(main_tab + '.agent-token-expired').count() == 0, 'Revocation was shown as expiry')
+        check('External agent token' not in page.locator(main_tab).get_attribute('title'),
+              'Revoked token tooltip remained stale')
+        check(page.locator(main_tab + ' .tab-agent-countdown').is_hidden(),
+              'Revoked token retained a countdown label')
+        token_event('active', 60000)
+        token_event('invalidated', 60000)
+        check(page.locator(main_tab + '.agent-token-active').count() == 0, 'Invalidated token stayed bright')
+        token_event('active', 60000)
+        emit_socket(page, 'agent_mode_set', {'terminal_id': TERMINAL_ID, 'mode': 'disabled'})
+        page.wait_for_function("() => window.terminalTest.getAgentStateForTest('main').mode === 'disabled'")
+        check(page.locator(main_tab + '.agent-token-active').count() == 0, 'Disabled access stayed bright')
+        check(color() == 'rgb(52, 199, 89)', 'Disabled access lost the normal connected light')
+        page.evaluate('id => window.terminalTest.switchTerminalForTest(id)', TERMINAL_ID)
+        set_agent_mode(page, 'direct', 'direct_active')
+        page.set_viewport_size({'width': 640, 'height': 600})
+        for selector in ['#new-tab-btn', '#agent-pause-btn', '#agent-status-mint-btn',
+                         '#agent-status-mint-3x-btn', '#agent-toggle-btn', '#quick-settings']:
+            bounds = page.locator(selector).bounding_box()
+            check(bounds is not None and bounds['x'] >= 0 and bounds['x'] + bounds['width'] <= 640,
+                  f'{selector} is clipped beside the compact tab row')
+        page.click('#agent-status-mint-btn')
+        page.wait_for_selector(main_tab + '.agent-token-active', state='attached')
+        page.click('#agent-pause-btn')
+        wait_for_agent(page, "state.mode === 'paused'")
+        check(page.locator(main_tab + '.agent-token-active').count() == 0, 'Paused access stayed bright')
+        check(page.locator(main_tab + ' .tab-agent-countdown').is_hidden(), 'Paused token retained a countdown')
     finally:
         close_context(context)
 
@@ -2012,6 +2099,7 @@ def test_rendered_viewport_snapshot_returns_png(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
         attach_agent(page)
+        page.evaluate('() => window.terminalTest.captureTerminalIoForTest()')
         page.evaluate("() => window.terminalTest.applyColorScheme('oneHalfLight')")
         page.evaluate(
             """payload => window.terminalTest.writeTerminalOutput(payload.data, payload.output_seq)""",
@@ -2071,6 +2159,7 @@ def test_background_terminal_render_uses_mirror_canvas_png(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
         attach_agent(page)
+        page.evaluate('() => window.terminalTest.captureTerminalIoForTest()')
         page.evaluate("() => window.terminalTest.applyColorScheme('oneHalfLight')")
         page.evaluate(
             """payload => window.terminalTest.writeTerminalOutput(payload.data, payload.output_seq)""",
@@ -2234,6 +2323,159 @@ def test_paste_review_approve_and_cancel(browser, access_url):
         payload = ssh_inputs[0]['args'][0]
         check(payload['terminal_id'] == TERMINAL_ID, 'paste review ssh_input used the wrong terminal')
         check(payload['data'] == ':\n:\n', 'paste review ssh_input used the wrong payload')
+    finally:
+        close_context(context)
+
+
+def test_clipboard_paste_targets_and_native_review(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        attach_agent(page)
+        page.evaluate('() => window.terminalTest.captureTerminalIoForTest()')
+        page.evaluate("""() => {
+            Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+                readText: () => new Promise(resolve => { window.resolveFixturePaste = resolve; })
+            }});
+        }""")
+
+        def begin():
+            page.evaluate("document.querySelector('.terminal-pane.active .xterm-helper-textarea').focus()")
+            page.evaluate("document.getElementById('paste-option').click()")
+            return page.evaluate('window.standtermUi.contextPasteRequest()')
+
+        def finish():
+            page.evaluate("window.resolveFixturePaste('')")
+
+        clear_emitted(page)
+        request = begin()
+        check(bool(request), 'context paste did not capture a target')
+        check(page.evaluate("id => window.standtermUi.completeContextPaste(id, ':')", request), 'context paste failed')
+        check(not page.evaluate("id => window.standtermUi.completeContextPaste(id, ':')", request), 'context paste was reusable')
+        finish()
+        check(len(get_emitted(page, 'ssh_input')) == 1, 'context paste did not send exactly once')
+        page.wait_for_function('window.terminalTest.activeTerminalHasFocus()')
+
+        # Web readText uses the same original-state guard when its promise is delayed.
+        clear_emitted(page)
+        begin()
+        page.evaluate("document.getElementById('new-tab-btn').focus()")
+        page.evaluate("window.resolveFixturePaste(':')")
+        check(not get_emitted(page, 'ssh_input'), 'delayed web paste ignored a changed target')
+
+        for mode in ['modal', 'focus', 'tab']:
+            clear_emitted(page)
+            request = begin()
+            check(bool(request), f'{mode} paste did not capture a target')
+            if mode == 'modal':
+                page.evaluate("document.getElementById('settings-modal').classList.add('open')")
+            elif mode == 'focus':
+                page.evaluate("document.getElementById('new-tab-btn').focus()")
+            else:
+                page.evaluate("document.getElementById('new-tab-btn').click()")
+                page.wait_for_function("window.standtermUi.snapshot().terminalId !== 'main'")
+            check(not page.evaluate("id => window.standtermUi.completeContextPaste(id, ':')", request), f'{mode} change accepted stale paste')
+            finish()
+            check(not get_emitted(page, 'ssh_input'), f'{mode} change sent input')
+            page.evaluate("document.getElementById('settings-modal').classList.remove('open')")
+            if mode == 'tab':
+                page.locator('.terminal-tab[data-terminal-id="main"]').click()
+
+        clear_emitted(page)
+        # Synthetic clipboard events exercise real xterm listeners without OS clipboard access.
+        page.evaluate("window.terminalTest.writeTerminalOutput('\\x1b[?2004l')")
+        page.wait_for_timeout(100)
+        for approve in [False, True]:
+            page.evaluate("""() => {
+                const data = new DataTransfer(); data.setData('text/plain', ':\\n:');
+                document.querySelector('.terminal-pane.active .xterm-helper-textarea').dispatchEvent(
+                    new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+            }""")
+            check(page.locator('#paste-review-modal').evaluate("el => el.classList.contains('open')"), 'native two-line paste skipped review')
+            check(not get_emitted(page, 'ssh_input'), 'native paste sent input before review')
+            page.evaluate(f"document.getElementById('paste-review-{'approve' if approve else 'cancel'}').click()")
+        inputs = get_emitted(page, 'ssh_input')
+        check(len(inputs) == 1 and inputs[0]['args'][0]['data'] == ':\r:',
+              f"native paste sent incorrect or duplicate input: {[entry['args'][0]['data'] for entry in inputs]!r}")
+        check(page.locator('#context-menu').evaluate("el => getComputedStyle(el).userSelect") == 'none', 'context menu text remains selectable')
+
+        clear_emitted(page)
+        page.evaluate("window.terminalTest.writeTerminalOutput('\\x1b[?2004h')")
+        page.wait_for_timeout(100)
+        page.evaluate("""() => {
+            const data = new DataTransfer(); data.setData('text/plain', ':\\n:');
+            document.querySelector('.terminal-pane.active .xterm-helper-textarea').dispatchEvent(
+                new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+        }""")
+        check(not get_emitted(page, 'ssh_input'), 'bracketed paste sent before review')
+        page.evaluate("document.getElementById('paste-review-approve').click()")
+        inputs = get_emitted(page, 'ssh_input')
+        check(len(inputs) == 1 and inputs[0]['args'][0]['data'] == '\x1b[200~:\r:\x1b[201~', 'review lost bracketed paste semantics')
+
+        clear_emitted(page)
+        page.evaluate("""() => document.querySelector('.terminal-pane.active .xterm-helper-textarea').dispatchEvent(
+            new KeyboardEvent('keydown', {key: 'v', code: 'KeyV', keyCode: 86, ctrlKey: true, bubbles: true, cancelable: true}))""")
+        inputs = get_emitted(page, 'ssh_input')
+        check(len(inputs) == 1 and inputs[0]['args'][0]['data'] == '\x16', 'Ctrl+V no longer sends the terminal control code')
+
+        # A previous document's request must not be reusable after a reload.
+        request = begin()
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_function('window.standtermUi?.version === 1')
+        check(not page.evaluate("id => window.standtermUi.completeContextPaste(id, ':')", request), 'reloaded document accepted an old paste request')
+    finally:
+        close_context(context)
+
+
+def test_clipboard_paste_encoding_is_consistent(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        attach_agent(page)
+        page.evaluate('() => window.terminalTest.captureTerminalIoForTest()')
+        for bracketed in [False, True]:
+            page.evaluate("value => window.terminalTest.writeTerminalOutput(value)", '\x1b[?2004' + ('h' if bracketed else 'l'))
+            page.wait_for_timeout(100)
+            for route in ['native', 'web', 'desktop']:
+                for text in [':', ':\n:', ':\r\n:', ':\x1b[201~:', ':\x1b[201~\n:']:
+                    result = page.evaluate("""async ({route, text}) => {
+                        const area = document.querySelector('.terminal-pane.active .xterm-helper-textarea');
+                        area.focus(); window.terminalTest.clearEmitted();
+                        if (route === 'native') {
+                            const data = new DataTransfer(); data.setData('text/plain', text);
+                            area.dispatchEvent(new ClipboardEvent('paste', {clipboardData: data, bubbles: true, cancelable: true}));
+                        } else {
+                            let resolve;
+                            Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {
+                                readText: () => route === 'web' ? Promise.resolve(text)
+                                    : new Promise(done => { resolve = done; })
+                            }});
+                            const pending = document.getElementById('paste-option').onclick({stopPropagation() {}});
+                            if (route === 'desktop') {
+                                const id = window.standtermUi.contextPasteRequest();
+                                if (!id || !window.standtermUi.completeContextPaste(id, text)) throw new Error('Missing paste target');
+                                resolve('');
+                            }
+                            await pending;
+                        }
+                        const open = () => document.getElementById('paste-review-modal').classList.contains('open');
+                        const outputs = () => window.terminalTest.getEmitted()
+                            .filter(entry => entry.event === 'ssh_input').map(entry => entry.args[0].data);
+                        const review = open();
+                        const before = outputs();
+                        const preview = document.getElementById('paste-review-preview').value;
+                        if (review) document.getElementById('paste-review-approve').click();
+                        return {review, before, preview, repeatedReview: open(), outputs: outputs()};
+                    }""", {'route': route, 'text': text})
+                    expected = text.replace('\x1b', '\u241b')
+                    check(result['review'] == ('\n' in text), f'{route}: incorrect paste review decision')
+                    if result['review']:
+                        check(not result['before'], f'{route}: paste sent before approval')
+                        check(result['preview'] == expected.replace('\r\n', '\n'), f'{route}: preview differs from sanitized text')
+                    expected = expected.replace('\r\n', '\r').replace('\n', '\r')
+                    if bracketed:
+                        expected = '\x1b[200~' + expected + '\x1b[201~'
+                    check(result['outputs'] == [expected],
+                          f"{route}: paste encoding differs or was sent more than once: {result['outputs']!r}, expected {[expected]!r}")
+                    check(not result['repeatedReview'], f'{route}: approved paste was reviewed again')
     finally:
         close_context(context)
 
@@ -2541,6 +2783,20 @@ def test_file_copy_approval_keeps_controls_visible_with_long_paths(browser, acce
         clear_emitted(page)
         page.click('#agent-reject-btn')
         check(len(get_emitted(page, 'agent_action_reject')) == 1, 'visible reject did not emit one decision')
+    finally:
+        close_context(context)
+
+
+def test_ime_anchor_poc_loads_and_fails_open(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        page.wait_for_selector('.xterm[data-ime-anchor-poc="enabled"]')
+        # The optional PoC asset must not prevent Core startup if unavailable.
+        page.route('**/static/js/standterm-ime-anchor-poc.js', lambda route: route.abort())
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_selector('.xterm')
+        check(page.locator('.xterm[data-ime-anchor-poc]').count() == 0,
+              'Missing PoC asset did not retain native xterm positioning')
     finally:
         close_context(context)
 
@@ -4206,14 +4462,18 @@ def main():
         test_hidden_mirror_ignores_visible_scroll,
         test_privacy_states_block_snapshots_and_agent_runs,
         test_agent_panel_status_gates_and_external_hint,
+        test_external_token_tab_indicator_tracks_background_lifecycle,
         test_session_recovery_new_tab_can_renew_external_agent_token,
         test_rendered_viewport_snapshot_returns_png,
         test_background_terminal_render_uses_mirror_canvas_png,
         test_paste_review_approve_and_cancel,
+        test_clipboard_paste_targets_and_native_review,
+        test_clipboard_paste_encoding_is_consistent,
         test_approval_payload_and_stale_rejections,
         test_file_copy_approval_shows_canonical_plan,
         test_file_copy_approval_is_global_and_decision_is_single_shot,
         test_file_copy_approval_keeps_controls_visible_with_long_paths,
+        test_ime_anchor_poc_loads_and_fails_open,
         test_cjk_width_compatibility_defaults_off,
         test_windows_font_fallback_defaults_and_migrates_legacy,
         test_powerline_symbol_fallback_defaults_on_and_preserves_opt_out,

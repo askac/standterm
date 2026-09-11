@@ -9,6 +9,7 @@ const { EventEmitter } = require('node:events');
 
 function fixture(platform = 'win32') {
   let handler, requestFilter, permission, device, popup = 0, calls = 0, focused;
+  const edits = [];
   const contents = new EventEmitter();
   Object.assign(contents, { mainFrame: {}, isDestroyed: () => false, send: () => {}, setWindowOpenHandler: () => {},
     session: { setPermissionRequestHandler: fn => { permission = fn; }, setPermissionCheckHandler: () => {},
@@ -28,11 +29,13 @@ function fixture(platform = 'win32') {
   });
   const capture = { screenshot: async () => { calls++; }, start: async () => { calls++; },
     togglePause: async () => { calls++; }, stop: async () => { calls++; } };
-  const toolbar = api.exports.installToolbar(win, core, capture, { refresh: async () => {} });
+  const toolbar = api.exports.installToolbar(win, core, capture, {
+    refresh: async () => {}, edit: action => { edits.push(action); return true; },
+  });
   contents.mainFrame.url = toolbar.url;
   const event = { sender: contents, senderFrame: contents.mainFrame };
   return { invoke: (action, source = event) => handler(source, action), event, win, core, contents, toolbar,
-    unfocus: () => { focused = null; }, calls: () => calls, popup: () => popup,
+    unfocus: () => { focused = null; }, calls: () => calls, popup: () => popup, edits,
     filter: url => new Promise(resolve => requestFilter({ url }, resolve)),
     permission: () => new Promise(resolve => permission(contents, 'media', resolve)), device: () => device() };
 }
@@ -51,6 +54,17 @@ test('only the bundled toolbar main frame can invoke fixed native capture/menu a
   f.unfocus();
   assert.equal(await f.invoke('record'), false);
   assert.equal(f.calls(), 1);
+});
+
+test('clipboard buttons use only fixed native edit commands from the trusted focused toolbar', async () => {
+  const f = fixture();
+  assert.equal(await f.invoke('copy-text'), true);
+  assert.equal(await f.invoke('paste-text'), true);
+  assert.deepEqual(f.edits, ['copy', 'paste']);
+  assert.equal(await f.invoke('paste-text', { sender: f.core.webContents, senderFrame: f.event.senderFrame }), false);
+  f.unfocus();
+  assert.equal(await f.invoke('paste-text'), false);
+  assert.deepEqual(f.edits, ['copy', 'paste']);
 });
 
 test('toolbar resource and permission boundaries are identical on Windows and macOS', async () => {

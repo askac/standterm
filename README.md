@@ -9,6 +9,12 @@ to the StandTerm server process across page reloads.
 [Download and install StandTerm Desktop](#desktop-downloads-evaluation), or use
 the [browser-based Core quick start](#quick-start).
 
+**Core 2.11.0** is a [source release](https://github.com/askac/standterm/releases/tag/v2.11.0).
+It includes terminal latency, clipboard, agent-tab status and launcher UI updates.
+IME input-line anchoring remains an [experimental PoC](docs/ime_anchor_poc.md).
+This release does not publish new Desktop installers: the downloads below remain
+Desktop 0.4.3 evaluation builds with their original bundled Core snapshot.
+
 ![StandTerm Desktop with terminal rendering tests, local and SSH tabs, and a floating PowerShell terminal](standterm_desktop.png)
 
 *Desktop development preview. The toolbar shown above is newer than the published
@@ -99,6 +105,12 @@ redirects to `/`.
 
 Use `./run.sh --force` or `run.bat --force` to rebuild dependency checks after
 pulling large changes.
+
+The optional Tk access window checks backend status in a background worker, so
+slow Windows-to-WSL connections do not block its event loop during polling.
+Only one status request runs per window; closing the window does not wait for
+that request or shut down the server. Authentication, instance checks, URL
+fallback order, and the existing offline-close policy are unchanged.
 
 ## What It Does
 
@@ -255,6 +267,33 @@ also receive `COLORTERM=truecolor` plus `TERM_PROGRAM=StandTerm`. This advertise
 xterm.js 24-bit color support without requiring a less widely installed terminfo
 entry. SSH sessions continue to request the compatible `xterm-256color` PTY;
 remote environment-variable propagation remains controlled by the SSH server.
+
+Windows Local Shell uses pywinpty 3.0.5 to avoid the fixed per-read delay in
+the older 2.x backend. The launchers refresh dependencies when `requirements.txt`
+changes; an existing running server must be restarted to use the new dependency.
+SSH and local-shell output use bounded reads with idle waits, keeping input
+responsive without imposing a timed delay on each available output chunk.
+
+Clipboard paste, including the terminal's right-click Paste action, preserves
+xterm's bracketed-paste mode and normalizes line endings. Multi-line or large
+text still requires review. Clipboard ESC characters become visible `␛` characters
+before review, so pasted text cannot supply its own bracketed-paste terminator.
+Normal terminal key sequences, including Windows/Linux Ctrl+V, are unchanged.
+
+Terminal tabs use a turquoise light and tinted background while their minted
+external-agent token is valid, and dim turquoise when it expires. The tooltip
+states the token status; tab labels include remaining idle seconds, for example
+`SSH - vax (123)`. Expiry hides the countdown but retains the dim tint. The color
+does not mean an agent is currently executing.
+Revocation, invalidation, or disabling access removes the tint, and connection
+warnings take priority. Background tabs update without opening the Agent panel.
+The tab-row Mint and Mint 3× buttons sit beside Pause Agent when the Agent panel
+is hidden, and always target the active terminal.
+
+This development build also enables an **experimental IME positioning PoC**:
+the composition overlay follows its starting input line during terminal redraws.
+It is not yet qualified with real Windows/macOS candidate windows. See
+[PoC scope, fallback behavior, and manual checks](docs/ime_anchor_poc.md).
 
 Backend plugin policy, start form metadata, and runtime defaults are documented
 in `docs/backend_plugin_contract.md`.

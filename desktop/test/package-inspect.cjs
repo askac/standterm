@@ -7,6 +7,7 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 const { createHash } = require('node:crypto');
 const { validateCoreFiles } = require('../core-files.cjs');
+const { stagedReleaseIdentity } = require('../release-identity.cjs');
 const [resourcesArg, stageArg, asarModule] = process.argv.slice(2);
 if (!resourcesArg || !stageArg || !asarModule) throw new Error('Pass resources, stage and @electron/asar module paths.');
 const resources = path.resolve(resourcesArg);
@@ -31,11 +32,17 @@ for (const name of names) {
   }
 }
 for (const file of ['main.cjs', 'agent-menu.cjs', 'browser-session.cjs', 'diagnostics.cjs', 'diagnostics-window.cjs',
-  'external-links.cjs', 'floating-windows.cjs', 'test/external-links-smoke.cjs']) {
+  'external-links.cjs', 'floating-windows.cjs', 'test/external-links-smoke.cjs', 'browser-access.cjs', 'context-paste.cjs',
+  'capture-settings.cjs', 'ui-commands.cjs', 'toolbar.cjs', 'toolbar-preload.cjs',
+  'toolbar.html', 'toolbar.js', 'toolbar.css', 'test/toolbar-smoke.cjs', 'release-identity.json']) {
   assert.ok(names.includes('/' + file), `Missing ${file}`);
 }
 const metadata = JSON.parse(asar.extractFile(archive, 'package.json'));
 assert.equal(metadata.version, JSON.parse(fs.readFileSync(path.join(stage, 'package.json'), 'utf8')).version);
+const identity = stagedReleaseIdentity(stage);
+assert.deepEqual(JSON.parse(asar.extractFile(archive, 'release-identity.json')), identity);
+assert.equal(metadata.version, identity.desktopVersion);
+assert.equal(manifest.id, identity.coreBundleId);
 const coreFiles = [];
 function walk(directory, relative = '') {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {

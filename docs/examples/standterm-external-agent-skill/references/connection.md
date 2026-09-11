@@ -36,7 +36,9 @@ Explicit current URL/token/terminal fields from a configured tool or local
 handoff may go directly to `hello`; do not display credentials while assembling
 the call. Tokenless discovery can precede minting, but terminal commands need a
 minted token and an attached browser Agent UI. Standard and 3x mint actions are
-also available on the active terminal status bar when the Agent panel is hidden.
+also available in the terminal tab row beside Pause Agent when the Agent panel
+is hidden. They act on the selected terminal. A turquoise tab shows its remaining
+idle seconds; an expired token dims the tab indicator and hides the countdown.
 
 ## Scope And TLS
 

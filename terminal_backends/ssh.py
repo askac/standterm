@@ -21,6 +21,10 @@ SFTP_FILE_REFERENCE_TTL_SECONDS = 5 * 60
 SFTP_FILE_REFERENCE_MAX_RECORDS = 4096
 SFTP_FILE_REFERENCE_TOKEN_BYTES = 12
 SFTP_IO_TIMEOUT_SECONDS = 60
+SSH_READ_CHUNK_BYTES = 4096
+SSH_READ_BATCH_CHUNKS = 16
+SSH_READ_BATCH_SECONDS = 0.002
+SSH_READ_IDLE_SECONDS = 0.01
 
 
 class BrowserSSHKeyError(Exception):
@@ -1063,27 +1067,44 @@ class SSHBridge(TerminalBridge):
     def read_loop(self):
         log_message(f"[*] Starting SSH read loop for {self.sid}")
         while True:
-            # Short sleep to prevent CPU hogging while allowing high responsiveness
-            self.runtime.sleep(0.01)
+            # Yield between bounded batches; only idle channels need a timed wait.
+            self.runtime.sleep(0)
             if not self.channel:
                 break
 
             try:
-                if self.channel.recv_ready():
-                    data = self._output_decoder.decode(self.channel.recv(4096))
+                chunks = []
+                eof = False
+                deadline = time.monotonic() + SSH_READ_BATCH_SECONDS
+                try:
+                    for _ in range(SSH_READ_BATCH_CHUNKS):
+                        if not self.channel.recv_ready():
+                            break
+                        chunk = self.channel.recv(SSH_READ_CHUNK_BYTES)
+                        if not chunk:
+                            eof = True
+                            break
+                        chunks.append(chunk)
+                        if time.monotonic() >= deadline:
+                            break
+                finally:
+                    # Preserve data read before EOF or a later read failure.
+                    data = self._output_decoder.decode(b''.join(chunks))
                     if data:
                         self.emit_output({
                             'message_type': 'terminal',
                             'data': data,
                         })
 
-                if self.channel.exit_status_ready():
+                if eof or (self.channel.exit_status_ready() and not self.channel.recv_ready()):
                     log_message(f"[*] SSH session exited for {self.sid}")
                     self.emit_output({
                         'message_type': 'ssh_closed',
                         'message': 'SSH session closed.',
                     })
                     break
+                if not chunks:
+                    self.runtime.sleep(SSH_READ_IDLE_SECONDS)
             except Exception as e:
                 if self.closing:
                     break

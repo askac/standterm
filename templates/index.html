@@ -32,10 +32,17 @@
         .terminal-tab.connected .tab-state { background: #34c759; }
         .terminal-tab.connecting .tab-state { background: #ffcc00; }
         .terminal-tab.error .tab-state { background: #ff9f0a; }
+        .terminal-tab.agent-token-active { background: #123a35; }
+        .terminal-tab.agent-token-active.active { background: #184b43; }
+        .terminal-tab.agent-token-active .tab-state { background: #40e0d0; }
+        .terminal-tab.agent-token-expired { background: #202b2a; }
+        .terminal-tab.agent-token-expired.active { background: #283936; }
+        .terminal-tab.agent-token-expired .tab-state { background: #47736e; }
         .terminal-tab.operator-observing { border-color: #ff453a; box-shadow: inset 0 -2px 0 #ff453a; }
         .terminal-tab.in-pip { display: none; }
         .tab-state { width: 7px; height: 7px; border-radius: 50%; background: #777; flex: 0 0 auto; }
         .tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+        .tab-agent-countdown { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
         .tab-close { width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border: none; border-radius: 4px; background: transparent; color: #888; cursor: pointer; font-size: 15px; line-height: 1; padding: 0; flex: 0 0 auto; }
         .tab-close:hover { background: #444; color: #fff; }
         .status-action { height: 21px; border: 1px solid #333; border-radius: 5px; background: #202020; color: #b6b6b6; cursor: pointer; font-size: 12px; line-height: 1; padding: 0 8px; flex: 0 0 auto; }
@@ -114,7 +121,7 @@
         #context-menu {
             display: none; position: fixed; z-index: 3000; background: #2c2c2e; color: white;
             border: 1px solid #555; border-radius: 6px; padding: 4px 0; min-width: 210px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.6); font-size: 13px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.6); font-size: 13px; user-select: none;
         }
         #context-menu .menu-item { padding: 8px 16px; cursor: pointer; }
         #context-menu .menu-item:hover { background: #0a84ff; }
@@ -1123,6 +1130,8 @@
             <button id="new-tab-btn" class="status-action" type="button" title="New terminal tab" aria-label="New terminal tab">+</button>
         </div>
         <button id="agent-pause-btn" class="status-action" type="button" title="Pause Agent terminal input">Pause Agent</button>
+        <button id="agent-status-mint-btn" class="status-action agent-status-mint" title="Mint a standard external-agent token for the active terminal">Mint</button>
+        <button id="agent-status-mint-3x-btn" class="status-action agent-status-mint" title="Mint a 3x idle-time external-agent token for the active terminal">Mint 3&times;</button>
         <div id="terminal-tools">
             <button id="agent-toggle-btn" class="status-action" type="button" title="Show Agent panel">Show Agent Panel</button>
             <button id="sftp-status-btn" class="status-action status-sftp" type="button" title="Open Files" aria-label="Open Files" hidden>&#x1F4C1;</button>
@@ -1145,8 +1154,6 @@
         <span class="sb-sep">|</span>
         <span class="sb-item" id="clock-display"></span>
         <span id="uptime-section" class="sb-item" style="display:none"><span class="sb-sep">|</span>connected:&nbsp;<span id="uptime-display"></span></span>
-        <button id="agent-status-mint-btn" class="status-action agent-status-mint" title="Mint a standard external-agent token for the active terminal">Mint Agent</button>
-        <button id="agent-status-mint-3x-btn" class="status-action agent-status-mint" title="Mint a 3x idle-time external-agent token for the active terminal">Mint Agent 3&times;</button>
     </div>
     <div id="policy-debug-panel"></div>
     <div id="debug-hud"></div>
@@ -1507,6 +1514,8 @@
         const BROWSER_KEY_ALGORITHM = { name: 'ECDSA', namedCurve: 'P-256' };
         const BROWSER_SIGN_ALGORITHM = { name: 'ECDSA', hash: { name: 'SHA-256' } };
         const URL_PARAMS = new URLSearchParams(window.location.search);
+        // Experimental Core IME positioning. See docs/ime_anchor_poc.md before promotion.
+        const IME_ANCHOR_POC_ENABLED = true;
         const BROWSER_AUTH_GRANT = URL_PARAMS.get('authorize') || '';
         let browserAuthGrantSubmitted = false;
 
@@ -1909,6 +1918,11 @@
                 return;
             }
 
+            if (IME_ANCHOR_POC_ENABLED) {
+                try { await loadScript('/static/js/standterm-ime-anchor-poc.js'); }
+                catch { console.warn('IME anchor PoC unavailable; using native xterm positioning.'); }
+            }
+
             clearInterval(timerInterval);
             document.getElementById('loader-screen').style.display = 'none';
             document.getElementById('terminal').style.display = 'block';
@@ -2123,6 +2137,8 @@
             let sftpPipState = null;
             let contextMenuTerminalId = null;
             let pendingPasteReview = null;
+            let pendingContextPaste = null;
+            let reviewedClipboardPasteState = null;
             let serverSettingsSnapshot = null;
             let currentSettingsAdminGrant = null;
             let sessionRenewTimer = null;
@@ -2952,8 +2968,8 @@
                     button.classList.toggle('visible', available);
                     button.disabled = !available || minting;
                 });
-                agentStatusMintBtn.innerText = minting ? 'Minting...' : 'Mint Agent';
-                agentStatusMint3xBtn.innerText = minting ? 'Minting...' : 'Mint Agent 3×';
+                agentStatusMintBtn.innerText = minting ? 'Minting...' : 'Mint';
+                agentStatusMint3xBtn.innerText = minting ? 'Minting...' : 'Mint 3×';
                 if (state) {
                     const target = state.label || state.id;
                     agentStatusMintBtn.title = `Mint a standard external-agent token for ${target}`;
@@ -3056,6 +3072,7 @@
             }
 
             function updateAgentPanel() {
+                terminals.forEach(updateTabAgentIndicator);
                 const state = getAgentPanelTerminalState();
                 const usable = canUseAgentPanel(state);
                 if (!usable) {
@@ -3741,17 +3758,29 @@
                 focusTerminalAfterPaste(state);
             }
 
-            function startPasteReview(state, text) {
+            function sendReviewedPaste(state, text, clipboardPaste = false) {
+                if (!isCurrentTerminalState(state) || !socket.connected || !state.connected) return;
+                if (!clipboardPaste) { sendTerminalInput(state, text); return; }
+                // Keep xterm's bracketed-paste and line-ending behavior after review.
+                reviewedClipboardPasteState = state;
+                try { state.term.paste(text); }
+                finally { reviewedClipboardPasteState = null; }
+            }
+
+            function startPasteReview(state, text, clipboardPaste = false) {
                 if (!state || !state.connected || typeof text !== 'string' || !text) return false;
+                // Clipboard ESC must not terminate bracketed paste or inject terminal keys.
+                // Sanitize before review so the preview matches the text sent to xterm.
+                if (clipboardPaste) text = text.replace(/\x1b/g, '\u241b');
                 if (!requiresPasteReview(text)) {
-                    sendTerminalInput(state, text);
+                    sendReviewedPaste(state, text, clipboardPaste);
                     focusTerminalAfterPaste(state);
                     return true;
                 }
                 if (pendingPasteReview) endPasteReview(true);
                 pendingPasteReview = {
                     terminalId: state.id,
-                    text
+                    text, clipboardPaste
                 };
                 emitAgentPrivacyState(state, 'paste_review');
                 pasteReviewMeta.innerText = `${state.label || state.id} · ${text.length} bytes · ${countPasteLines(text)} lines`;
@@ -5150,6 +5179,8 @@
                 const state = getActiveTerminalState();
                 document.getElementById('clock-display').innerText = now.toLocaleString();
                 if (state && state.connectedAt) document.getElementById('uptime-display').innerText = formatUptime(Math.floor((now - state.connectedAt) / 1000));
+                // Expiry must remain visible even when another tab owns the Agent panel.
+                terminals.forEach(updateTabAgentIndicator);
             }, 1000);
 
             function updateTerminalSizeStatus() {
@@ -5226,6 +5257,32 @@
                 terminalTitleItem.title = title;
             }
 
+            function updateTabAgentIndicator(state) {
+                const token = getCurrentAgentExternalToken(state);
+                const eligible = canUseAgentPanel(state) && !state.connecting && !state.error
+                    && state.agent.mode !== AGENT_MODE_DISABLED && !state.agent.paused
+                    && state.agent.mode !== AGENT_MODE_PAUSED
+                    && token && (token.status === 'active' || token.status === 'attached')
+                    && Number.isFinite(token.expiresAt);
+                const secondsRemaining = eligible ? getAgentExternalTokenSecondsRemaining(state.agent) : null;
+                const active = !!eligible && secondsRemaining > 0;
+                const expired = !!eligible && !active;
+                state.tabEl.classList.toggle('agent-token-active', active);
+                state.tabEl.classList.toggle('agent-token-expired', expired);
+                const label = getTerminalDisplayLabel(state);
+                if (state.titleEl.innerText !== label) state.titleEl.innerText = label;
+                const countdown = active ? `(${secondsRemaining})` : '';
+                if (state.agentCountdownEl.textContent !== countdown) state.agentCountdownEl.textContent = countdown;
+                state.agentCountdownEl.hidden = !active;
+                const title = active
+                    ? `${label}\nExternal agent token active (${formatAgentModeLabel(state.agent.mode)}); ${secondsRemaining}s remaining without activity`
+                    : expired ? `${label}\nExternal agent token expired; mint again to continue` : label;
+                if (state.tabEl.title !== title) {
+                    state.tabEl.title = title;
+                    state.tabEl.setAttribute('aria-label', title);
+                }
+            }
+
             function updateTabState(state) {
                 state.tabEl.classList.toggle('active', state.id === activeTerminalId);
                 state.tabEl.classList.toggle('connected', state.connected);
@@ -5233,9 +5290,7 @@
                 state.tabEl.classList.toggle('error', state.error);
                 state.tabEl.classList.toggle('operator-observing', !!(state.observation && state.observation.active));
                 state.tabEl.classList.toggle('in-pip', !!state.inPip);
-                const displayLabel = getTerminalDisplayLabel(state);
-                state.titleEl.innerText = displayLabel;
-                state.tabEl.title = displayLabel;
+                updateTabAgentIndicator(state);
                 updatePipStatus(state);
             }
 
@@ -5334,6 +5389,7 @@
 
             function updateActiveTerminalUi() {
                 const state = getActiveTerminalState();
+                if (pendingContextPaste && pendingContextPaste.state !== state) pendingContextPaste = null;
                 updateTabBarVisibility();
                 terminals.forEach(updateTabState);
                 updateTerminalActions();
@@ -5425,12 +5481,15 @@
                 const titleEl = document.createElement('span');
                 titleEl.className = 'tab-title';
                 titleEl.innerText = title;
+                const agentCountdownEl = document.createElement('span');
+                agentCountdownEl.className = 'tab-agent-countdown';
+                agentCountdownEl.hidden = true;
                 const closeBtn = document.createElement('button');
                 closeBtn.type = 'button';
                 closeBtn.className = 'tab-close';
                 closeBtn.title = 'Close terminal tab';
                 closeBtn.innerText = '×';
-                tabEl.append(stateEl, titleEl, closeBtn);
+                tabEl.append(stateEl, titleEl, agentCountdownEl, closeBtn);
                 tabsList.appendChild(tabEl);
 
                 const term = new Terminal({
@@ -5447,6 +5506,9 @@
                 const fitAddon = (typeof FitAddon !== 'undefined') ? new FitAddon.FitAddon() : null;
                 if (fitAddon) term.loadAddon(fitAddon);
                 term.open(container);
+                if (IME_ANCHOR_POC_ENABLED && typeof window.StandTermImeAnchorPoc === 'function') {
+                    term.loadAddon(new window.StandTermImeAnchorPoc());
+                }
 
                 const state = {
                     id: terminalId,
@@ -5470,6 +5532,7 @@
                     container,
                     tabEl,
                     titleEl,
+                    agentCountdownEl,
                     term,
                     fitAddon,
                     webglAddon: null,
@@ -5506,9 +5569,18 @@
                 configureWebLinks(state);
                 syncAgentTerminalMirrorSize(state);
                 term.onResize(() => notifyTerminalResize(state));
+                // Review the original clipboard text before xterm normalizes LF to CR.
+                // Bind to this pane so the same target guard follows it into PiP.
+                container.addEventListener('paste', event => {
+                    const text = event.clipboardData?.getData('text/plain') || '';
+                    if (!text) return;
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    if (isCurrentTerminalState(state) && socket.connected && state.connected) startPasteReview(state, text, true);
+                }, true);
                 term.onData(data => {
                     if (!socket || !socket.connected || !state.connected) return;
-                    if (requiresPasteReview(data)) startPasteReview(state, data);
+                    if (reviewedClipboardPasteState !== state && requiresPasteReview(data)) startPasteReview(state, data);
                     else sendTerminalInput(state, data);
                 });
                 tabEl.addEventListener('click', () => {
@@ -5681,6 +5753,7 @@
             function installBrowserTestHook() {
                 if (!debugEnabled || !socket || window.terminalTest) return;
                 const emitted = [];
+                let captureTerminalIo = false;
                 const originalEmit = socket.emit.bind(socket);
                 socket.emit = (eventName, ...args) => {
                     emitted.push({
@@ -5689,9 +5762,18 @@
                         at: new Date().toISOString()
                     });
                     if (emitted.length > 100) emitted.shift();
+                    if (captureTerminalIo && eventName === 'ssh_input') return socket;
                     return originalEmit(eventName, ...args);
                 };
                 window.terminalTest = {
+                    async captureTerminalIoForTest() {
+                        // Synthetic UI fixtures must not race shell prompt output or execute pasted text.
+                        captureTerminalIo = true;
+                        socket.off('ssh_output', handleSshOutputPayload);
+                        const state = getActiveTerminalState();
+                        await Promise.all([state?.term, state?.agentTerminalMirror].filter(Boolean)
+                            .map(term => new Promise(resolve => term.write('', resolve))));
+                    },
                     clearEmitted() {
                         emitted.length = 0;
                     },
@@ -5732,6 +5814,9 @@
                     },
                     applyAgentActionPayloadForTest(payload) {
                         applyAgentActionPayload(cloneForTest(payload));
+                    },
+                    applyAgentExternalTokenStateForTest(payload) {
+                        applyAgentExternalTokenState(cloneForTest(payload));
                     },
                     activeTerminalHasFocus() {
                         const state = getActiveTerminalState();
@@ -9206,7 +9291,7 @@
                 const review = pendingPasteReview;
                 if (!review) return;
                 const state = terminals.get(review.terminalId);
-                if (state && state.connected) sendTerminalInput(state, review.text);
+                if (state && state.connected) sendReviewedPaste(state, review.text, review.clipboardPaste);
                 endPasteReview(true);
             };
             pasteReviewCancelBtn.onclick = () => {
@@ -9218,24 +9303,31 @@
                     endPasteReview(true);
                 }
             });
-            terminalContainer.addEventListener('paste', event => {
-                const state = getActiveTerminalState();
-                if (!state || !state.connected) return;
-                const text = event.clipboardData ? event.clipboardData.getData('text/plain') : '';
-                if (!text) return;
-                event.preventDefault();
-                startPasteReview(state, text);
-            });
             document.getElementById('paste-option').onclick = async (e) => {
                 e.stopPropagation(); contextMenu.style.display = 'none';
-                let text = "";
+                const state = getActiveTerminalState();
+                if (pendingContextPaste || !socket.connected || !state?.connected) return;
+                const request = { id: crypto.getRandomValues(new Uint32Array(4)).join('-'), state, focus: document.activeElement };
+                pendingContextPaste = request;
                 try {
-                    if (navigator.clipboard && navigator.clipboard.readText) text = await navigator.clipboard.readText();
-                    else text = prompt("Paste text here:");
-                    const state = getActiveTerminalState();
-                    if (text && socket.connected && state && state.connected) startPasteReview(state, text);
-                } catch(err) {}
+                    const text = navigator.clipboard?.readText ? await navigator.clipboard.readText() : prompt('Paste text here:');
+                    if (pendingContextPaste === request && validContextPasteRequest() && text) startPasteReview(state, text, true);
+                } catch {
+                    if (!useDesktopFloatingWindows) showError('Clipboard access was denied. Use your terminal paste shortcut (Ctrl+Shift+V or Cmd+V).');
+                } finally {
+                    if (pendingContextPaste === request) pendingContextPaste = null;
+                }
             };
+            function validContextPasteRequest() {
+                const request = pendingContextPaste;
+                return !!request && request.state === getActiveTerminalState()
+                    && isCurrentTerminalState(request.state) && !request.state.inPip && request.state.connected && socket.connected
+                    && document.activeElement === request.focus
+                    && !document.querySelector('#settings-modal.open, #paste-review-modal.open, #session-recovery-modal.open, #browser-auth-help-modal.open');
+            }
+            document.addEventListener('focusin', () => {
+                if (pendingContextPaste && document.activeElement !== pendingContextPaste.focus) pendingContextPaste = null;
+            });
             document.getElementById('close-overlay').onclick = (e) => {
                 e.stopPropagation();
                 clearOverlayFallbackTimer();
@@ -9896,6 +9988,15 @@
             // never terminal labels or other display text.
             window.standtermUi = Object.freeze({
                 version: 1,
+                contextPasteRequest() {
+                    return validContextPasteRequest() ? pendingContextPaste.id : null;
+                },
+                completeContextPaste(id, text) {
+                    if (!validContextPasteRequest() || pendingContextPaste.id !== id || typeof text !== 'string') return false;
+                    const state = pendingContextPaste.state;
+                    pendingContextPaste = null;
+                    return !text || startPasteReview(state, text, true);
+                },
                 snapshot() {
                     const state = getActiveTerminalState();
                     const ready = !!(socket && socket.connected);

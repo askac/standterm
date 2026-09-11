@@ -14,6 +14,36 @@ The evaluation uses ad-hoc signing, without Developer ID or notarization; it is
 not a Gatekeeper-qualified public release. No signing account or private key is
 needed for a local build. Intel/Rosetta acceptance is not implied.
 
+New build filenames pair the independent Desktop and bundled Core versions:
+`StandTerm-Desktop-0.4.5-2.11.0-mac-arm64.dmg` and
+`StandTerm-Desktop-0.4.5-2.11.0-win32-x64-Setup.exe` for future matching builds.
+These are naming examples, not published download links. Core 2.11.0 is a
+source-only release; existing 0.4.3 downloads are unchanged. Delivery archives
+and checksum sidecars retain the paired label; a future matching Desktop tag
+would be `desktop-v0.4.5-2.11.0`.
+
+Staging writes `release-identity.json` from the staged package/lock versions and
+the manifest-hashed `core_version.py`. The builder revalidates this identity and
+fails on missing or inconsistent inputs. Build from the printed stage, not the
+source Desktop directory. Package and lock versions remain Desktop-only SemVer
+(`0.4.5`), so the combined label cannot change installer upgrade ordering. The
+Core qualifier is preserved, and About/Diagnostics continue to show separate
+versions. A label alone is not a source or Core bundle identity.
+
+The 0.4.5 evaluation source includes updated Core terminal reads, transcript
+splitting, token-tab countdowns, asynchronous launcher status polling and the
+experimental IME anchor, plus guarded Desktop clipboard controls. Earlier local
+0.4.5 candidates contain Core `2.11.0-dev`; they must not be renamed or presented
+as containing Core 2.11.0. Rebuild both platforms and verify their manifests
+before publishing paired installers. Real macOS IME candidate placement and
+native clipboard/upgrade acceptance remain separate manual checks.
+
+The trusted Desktop status strip disables background timer throttling so notice
+expiry and recording indicators stay current when another window has focus.
+This also keeps frames updating for its owning window; it is not a capture
+permission grant. Core's own preferences, action focus checks and the existing
+stop-on-hide/minimize/fullscreen/navigation behavior remain unchanged.
+
 Native macOS mode is selected automatically, or explicitly with `--backend=macos`.
 Local shells start as login shells so their usual profiles (for example
 `~/.zprofile` for zsh) supply MacPorts/Homebrew and user command paths even when
@@ -209,7 +239,7 @@ that uncommitted changes are already a GitHub release. Build staging never copie
 the development venv or `node_modules`. The new directory gets Windows build
 dependencies; the source checkout's Linux/WSLg `node_modules` is untouched.
 
-The `StandTerm-Desktop-0.4.3-win32-x64-Setup.exe` is under `out/`; the unpacked
+The `StandTerm-Desktop-0.4.5-2.11.0-win32-x64-Setup.exe` is under `out/`; the unpacked
 application is under `out/win-unpacked/`. Packaging uses
 [electron-builder's assisted NSIS target](https://www.electron.build/nsis.html),
 with pinned build dependencies and scoped custom installer hooks. Squirrel
@@ -426,10 +456,30 @@ and Agent connection info remain credential-free.
 The Desktop toolbar is a bundled local page, separate from the authenticated Core
 WebContentsView. Only the toolbar has a narrowly scoped preload; its private
 session has no backend cookies, no network access, and no camera/microphone grants.
-IPC validates the exact sender and main frame, and accepts only fixed menu/capture
+IPC validates the exact sender and main frame, and accepts only fixed menu/edit/capture
 actions. Core and floating windows remain sandboxed with no Node or preload.
-Windows/Linux show menu buttons beside capture controls; macOS retains its system
-application menu and shows capture controls in the window's Desktop toolbar.
+Windows/Linux place Copy/Paste immediately after the menu buttons, separate from
+right-aligned capture controls. macOS retains its system application menu and
+places Copy/Paste after the title in the window's Desktop toolbar. Menu labels are
+not selectable; terminal text, text fields and status notices remain selectable.
+
+**Copy selected text** uses native Copy, never the terminal Ctrl+C interrupt.
+**Paste clipboard text** restores the Core editing target and uses native Paste;
+text fields keep normal editing behavior. Windows/Linux Ctrl+V remains the terminal
+control code; use Ctrl+Shift+V for keyboard paste (Cmd+V on macOS).
+Terminal paste events are reviewed before xterm normalizes line endings, including
+two-line text. Cancel sends nothing; approval sends once to the captured terminal,
+preserving xterm's native bracketed-paste and line-ending behavior.
+
+The main terminal's custom right-click **Paste** requires a one-time native Paste
+confirmation in Desktop. Clipboard-read permission remains denied: only an explicit
+confirmation reads text once in the main process and passes it into Core's existing
+paste review. A changed tab, focus, modal, disconnected terminal or reloaded document
+cancels delivery. Background web clipboard requests do not gain access. Floating
+windows do not receive this main-window fallback; use native keyboard paste there.
+Use the toolbar Paste button to avoid the extra clipboard-access confirmation;
+multi-line/large terminal text still requires review. Native clipboard tests use
+fixtures, not the operator's clipboard; real clipboard and Mac acceptance remain manual.
 
 Toolbar SVG artwork is original StandTerm geometric artwork under the project
 license. No third-party icon paths, icon package, web font or remote image is used.
@@ -499,8 +549,9 @@ managed Core bundle SHA-256 identity when available. The same Core details are
 in Diagnostics. Core reports its version from `core_version.py`, independently
 of the Electron package version. Source checkouts have no managed build identity;
 older backends that omit version metadata show Unknown, never an inferred Git
-tag. The current source candidate is Desktop 0.4.3 / Core 2.11.0-dev, not a
-published stable release. The Agent menu and expanded Core payload postdate the
+tag. The current source pairing is Desktop 0.4.5 / Core 2.11.0. The Core source
+release does not publish or qualify Desktop installers. The Agent menu and
+expanded Core payload postdate the
 published 0.4.1 installer and the earlier macOS 0.4.2 candidate; they require a
 new build. The integrated macOS candidate retains native setup, login shells
 and arm64 DMG packaging alongside these additions.

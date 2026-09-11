@@ -2623,21 +2623,25 @@ class AgentTranscriptStore:
         if not sanitized:
             return
         encoded = sanitized.encode('utf-8', errors='ignore')
-        if len(encoded) > AGENT_TRANSCRIPT_MAX_EVENT_BYTES:
-            encoded = encoded[:AGENT_TRANSCRIPT_MAX_EVENT_BYTES]
-            sanitized = encoded.decode('utf-8', errors='ignore')
         key = (session_token, terminal_id)
         now = time.time()
         bucket = self._entries.setdefault(key, {'events': deque(), 'bytes': 0})
-        event = {
-            'captured_at': now,
-            'data': sanitized,
-            'byte_length': len(encoded),
-            'untrusted': True,
-        }
-        bucket['events'].append(event)
-        bucket['bytes'] += event['byte_length']
-        self._trim_bucket(bucket, now)
+        start = 0
+        while start < len(encoded):
+            end = min(start + AGENT_TRANSCRIPT_MAX_EVENT_BYTES, len(encoded))
+            # Keep each event bounded without truncating a batch or a UTF-8 character.
+            while end < len(encoded) and encoded[end] & 0xc0 == 0x80:
+                end -= 1
+            chunk = encoded[start:end]
+            bucket['events'].append({
+                'captured_at': now,
+                'data': chunk.decode('utf-8'),
+                'byte_length': len(chunk),
+                'untrusted': True,
+            })
+            bucket['bytes'] += len(chunk)
+            self._trim_bucket(bucket, now)
+            start = end
 
     def get_recent(self, session_token, terminal_id):
         key = (session_token, terminal_id)
