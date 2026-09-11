@@ -31,6 +31,7 @@ const shellFiles = [
   'toolbar.html', 'toolbar.js', 'toolbar.css',
   'test/toolbar-smoke.cjs',
   'browser-access.cjs',
+  'context-paste.cjs',
   'release-identity.cjs',
 ];
 fs.mkdirSync(path.join(__dirname, 'dist'), { recursive: true });

@@ -447,10 +447,30 @@ and Agent connection info remain credential-free.
 The Desktop toolbar is a bundled local page, separate from the authenticated Core
 WebContentsView. Only the toolbar has a narrowly scoped preload; its private
 session has no backend cookies, no network access, and no camera/microphone grants.
-IPC validates the exact sender and main frame, and accepts only fixed menu/capture
+IPC validates the exact sender and main frame, and accepts only fixed menu/edit/capture
 actions. Core and floating windows remain sandboxed with no Node or preload.
-Windows/Linux show menu buttons beside capture controls; macOS retains its system
-application menu and shows capture controls in the window's Desktop toolbar.
+Windows/Linux place Copy/Paste immediately after the menu buttons, separate from
+right-aligned capture controls. macOS retains its system application menu and
+places Copy/Paste after the title in the window's Desktop toolbar. Menu labels are
+not selectable; terminal text, text fields and status notices remain selectable.
+
+**Copy selected text** uses native Copy, never the terminal Ctrl+C interrupt.
+**Paste clipboard text** restores the Core editing target and uses native Paste;
+text fields keep normal editing behavior. Windows/Linux Ctrl+V remains the terminal
+control code; use Ctrl+Shift+V for keyboard paste (Cmd+V on macOS).
+Terminal paste events are reviewed before xterm normalizes line endings, including
+two-line text. Cancel sends nothing; approval sends once to the captured terminal,
+preserving xterm's native bracketed-paste and line-ending behavior.
+
+The main terminal's custom right-click **Paste** requires a one-time native Paste
+confirmation in Desktop. Clipboard-read permission remains denied: only an explicit
+confirmation reads text once in the main process and passes it into Core's existing
+paste review. A changed tab, focus, modal, disconnected terminal or reloaded document
+cancels delivery. Background web clipboard requests do not gain access. Floating
+windows do not receive this main-window fallback; use native keyboard paste there.
+Use the toolbar Paste button to avoid the extra clipboard-access confirmation;
+multi-line/large terminal text still requires review. Native clipboard tests use
+fixtures, not the operator's clipboard; real clipboard and Mac acceptance remain manual.
 
 Toolbar SVG artwork is original StandTerm geometric artwork under the project
 license. No third-party icon paths, icon package, web font or remote image is used.

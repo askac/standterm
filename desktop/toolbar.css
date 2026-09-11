@@ -1,7 +1,9 @@
 :root { color-scheme: dark; font: 12px system-ui, sans-serif; }
 body { margin: 0; height: 36px; display: flex; align-items: center; gap: 6px; padding: 0 8px; background: #202020; color: #ddd; box-sizing: border-box; border-bottom: 1px solid #3b3b3b; overflow: hidden; }
-nav, #capture-tools { display: flex; align-items: center; flex-shrink: 0; }
-button { font: inherit; color: inherit; background: transparent; border: 0; border-radius: 4px; height: 28px; padding: 0 8px; cursor: pointer; }
+nav, #edit-tools, #capture-tools { display: flex; align-items: center; flex-shrink: 0; }
+button { font: inherit; color: inherit; background: transparent; border: 0; border-radius: 4px; height: 28px; padding: 0 8px; cursor: pointer; user-select: none; }
+#mac-title { user-select: none; }
+#edit-tools { border-left: 1px solid #555; padding-left: 6px; }
 button:hover { background: #414141; }
 button:focus-visible { outline: 2px solid #5ea8ff; outline-offset: -2px; }
 button:disabled { opacity: .4; cursor: default; }

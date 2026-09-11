@@ -51,6 +51,34 @@ async function run(win, contents, browserAccess) {
   if (win.isMinimized()) win.restore();
   win.show(); win.moveTop(); win.focus(); contents.focus();
   await until(() => BrowserWindow.getFocusedWindow() === win, 'main focus');
+  // Exercise native routing with spies, never the operator's OS clipboard.
+  const originalNativeCopy = contents.copy, originalNativePaste = contents.paste;
+  const edits = [];
+  contents.copy = () => edits.push('copy');
+  contents.paste = () => edits.push('paste');
+  try {
+    assert.equal(await win.webContents.executeJavaScript("window.desktopToolbar.invoke('copy-text')"), true);
+    assert.equal(await win.webContents.executeJavaScript("window.desktopToolbar.invoke('paste-text')"), true);
+    assert.deepEqual(edits, ['copy', 'paste']);
+    assert.equal(await win.webContents.executeJavaScript("getComputedStyle(document.querySelector('#menus button')).userSelect"), 'none');
+  } finally { contents.copy = originalNativeCopy; contents.paste = originalNativePaste; }
+  const originalRead = clipboard.readText;
+  let reads = 0, prompts = 0;
+  clipboard.readText = async () => { reads++; return ':\n:'; };
+  dialog.showMessageBox = async () => { prompts++; return { response: 1 }; };
+  try {
+    await evaluate("document.getElementById('paste-option').click()");
+    await until(() => evaluate("document.getElementById('paste-review-modal').classList.contains('open')"), 'native context paste review');
+    assert.equal(reads, 1);
+    assert.equal(prompts, 1);
+    assert.equal(await evaluate("document.getElementById('paste-review-preview').value"), ':\n:');
+    await evaluate("document.getElementById('paste-review-cancel').click()");
+    await until(() => evaluate('window.standtermUi.contextPasteRequest() === null'), 'context paste cleared');
+    assert.equal(await evaluate("navigator.clipboard.readText().then(() => 'granted', () => 'denied')"), 'denied');
+    assert.equal(reads, 1, 'background renderer reads must not access the OS clipboard');
+    assert.equal(prompts, 1, 'background renderer reads without a target must not prompt');
+  } finally { clipboard.readText = originalRead; dialog.showMessageBox = originalDialog; }
+  console.log('Desktop clipboard smoke: toolbar routing, one-time context consent, denied background reads and multi-line review passed (mocked OS clipboard).');
   await until(() => menu.getMenuItemById('ui-settings').enabled, 'Settings enabled');
   menu.getMenuItemById('ui-settings').click();
   await until(() => evaluate("document.getElementById('settings-modal').classList.contains('open')"), 'Settings opened');
@@ -85,6 +113,10 @@ async function run(win, contents, browserAccess) {
   })`), true);
   assert.equal(await evaluate("document.querySelector('#status-bar #new-tab-btn, #status-bar #quick-settings, #status-bar #agent-pause-btn') === null"), true);
   assert.equal(await evaluate('innerHeight'), win.getContentSize()[1] - 36);
+  assert.equal(await win.webContents.executeJavaScript(`
+    [...document.querySelectorAll('#edit-tools button, #capture-tools button')].filter(el => !el.hidden).every(el => {
+      const bounds = el.getBoundingClientRect(); return bounds.x >= 0 && bounds.right <= innerWidth;
+    })`), true, 'clipboard and capture controls must fit a narrow window');
   const directory = await fs.mkdtemp(path.join(app.isPackaged ? app.getPath('temp') : path.join(__dirname, '..', 'dist'), 'toolbar-smoke-'));
   const screenshotCss = await contents.insertCSS('#debug-hud, #policy-debug-panel, #payload-log { display: none !important; }');
   console.log('Desktop toolbar smoke: capturing the Core preview.');
@@ -123,7 +155,7 @@ async function run(win, contents, browserAccess) {
       scale: devicePixelRatio, width: innerWidth,
       reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
       transition: getComputedStyle(document.getElementById('notice-area')).transitionDuration,
-      controlsFit: [...document.querySelectorAll('#capture-tools button')].filter(element => !element.hidden).every(element => {
+      controlsFit: [...document.querySelectorAll('#edit-tools button, #capture-tools button')].filter(element => !element.hidden).every(element => {
         const bounds = element.getBoundingClientRect(); return bounds.x >= 0 && bounds.right <= innerWidth;
       }),
     })`);

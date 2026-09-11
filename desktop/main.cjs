@@ -22,6 +22,7 @@ const { createExternalOpener } = require('./external-links.cjs');
 const { createUiCommands } = require('./ui-commands.cjs');
 const { installToolbar } = require('./toolbar.cjs');
 const { createBrowserAccess } = require('./browser-access.cjs');
+const { installContextPaste } = require('./context-paste.cjs');
 
 let maintenance;
 try { maintenance = installerRequest(process.argv); } catch (error) {
@@ -322,6 +323,7 @@ async function start() {
     } } : {}),
   });
   toolbar = installToolbar(win, coreView, capture, commands);
+  installContextPaste(win, contents, handoff.origin, toolbar.notify);
   const browserAccess = createBrowserAccess({ origin: handoff.origin, session: desktopSession, launcherToken,
     available: () => !win.isDestroyed() && !contents.isDestroyed() && allowedNavigation(contents.getURL(), handoff.origin),
     confirm: async () => {

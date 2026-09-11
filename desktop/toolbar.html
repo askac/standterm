@@ -11,6 +11,11 @@
     <button data-menu="standterm">StandTerm</button><button data-menu="edit">Edit</button><button data-menu="agent-menu">Agent</button><button data-menu="view">View</button><button data-menu="diagnostics">Diagnostics</button>
   </nav>
   <span id="mac-title" hidden>StandTerm Desktop</span>
+  <div id="edit-tools" role="toolbar" aria-label="Clipboard actions">
+    <!-- Original StandTerm geometric SVG artwork; no third-party icon paths. -->
+    <button id="edit-copy" data-action="copy-text" title="Copy selected text (not Ctrl+C)" aria-label="Copy selected text"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 16H4V3h11v3"/><rect x="8" y="7" width="12" height="14" rx="1"/></svg></button>
+    <button id="edit-paste" data-action="paste-text" title="Paste clipboard text" aria-label="Paste clipboard text"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5H4v16h16V5h-4M8 12h8M8 16h6"/><rect x="8" y="3" width="8" height="4" rx="1"/></svg></button>
+  </div>
   <span id="notice-area" role="status" aria-live="polite" aria-atomic="true">
     <span id="notice-indicator" aria-hidden="true"></span>
     <span id="notice"></span>
