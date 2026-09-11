@@ -294,6 +294,9 @@ async function start() {
     minWidth: 640, minHeight: 480, show: false, icon,
     webPreferences: {
       partition: 'standterm-desktop-toolbar', preload: path.join(__dirname, 'toolbar-preload.cjs'),
+      // The trusted status strip must keep timers/notices current when unfocused.
+      // Capture focus/visibility guards and Core's own preferences stay unchanged.
+      backgroundThrottling: false,
       nodeIntegration: false, contextIsolation: true,
       sandbox: true, webSecurity: true, webviewTag: false,
       allowRunningInsecureContent: false, devTools: true,

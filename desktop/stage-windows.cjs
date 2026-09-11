@@ -7,6 +7,7 @@ const { execFileSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const { writeIcon } = require('./build-icon.cjs');
 const { coreFiles: selectCoreFiles, validateCoreFiles } = require('./core-files.cjs');
+const { releaseIdentity } = require('./release-identity.cjs');
 
 const platform = process.argv.includes('--macos') ? 'macos' : 'windows';
 if (platform === 'macos' && process.platform !== 'darwin') throw new Error('Stage macOS on a native Mac.');
@@ -30,6 +31,7 @@ const shellFiles = [
   'toolbar.html', 'toolbar.js', 'toolbar.css',
   'test/toolbar-smoke.cjs',
   'browser-access.cjs',
+  'release-identity.cjs',
 ];
 fs.mkdirSync(path.join(__dirname, 'dist'), { recursive: true });
 const stage = fs.mkdtempSync(path.join(__dirname, 'dist', `${platform}-build-`));
@@ -66,4 +68,5 @@ for (const file of coreFiles.sort()) {
 const id = createHash('sha256').update(JSON.stringify(files)).digest('hex');
 validateCoreFiles(path.join(stage, 'bundle', 'core'), Object.keys(files));
 fs.writeFileSync(path.join(stage, 'bundle', 'manifest.json'), JSON.stringify({ version: 1, id, files }, null, 2), { flag: 'wx' });
+fs.writeFileSync(path.join(stage, 'release-identity.json'), JSON.stringify(releaseIdentity(stage), null, 2) + '\n', { flag: 'wx' });
 console.log(stage);

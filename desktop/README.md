@@ -14,6 +14,27 @@ The evaluation uses ad-hoc signing, without Developer ID or notarization; it is
 not a Gatekeeper-qualified public release. No signing account or private key is
 needed for a local build. Intel/Rosetta acceptance is not implied.
 
+New build filenames pair the independent Desktop and bundled Core versions:
+`StandTerm-Desktop-0.4.4-2.11.0-dev-mac-arm64.dmg` for this candidate, and
+`StandTerm-Desktop-0.4.4-2.11.0-dev-win32-x64-Setup.exe` for a matching Windows
+build. These are naming examples, not published download links. Existing 0.4.3
+downloads are unchanged. Delivery archives and checksum sidecars retain the same
+paired label; a future matching tag would be `desktop-v0.4.4-2.11.0-dev`.
+
+Staging writes `release-identity.json` from the staged package/lock versions and
+the manifest-hashed `core_version.py`. The builder revalidates this identity and
+fails on missing or inconsistent inputs. Build from the printed stage, not the
+source Desktop directory. Package and lock versions remain Desktop-only SemVer
+(`0.4.4`), so the combined label cannot change installer upgrade ordering. The
+Core qualifier is preserved, and About/Diagnostics continue to show separate
+versions. A label alone is not a source or Core bundle identity.
+
+The trusted Desktop status strip disables background timer throttling so notice
+expiry and recording indicators stay current when another window has focus.
+This also keeps frames updating for its owning window; it is not a capture
+permission grant. Core's own preferences, action focus checks and the existing
+stop-on-hide/minimize/fullscreen/navigation behavior remain unchanged.
+
 Native macOS mode is selected automatically, or explicitly with `--backend=macos`.
 Local shells start as login shells so their usual profiles (for example
 `~/.zprofile` for zsh) supply MacPorts/Homebrew and user command paths even when
@@ -499,7 +520,7 @@ managed Core bundle SHA-256 identity when available. The same Core details are
 in Diagnostics. Core reports its version from `core_version.py`, independently
 of the Electron package version. Source checkouts have no managed build identity;
 older backends that omit version metadata show Unknown, never an inferred Git
-tag. The current source candidate is Desktop 0.4.3 / Core 2.11.0-dev, not a
+tag. The current source candidate is Desktop 0.4.4 / Core 2.11.0-dev, not a
 published stable release. The Agent menu and expanded Core payload postdate the
 published 0.4.1 installer and the earlier macOS 0.4.2 candidate; they require a
 new build. The integrated macOS candidate retains native setup, login shells

@@ -8,7 +8,7 @@ const { app, BrowserWindow, Menu, clipboard, dialog } = require('electron');
 async function run(win, contents, browserAccess) {
   const evaluate = script => contents.executeJavaScript(script, true);
   const until = async (check, stage) => {
-    const deadline = Date.now() + 10000;
+    const deadline = Date.now() + 15000;
     while (!await check()) {
       if (Date.now() > deadline) throw new Error(`Desktop toolbar smoke timed out: ${stage}; ${JSON.stringify({
         visible: win.isVisible(), minimized: win.isMinimized(), focused: win.isFocused(),
@@ -19,7 +19,12 @@ async function run(win, contents, browserAccess) {
   };
   const menu = Menu.getApplicationMenu();
   assert.deepEqual(menu.items.map(item => item.id), ['standterm', 'edit', 'agent-menu', 'view', 'diagnostics']);
+  assert.deepEqual(await win.webContents.executeJavaScript(`({
+    menusHidden: document.getElementById('menus').hidden,
+    titleHidden: document.getElementById('mac-title').hidden,
+  })`), { menusHidden: process.platform === 'darwin', titleHidden: process.platform !== 'darwin' });
   assert.notEqual(win.webContents.session, contents.session);
+  assert.equal(win.webContents.backgroundThrottling, false);
   assert.deepEqual(await win.webContents.session.cookies.get({}), []);
   assert.equal(await evaluate('typeof window.desktopToolbar'), 'undefined');
   assert.equal(contents.getLastWebPreferences().preload, undefined);
@@ -94,6 +99,39 @@ async function run(win, contents, browserAccess) {
   await fs.writeFile(path.join(directory, 'toolbar.png'), (await win.webContents.capturePage({ x: 0, y: 0, width: win.getContentSize()[0], height: 36 })).toPNG(), { flag: 'wx' });
   await contents.removeInsertedCSS(screenshotCss);
   win.setSize(...originalSize);
+  if (process.platform === 'darwin') {
+    const toolbar = script => win.webContents.executeJavaScript(script);
+    const visible = () => toolbar("document.getElementById('notice-area').classList.contains('visible')");
+    const background = new BrowserWindow({ width: 300, height: 200, show: false,
+      webPreferences: { sandbox: true, nodeIntegration: false, contextIsolation: true } });
+    try {
+      await background.loadURL('data:text/html,<p>Background timer fixture</p>');
+      background.show(); background.focus();
+      await until(() => BrowserWindow.getFocusedWindow() === background, 'background timer focus');
+      for (const [noticeId, error, minimumMs] of [[-1, false, 4900], [-2, true, 9900]]) {
+        const started = Date.now();
+        win.webContents.send('standterm-toolbar-state', { notice: 'Isolated Mac notice fixture.', noticeId, error });
+        await until(visible, 'notice visible');
+        await until(async () => !await visible(), 'notice fade');
+        assert.ok(Date.now() - started >= minimumMs, 'notice must not disappear early');
+        await until(async () => await toolbar("document.getElementById('notice').textContent") === '', 'notice text cleared');
+      }
+    } finally { background.destroy(); }
+    win.focus(); contents.focus();
+    await until(() => BrowserWindow.getFocusedWindow() === win, 'focus after background notices');
+    const layout = await toolbar(`({
+      scale: devicePixelRatio, width: innerWidth,
+      reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
+      transition: getComputedStyle(document.getElementById('notice-area')).transitionDuration,
+      controlsFit: [...document.querySelectorAll('#capture-tools button')].filter(element => !element.hidden).every(element => {
+        const bounds = element.getBoundingClientRect(); return bounds.x >= 0 && bounds.right <= innerWidth;
+      }),
+    })`);
+    assert.ok(layout.controlsFit);
+    assert.ok(layout.scale >= 1);
+    if (layout.reducedMotion) assert.equal(layout.transition, '0s');
+    console.log(`macOS toolbar renderer: native menu, background five/ten-second notices and wide layout passed; ${JSON.stringify(layout)}`);
+  }
   console.log(`Desktop toolbar smoke: isolated SVG toolbar, focus guards, native Settings/tab actions and compact layout passed (${directory}).`);
 }
 
