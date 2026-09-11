@@ -32,7 +32,7 @@ for (const name of names) {
   }
 }
 for (const file of ['main.cjs', 'agent-menu.cjs', 'browser-session.cjs', 'diagnostics.cjs', 'diagnostics-window.cjs',
-  'external-links.cjs', 'floating-windows.cjs', 'test/external-links-smoke.cjs', 'browser-access.cjs',
+  'external-links.cjs', 'floating-windows.cjs', 'test/external-links-smoke.cjs', 'browser-access.cjs', 'context-paste.cjs',
   'capture-settings.cjs', 'ui-commands.cjs', 'toolbar.cjs', 'toolbar-preload.cjs',
   'toolbar.html', 'toolbar.js', 'toolbar.css', 'test/toolbar-smoke.cjs', 'release-identity.json']) {
   assert.ok(names.includes('/' + file), `Missing ${file}`);

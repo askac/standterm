@@ -1,7 +1,7 @@
 # IME input-line anchor: experimental PoC
 
-Status: enabled in the development/evaluation build for user testing, **not a
-qualified permanent fix**. Applies to Core terminals in both the browser and
+Status: enabled as an experimental feature in Core 2.11.0 for user testing,
+**not a qualified permanent fix**. Applies to Core terminals in both the browser and
 Desktop. No CJK-width preference, remote shell, tmux, or screen setting is changed.
 
 ## Problem and proposed behavior
@@ -44,7 +44,7 @@ license is retained under `static/licenses/`.
 
 ## Enable, compare, or withdraw
 
-`IME_ANCHOR_POC_ENABLED` in `templates/index.html` is `true` for this evaluation.
+`IME_ANCHOR_POC_ENABLED` in `templates/index.html` is `true` for this PoC.
 Set it to `false` and reload in an isolated test instance to compare native xterm
 positioning. No new persistent user preference is introduced. Packaged Desktop
 must be rebuilt to change its bundled Core; do not edit an installed runtime or

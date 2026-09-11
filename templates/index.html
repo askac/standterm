@@ -5753,6 +5753,7 @@
             function installBrowserTestHook() {
                 if (!debugEnabled || !socket || window.terminalTest) return;
                 const emitted = [];
+                let captureTerminalIo = false;
                 const originalEmit = socket.emit.bind(socket);
                 socket.emit = (eventName, ...args) => {
                     emitted.push({
@@ -5761,9 +5762,18 @@
                         at: new Date().toISOString()
                     });
                     if (emitted.length > 100) emitted.shift();
+                    if (captureTerminalIo && eventName === 'ssh_input') return socket;
                     return originalEmit(eventName, ...args);
                 };
                 window.terminalTest = {
+                    async captureTerminalIoForTest() {
+                        // Synthetic UI fixtures must not race shell prompt output or execute pasted text.
+                        captureTerminalIo = true;
+                        socket.off('ssh_output', handleSshOutputPayload);
+                        const state = getActiveTerminalState();
+                        await Promise.all([state?.term, state?.agentTerminalMirror].filter(Boolean)
+                            .map(term => new Promise(resolve => term.write('', resolve))));
+                    },
                     clearEmitted() {
                         emitted.length = 0;
                     },

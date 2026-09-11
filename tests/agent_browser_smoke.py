@@ -1746,6 +1746,7 @@ def test_hidden_mirror_ignores_visible_scroll(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
         attach_agent(page)
+        page.evaluate('() => window.terminalTest.captureTerminalIoForTest()')
         output = ''.join(f'mirror-{index:03d}\\r\\n' for index in range(90))
         page.evaluate(
             """payload => window.terminalTest.writeTerminalOutput(payload.data, payload.output_seq)""",
@@ -2098,6 +2099,7 @@ def test_rendered_viewport_snapshot_returns_png(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
         attach_agent(page)
+        page.evaluate('() => window.terminalTest.captureTerminalIoForTest()')
         page.evaluate("() => window.terminalTest.applyColorScheme('oneHalfLight')")
         page.evaluate(
             """payload => window.terminalTest.writeTerminalOutput(payload.data, payload.output_seq)""",
@@ -2157,6 +2159,7 @@ def test_background_terminal_render_uses_mirror_canvas_png(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
         attach_agent(page)
+        page.evaluate('() => window.terminalTest.captureTerminalIoForTest()')
         page.evaluate("() => window.terminalTest.applyColorScheme('oneHalfLight')")
         page.evaluate(
             """payload => window.terminalTest.writeTerminalOutput(payload.data, payload.output_seq)""",
@@ -2328,6 +2331,7 @@ def test_clipboard_paste_targets_and_native_review(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
         attach_agent(page)
+        page.evaluate('() => window.terminalTest.captureTerminalIoForTest()')
         page.evaluate("""() => {
             Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
                 readText: () => new Promise(resolve => { window.resolveFixturePaste = resolve; })
@@ -2390,7 +2394,8 @@ def test_clipboard_paste_targets_and_native_review(browser, access_url):
             check(not get_emitted(page, 'ssh_input'), 'native paste sent input before review')
             page.evaluate(f"document.getElementById('paste-review-{'approve' if approve else 'cancel'}').click()")
         inputs = get_emitted(page, 'ssh_input')
-        check(len(inputs) == 1 and inputs[0]['args'][0]['data'] == ':\r:', 'native paste sent incorrect or duplicate input')
+        check(len(inputs) == 1 and inputs[0]['args'][0]['data'] == ':\r:',
+              f"native paste sent incorrect or duplicate input: {[entry['args'][0]['data'] for entry in inputs]!r}")
         check(page.locator('#context-menu').evaluate("el => getComputedStyle(el).userSelect") == 'none', 'context menu text remains selectable')
 
         clear_emitted(page)
@@ -2425,6 +2430,7 @@ def test_clipboard_paste_encoding_is_consistent(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
         attach_agent(page)
+        page.evaluate('() => window.terminalTest.captureTerminalIoForTest()')
         for bracketed in [False, True]:
             page.evaluate("value => window.terminalTest.writeTerminalOutput(value)", '\x1b[?2004' + ('h' if bracketed else 'l'))
             page.wait_for_timeout(100)
@@ -2467,7 +2473,8 @@ def test_clipboard_paste_encoding_is_consistent(browser, access_url):
                     expected = expected.replace('\r\n', '\r').replace('\n', '\r')
                     if bracketed:
                         expected = '\x1b[200~' + expected + '\x1b[201~'
-                    check(result['outputs'] == [expected], f'{route}: paste encoding differs or was sent more than once')
+                    check(result['outputs'] == [expected],
+                          f"{route}: paste encoding differs or was sent more than once: {result['outputs']!r}, expected {[expected]!r}")
                     check(not result['repeatedReview'], f'{route}: approved paste was reviewed again')
     finally:
         close_context(context)
