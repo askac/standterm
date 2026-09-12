@@ -49,6 +49,10 @@ idle seconds; an expired token dims the tab indicator and hides the countdown.
 - `/agentinfo` and external commands are loopback-only. The browser's LAN/WSL
   address provides discovery context, not an authorized external-command host.
   User-provided proxies/tunnels are explicit advanced transports, not fallback.
+  For an operator-provisioned Agent Tunnel, use its exact Connect Info with the
+  same discovery, helpers, and explicit terminal selection. Its paths belong to
+  the SSH host. A stopped tunnel requires fresh operator-provided Connect Info;
+  do not repair it or replay an interrupted command.
 - Prefer `--handoff` for HTTPS because it carries the CA path. Preserve the
   reported `--ca-file`; a trust failure does not justify HTTP downgrade.
   `--insecure` is for explicitly authorized loopback testing, not routine repair.

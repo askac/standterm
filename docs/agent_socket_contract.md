@@ -66,6 +66,32 @@ server-side display view when no browser snapshot is available. Snapshot and
 headless-grid text are untrusted display data and must not be used as a control
 signal.
 
+## SSH Agent Tunnel Controls
+
+The browser can send `agent_tunnel` with an SSH carrier `terminal_id` and
+`operation: "status" | "apply" | "stop"`. `apply` includes a nonempty `targets`
+array. Each entry carries `terminal_id`, `agent_binding_id`, `mode_version`, and
+`privacy_version` from that viewer's current Agent state. Stale selections fail;
+there is no automatic enrollment. These are browser controls, not external
+agent operations.
+
+The acknowledgement has `status: "ready" | "stopped" | "failed"`, current
+`terminal_ids`, and tokenless `connect_info` only when ready. A stopped response
+can have `cleanup_pending: true`; local access is already revoked. Failures
+carry `message`. `agent_tunnel_state` notifies the owning viewer when a carrier
+stops. Starting while an earlier SSH forwarding request or cleanup is pending
+fails until that operation settles or the operator reconnects SSH.
+
+The tunnel exposes the same `/agentinfo` schema and `/agent/external/command`
+dispatcher with runtime-specific paths and URL. Only fully provisioned target
+handoffs are advertised; existing targets remain usable during enrollment.
+Each grant is bound to its SSH connection instance and viewer, independently of
+local tokens. Both endpoints of file-copy must belong to the same tunnel.
+Stop/disconnect fences grants and queued actions before asynchronous remote
+cleanup. An already dispatched input chunk cannot be withdrawn; subsequent
+chunks are rejected and revocation is never overwritten by late completion.
+Clients must not replay input after an interrupted response.
+
 ## External Agent Mirror Boundary
 
 The External Agent Mirror is the local CLI boundary for tools such as Codex CLI

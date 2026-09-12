@@ -3827,6 +3827,51 @@ def test_terminal_payload_text_is_not_control(browser, access_url):
         close_context(context)
 
 
+def test_agent_tunnel_requires_explicit_targets_and_keeps_focus(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        attach_agent(page)
+        page.evaluate('() => window.terminalTest.captureTerminalIoForTest()')
+        page.evaluate('''() => window.terminalTest.applyTerminalListForTest({terminals: [
+            {terminal_id: 'main', connected: true, connection_type: 'ssh', terminal_label: '<img src=x>'},
+            {terminal_id: 'third', connected: true, connection_type: 'ssh', terminal_label: 'Unenrolled'}
+        ]})''')
+        page.click('#agent-tunnel-btn')
+        page.wait_for_selector('#agent-tunnel-apply:not([disabled])')
+        check(page.locator('#agent-tunnel-targets input:checked').count() == 0,
+              'tunnel must not enroll tabs automatically')
+        check(page.locator('#agent-tunnel-targets img').count() == 0,
+              'terminal label was interpreted as HTML')
+        check(page.locator('#agent-tunnel-targets input[value="third"]').is_disabled(),
+              'Agent-disabled target can be selected')
+        page.evaluate('() => window.terminalTest.clearEmitted()')
+        page.click('#agent-tunnel-apply')
+        check(page.locator('#agent-tunnel-message').inner_text() == 'Select at least one Agent-enabled terminal.',
+              'empty enrollment was not explained')
+        check(page.evaluate("() => window.terminalTest.getEmitted().filter(e => e.event === 'agent_tunnel').length") == 0,
+              'empty enrollment started remote provisioning')
+        page.check('#agent-tunnel-targets input[value="main"]')
+        page.evaluate('() => window.terminalTest.clearEmitted()')
+        page.click('#agent-tunnel-apply')
+        page.wait_for_selector('#agent-tunnel-apply:not([disabled])')
+        requests = page.evaluate("() => window.terminalTest.getEmitted().filter(e => e.event === 'agent_tunnel')")
+        check(len(requests) == 1, 'Apply sent duplicate tunnel operations')
+        request = requests[0]['args'][0]
+        check(request['terminal_id'] == 'main' and request['operation'] == 'apply', 'carrier scope is wrong')
+        check([target['terminal_id'] for target in request['targets']] == ['main'], 'unchecked tab was enrolled')
+        check(bool(request['targets'][0]['agent_binding_id']), 'target lost its current Agent binding')
+        page.focus('#agent-tunnel-close')
+        page.evaluate("() => { window.dispatchEvent(new Event('blur')); window.dispatchEvent(new Event('focus')); }")
+        page.wait_for_timeout(150)
+        check(page.evaluate("() => document.activeElement.id === 'agent-tunnel-close'"),
+              'window focus stole focus from tunnel controls')
+        check(page.locator('#agent-tunnel-info').is_hidden(), 'failed setup advertised usable Connect Info')
+        page.click('#agent-tunnel-close')
+        check(not page.locator('#agent-tunnel-dialog').is_visible(), 'Close did not dismiss tunnel dialog')
+    finally:
+        close_context(context)
+
+
 def test_ssh_host_key_prompts_default_to_cancel_and_bind_actions(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
@@ -4554,6 +4599,7 @@ def main():
         test_connection_controls_follow_start_fields_without_legacy_payload,
         test_terminal_payload_text_is_not_control,
         test_ssh_host_key_prompts_default_to_cancel_and_bind_actions,
+        test_agent_tunnel_requires_explicit_targets_and_keeps_focus,
         test_ssh_history_and_auto_profile_follow_structured_success,
         test_ssh_profile_picker_and_settings_save_semantics,
         test_browser_ssh_key_lifecycle_and_settings_transfer,

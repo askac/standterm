@@ -283,6 +283,12 @@
             background: rgba(0,0,0,0.75); z-index: 7000; align-items: center; justify-content: center;
         }
         #settings-modal.open { display: flex; }
+        #agent-tunnel-dialog { width: min(620px, calc(100vw - 48px)); border: 1px solid #555; border-radius: 8px; background: #1c1c1e; color: #ddd; }
+        #agent-tunnel-dialog::backdrop { background: rgba(0,0,0,0.75); }
+        #agent-tunnel-targets { display: grid; gap: 8px; max-height: 30vh; overflow: auto; margin: 16px 0; }
+        #agent-tunnel-info { width: 100%; box-sizing: border-box; min-height: 140px; background: #111; color: #ddd; }
+        #agent-tunnel-message { white-space: pre-wrap; }
+        .agent-tunnel-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
         #paste-review-modal {
             display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
             background: rgba(0,0,0,0.75); z-index: 4100; align-items: center; justify-content: center;
@@ -1135,6 +1141,7 @@
         <button id="agent-status-mint-3x-btn" class="status-action agent-status-mint" title="Mint a 3x idle-time external-agent token for the active terminal">Mint 3&times;</button>
         <div id="terminal-tools">
             <button id="agent-toggle-btn" class="status-action" type="button" title="Show Agent panel">Show Agent Panel</button>
+            <button id="agent-tunnel-btn" class="status-action" type="button" title="Manage remote Agent access through this SSH connection" hidden>Agent Tunnel</button>
             <button id="sftp-status-btn" class="status-action status-sftp" type="button" title="Open Files" aria-label="Open Files" hidden>&#x1F4C1;</button>
             <button id="quick-settings" class="status-action" type="button" title="Settings" aria-label="Settings">&#x2699;&#xFE0F;</button>
             <details id="tab-more">
@@ -1143,6 +1150,21 @@
             </details>
         </div>
     </div>
+    <dialog id="agent-tunnel-dialog" aria-labelledby="agent-tunnel-title">
+        <h3 id="agent-tunnel-title">Agent Tunnel</h3>
+        <p id="agent-tunnel-carrier"></p>
+        <p>Select each tab the remote agent may access. Each tab keeps its current Agent permissions. Enable its Agent panel before selecting it.</p>
+        <p>Start provisions the current helpers and skills in a private directory on this SSH host (Linux or macOS, Python 3.9+ and SFTP required).</p>
+        <div id="agent-tunnel-targets"></div>
+        <p id="agent-tunnel-message" role="status"></p>
+        <textarea id="agent-tunnel-info" readonly aria-label="Agent Connect Info" hidden></textarea>
+        <div class="agent-tunnel-actions">
+            <button id="agent-tunnel-copy" type="button" hidden>Copy Connect Info</button>
+            <button id="agent-tunnel-stop" type="button">Stop Tunnel</button>
+            <button id="agent-tunnel-apply" type="button">Start / Apply Selection</button>
+            <button id="agent-tunnel-close" type="button">Close</button>
+        </div>
+    </dialog>
     <div id="terminal"></div>
     <div id="status-bar">
         <span class="sb-item">Socket:&nbsp;<span id="socketStatus">Disconnected</span></span>
@@ -2466,6 +2488,90 @@
             function getActiveTerminalState() {
                 return terminals.get(activeTerminalId) || null;
             }
+
+            const agentTunnelDialog = document.getElementById('agent-tunnel-dialog');
+            const agentTunnelInfo = document.getElementById('agent-tunnel-info');
+            const agentTunnelMessage = document.getElementById('agent-tunnel-message');
+            let agentTunnelCarrier = null;
+            let agentTunnelRequest = 0;
+
+            function clearAgentTunnelInfo(message) {
+                agentTunnelInfo.value = '';
+                agentTunnelInfo.hidden = true;
+                document.getElementById('agent-tunnel-copy').hidden = true;
+                agentTunnelMessage.textContent = message;
+            }
+
+            function renderAgentTunnelTargets(selected) {
+                const list = document.getElementById('agent-tunnel-targets');
+                list.replaceChildren();
+                terminals.forEach(state => {
+                    const label = document.createElement('label');
+                    const input = document.createElement('input');
+                    input.type = 'checkbox';
+                    input.value = state.id;
+                    input.checked = selected.includes(state.id);
+                    input.disabled = !state.connected || !state.agent.attached || state.agent.mode === AGENT_MODE_DISABLED;
+                    input.dataset.binding = JSON.stringify({
+                        terminal_id: state.id,
+                        agent_binding_id: state.agent.agentBindingId,
+                        mode_version: state.agent.modeVersion,
+                        privacy_version: state.agent.privacyVersion
+                    });
+                    label.append(input, document.createTextNode(` ${state.title} (${state.id}) · ${state.agent.mode}`));
+                    list.append(label);
+                });
+            }
+
+            function requestAgentTunnel(operation) {
+                if (!agentTunnelCarrier || !socket.connected) return;
+                const requestId = ++agentTunnelRequest;
+                const terminalId = agentTunnelCarrier;
+                const targets = Array.from(document.querySelectorAll('#agent-tunnel-targets input:checked'))
+                    .filter(input => !input.disabled).map(input => JSON.parse(input.dataset.binding));
+                if (operation === 'apply' && targets.length === 0) {
+                    agentTunnelMessage.textContent = 'Select at least one Agent-enabled terminal.';
+                    return;
+                }
+                agentTunnelMessage.textContent = operation === 'apply' ? 'Preparing and verifying Agent access…' : 'Updating tunnel status…';
+                document.getElementById('agent-tunnel-apply').disabled = true;
+                if (operation === 'apply') document.getElementById('agent-tunnel-stop').disabled = false;
+                socket.emit('agent_tunnel', { terminal_id: terminalId, operation, targets }, result => {
+                    if (requestId !== agentTunnelRequest || terminalId !== agentTunnelCarrier) return;
+                    document.getElementById('agent-tunnel-apply').disabled = false;
+                    const ready = result && result.status === 'ready';
+                    agentTunnelMessage.textContent = ready ? 'Ready. Give this Connect Info to the agent on the SSH host.'
+                        : result && result.status === 'stopped'
+                            ? (result.cleanup_pending ? 'Access revoked. Remote cleanup is pending.' : 'Tunnel stopped.')
+                        : (result && result.message) || 'Tunnel setup failed.';
+                    agentTunnelInfo.value = ready ? result.connect_info : '';
+                    agentTunnelInfo.hidden = !ready;
+                    document.getElementById('agent-tunnel-copy').hidden = !ready;
+                    document.getElementById('agent-tunnel-stop').disabled = !ready;
+                    renderAgentTunnelTargets((result && result.terminal_ids) || []);
+                });
+            }
+
+            document.getElementById('agent-tunnel-btn').addEventListener('click', () => {
+                agentTunnelCarrier = activeTerminalId;
+                document.getElementById('agent-tunnel-carrier').textContent = `SSH host: ${getActiveTerminalState().title}`;
+                agentTunnelInfo.hidden = true;
+                document.getElementById('agent-tunnel-copy').hidden = true;
+                renderAgentTunnelTargets([]);
+                agentTunnelDialog.showModal();
+                requestAgentTunnel('status');
+            });
+            document.getElementById('agent-tunnel-apply').addEventListener('click', () => requestAgentTunnel('apply'));
+            document.getElementById('agent-tunnel-stop').addEventListener('click', () => requestAgentTunnel('stop'));
+            document.getElementById('agent-tunnel-close').addEventListener('click', () => agentTunnelDialog.close());
+            document.getElementById('agent-tunnel-copy').addEventListener('click', async () => {
+                try {
+                    await navigator.clipboard.writeText(agentTunnelInfo.value);
+                } catch (_error) {
+                    agentTunnelInfo.focus();
+                    agentTunnelInfo.select();
+                }
+            });
 
             function getActiveTerm() {
                 const state = getActiveTerminalState();
@@ -5399,6 +5505,10 @@
                 updateAgentPanel();
                 updateTerminalApplicationTitleStatus(state);
                 updateSftpActionButton(sftpStatusBtn, state);
+                document.getElementById('agent-tunnel-btn').hidden = !state || !state.connected || state.connectionType !== 'ssh';
+                if (agentTunnelDialog.open && (!socket.connected || !terminals.get(agentTunnelCarrier)?.connected)) {
+                    clearAgentTunnelInfo('SSH connection unavailable. Start a new tunnel after reconnecting.');
+                }
                 if (!state) return;
                 sshStatusEl.innerText = state.connected ? getTerminalDisplayLabel(state) : (state.connecting ? 'Connecting' : 'Disconnected');
                 sshStatusEl.style.color = state.connected ? '#34c759' : (state.connecting ? '#ffcc00' : '#ff9f0a');
@@ -6440,6 +6550,11 @@
             });
             socket.on('agent_state', data => {
                 applyAgentStatePayload(data);
+            });
+            socket.on('agent_tunnel_state', data => {
+                if (data && data.terminal_id === agentTunnelCarrier && data.status === 'stopped') {
+                    clearAgentTunnelInfo('Tunnel stopped.');
+                }
             });
             socket.on('agent_action_request', data => {
                 applyAgentActionPayload(data);
@@ -9361,7 +9476,7 @@
                 return !!request && request.state === getActiveTerminalState()
                     && isCurrentTerminalState(request.state) && !request.state.inPip && request.state.connected && socket.connected
                     && document.activeElement === request.focus
-                    && !document.querySelector('#settings-modal.open, #paste-review-modal.open, #session-recovery-modal.open, #browser-auth-help-modal.open');
+                    && !document.querySelector('#settings-modal.open, #paste-review-modal.open, #session-recovery-modal.open, #browser-auth-help-modal.open, #agent-tunnel-dialog[open]');
             }
             document.addEventListener('focusin', () => {
                 if (pendingContextPaste && document.activeElement !== pendingContextPaste.focus) pendingContextPaste = null;

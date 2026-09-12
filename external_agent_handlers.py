@@ -332,6 +332,7 @@ class ExternalAgentSendActionExecutor:
         error_privacy_blocked,
         error_human_input_active,
         error_mode_not_writable,
+        validate_record=None,
     ):
         self.agent_lock = agent_lock
         self.is_context_allowed = is_context_allowed
@@ -356,6 +357,7 @@ class ExternalAgentSendActionExecutor:
         self.error_privacy_blocked = error_privacy_blocked
         self.error_human_input_active = error_human_input_active
         self.error_mode_not_writable = error_mode_not_writable
+        self.validate_record = validate_record
 
     def execute_send_action(
         self,
@@ -373,6 +375,10 @@ class ExternalAgentSendActionExecutor:
         before_output_seq = None
         with bridge.input_lock:
             with self.agent_lock:
+                if self.validate_record:
+                    error_code = self.validate_record(record)
+                    if error_code:
+                        return None, error_code
                 if state.paused or state.mode == self.mode_paused:
                     return None, self.error_paused
                 if not self.is_context_allowed(state):
@@ -391,6 +397,8 @@ class ExternalAgentSendActionExecutor:
                 action, error_code = self.build_action(state, proposal, requires_approval)
                 if error_code:
                     return None, error_code
+                action['external_agent_id'] = record.get('external_agent_id')
+                action['external_agent_token_hash'] = record.get('token_hash')
                 self.record_audit(
                     state,
                     self.audit_event_type,

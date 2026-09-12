@@ -28,9 +28,10 @@ Keep routine operations small; read only the reference needed for the task.
 
 ## Non-Negotiable Boundaries
 
-- The controller runs locally to the backend. Do not install helpers or tunnels
-  on SSH targets or attempt cross-user discovery. Windows/WSL are different
-  runtimes; forwarding is not guaranteed.
+- Use the operator-provided loopback endpoint in the agent's runtime. This may
+  be local to Core or an already provisioned SSH Agent Tunnel. Do not install
+  helpers or tunnels as automatic recovery, or attempt cross-user discovery.
+  Windows/WSL are different runtimes; forwarding is not guaranteed.
 - Before the first write, establish the current shell/TUI/editor/login/log-stream
   context with read-only observation, unless the user has already supplied it.
   Start with text; use an image when visual state matters. If uncertain, ask;

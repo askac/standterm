@@ -516,6 +516,30 @@ Python environment.
 UART access follows the same local-client/browser-authorization gate as Local
 Shell unless `STANDTERM_ALLOW_REMOTE_UART=1` is set.
 
+## SSH Agent Tunnel
+
+On a connected SSH tab, **Agent Tunnel** can provision remote Agent access
+without reconnecting the terminal. Enable Agent on each target tab, select the
+tabs individually, then choose **Start / Apply Selection**. Give the resulting
+**Connect Info** to the agent running on that SSH host. It uses the same skills,
+Python helpers, discovery, and per-tab permissions as a local external agent,
+including normal file-copy approval between two authorized tabs.
+
+The SSH host needs Linux or macOS, Python 3.9+, SFTP, and remote forwarding.
+Core verifies the actual listener is loopback-only and checks the complete
+helper and skill bundle before showing usable Connect Info. OpenSSH
+`GatewayPorts yes` is rejected; use `no` or `clientspecified`. Helpers and secret
+handoffs live in a private temporary directory on the SSH host. The tunnel
+exposes only scoped Agent discovery and commands over HTTP inside SSH.
+
+Applying a new selection removes unchecked grants and can renew expired or
+revoked grants. **Stop Tunnel**, SSH disconnect, or browser viewer disconnect
+revokes this tunnel's grants and pending input without revoking local agents.
+Stopping preserves the SSH terminal and Files connection. An interrupted
+command is never replayed automatically. If SSH is already unreachable, remote
+temporary files may remain; their tokens are invalid. Reconnecting requires a
+new tunnel and Connect Info. ProxyJump is planned separately.
+
 ## Agent And External Agent Mirror
 
 The browser Agent panel is an operator gate around typed terminal actions. It
