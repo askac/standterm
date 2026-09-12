@@ -538,7 +538,11 @@ authenticated request through this tunnel. **Last authenticated request** is a
 historical timestamp, not a continuous connection indicator. **Refresh Status**
 reloads the current grants and activity without renewing their tokens.
 
-The SSH host needs Linux or macOS, Python 3.9+, SFTP, and remote forwarding.
+The SSH host needs Python 3.9+, SFTP, remote forwarding, and a way to inspect
+its listener bindings. Core supports Linux `/proc/net`, FreeBSD `netstat` JSON,
+and `lsof` (including macOS). Hosts are not rejected during preparation based
+on their OS name; setup fails when a required capability or verification is
+unavailable. Helpers are clients of the same HTTP API on every host.
 Core verifies the actual listener is loopback-only and checks the complete
 helper and skill bundle before showing usable Connect Info. OpenSSH
 `GatewayPorts yes` is rejected; use `no` or `clientspecified`. Helpers and secret

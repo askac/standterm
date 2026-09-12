@@ -1,5 +1,6 @@
 """Dynamic SSH forwarding for the existing external-agent HTTP contract."""
 import json
+import base64
 import hashlib
 import secrets
 import select
@@ -170,7 +171,10 @@ class AgentTunnel:
                         for name in TUNNEL_SKILL_REFERENCES)
         if any(not path.is_file() for path in required):
             raise RuntimeError('The Core installation has an incomplete Agent helper or skill bundle.')
-        bootstrap = (self.app_dir / 'scripts' / 'agent_tunnel_runtime.py').read_text(encoding='utf-8')
+        source = (self.app_dir / 'scripts' / 'agent_tunnel_runtime.py').read_bytes()
+        # Account shells such as tcsh reject literal newlines inside quoted arguments.
+        encoded = base64.b64encode(source).decode('ascii')
+        bootstrap = 'import base64; exec(base64.b64decode("' + encoded + '"))'
         result = self._exec(shlex.quote(TUNNEL_REMOTE_PYTHON) + ' -c ' + shlex.quote(bootstrap) + ' prepare')
         root = PurePosixPath(result['root'])
         python_path = result['python_path']

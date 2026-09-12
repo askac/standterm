@@ -5,6 +5,7 @@ import hashlib
 import importlib
 import json
 import os
+import shutil
 import socket
 import struct
 import subprocess
@@ -15,9 +16,43 @@ import urllib.request
 from pathlib import Path
 
 
+def freebsd_listener_addresses(port):
+    result = subprocess.run(
+        ['/usr/bin/netstat', '--libxo', 'json', '-an', '-p', 'tcp'],
+        capture_output=True, text=True, timeout=10, check=False,
+    )
+    if result.returncode != 0 or result.stderr.strip():
+        raise RuntimeError('Cannot inspect the SSH listener with netstat JSON.')
+    try:
+        entries = json.loads(result.stdout)['statistics']['socket']
+        if not isinstance(entries, list):
+            raise ValueError
+        addresses = []
+        for entry in entries:
+            if entry['protocol'] not in {'tcp4', 'tcp6', 'tcp46', 'toe4', 'toe6', 'toe46'}:
+                raise ValueError
+            if not isinstance(entry['tcp-state'], str):
+                raise ValueError
+            if entry['tcp-state'] != 'LISTEN':
+                continue
+            local = entry['local']
+            number = local['port']
+            if not isinstance(number, str) or not number.isascii() or not number.isdecimal():
+                raise ValueError
+            if not 1 <= int(number) <= 65535 or not isinstance(local['address'], str):
+                raise ValueError
+            if int(number) == port:
+                addresses.append(local['address'])
+        return addresses
+    except (KeyError, TypeError, ValueError):
+        raise RuntimeError('Cannot verify the SSH listener: invalid netstat JSON.') from None
+
+
 def listener_addresses(port):
     addresses = []
-    if sys.platform.startswith('linux'):
+    if sys.platform.startswith('freebsd'):
+        return freebsd_listener_addresses(port)
+    if os.path.isfile('/proc/net/tcp'):
         for name, family in (('tcp', socket.AF_INET), ('tcp6', socket.AF_INET6)):
             path = '/proc/net/' + name
             if name == 'tcp6' and not os.path.exists(path):
@@ -31,9 +66,9 @@ def listener_addresses(port):
                     packed = b''.join(struct.pack('=I', int(address[i:i + 8], 16))
                                       for i in range(0, len(address), 8))
                     addresses.append(socket.inet_ntop(family, packed))
-    elif sys.platform == 'darwin':
+    elif shutil.which('lsof'):
         result = subprocess.run(
-            ['/usr/sbin/lsof', '-nP', '-a', '-iTCP:' + str(port), '-sTCP:LISTEN', '-Fn'],
+            [shutil.which('lsof'), '-nP', '-a', '-iTCP:' + str(port), '-sTCP:LISTEN', '-Fn'],
             capture_output=True, text=True, timeout=10, check=False,
         )
         if result.returncode not in (0, 1):
@@ -42,7 +77,7 @@ def listener_addresses(port):
             if line.startswith('n'):
                 addresses.append(line[1:].rsplit(':', 1)[0].strip('[]'))
     else:
-        raise RuntimeError('Agent tunnel requires a Linux or macOS SSH host.')
+        raise RuntimeError('Cannot verify the remote loopback listener: no supported inspection tool is available.')
     return addresses
 
 
@@ -82,8 +117,6 @@ def main():
     if sys.version_info < (3, 9):
         raise RuntimeError('Agent tunnel requires Python 3.9 or newer.')
     if sys.argv[1:] == ['prepare']:
-        if not (sys.platform.startswith('linux') or sys.platform == 'darwin'):
-            raise RuntimeError('Agent tunnel requires a Linux or macOS SSH host.')
         root = tempfile.mkdtemp(prefix='standterm-agent-')
         os.chmod(root, 0o700)
         result = {'root': root, 'python_path': sys.executable}

@@ -1,6 +1,7 @@
 """Exercise unchanged clients through a real, isolated OpenSSH reverse forward."""
 import contextlib
 import getpass
+import io
 import json
 import os
 from pathlib import Path
@@ -15,12 +16,14 @@ import unittest
 import urllib.error
 import urllib.request
 from unittest.mock import patch
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 test_args = sys.argv[1:]
 sys.argv[1:] = []
 import agent_backend_smoke as fixture
 from agent_tunnel import AgentTunnel, tunnel_ingress
+from scripts import agent_tunnel_runtime as runtime
 sys.argv[1:] = test_args
 
 standterm = fixture.standterm
@@ -298,7 +301,16 @@ class AgentTunnelTests(unittest.TestCase):
         local_path = Path(local_payload['handoff_path'])
         local_bytes = local_path.read_bytes()
         with ssh_server() as ssh:
-            tunnel = self.open_tunnel(ssh)
+            commands = []
+            original_exec = AgentTunnel._exec
+
+            def capture_exec(tunnel, command):
+                commands.append(command)
+                return original_exec(tunnel, command)
+
+            with patch.object(AgentTunnel, '_exec', capture_exec):
+                tunnel = self.open_tunnel(ssh)
+            self.assertNotIn('\n', commands[0])
             root = Path(str(tunnel.runtime['root']))
             self.assertEqual(root.stat().st_mode & 0o777, 0o700)
             status, info = request_json(tunnel.runtime['base_url'] + '/agentinfo')
@@ -552,6 +564,71 @@ class AgentTunnelTests(unittest.TestCase):
                     self.assertNotIn('--token', command)
                     self.assertNotIn('--ca-file', command)
                     self.assertIn(str(runtime['root']), command)
+
+
+class AgentTunnelRuntimeTests(unittest.TestCase):
+    port = 43210
+
+    def entry(self, address='127.0.0.1', port='43210', state='LISTEN', protocol='tcp4'):
+        return {'protocol': protocol, 'tcp-state': state, 'local': {'address': address, 'port': port}}
+
+    def probe(self, payload, *, returncode=0, stderr='', instance_id='expected'):
+        with tempfile.TemporaryDirectory(prefix='standterm-freebsd-probe-') as directory:
+            root = Path(directory)
+            (root / 'manifest.json').write_text('{}')
+            result = SimpleNamespace(stdout=payload, stderr=stderr, returncode=returncode)
+            with patch.object(runtime, '__file__', str(root / 'scripts/runtime.py')), \
+                    patch.object(runtime.sys, 'platform', 'freebsd14'), \
+                    patch.object(runtime.sys, 'dont_write_bytecode', False), \
+                    patch.object(runtime.importlib, 'import_module'), \
+                    patch.object(runtime.subprocess, 'run', return_value=result) as inspect, \
+                    patch.object(runtime.urllib.request, 'build_opener') as build_opener:
+                build_opener.return_value.open.return_value = io.BytesIO(json.dumps({'instance_id': instance_id}).encode())
+                verified = runtime.verify(self.port, 'expected')
+                self.assertEqual(inspect.call_args.args[0],
+                                 ['/usr/bin/netstat', '--libxo', 'json', '-an', '-p', 'tcp'])
+                return verified
+
+    def payload(self, entries):
+        return json.dumps({'statistics': {'socket': entries}})
+
+    def test_freebsd_accepts_loopback_listeners_and_checks_instance(self):
+        entries = [self.entry(), self.entry('::1', protocol='tcp6'),
+                   self.entry('0.0.0.0', port='22'), self.entry('192.0.2.1', state='ESTABLISHED')]
+        self.assertEqual(self.probe(self.payload(entries)), {'verified': True})
+        with self.assertRaisesRegex(RuntimeError, 'did not reach this StandTerm instance'):
+            self.probe(self.payload(entries), instance_id='different')
+
+    def test_freebsd_rejects_any_unsafe_listener_at_the_forwarded_port(self):
+        for address, protocol in [('*', 'tcp4'), ('0.0.0.0', 'tcp4'), ('::', 'tcp6'),
+                                  ('192.0.2.1', 'tcp4'), ('2001:db8::1', 'tcp6')]:
+            with self.subTest(address=address), self.assertRaisesRegex(RuntimeError, 'loopback'):
+                self.probe(self.payload([self.entry(), self.entry(address, protocol=protocol)]))
+
+    def test_freebsd_rejects_absent_or_unverifiable_listener_data(self):
+        for entries in [[], [self.entry(port='22')], [self.entry(state='ESTABLISHED')]]:
+            with self.subTest(entries=entries), self.assertRaisesRegex(RuntimeError, 'Cannot verify'):
+                self.probe(self.payload(entries))
+        malformed = ['not JSON', '{}', self.payload(None), self.payload([None]), self.payload([{}]),
+                     self.payload([self.entry(port='ssh')]), self.payload([self.entry(port=43210)]),
+                     self.payload([self.entry(address=None)]), self.payload([self.entry(protocol='udp4')])]
+        for payload in malformed:
+            with self.subTest(payload=payload), self.assertRaisesRegex(RuntimeError, 'invalid netstat JSON'):
+                self.probe(payload)
+        for returncode, stderr in [(1, ''), (0, 'Permission denied')]:
+            with self.subTest(returncode=returncode, stderr=stderr), self.assertRaisesRegex(RuntimeError, 'Cannot inspect'):
+                self.probe(self.payload([self.entry()]), returncode=returncode, stderr=stderr)
+
+    def test_prepare_is_not_gated_by_os_name(self):
+        with tempfile.TemporaryDirectory(prefix='standterm-runtime-prepare-') as directory:
+            output = io.StringIO()
+            with patch.object(runtime.sys, 'platform', 'another-posix'), \
+                    patch.object(runtime.sys, 'argv', ['runtime.py', 'prepare']), \
+                    patch.object(runtime.tempfile, 'mkdtemp', return_value=directory), \
+                    contextlib.redirect_stdout(output):
+                runtime.main()
+            self.assertEqual(json.loads(output.getvalue())['root'], directory)
+            self.assertEqual(Path(directory).stat().st_mode & 0o777, 0o700)
 
 
 if __name__ == '__main__':
