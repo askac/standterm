@@ -1,4 +1,4 @@
-"""Exercise bounded terminal reads without network connections or user shells."""
+"""Exercise terminal reads and spawn arguments without network or user shells."""
 import codecs
 from collections import deque
 from pathlib import Path
@@ -172,6 +172,44 @@ class TerminalReadTests(unittest.TestCase):
         bridge, runtime = local_bridge(process)
         self.assertTrue(bridge._read_windows_once())
         self.assertEqual(runtime.sleeps, [LOCAL_SHELL_IDLE_WAIT_SECONDS])
+
+
+class WindowsShellSpawnTests(unittest.TestCase):
+    def test_windows_preserves_executable_paths_and_arguments(self):
+        executable = r'C:\Fixture Folder\PowerShell\pwsh.exe'
+        for command in ['cmd.exe', executable, [executable, '-NoLogo', 'argument with spaces'],
+                        (executable, '-NoLogo')]:
+            with self.subTest(command=command):
+                bridge, _runtime = local_bridge(None)
+                bridge.shell = 'PowerShell display label'
+                bridge.shell_command = command
+                expected = [command] if isinstance(command, str) else command
+                with patch('terminal_backends.local_shell.WinPtyProcess') as winpty:
+                    process = bridge._spawn_windows_process(80, 24, 'fixture-cwd', {'TERM': 'fixture'})
+                    self.assertIs(process, winpty.spawn.return_value)
+                    winpty.spawn.assert_called_once_with(expected, cwd='fixture-cwd',
+                        env={'TERM': 'fixture'}, dimensions=(24, 80))
+
+    def test_windows_compatibility_fallbacks_keep_the_same_command(self):
+        command = [r'C:\Fixture Folder\shell.exe', 'argument with spaces']
+        for failures in range(4):
+            with self.subTest(failures=failures):
+                bridge, _runtime = local_bridge(None)
+                bridge.shell_command = command
+                process = object()
+                with patch('terminal_backends.local_shell.WinPtyProcess') as winpty:
+                    winpty.spawn.side_effect = [TypeError('Legacy keyword signature')] * failures + [process]
+                    self.assertIs(bridge._spawn_windows_process(80, 24, 'fixture-cwd', {}), process)
+                    self.assertEqual(winpty.spawn.call_count, failures + 1)
+                    self.assertTrue(all(call.args == (command,) for call in winpty.spawn.call_args_list))
+
+    def test_windows_spawn_errors_are_not_retried_as_signature_failures(self):
+        bridge, _runtime = local_bridge(None)
+        with patch('terminal_backends.local_shell.WinPtyProcess') as winpty:
+            winpty.spawn.side_effect = FileNotFoundError('Missing executable')
+            with self.assertRaises(FileNotFoundError):
+                bridge._spawn_windows_process(80, 24, 'fixture-cwd', {})
+            self.assertEqual(winpty.spawn.call_count, 1)
 
 
 if __name__ == '__main__':

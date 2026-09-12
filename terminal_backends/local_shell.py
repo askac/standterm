@@ -722,11 +722,13 @@ class LocalShellBridge(TerminalBridge):
             return False, {'message': str(exc), 'error_code': 'local_shell_start_failed'}
 
     def _spawn_windows_process(self, cols, rows, cwd, env):
+        # A legacy string config is one executable path, not a command line.
+        command = [self.shell_command] if isinstance(self.shell_command, str) else self.shell_command
         spawn_attempts = (
-            lambda: WinPtyProcess.spawn(self.shell, cwd=cwd, env=env, dimensions=(rows, cols)),
-            lambda: WinPtyProcess.spawn(self.shell, cwd=cwd, env=env),
-            lambda: WinPtyProcess.spawn(self.shell, dimensions=(rows, cols)),
-            lambda: WinPtyProcess.spawn(self.shell),
+            lambda: WinPtyProcess.spawn(command, cwd=cwd, env=env, dimensions=(rows, cols)),
+            lambda: WinPtyProcess.spawn(command, cwd=cwd, env=env),
+            lambda: WinPtyProcess.spawn(command, dimensions=(rows, cols)),
+            lambda: WinPtyProcess.spawn(command),
         )
         last_error = None
         for spawn in spawn_attempts:
