@@ -58,7 +58,13 @@ try { mode = desktopMode(process.argv); } catch (error) {
   return;
 }
 app.setName('StandTerm Desktop');
-if (process.platform === 'win32') app.setAppUserModelId(`${APP_ID}.${mode}`);
+if (process.platform === 'win32') {
+  app.setAppUserModelId(`${APP_ID}.${mode}`);
+  // Native occlusion can leave a restored Core view unable to receive input or capture.
+  // Keep explicit focus, hide and minimize guards; reassess after Electron upgrades.
+  const disabledFeatures = app.commandLine.getSwitchValue('disable-features');
+  app.commandLine.appendSwitch('disable-features', [disabledFeatures, 'CalculateNativeWinOcclusion'].filter(Boolean).join(','));
+}
 app.enableSandbox();
 const captureSmoke = process.argv.includes('--desktop-capture-smoke');
 const smoke = process.argv.includes('--desktop-smoke') || captureSmoke;

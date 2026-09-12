@@ -15,10 +15,10 @@ not a Gatekeeper-qualified public release. No signing account or private key is
 needed for a local build. Intel/Rosetta acceptance is not implied.
 
 New build filenames pair the independent Desktop and bundled Core versions:
-`StandTerm-Desktop-0.5.0-2.12.0-mac-arm64.dmg` and
-`StandTerm-Desktop-0.5.0-2.12.0-win32-x64-Setup.exe`.
-The [Desktop 0.5.0 evaluation release](https://github.com/askac/standterm/releases/tag/desktop-v0.5.0-2.12.0)
-contains paired packages, checksums and validation evidence. Core 2.12.0 remains
+`StandTerm-Desktop-0.5.0-2.12.1-mac-arm64.dmg` and
+`StandTerm-Desktop-0.5.0-2.12.1-win32-x64-Setup.exe`.
+The [Desktop 0.5.0 evaluation release](https://github.com/askac/standterm/releases/tag/desktop-v0.5.0-2.12.1)
+contains paired packages, checksums and validation evidence. Core 2.12.1 remains
 a separate source release; older Desktop releases retain their original files.
 
 Staging writes `release-identity.json` from the staged package/lock versions and
@@ -33,7 +33,7 @@ The 0.4.5 evaluation source includes updated Core terminal reads, transcript
 splitting, token-tab countdowns, asynchronous launcher status polling and the
 experimental IME anchor, plus guarded Desktop clipboard controls. Earlier local
 0.4.5 candidates contain Core `2.11.0-dev`; they must not be renamed or presented
-as containing Core 2.12.0. Rebuild both platforms and verify their manifests
+as containing Core 2.12.1. Rebuild both platforms and verify their manifests
 before publishing paired installers. Real macOS IME candidate placement and
 native clipboard/upgrade acceptance remain separate manual checks.
 
@@ -42,6 +42,12 @@ expiry and recording indicators stay current when another window has focus.
 This also keeps frames updating for its owning window; it is not a capture
 permission grant. Core's own preferences, action focus checks and the existing
 stop-on-hide/minimize/fullscreen/navigation behavior remain unchanged.
+
+On Windows, Desktop disables Chromium's native window occlusion calculation to
+keep the Core view receiving input and producing captures after activation.
+Covered windows, other virtual desktops or a locked session may consequently
+use more CPU/GPU. Explicit focus checks and hide/minimize capture stops remain
+enabled. Recheck this workaround when upgrading Electron.
 
 Native macOS mode is selected automatically, or explicitly with `--backend=macos`.
 Local shells start as login shells so their usual profiles (for example
@@ -67,7 +73,7 @@ Build on an Apple Silicon Mac with Node 22.12+ and the checkout's macOS venv:
 ```sh
 cd desktop
 npm ci
-npm run stage:mac -- --core-ref v2.12.0
+npm run stage:mac -- --core-ref v2.12.1
 # Change to the absolute stage directory printed above, then:
 npm ci
 npm run make:mac
@@ -292,7 +298,7 @@ Permanent disposal of recovery files is a separate, explicit user action.
 Build tools need Windows Node.js 22.12+ and Git. From the repository:
 
 ```powershell
-node desktop/stage-windows.cjs --core-ref v2.12.0
+node desktop/stage-windows.cjs --core-ref v2.12.1
 # Change to the exact desktop/dist/windows-build-* path printed above.
 cd <printed-build-directory>
 npm ci
@@ -302,13 +308,13 @@ npm run make:win
 The staging script creates a new directory each time. `--core-ref` selects Core
 files and bytes from that Git revision; the Desktop shell comes from the current
 checkout. Verify a release stage with `node desktop/test/core-release-inspect.cjs
-<stage> v2.12.0`, then inspect the actual package with `test/package-inspect.cjs`.
+<stage> v2.12.1`, then inspect the actual package with `test/package-inspect.cjs`.
 Without `--core-ref`, staging uses tracked working-tree Core files for development
 snapshots; these are not a claim that changes are already a release. Build staging never copies
 the development venv or `node_modules`. The new directory gets Windows build
 dependencies; the source checkout's Linux/WSLg `node_modules` is untouched.
 
-The `StandTerm-Desktop-0.5.0-2.12.0-win32-x64-Setup.exe` is under `out/`; the unpacked
+The `StandTerm-Desktop-0.5.0-2.12.1-win32-x64-Setup.exe` is under `out/`; the unpacked
 application is under `out/win-unpacked/`. Packaging uses
 [electron-builder's assisted NSIS target](https://www.electron.build/nsis.html),
 with pinned build dependencies and scoped custom installer hooks. Squirrel
@@ -619,7 +625,7 @@ managed Core bundle SHA-256 identity when available. The same Core details are
 in Diagnostics. Core reports its version from `core_version.py`, independently
 of the Electron package version. Source checkouts have no managed build identity;
 older backends that omit version metadata show Unknown, never an inferred Git
-tag. The current source pairing is Desktop 0.5.0 / Core 2.12.0. The Core source
+tag. The current source pairing is Desktop 0.5.0 / Core 2.12.1. The Core source
 release does not publish or qualify Desktop installers. The Agent menu and
 expanded Core payload postdate the
 published 0.4.1 installer and the earlier macOS 0.4.2 candidate; they require a
