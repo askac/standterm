@@ -1,0 +1,122 @@
+name: Desktop package
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['release/desktop-*']
+
+permissions:
+  contents: read
+
+jobs:
+  macos-arm64:
+    runs-on: macos-15
+    timeout-minutes: 35
+    env:
+      CORE_REF: v2.12.0
+      CORE_COMMIT: 2d2606cb6f8cac62ed7b936a332f9595edffc34a
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      STANDTERM_DISABLE_AGENTINFO_CURRENT: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: arm64
+      - name: Verify native tools and prepare isolated dependencies
+        run: |
+          test "$(uname -m)" = arm64
+          node -e "require('node:assert/strict').equal(process.arch, 'arm64')"
+          python -c "import platform; assert platform.machine() == 'arm64'"
+          test "$(git rev-parse "$CORE_REF^{commit}")" = "$CORE_COMMIT"
+          python -m venv tools/.venv_macos
+          tools/.venv_macos/bin/python -m pip install -r requirements.txt
+          tools/.venv_macos/bin/python -m pip freeze > tools/requirements_macos.txt
+          npm ci --prefix desktop --no-audit --no-fund
+          mkdir -p desktop/dist/evidence
+      - name: Test Desktop source
+        run: npm test --prefix desktop > desktop/dist/evidence/desktop-unit.log 2>&1
+      - name: Stage formal Core and build native DMG
+        run: |
+          stage=$(node desktop/stage-windows.cjs --macos --core-ref "$CORE_REF")
+          echo "DESKTOP_STAGE=$stage" >> "$GITHUB_ENV"
+          node desktop/test/core-release-inspect.cjs "$stage" "$CORE_REF" > desktop/dist/evidence/core-release.json
+          npm ci --prefix "$stage" --no-audit --no-fund
+          npm run make:mac --prefix "$stage"
+      - name: Inspect the app and mounted DMG
+        run: |
+          app="$DESKTOP_STAGE/out.noindex/mac-arm64/StandTermDesktop.app"
+          test -d "$app"
+          test "$(lipo -archs "$app/Contents/MacOS/StandTermDesktop")" = arm64
+          codesign --verify --deep --strict "$app"
+          node desktop/test/package-inspect.cjs "$app/Contents/Resources" "$DESKTOP_STAGE" "$DESKTOP_STAGE/node_modules/@electron/asar" > desktop/dist/evidence/package-inspection.log
+          dmg=("$DESKTOP_STAGE"/out.noindex/*.dmg)
+          test "${#dmg[@]}" = 1
+          mountpoint=$(mktemp -d "$RUNNER_TEMP/standterm-dmg.XXXXXX")
+          hdiutil attach "${dmg[0]}" -readonly -nobrowse -mountpoint "$mountpoint"
+          trap 'hdiutil detach "$mountpoint"' EXIT
+          node desktop/test/package-inspect.cjs "$mountpoint/StandTermDesktop.app/Contents/Resources" "$DESKTOP_STAGE" "$DESKTOP_STAGE/node_modules/@electron/asar" >> desktop/dist/evidence/package-inspection.log
+          echo "DESKTOP_APP=$app" >> "$GITHUB_ENV"
+      - name: Verify native shell initialization
+        run: tools/.venv_macos/bin/python desktop/test/macos_shell_smoke.py > desktop/dist/evidence/macos-shell.log 2>&1
+      - name: Exercise packaged application
+        id: smoke
+        continue-on-error: true
+        timeout-minutes: 5
+        run: |
+          runtime=$(mktemp -d "$RUNNER_TEMP/standterm-core.XXXXXX")
+          cp -R "$DESKTOP_APP/Contents/Resources/bundle/core/." "$runtime/"
+          export STANDTERM_DESKTOP_TEST_ROOT="$runtime"
+          export STANDTERM_DESKTOP_PYTHON="$GITHUB_WORKSPACE/tools/.venv_macos/bin/python"
+          export STANDTERM_AGENT_RUNTIME_DIR="$runtime/agent-state"
+          export STANDTERM_SESSION_RECOVERY_STORE="$runtime/recovery.json"
+          "$DESKTOP_APP/Contents/MacOS/StandTermDesktop" --backend=macos --desktop-smoke > desktop/dist/evidence/packaged-smoke.log 2>&1
+      - name: Exercise first-run setup and reuse
+        id: setup
+        continue-on-error: true
+        timeout-minutes: 10
+        run: desktop/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron desktop/test/macos-setup-integration.cjs "$GITHUB_WORKSPACE/tools/.venv_macos/bin/python" "$DESKTOP_STAGE" > desktop/dist/evidence/setup-integration.log 2>&1
+      - name: Record build identity and verification results
+        if: always() && env.DESKTOP_APP != ''
+        env:
+          SMOKE_RESULT: ${{ steps.smoke.outcome }}
+          SETUP_RESULT: ${{ steps.setup.outcome }}
+        run: |
+          cp tools/requirements_macos.txt desktop/dist/evidence/tested-runtime-dependencies.txt
+          cp "$DESKTOP_STAGE/bundle/manifest.json" desktop/dist/evidence/core-manifest.json
+          cp "$DESKTOP_STAGE/release-identity.json" desktop/dist/evidence/release-identity.json
+          tools/.venv_macos/bin/python - <<'PY'
+          import json, os, platform
+          from pathlib import Path
+          info = {
+              'sourceCommit': os.environ['GITHUB_SHA'],
+              'coreCommit': os.environ['CORE_COMMIT'],
+              'platform': platform.platform(), 'architecture': platform.machine(),
+              'python': platform.python_version(),
+              'runUrl': f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+              'packagedSmoke': os.environ['SMOKE_RESULT'],
+              'firstRunSetup': os.environ['SETUP_RESULT'],
+              'signature': 'Ad hoc; no Developer ID or notarization',
+              'manualAcceptance': 'Finder, Gatekeeper, IME and upgrade not exercised',
+          }
+          Path('desktop/dist/evidence/build-metadata.json').write_text(json.dumps(info, indent=2) + '\n')
+          PY
+          cp "$DESKTOP_STAGE"/out.noindex/*.dmg desktop/dist/evidence/
+          cd desktop/dist/evidence
+          shasum -a 256 *.dmg > SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: StandTerm-Desktop-macos-arm64
+          path: desktop/dist/evidence/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Require native interaction checks
+        if: steps.smoke.outcome != 'success' || steps.setup.outcome != 'success'
+        run: exit 1

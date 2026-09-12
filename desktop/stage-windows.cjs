@@ -12,9 +12,15 @@ const { releaseIdentity } = require('./release-identity.cjs');
 const platform = process.argv.includes('--macos') ? 'macos' : 'windows';
 if (platform === 'macos' && process.platform !== 'darwin') throw new Error('Stage macOS on a native Mac.');
 const root = path.resolve(__dirname, '..');
-const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean);
+const coreRefIndex = process.argv.indexOf('--core-ref');
+const coreRef = coreRefIndex < 0 ? null : process.argv[coreRefIndex + 1];
+if (coreRefIndex >= 0 && (!coreRef || coreRef.startsWith('--'))) throw new Error('--core-ref requires a Git revision.');
+const coreCommit = coreRef && execFileSync('git', ['rev-parse', '--verify', '--end-of-options', `${coreRef}^{commit}`],
+  { cwd: root, encoding: 'utf8' }).trim();
+const tracked = execFileSync('git', coreCommit ? ['ls-tree', '-r', '--name-only', '-z', coreCommit] : ['ls-files', '-z'],
+  { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean);
 const coreFiles = selectCoreFiles(tracked);
-validateCoreFiles(root, coreFiles);
+if (!coreCommit) validateCoreFiles(root, coreFiles);
 const shellFiles = [
   'package.json', 'package-lock.json', 'electron-builder.cjs', 'installer.nsh', 'main.cjs', 'policy.cjs',
   'capture.cjs', 'capture-file.cjs', 'recorder.html', 'recorder.js', 'setup.cjs', 'macos-python.cjs',
@@ -66,8 +72,15 @@ if (platform === 'macos') {
 }
 const files = {};
 for (const file of coreFiles.sort()) {
-  copy(path.join(root, file), path.join(stage, 'bundle', 'core', file));
-  files[file] = createHash('sha256').update(fs.readFileSync(path.join(root, file))).digest('hex');
+  const destination = path.join(stage, 'bundle', 'core', file);
+  if (coreCommit) {
+    const data = execFileSync('git', ['show', `${coreCommit}:${file}`], { cwd: root, maxBuffer: 16 * 1024 * 1024 });
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.writeFileSync(destination, data, { flag: 'wx' });
+  } else {
+    copy(path.join(root, file), destination);
+  }
+  files[file] = createHash('sha256').update(fs.readFileSync(destination)).digest('hex');
 }
 const id = createHash('sha256').update(JSON.stringify(files)).digest('hex');
 validateCoreFiles(path.join(stage, 'bundle', 'core'), Object.keys(files));

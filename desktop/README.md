@@ -15,18 +15,18 @@ not a Gatekeeper-qualified public release. No signing account or private key is
 needed for a local build. Intel/Rosetta acceptance is not implied.
 
 New build filenames pair the independent Desktop and bundled Core versions:
-`StandTerm-Desktop-0.4.5-2.12.0-mac-arm64.dmg` and
-`StandTerm-Desktop-0.4.5-2.12.0-win32-x64-Setup.exe` for future matching builds.
+`StandTerm-Desktop-0.5.0-2.12.0-mac-arm64.dmg` and
+`StandTerm-Desktop-0.5.0-2.12.0-win32-x64-Setup.exe` for future matching builds.
 These are naming examples, not published download links. Core 2.12.0 is a
 source-only release; existing 0.4.3 downloads are unchanged. Delivery archives
 and checksum sidecars retain the paired label; a future matching Desktop tag
-would be `desktop-v0.4.5-2.12.0`.
+would be `desktop-v0.5.0-2.12.0`.
 
 Staging writes `release-identity.json` from the staged package/lock versions and
 the manifest-hashed `core_version.py`. The builder revalidates this identity and
 fails on missing or inconsistent inputs. Build from the printed stage, not the
 source Desktop directory. Package and lock versions remain Desktop-only SemVer
-(`0.4.5`), so the combined label cannot change installer upgrade ordering. The
+(`0.5.0`), so the combined label cannot change installer upgrade ordering. The
 Core qualifier is preserved, and About/Diagnostics continue to show separate
 versions. A label alone is not a source or Core bundle identity.
 
@@ -68,7 +68,7 @@ Build on an Apple Silicon Mac with Node 22.12+ and the checkout's macOS venv:
 ```sh
 cd desktop
 npm ci
-npm run stage:mac
+npm run stage:mac -- --core-ref v2.12.0
 # Change to the absolute stage directory printed above, then:
 npm ci
 npm run make:mac
@@ -79,6 +79,11 @@ documents and Git state, and generates the native icon with macOS `sips` and
 `iconutil`. macOS outputs are in the stage's `out.noindex/` directory so local
 development app copies stay out of Spotlight results. The current build uses
 electron-builder 26's [macOS signing options](https://www.electron.build/v26/docs/mac/).
+
+The Desktop package workflow builds on a native `macos-15` arm64 runner. It
+compares the complete staged Core payload to the formal tag, inspects the app
+and mounted DMG, and records native smoke results with the artifact. Automated
+checks do not replace Finder, Gatekeeper, IME or installer-upgrade acceptance.
 
 For isolated verification, run `npm test`, `npm run smoke:capture`, the Python
 bootstrap/runtime/backend tests, and `test/browser-storage-smoke.cjs` with the
@@ -287,21 +292,23 @@ Permanent disposal of recovery files is a separate, explicit user action.
 Build tools need Windows Node.js 22.12+ and Git. From the repository:
 
 ```powershell
-node desktop/stage-windows.cjs
+node desktop/stage-windows.cjs --core-ref v2.12.0
 # Change to the exact desktop/dist/windows-build-* path printed above.
 cd <printed-build-directory>
 npm ci
 npm run make:win
 ```
 
-The staging script creates a new directory each time, using a runtime filter over
-`git ls-files` plus explicit desktop-shell/shared-lease file lists. Runtime contents include
-the tracked working-tree changes, so this is an evaluation snapshot, not a claim
-that uncommitted changes are already a GitHub release. Build staging never copies
+The staging script creates a new directory each time. `--core-ref` selects Core
+files and bytes from that Git revision; the Desktop shell comes from the current
+checkout. Verify a release stage with `node desktop/test/core-release-inspect.cjs
+<stage> v2.12.0`, then inspect the actual package with `test/package-inspect.cjs`.
+Without `--core-ref`, staging uses tracked working-tree Core files for development
+snapshots; these are not a claim that changes are already a release. Build staging never copies
 the development venv or `node_modules`. The new directory gets Windows build
 dependencies; the source checkout's Linux/WSLg `node_modules` is untouched.
 
-The `StandTerm-Desktop-0.4.5-2.12.0-win32-x64-Setup.exe` is under `out/`; the unpacked
+The `StandTerm-Desktop-0.5.0-2.12.0-win32-x64-Setup.exe` is under `out/`; the unpacked
 application is under `out/win-unpacked/`. Packaging uses
 [electron-builder's assisted NSIS target](https://www.electron.build/nsis.html),
 with pinned build dependencies and scoped custom installer hooks. Squirrel
@@ -574,24 +581,25 @@ display are covered by tests.
 
 ## Agent prompts and bundled Core
 
-The top-level **Agent** menu is the first-use entrypoint; no prior StandTerm
-skill installation is required. Choose **Copy skill installation prompt** and
-paste it into your agent. For subsequent sessions, use **Copy usage prompt** or
-**Copy file-transfer prompt** and describe the intended task and terminal.
-**Getting started...** explains token minting and the distinction between setup
-and terminal authority. **Copy connection info (JSON)** and **Copy agentinfo URL**
-remain available for clients that already know the protocol. Existing Diagnostics
-copy actions are preserved.
+Use Core's **Agent Info for Current Tab** to copy an agent prompt. The Desktop
+**Agent** menu retains **Show / hide Agent Panel**, **Pause Agent for current
+terminal**, and **Getting started...**. Desktop does not generate another set of
+AgentInfo URLs or prompts.
 
-These actions only copy text or show help. They do not install skills, execute
-helpers, mint tokens or approve transfers. Each prompt contains the exact live
-endpoint and instance ID, never credentials. Agents verify `/agentinfo` identity
-and use its `launch_dir`, `python_path`, `scripts` and `skills` paths. Installation
-prompts ask agents to preserve references and customized skills; agents without
-persistent skill support can read the documents for the current session instead.
-Backend paths belong to the active macOS, Windows or WSL environment. If access fails or
-an older Core lacks discovery metadata, request the correct environment or a
-Core update; do not guess a different endpoint or download arbitrary helpers.
+1. Select the tab where the agent runs. In Agent Panel, enable access and choose
+   permissions for each tab it may operate.
+2. For an SSH agent, start **Agent Tunnel** on its SSH tab. Agent Info appears
+   only after setup succeeds. For a local agent, mint a token in Agent Panel.
+3. Open **Agent Info for Current Tab**, choose **Copy Prompt**, and paste it into
+   the agent with the intended task. Follow the environment identified there.
+
+Skills do not need to be installed first. The prompt leads to the active Core's
+bundled skills and helpers. For persistent skill installation, ask the agent to
+follow the `skills[*].install_prompt_path` instructions reported by Agent Info,
+preserving references and any customized skills. Copying a prompt does not grant
+terminal access or approve transfers. The advanced Git Core mode needs a Core
+version that supports current-tab Agent Info; an older checkout does not gain
+these controls from the Desktop shell.
 
 Core staging includes the published runtime, static assets, launch/install
 scripts, README, public documentation, skill prompts/references and support
@@ -611,7 +619,7 @@ managed Core bundle SHA-256 identity when available. The same Core details are
 in Diagnostics. Core reports its version from `core_version.py`, independently
 of the Electron package version. Source checkouts have no managed build identity;
 older backends that omit version metadata show Unknown, never an inferred Git
-tag. The current source pairing is Desktop 0.4.5 / Core 2.12.0. The Core source
+tag. The current source pairing is Desktop 0.5.0 / Core 2.12.0. The Core source
 release does not publish or qualify Desktop installers. The Agent menu and
 expanded Core payload postdate the
 published 0.4.1 installer and the earlier macOS 0.4.2 candidate; they require a
@@ -636,17 +644,10 @@ snapshot. It has a separate temporary session, no backend cookies, no scripts,
 no Node/preload bridge and no network access. Paths may identify your OS account;
 review the page before sharing. Previous-run logs remain in the log folder.
 
-**Copy backend URL** copies only the current origin. **Copy agent connection
-info** copies a tokenless JSON object with `base_url`, `agentinfo_url`,
-`instance_id` and `backend_mode`, identified by the `standterm_agent_connection`
-schema. Both actions are in the main Diagnostics menu and the diagnostic
-window's View menu. Paste the latter into the agent conversation to identify
-this exact instance when Core and Desktop run together; do not guess port 5000
-or use a shared current-instance pointer. The object is bootstrap information,
-not a credential or a handoff file. The agent must fetch its exact Agent Info
-URL; existing minting, terminal selection and approval requirements still apply.
-Copying does not connect an agent, mint a token or add clipboard access to the
-renderer. These source changes postdate the original 0.4.0 evaluation installer.
+**Copy backend URL** copies the current Core origin for diagnostics. It is
+available in the main Diagnostics menu and the diagnostic window's View menu.
+For agent setup, use Core's **Agent Info for Current Tab** and **Copy Prompt**;
+Diagnostics does not provide a separate AgentInfo copy action.
 
 **Diagnostics > Developer Tools...** requires explicit confirmation each time.
 Use the Console or Sources snippets for trusted frontend JavaScript diagnostics
