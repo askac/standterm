@@ -31,7 +31,6 @@ for (const button of document.querySelectorAll('[data-action], [data-menu]')) {
 window.desktopToolbar.onState(state => {
   if (typeof state.mac === 'boolean') {
     byId('menus').hidden = state.mac;
-    byId('mac-title').hidden = !state.mac;
   }
   if (typeof state.notice === 'string' && Number.isSafeInteger(state.noticeId) && state.noticeId !== lastNoticeId) {
     lastNoticeId = state.noticeId;

@@ -121,6 +121,66 @@ async function run(win, origin, contents = win.webContents, browserAccess) {
   await waitFor(contents, `Array.from({length: 100}, (_, row) =>
     (window.terminalTest.getActiveTerminalBufferCellsForTest(row) || []).map(cell => cell?.chars || '').join('').trim()
   ).includes('STANDTERM_SMOKE_IO')`);
+  // Window activation must restore Core's native focus without a terminal click.
+  const other = new BrowserWindow({ width: 300, height: 200, show: false,
+    webPreferences: { sandbox: true, nodeIntegration: false, contextIsolation: true } });
+  const evaluate = script => contents.executeJavaScript(script);
+  const restored = async () => {
+    await waitFor(contents, 'document.hasFocus()');
+    assert.equal(BrowserWindow.getFocusedWindow(), win);
+    assert.equal(contents.isFocused(), true);
+    assert.equal(win.webContents.isFocused(), false);
+  };
+  const switchBack = async () => {
+    other.show(); other.focus();
+    await waitFor(other.webContents, 'document.hasFocus()');
+    assert.equal(BrowserWindow.getFocusedWindow(), other);
+    assert.equal(await evaluate('document.hasFocus()'), false);
+    win.focus();
+    await restored();
+  };
+  try {
+    await other.loadURL('data:text/html,<p>Window activation fixture</p>');
+    win.focus(); contents.focus();
+    await evaluate(`document.querySelector('.terminal-pane.active .xterm-helper-textarea').focus();
+      window.terminalTest.captureTerminalIoForTest()`);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await switchBack();
+      assert.equal(await evaluate('window.terminalTest.activeTerminalHasFocus()'), true);
+      await evaluate('window.terminalTest.clearEmitted()');
+      contents.sendInputEvent({ type: 'keyDown', keyCode: 'Z' });
+      contents.sendInputEvent({ type: 'char', keyCode: 'z' });
+      contents.sendInputEvent({ type: 'keyUp', keyCode: 'Z' });
+      await waitFor(contents, `window.terminalTest.getEmitted().some(item =>
+        item.event === 'ssh_input' && item.args[0]?.data === 'z')`);
+    }
+    win.minimize();
+    await waitFor(contents, 'document.visibilityState === "hidden"');
+    win.restore(); win.focus();
+    await restored();
+    assert.equal(await evaluate('window.terminalTest.activeTerminalHasFocus()'), true);
+    win.hide();
+    await waitFor(contents, 'document.visibilityState === "hidden"');
+    win.show(); win.focus();
+    await restored();
+    assert.equal(await evaluate('window.terminalTest.activeTerminalHasFocus()'), true);
+    await evaluate(`document.getElementById('quick-settings').click();
+      document.querySelector('.settings-nav-item[data-tab="appearance"]').click();
+      document.getElementById('pref-fontFace').focus()`);
+    await switchBack();
+    assert.equal(await evaluate('document.activeElement.id'), 'pref-fontFace');
+    assert.equal(await evaluate('window.terminalTest.activeTerminalHasFocus()'), false);
+    await evaluate('window.terminalTest.clearEmitted()');
+    const fontFace = await evaluate('document.getElementById("pref-fontFace").value');
+    contents.sendInputEvent({ type: 'keyDown', keyCode: 'Z' });
+    contents.sendInputEvent({ type: 'char', keyCode: 'z' });
+    contents.sendInputEvent({ type: 'keyUp', keyCode: 'Z' });
+    await waitFor(contents, `document.getElementById('pref-fontFace').value !== ${JSON.stringify(fontFace)}`);
+    assert.equal(await evaluate('window.terminalTest.getEmitted().some(item => item.event === "ssh_input")'), false);
+    await evaluate(`document.getElementById('pref-fontFace').value = ${JSON.stringify(fontFace)};
+      document.getElementById('settings-close').click()`);
+  } finally { other.destroy(); }
+  console.log('Desktop focus smoke: repeated activation, terminal keyboard input, minimize/hide return and preserved Settings input passed.');
   // Reload must reattach the existing backend terminal, not create a new shell.
   await contents.loadURL(`${origin}/?debug=1`);
   await waitFor(contents, '!!window.terminalTest && window.terminalTest.getActiveAgentState()?.connected === true');

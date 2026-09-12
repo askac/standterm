@@ -21,8 +21,8 @@ async function run(win, contents, browserAccess) {
   assert.deepEqual(menu.items.map(item => item.id), ['standterm', 'edit', 'agent-menu', 'view', 'diagnostics']);
   assert.deepEqual(await win.webContents.executeJavaScript(`({
     menusHidden: document.getElementById('menus').hidden,
-    titleHidden: document.getElementById('mac-title').hidden,
-  })`), { menusHidden: process.platform === 'darwin', titleHidden: process.platform !== 'darwin' });
+    hasTitle: !!document.getElementById('mac-title'),
+  })`), { menusHidden: process.platform === 'darwin', hasTitle: false });
   assert.notEqual(win.webContents.session, contents.session);
   assert.equal(win.webContents.backgroundThrottling, false);
   assert.deepEqual(await win.webContents.session.cookies.get({}), []);

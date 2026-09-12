@@ -89,7 +89,8 @@ async function performMaintenance(request, { prepare, cleanup, shortcuts, ensure
 
 async function runInstaller(request) {
   const { app, dialog, shell } = require('electron');
-  const { preparePackagedBackend, cleanupManagedVenvs, stopSetup, confirmSetupQuit } = require('./setup.cjs');
+  const { preparePackagedBackend, cleanupManagedVenvs, stopSetup, confirmSetupQuit, modeProfile } = require('./setup.cjs');
+  const { installedStore } = require('./core-source.cjs');
   let exiting = false;
   const watcher = watchInstaller(request.parent, () => {
     void stopSetup().finally(() => { exiting = true; app.exit(2); });
@@ -106,7 +107,11 @@ async function runInstaller(request) {
     await watcher.started;
     const ensureAlive = () => { if (!watcher.alive()) throw new Error('The owning installer exited.'); };
     await performMaintenance(request, {
-      prepare: preparePackagedBackend, cleanup: cleanupManagedVenvs, ensureAlive,
+      prepare: async (mode, options) => {
+        await preparePackagedBackend(mode, options);
+        ensureAlive();
+        await (await installedStore(modeProfile(mode), process.resourcesPath, app.getVersion())).reset();
+      }, cleanup: cleanupManagedVenvs, ensureAlive,
       shortcuts: selected => applyShortcuts(shell, shortcutPlan(process.execPath, app.getPath('desktop'),
         path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs'), selected)),
       report: async results => {

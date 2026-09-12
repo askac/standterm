@@ -98,7 +98,7 @@ def safe_directory(directory):
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
 
 
-def prepare(bundle, root, data):
+def prepare(bundle, root, data, payloads=None):
     global WINDOWS_JOB
     if WINDOWS and WINDOWS_JOB is None:
         # -I excludes the script directory from imports; load only this sibling.
@@ -131,7 +131,7 @@ def prepare(bundle, root, data):
                     raise SetupError('modified_runtime')
             else:
                 with tempfile.NamedTemporaryFile(dir=destination.parent, prefix='.setup-', delete=False) as output:
-                    output.write((bundle / 'core' / name).read_bytes())
+                    output.write(payloads[name] if payloads is not None else (bundle / 'core' / name).read_bytes())
                     temporary = Path(output.name)
                 os.link(temporary, destination)
                 temporary.unlink()
@@ -206,28 +206,15 @@ def prepare(bundle, root, data):
         ready.write_text(json.dumps({'id': data['id']}), encoding='utf-8')
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--bundle', type=Path, required=True)
-    parser.add_argument('--prepare', action='store_true')
-    # Only the test harness uses this override; the desktop UI has no path input.
-    parser.add_argument('--test-root', type=Path)
-    args = parser.parse_args()
-    if sys.version_info < (3, 10) or not importlib.util.find_spec('venv') or not importlib.util.find_spec('ensurepip'):
-        raise SetupError('python_required')
-    data = manifest(args.bundle)
-    root = args.test_root or runtime.runtime_base() / 'runtimes' / data['id']
-    if not root.is_absolute():
-        raise SetupError('unsafe_runtime_path')
-    check_directory(root)
-    if args.prepare:
-        prepare(args.bundle, root, data)
+def check_ready(root, data):
+    runtime.check_path(root)
     ready = root / '.desktop-ready.json'
     python = environment_python(root)
     healthy = False
     if ready.is_file() and not linked(ready) and python.is_file():
         try:
-            if json.loads(ready.read_text()) == {'id': data['id']}:
+            if (runtime.read_marker(root / '.standterm-bundle.json') == {'id': data['id']}
+                    and json.loads(ready.read_text()) == {'id': data['id']}):
                 for name, digest in data['files'].items():
                     installed = root / name
                     check_directory(installed.parent)
@@ -239,10 +226,27 @@ def main():
                         **({'creationflags': subprocess.CREATE_NO_WINDOW} if WINDOWS else {})).returncode == 0
         except (OSError, ValueError, subprocess.TimeoutExpired):
             pass
-    if not healthy:
+    return healthy
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--bundle', type=Path, required=True)
+    parser.add_argument('--prepare', action='store_true')
+    # Only the test harness uses this override; the desktop UI has no path input.
+    parser.add_argument('--test-root', type=Path)
+    args = parser.parse_args()
+    if sys.version_info < (3, 10) or not importlib.util.find_spec('venv') or not importlib.util.find_spec('ensurepip'):
+        raise SetupError('python_required')
+    data = manifest(args.bundle)
+    root = args.test_root or runtime.bundled_root(runtime.runtime_base(), data['id'])
+    runtime.check_path(root)
+    if args.prepare:
+        prepare(args.bundle, root, data)
+    if not check_ready(root, data):
         emit('needs_setup', bundle_id=data['id'])
         return
-    emit('ready', bundle_id=data['id'], root=str(root), python=str(python))
+    emit('ready', bundle_id=data['id'], root=str(root), python=str(environment_python(root)))
 
 
 if __name__ == '__main__':

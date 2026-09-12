@@ -73,7 +73,7 @@ test('failed toolbar actions use the same timed error presentation', async () =>
 test('macOS keeps the system menu layout while notices use the shared renderer', () => {
   const f = fixture(); f.receive({ mac: true, notice: 'Copied.', noticeId: 1 });
   assert.equal(f.element('menus').hidden, true);
-  assert.equal(f.element('mac-title').hidden, false);
+  assert.equal(f.element('mac-title'), undefined);
   assert.equal(f.element('notice').textContent, 'Copied.');
   f.tick(5350); assert.equal(f.element('notice').textContent, '');
   f.receive({ mac: false });

@@ -27,6 +27,14 @@ const ERRORS = {
   invalid_bundle: 'The bundled Core failed its integrity check. Reinstall StandTerm Desktop.',
   setup_canceled: 'Setup was canceled. Restart StandTerm to retry.',
   setup_timeout: 'Setup timed out. Check internet access and retry.',
+  git_required: 'Git is unavailable in the selected backend environment. Install Git there, or restore the bundled Core.',
+  git_dirty: 'The Git Core has local changes. Keep them or resolve them in its checkout before updating. Nothing was reset or stashed.',
+  git_diverged: 'The Git Core cannot fast-forward to the official branch. Local history is retained. Restore bundled Core or resolve the checkout manually.',
+  git_source_changed: 'The managed Git origin or branch has changed. Expected the official repository and main branch.',
+  invalid_git_workspace: 'The private Git checkout is incomplete or damaged. It is retained. Restore the bundled Core or repair that checkout manually.',
+  git_needs_setup: 'The Git Core requirements changed or its environment is missing. Use Prepare Git environment from Core source (Advanced).',
+  git_failed: 'Git could not complete the operation. Check network access and the runtime setup.log. Prepared files are retained.',
+  invalid_archive: 'The recovery archive failed verification. Reinstall StandTerm Desktop if its installed bundle is also damaged.',
   setup_failed: 'Setup failed. Check the selected Python environment and available disk space.',
 };
 let window;
@@ -112,7 +120,7 @@ function execute(executable, args, { encoding = 'utf8', timeout = 20000, progres
         const line = output.subarray(0, end).toString('utf8'); output = output.subarray(end + 1);
         try {
           const frame = JSON.parse(line);
-          if (!['progress', 'ready', 'needs_setup', 'error', 'python_info', 'cleanup_inventory', 'cleanup_summary'].includes(frame.type) || frames.length >= 32) throw new Error();
+          if (!['progress', 'ready', 'needs_setup', 'error', 'python_info', 'cleanup_inventory', 'cleanup_summary', 'core_status'].includes(frame.type) || frames.length >= 32) throw new Error();
           frames.push(frame);
           if (frame.type === 'progress') progress?.(frame.stage);
         } catch { protocolError = true; abort(new Error('Invalid setup control response.')); }
@@ -127,8 +135,8 @@ function execute(executable, args, { encoding = 'utf8', timeout = 20000, progres
       else if (protocolError || (stream && output.length)) reject(new Error('Invalid setup control response.'));
       else if (stream) {
         const result = frames.at(-1);
-        if (code !== 0 || !result || result.type === 'error') reject(new Error(
-          ['python_required', 'venv_failed'].includes(result?.code) ? help : ERRORS[result?.code] || help));
+        if (code !== 0 || !result || result.type === 'error') reject(Object.assign(new Error(
+          ['python_required', 'venv_failed'].includes(result?.code) ? help : ERRORS[result?.code] || help), { code: result?.code }));
         else resolve(result);
       } else if (code !== 0) reject(new Error(help));
       else resolve(output.toString(encoding).replace(/^\uFEFF/, '').trim());
@@ -186,7 +194,7 @@ async function macosPython(saved) {
   return probe(selected.filePaths[0]);
 }
 
-async function preparePackagedBackend(mode, { installer = false } = {}) {
+async function setupEnvironment(mode, installer = false) {
   if (!['windows', 'wsl', 'macos'].includes(mode)) throw new Error('Choose a supported desktop backend.');
   const windows = mode === 'windows';
   const macos = mode === 'macos';
@@ -240,6 +248,12 @@ async function preparePackagedBackend(mode, { installer = false } = {}) {
     args = [...prefix, 'python3', '-I', `${linuxBundle}/bootstrap.py`, '--bundle', linuxBundle];
     saved = { version: 1, distro };
   }
+  return { windows, macos, native, help, bundle, metadata, settingsPath, executable, args, saved, distro };
+}
+
+async function preparePackagedBackend(mode, { installer = false } = {}) {
+  const environment = await setupEnvironment(mode, installer);
+  const { windows, macos, native, help, metadata, settingsPath, executable, args, saved, distro } = environment;
   let result = await execute(executable, args, { stream: true, timeout: 60000, help });
   if (result.type === 'needs_setup') {
     const answer = await dialog.showMessageBox({
@@ -254,39 +268,7 @@ async function preparePackagedBackend(mode, { installer = false } = {}) {
       buttons: ['Cancel', 'Create environment and install dependencies'], defaultId: 0, cancelId: 0,
     });
     if (answer.response !== 1) throw canceledError();
-    const isolated = session.fromPartition('standterm-setup');
-    isolated.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-    isolated.setPermissionCheckHandler(() => false);
-    isolated.webRequest.onBeforeRequest((details, callback) => callback({ cancel: details.url !== SETUP_URL }));
-    window = new BrowserWindow({ title: 'StandTerm Desktop - Preparing environment',
-      width: 700, height: 500, resizable: false, autoHideMenuBar: true,
-      webPreferences: { session: isolated, sandbox: true, contextIsolation: true, nodeIntegration: false, devTools: false } });
-    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-    window.webContents.on('will-navigate', event => event.preventDefault());
-    window.on('close', event => {
-      event.preventDefault();
-      void requestSetupCancel();
-    });
-    window.on('closed', cancelSetup);
-    let finishSetup;
-    setupFinished = new Promise(resolve => { finishSetup = resolve; });
-    try {
-      await window.loadURL(SETUP_URL);
-      await window.webContents.executeJavaScript(`document.getElementById('requirements').textContent = ${JSON.stringify(
-        macos ? 'Preparing Core for native macOS.' : windows ? 'Preparing Core for native Windows.' : `Preparing Core inside WSL: ${distro}.`)}`);
-      result = await execute(executable, [...args, '--prepare'], { stream: true, timeout: 30 * 60 * 1000, help, progress: stage => {
-        const labels = { copy: 'Copying verified Core files...', venv: 'Creating the private Python environment...',
-          dependencies: 'Installing Python dependencies. This can take several minutes...', verify: 'Verifying the installed dependencies...' };
-        if (labels[stage] && !canceled && !window.isDestroyed()) void window.webContents.executeJavaScript(
-          `document.getElementById('stage').textContent = ${JSON.stringify(labels[stage])}`,
-        ).catch(() => {});
-      } });
-    } finally {
-      if (!window.isDestroyed()) { window.removeListener('closed', cancelSetup); window.destroy(); }
-      window = null;
-      finishSetup();
-      setupFinished = null;
-    }
+    result = await runPreparation(environment, [...args, '--prepare']);
   }
   const runtimePath = windows ? path.win32 : path.posix;
   if (result.type !== 'ready' || result.bundle_id !== metadata.id
@@ -356,4 +338,83 @@ async function cleanupManagedVenvs(mode) {
 }
 
 module.exports = { preparePackagedBackend, focusSetup, cancelSetup, confirmSetupQuit,
-  stopSetup, cleanupManagedVenvs, modeProfile };
+  stopSetup, cleanupManagedVenvs, modeProfile, manageCore };
+
+async function manageCore(mode, action) {
+  if (!['status', 'enable', 'update', 'prepare', 'check', 'recover'].includes(action)) throw new Error('Invalid Core action.');
+  // Select the base interpreter without requiring either Core or venv to work.
+  const environment = await setupEnvironment(mode);
+  const { windows, macos, native, help, executable, args, metadata, settingsPath, saved, distro } = environment;
+  const runtimePath = windows ? path.win32 : path.posix;
+  const scriptIndex = args.indexOf('-I') + 1;
+  const bundle = args[args.indexOf('--bundle') + 1];
+  const managedArgs = [...args];
+  managedArgs[scriptIndex] = runtimePath.join(bundle, 'core_manager.py');
+  managedArgs.push('--action', action);
+  const result = ['status', 'check'].includes(action)
+    ? await execute(executable, managedArgs, { stream: true, timeout: 60000, help })
+    : await runPreparation(environment, managedArgs);
+  if (action === 'status') {
+    if (result.type !== 'core_status' || typeof result.git_available !== 'boolean'
+        || !['absent', 'present', 'unavailable', 'invalid'].includes(result.workspace)
+        || (result.workspace === 'present' && (!/^[a-f0-9]{40,64}$/.test(result.commit)
+          || typeof result.dirty !== 'boolean'))) throw new Error('Invalid Core status.');
+    return result;
+  }
+  const git = action !== 'recover';
+  if (result.type !== 'ready' || result.source !== (git ? 'git' : 'bundled')
+      || typeof result.root !== 'string' || !runtimePath.isAbsolute(result.root) || /[\r\n\0]/.test(result.root)
+      || result.python !== runtimePath.join(result.root, 'tools', windows ? '.venv_win' : macos ? '.venv_macos' : '.venv_wsl',
+        windows ? 'Scripts' : 'bin', windows ? 'python.exe' : 'python')
+      || (git ? result.core_root !== runtimePath.join(result.root, 'repo')
+        || !/^[a-f0-9]{40,64}$/.test(result.commit) || typeof result.dirty !== 'boolean' : result.bundle_id !== metadata.id)) {
+    throw new Error('Invalid Core runtime response.');
+  }
+  await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+  await fs.writeFile(`${settingsPath}.tmp`, JSON.stringify(saved, null, 2), { mode: 0o600 });
+  await fs.rename(`${settingsPath}.tmp`, settingsPath);
+  const backendArgs = git ? ['-u', runtimePath.join(bundle, 'backend.py'), '--git-core', result.core_root]
+    : ['-u', runtimePath.join(result.root, 'desktop', 'backend.py')];
+  const command = native ? { executable: result.python, args: backendArgs, cwd: result.root }
+    : { executable: 'wsl.exe', args: ['--distribution', distro, '--cd', result.root, '--exec', result.python, ...backendArgs],
+      cwd: process.resourcesPath };
+  return { ...command, source: git ? 'git' : 'bundled',
+    coreSource: git ? `Git ${result.commit}${result.dirty ? ' (local changes)' : ''}` : 'Bundled' };
+}
+
+async function runPreparation(environment, args) {
+  const { executable, help, macos, windows, distro } = environment;
+  const isolated = session.fromPartition('standterm-setup');
+  isolated.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  isolated.setPermissionCheckHandler(() => false);
+  isolated.webRequest.onBeforeRequest((details, callback) => callback({ cancel: details.url !== SETUP_URL }));
+  window = new BrowserWindow({ title: 'StandTerm Desktop - Preparing environment',
+    width: 700, height: 500, resizable: false, autoHideMenuBar: true,
+    webPreferences: { session: isolated, sandbox: true, contextIsolation: true, nodeIntegration: false, devTools: false } });
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.webContents.on('will-navigate', event => event.preventDefault());
+  window.on('close', event => {
+    event.preventDefault();
+    void requestSetupCancel();
+  });
+  window.on('closed', cancelSetup);
+  let finishSetup;
+  setupFinished = new Promise(resolve => { finishSetup = resolve; });
+  try {
+    await window.loadURL(SETUP_URL);
+    await window.webContents.executeJavaScript(`document.getElementById('requirements').textContent = ${JSON.stringify(
+      macos ? 'Preparing Core for native macOS.' : windows ? 'Preparing Core for native Windows.' : `Preparing Core inside WSL: ${distro}.`)}`);
+    return await execute(executable, args, { stream: true, timeout: 30 * 60 * 1000, help, progress: stage => {
+      const labels = { git: 'Updating the private Git checkout...', copy: 'Copying verified Core files...', venv: 'Creating the private Python environment...',
+        dependencies: 'Installing Python dependencies. This can take several minutes...', verify: 'Verifying the installed dependencies...' };
+      if (labels[stage] && !canceled && !window.isDestroyed()) void window.webContents.executeJavaScript(
+        `document.getElementById('stage').textContent = ${JSON.stringify(labels[stage])}`,
+      ).catch(() => {});
+    } });
+  } finally {
+    if (!window.isDestroyed()) { window.removeListener('closed', cancelSetup); window.destroy(); }
+    window = null;
+    finishSetup();
+    setupFinished = null;
+  }
+}

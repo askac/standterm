@@ -16,7 +16,9 @@ import time
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=0)
-    requested_port = parser.parse_args().port
+    parser.add_argument('--git-core', type=Path)
+    args = parser.parse_args()
+    requested_port = args.port
     if not 0 <= requested_port <= 65535:
         parser.error('port must be between 0 and 65535')
     control_output = sys.stdout
@@ -26,12 +28,18 @@ def main():
     # have no ownership marker and remain independent of installer maintenance.
     lifetime = ExitStack()
     core_bundle_id = None
-    if (root / '.standterm-bundle.json').exists():
+    if args.git_core is not None or (root / '.standterm-bundle.json').exists():
         spec = importlib.util.spec_from_file_location('standterm_runtime', Path(__file__).with_name('runtime.py'))
         runtime = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(runtime)
-        lifetime.enter_context(runtime.lease(root))
-        if not runtime.venv_path(root).is_dir():
+        managed = args.git_core.parent if args.git_core is not None else root
+        if args.git_core is not None:
+            runtime.check_git_root(managed)
+            if args.git_core != managed / 'repo' or Path(sys.prefix) != runtime.venv_path(managed):
+                raise RuntimeError('Invalid Git Core environment.')
+            root = args.git_core
+        lifetime.enter_context(runtime.lease(managed))
+        if not runtime.venv_path(managed).is_dir():
             raise RuntimeError('Managed environment is unavailable. Run setup again.')
         try:
             marker = runtime.read_marker(root / '.standterm-bundle.json')
