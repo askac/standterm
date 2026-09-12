@@ -10,6 +10,14 @@ async function waitFor(contents, predicate) {
     if (await contents.executeJavaScript(predicate)) return;
     await new Promise(resolve => setTimeout(resolve, 100));
   }
+  const state = await contents.executeJavaScript(`({
+    path: location.pathname, focused: document.hasFocus(), visibility: document.visibilityState,
+    activeTag: document.activeElement?.tagName, activeClass: document.activeElement?.className,
+    socket: window.terminalTest?.getSocketState(),
+    connection: window.terminalTest?.getConnectionDiagnostics(),
+    terminal: window.terminalTest?.getActiveAgentState()?.connected
+  })`).catch(() => null);
+  console.error('Desktop smoke wait state:', JSON.stringify(state));
   throw new Error('Desktop smoke timed out waiting for terminal state.');
 }
 
