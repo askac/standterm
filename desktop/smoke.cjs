@@ -10,6 +10,14 @@ async function waitFor(contents, predicate) {
     if (await contents.executeJavaScript(predicate)) return;
     await new Promise(resolve => setTimeout(resolve, 100));
   }
+  const state = await contents.executeJavaScript(`({
+    path: location.pathname, focused: document.hasFocus(), visibility: document.visibilityState,
+    activeTag: document.activeElement?.tagName, activeClass: document.activeElement?.className,
+    socket: window.terminalTest?.getSocketState(),
+    connection: window.terminalTest?.getConnectionDiagnostics(),
+    terminal: window.terminalTest?.getActiveAgentState()?.connected
+  })`).catch(() => null);
+  console.error('Desktop smoke wait state:', JSON.stringify(state));
   throw new Error('Desktop smoke timed out waiting for terminal state.');
 }
 
@@ -31,25 +39,15 @@ async function run(win, origin, contents = win.webContents, browserAccess) {
   clipboard.writeText = value => copied.push(value);
   try {
     menu.getMenuItemById('diagnostics-copy-origin').click();
-    menu.getMenuItemById('diagnostics-copy-agent').click();
-    menu.getMenuItemById('agent-copy-connection').click();
-    menu.getMenuItemById('agent-copy-install').click();
-    menu.getMenuItemById('agent-copy-usage').click();
-    menu.getMenuItemById('agent-copy-transfer').click();
   } finally { clipboard.writeText = originalCopy; }
-  assert.equal(copied[0], origin);
-  const connection = JSON.parse(copied[1]);
-  assert.equal(copied[2], copied[1]);
-  for (const prompt of copied.slice(3)) {
-    assert.deepEqual(JSON.parse(prompt.slice(prompt.indexOf('{'))), connection);
-    assert.ok(prompt.includes('verify instance_id'));
+  assert.deepEqual(copied, [origin]);
+  for (const id of ['diagnostics-copy-agent', 'agent-copy-connection', 'agent-copy-agentinfo',
+    'agent-copy-install', 'agent-copy-usage', 'agent-copy-transfer']) {
+    assert.equal(menu.getMenuItemById(id), null);
   }
-  assert.equal(connection.base_url, origin);
-  assert.equal(connection.agentinfo_url, origin + '/agentinfo');
-  assert.ok(connection.instance_id);
   const agentinfo = await contents.executeJavaScript('fetch("/agentinfo").then(response => response.json())');
-  assert.equal(agentinfo.instance_id, connection.instance_id);
-  assert.equal(agentinfo.agentinfo_url, connection.agentinfo_url);
+  assert.equal(typeof agentinfo.instance_id, 'string');
+  assert.equal(agentinfo.agentinfo_url, origin + '/agentinfo');
   for (const name of ['standterm-external-agent', 'standterm-file-transfer', 'standterm-privileged-hitl']) {
     const skill = agentinfo.skills[name];
     assert.equal(skill.available, true, `Missing ${name} in the running Core`);
@@ -60,9 +58,6 @@ async function run(win, origin, contents = win.webContents, browserAccess) {
   }
   assert.deepEqual(agentinfo.skill, agentinfo.skills['standterm-external-agent']);
   for (const name of ['agent_scp', 'agent_rsfile', 'agent_mcp']) assert.equal(typeof agentinfo.scripts[name], 'string');
-  assert.ok(['windows', 'wsl', 'macos'].includes(connection.backend_mode));
-  assert.deepEqual(Object.keys(connection).sort(),
-    ['schema', 'schema_version', 'base_url', 'agentinfo_url', 'instance_id', 'backend_mode'].sort());
   assert.equal(contents.isDevToolsOpened(), false);
   menu.getMenuItemById('diagnostics-status').click();
   const status = BrowserWindow.getAllWindows().find(candidate => candidate !== win);

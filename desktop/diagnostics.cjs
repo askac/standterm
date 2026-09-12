@@ -65,7 +65,6 @@ function diagnosticsMenu({ origin, mode, instanceId, version, coreVersion, logge
     { id: 'diagnostics-backend', label: `Backend: ${mode === 'wsl' ? 'WSL' : 'Native'}`, enabled: false },
     { id: 'diagnostics-origin', label: `URL: ${origin}`, enabled: false },
     { id: 'diagnostics-copy-origin', label: 'Copy backend URL', click: () => copyText(info.base_url) },
-    { id: 'diagnostics-copy-agent', label: 'Copy agent connection info', click: () => copyText(JSON.stringify(info, null, 2)) },
     { label: persistent ? 'Web settings: saved per origin (same as Core)' : 'Web settings: temporary test profile', enabled: false },
     { type: 'separator' },
     { id: 'diagnostics-logs', label: 'Open diagnostics log folder', click: openLogs },

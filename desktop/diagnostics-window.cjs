@@ -24,7 +24,7 @@ function statusHtml(rows, events) {
     <pre>${escape(events.map(event => JSON.stringify(event)).join('\n') || 'No events yet.')}</pre></html>`;
 }
 
-function createStatusWindow(owner, snapshot, { copyUrl, copyConnectionInfo }) {
+function createStatusWindow(owner, snapshot, { copyUrl }) {
   const { BrowserWindow, Menu, session } = require('electron');
   let win;
   let opening;
@@ -46,7 +46,6 @@ function createStatusWindow(owner, snapshot, { copyUrl, copyConnectionInfo }) {
       win.setMenu(Menu.buildFromTemplate([{ label: 'View', submenu: [
         { label: 'Refresh', accelerator: 'CommandOrControl+R', click: () => refresh().catch(() => {}) },
         { label: 'Copy backend URL', click: copyUrl },
-        { label: 'Copy agent connection info', click: copyConnectionInfo },
         { role: 'close' },
       ] }]));
       const owned = win;

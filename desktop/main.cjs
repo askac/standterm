@@ -58,7 +58,13 @@ try { mode = desktopMode(process.argv); } catch (error) {
   return;
 }
 app.setName('StandTerm Desktop');
-if (process.platform === 'win32') app.setAppUserModelId(`${APP_ID}.${mode}`);
+if (process.platform === 'win32') {
+  app.setAppUserModelId(`${APP_ID}.${mode}`);
+  // Native occlusion can leave a restored Core view unable to receive input or capture.
+  // Keep explicit focus, hide and minimize guards; reassess after Electron upgrades.
+  const disabledFeatures = app.commandLine.getSwitchValue('disable-features');
+  app.commandLine.appendSwitch('disable-features', [disabledFeatures, 'CalculateNativeWinOcclusion'].filter(Boolean).join(','));
+}
 app.enableSandbox();
 const captureSmoke = process.argv.includes('--desktop-capture-smoke');
 const smoke = process.argv.includes('--desktop-smoke') || captureSmoke;
@@ -377,7 +383,6 @@ async function start() {
     ['Security', 'Core sandbox on; Node/preload off; isolated Desktop toolbar; external preview network blocked'],
   ], events: diagnostics.snapshot() }), {
     copyUrl: () => clipboard.writeText(connectionInfo.base_url),
-    copyConnectionInfo: () => clipboard.writeText(JSON.stringify(connectionInfo, null, 2)),
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { id: 'standterm', label: 'StandTerm', submenu: [
@@ -400,17 +405,18 @@ async function start() {
       { label: 'Quit StandTerm', accelerator: 'CommandOrControl+Q', click: () => app.quit() },
     ] },
     { id: 'edit', role: 'editMenu' },
-    agentMenu({ origin: handoff.origin, mode, instanceId: handoff.instance_id,
+    agentMenu({
       uiItems: [commands.item('agentPanel'), commands.item('pauseAgent'), { type: 'separator' }],
-      copyText: text => clipboard.writeText(text),
       showHelp: () => dialog.showMessageBox(win, {
         type: 'info', title: 'StandTerm Agent', message: 'Give your agent a StandTerm prompt',
-        detail: 'First time: choose Agent > Copy skill installation prompt and paste it into your agent. '
-          + 'For an existing setup, use Copy usage prompt or Copy file-transfer prompt and describe your task.\n\n'
-          + 'Prompts identify this instance without credentials. The agent reads bundled Core documents and helpers; '
-          + 'it needs access to the backend environment (macOS, Windows or WSL).\n\n'
-          + 'When ready, enable External Agent in the intended terminal tab and mint a token. '
-          + 'Copying a prompt does not install anything, grant terminal access or approve transfers.',
+        detail: 'Select the tab where your agent runs. Use Agent Panel to enable access and choose permissions '
+          + 'on each tab it may operate.\n\n'
+          + 'For an SSH agent, start Agent Tunnel on its SSH tab. Agent Info for Current Tab appears after setup succeeds. '
+          + 'For a local agent, mint a token in Agent Panel.\n\n'
+          + 'Open Agent Info for Current Tab, choose Copy Prompt, and paste it into your agent with the intended task. '
+          + 'Follow the environment shown in that dialog.\n\n'
+          + 'Skills do not need to be installed first. The prompt leads to the bundled skills and helpers; '
+          + 'Agent Info also provides installation instructions when persistent skills are wanted.',
         buttons: ['OK'], noLink: true,
       }),
     }),

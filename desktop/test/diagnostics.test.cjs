@@ -76,7 +76,7 @@ test('diagnostics menu shows the actual owned endpoint without an access URL', t
   }
 });
 
-test('connection copy uses the exact instance and never includes credentials or page payloads', t => {
+test('backend URL copy preserves origin validation without another AgentInfo entry', t => {
   const { logger } = fixture(t);
   const options = { origin: 'http://127.0.0.1:64487', mode: 'wsl', instanceId: 'desktop-test-1',
     token: 'secret', session_token: 'secret', launcher_token: 'secret', terminal: 'private content' };
@@ -88,9 +88,8 @@ test('connection copy uses the exact instance and never includes credentials or 
   const menu = diagnosticsMenu({ ...options, version: '0.4.0', logger, copyText: value => copied.push(value) });
   assert.deepEqual(copied, []);
   menu.submenu.find(item => item.id === 'diagnostics-copy-origin').click();
-  menu.submenu.find(item => item.id === 'diagnostics-copy-agent').click();
-  assert.equal(copied[0], options.origin);
-  assert.deepEqual(JSON.parse(copied[1]), info);
+  assert.deepEqual(copied, [options.origin]);
+  assert.equal(menu.submenu.find(item => item.id === 'diagnostics-copy-agent'), undefined);
   for (const invalid of [{ origin: options.origin + '/?token=secret' }, { instanceId: '' },
     { instanceId: 'id\nsecret' }, { mode: 'unknown' }]) {
     assert.throws(() => agentConnectionInfo({ ...options, ...invalid }));
