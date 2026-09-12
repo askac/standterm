@@ -16,11 +16,10 @@ needed for a local build. Intel/Rosetta acceptance is not implied.
 
 New build filenames pair the independent Desktop and bundled Core versions:
 `StandTerm-Desktop-0.5.0-2.12.0-mac-arm64.dmg` and
-`StandTerm-Desktop-0.5.0-2.12.0-win32-x64-Setup.exe` for future matching builds.
-These are naming examples, not published download links. Core 2.12.0 is a
-source-only release; existing 0.4.3 downloads are unchanged. Delivery archives
-and checksum sidecars retain the paired label; a future matching Desktop tag
-would be `desktop-v0.5.0-2.12.0`.
+`StandTerm-Desktop-0.5.0-2.12.0-win32-x64-Setup.exe`.
+The [Desktop 0.5.0 evaluation release](https://github.com/askac/standterm/releases/tag/desktop-v0.5.0-2.12.0)
+contains paired packages, checksums and validation evidence. Core 2.12.0 remains
+a separate source release; older Desktop releases retain their original files.
 
 Staging writes `release-identity.json` from the staged package/lock versions and
 the manifest-hashed `core_version.py`. The builder revalidates this identity and
@@ -80,7 +79,8 @@ documents and Git state, and generates the native icon with macOS `sips` and
 development app copies stay out of Spotlight results. The current build uses
 electron-builder 26's [macOS signing options](https://www.electron.build/v26/docs/mac/).
 
-The Desktop package workflow builds on a native `macos-15` arm64 runner. It
+The Desktop package workflow builds on native `macos-15` arm64 and
+`windows-2025` x64 runners. It
 compares the complete staged Core payload to the formal tag, inspects the app
 and mounted DMG, and records native smoke results with the artifact. Automated
 checks do not replace Finder, Gatekeeper, IME or installer-upgrade acceptance.
