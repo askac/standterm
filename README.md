@@ -9,8 +9,9 @@ to the StandTerm server process across page reloads.
 [Download and install StandTerm Desktop](#desktop-downloads-evaluation), or use
 the [browser-based Core quick start](#quick-start).
 
-**Core 2.12.0** is a [source release](https://github.com/askac/standterm/releases/tag/v2.12.0).
-It adds SSH Agent Tunnel with shared skills and helpers, Agent Panel permission
+**Core 2.12.1** is a [source release](https://github.com/askac/standterm/releases/tag/v2.12.1).
+It fixes Windows local shell startup when an executable path contains spaces.
+Core 2.12 adds SSH Agent Tunnel with shared skills and helpers, Agent Panel permission
 sync, Agent Info for the current tab, and SSH host fingerprint management.
 IME input-line anchoring remains an [experimental PoC](docs/ime_anchor_poc.md).
 The separate Desktop 0.5.0 evaluation below bundles the formal Core 2.12.0 source.

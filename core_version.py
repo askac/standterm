@@ -1,3 +1,3 @@
 """Core release identity, shared by source and packaged launchers."""
 
-CORE_VERSION = '2.12.0'
+CORE_VERSION = '2.12.1'
