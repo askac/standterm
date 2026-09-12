@@ -77,7 +77,7 @@ jobs:
           export STANDTERM_DESKTOP_PYTHON="$GITHUB_WORKSPACE/tools/.venv_macos/bin/python"
           export STANDTERM_AGENT_RUNTIME_DIR="$runtime/agent-state"
           export STANDTERM_SESSION_RECOVERY_STORE="$runtime/recovery.json"
-          "$DESKTOP_APP/Contents/MacOS/StandTermDesktop" --backend=macos --desktop-smoke > desktop/dist/evidence/packaged-smoke.log 2>&1
+          node desktop/test/packaged-smoke-runner.cjs "$DESKTOP_APP/Contents/MacOS/StandTermDesktop" macos > desktop/dist/evidence/packaged-smoke.log 2>&1
       - name: Exercise first-run setup and reuse
         id: setup
         continue-on-error: true
@@ -177,7 +177,7 @@ jobs:
           $env:STANDTERM_DESKTOP_PYTHON = "$env:GITHUB_WORKSPACE/tools/.venv_win/Scripts/python.exe"
           $env:STANDTERM_AGENT_RUNTIME_DIR = "$runtime/agent-state"
           $env:STANDTERM_SESSION_RECOVERY_STORE = "$runtime/recovery.json"
-          & $env:DESKTOP_APP --backend=windows --desktop-smoke *> desktop/dist/evidence/packaged-smoke.log
+          node desktop/test/packaged-smoke-runner.cjs $env:DESKTOP_APP windows *> desktop/dist/evidence/packaged-smoke.log
           exit $LASTEXITCODE
       - name: Exercise first-run preparation and reuse
         id: setup
