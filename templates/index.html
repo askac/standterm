@@ -283,6 +283,16 @@
             background: rgba(0,0,0,0.75); z-index: 7000; align-items: center; justify-content: center;
         }
         #settings-modal.open { display: flex; }
+        #agent-tunnel-dialog, #agent-connect-dialog { width: min(680px, calc(100vw - 48px)); max-height: 85vh; overflow: auto; border: 1px solid #555; border-radius: 8px; background: #1c1c1e; color: #ddd; }
+        #agent-tunnel-dialog::backdrop, #agent-connect-dialog::backdrop { background: rgba(0,0,0,0.75); }
+        #agent-tunnel-targets { display: grid; gap: 8px; max-height: 30vh; overflow: auto; margin: 16px 0; }
+        #agent-tunnel-info, #agent-connect-info { width: 100%; box-sizing: border-box; min-height: 140px; background: #111; color: #ddd; }
+        .agent-connect-url { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0; }
+        .agent-connect-url input { flex: 1; min-width: 220px; background: #111; color: #ddd; padding: 8px; border: 1px solid #555; }
+        .agent-connect-activity { white-space: pre-wrap; }
+        .agent-connect-steps { padding-left: 24px; line-height: 1.5; }
+        #agent-tunnel-message { white-space: pre-wrap; }
+        .agent-tunnel-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; margin-top: 12px; }
         #paste-review-modal {
             display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
             background: rgba(0,0,0,0.75); z-index: 4100; align-items: center; justify-content: center;
@@ -1092,6 +1102,7 @@
                     <button type="button" id="ssh-session-picker-toggle" aria-expanded="false" aria-controls="ssh-session-picker-panel">History &amp; Profiles</button>
                     <div id="ssh-session-picker-panel" role="listbox"></div>
                 </div>
+                <button type="button" id="ssh-forget-host-key">Forget host key...</button>
                 <div id="ssh-session-message" aria-live="polite"></div>
             </div>
             <div id="local-shell-fields">
@@ -1133,7 +1144,9 @@
         <button id="agent-status-mint-btn" class="status-action agent-status-mint" title="Mint a standard external-agent token for the active terminal">Mint</button>
         <button id="agent-status-mint-3x-btn" class="status-action agent-status-mint" title="Mint a 3x idle-time external-agent token for the active terminal">Mint 3&times;</button>
         <div id="terminal-tools">
+            <button id="agent-connect-btn" class="status-action" type="button" title="Copy the agent prompt for the current tab's environment">Agent Info for Current Tab</button>
             <button id="agent-toggle-btn" class="status-action" type="button" title="Show Agent panel">Show Agent Panel</button>
+            <button id="agent-tunnel-btn" class="status-action" type="button" title="Set up remote Agent access through this SSH connection" hidden>Agent Tunnel</button>
             <button id="sftp-status-btn" class="status-action status-sftp" type="button" title="Open Files" aria-label="Open Files" hidden>&#x1F4C1;</button>
             <button id="quick-settings" class="status-action" type="button" title="Settings" aria-label="Settings">&#x2699;&#xFE0F;</button>
             <details id="tab-more">
@@ -1142,6 +1155,63 @@
             </details>
         </div>
     </div>
+    <dialog id="agent-connect-dialog" aria-labelledby="agent-connect-title">
+        <h3 id="agent-connect-title">Agent Info for Current Tab</h3>
+        <p>For an agent running on the <strong>Core host</strong>. If you launched Core with <code>run_wsl.bat</code>, this means WSL, not the Windows browser environment. It can access any individually authorized tab.</p>
+        <ol class="agent-connect-steps">
+            <li>On each target tab, open the Agent panel, enable external agent, choose its permission, and click <strong>Mint</strong>.</li>
+            <li>Click <strong>Copy Prompt</strong> below and paste it to the agent running on the Core host.</li>
+            <li>Ask the agent to run <strong>discover</strong>, then <strong>hello</strong>. Its authenticated requests appear below.</li>
+        </ol>
+        <div class="agent-connect-url">
+            <label for="agent-connect-url">Agent Info URL</label>
+            <input id="agent-connect-url" readonly aria-label="Agent Info URL">
+            <button id="agent-connect-copy-url" type="button" disabled>Copy URL</button>
+        </div>
+        <p id="agent-connect-message" role="status"></p>
+        <p id="agent-connect-activity" class="agent-connect-activity" aria-live="polite"></p>
+        <textarea id="agent-connect-info" readonly aria-label="Local agent prompt" hidden></textarea>
+        <div class="agent-tunnel-actions">
+            <button id="agent-connect-open-panel" type="button">Open Agent Panel</button>
+            <button id="agent-connect-refresh" type="button">Refresh Status</button>
+            <button id="agent-connect-copy" type="button" disabled>Copy Prompt</button>
+            <button id="agent-connect-close" type="button">Close</button>
+        </div>
+    </dialog>
+    <dialog id="agent-tunnel-dialog" aria-labelledby="agent-tunnel-title">
+        <h3 id="agent-tunnel-title">Agent Tunnel</h3>
+        <p id="agent-tunnel-carrier"></p>
+        <div id="agent-tunnel-setup">
+        <ol class="agent-connect-steps">
+            <li>Use each tab's <strong>Agent Panel</strong> to enable access and choose its permission. This tunnel follows those permissions, including tabs enabled later.</li>
+            <li>Click <strong>Start / Renew Access</strong>. Local Mint is not required. You can enable tabs after starting the tunnel.</li>
+            <li>After setup succeeds, click <strong>Copy Prompt</strong> and paste it to the agent on this SSH host.</li>
+        </ol>
+        <p>Start provisions the current helpers and skills in a private directory on this SSH host. Python 3.9+, SFTP, remote forwarding, and listener inspection are required (Linux, FreeBSD, and macOS checks are available).</p>
+        <div id="agent-tunnel-targets"></div>
+        </div>
+        <p id="agent-tunnel-message" role="status"></p>
+        <div id="agent-tunnel-connection" hidden>
+            <h4>Agent Info</h4>
+            <div class="agent-connect-url">
+                <label for="agent-tunnel-url">Agent Info URL</label>
+                <input id="agent-tunnel-url" readonly aria-label="Agent Info URL">
+                <button id="agent-tunnel-copy-url" type="button">Copy URL</button>
+            </div>
+            <p id="agent-tunnel-verification"></p>
+            <p id="agent-tunnel-activity" class="agent-connect-activity" aria-live="polite"></p>
+        </div>
+        <textarea id="agent-tunnel-info" readonly aria-label="Remote agent prompt" hidden></textarea>
+        <div class="agent-tunnel-actions">
+            <button id="agent-tunnel-copy" type="button" hidden>Copy Prompt</button>
+            <button id="agent-tunnel-manage" type="button" hidden>Manage Tunnel</button>
+            <button id="agent-tunnel-refresh" type="button">Refresh Status</button>
+            <button id="agent-tunnel-check" type="button" disabled>Check Tunnel</button>
+            <button id="agent-tunnel-stop" type="button">Stop Tunnel</button>
+            <button id="agent-tunnel-apply" type="button">Start / Renew Access</button>
+            <button id="agent-tunnel-close" type="button">Close</button>
+        </div>
+    </dialog>
     <div id="terminal"></div>
     <div id="status-bar">
         <span class="sb-item">Socket:&nbsp;<span id="socketStatus">Disconnected</span></span>
@@ -2099,6 +2169,7 @@
             let payloadEntries = [];
             let pendingAction = null;
             let pendingActionId = null;
+            let pendingActionTerminalId = null;
             let pendingReconnect = null;
             let overlayFallbackTimer = null;
             let socket = null;
@@ -2464,6 +2535,253 @@
             function getActiveTerminalState() {
                 return terminals.get(activeTerminalId) || null;
             }
+
+            const agentTunnelDialog = document.getElementById('agent-tunnel-dialog');
+            const agentTunnelInfo = document.getElementById('agent-tunnel-info');
+            const agentTunnelMessage = document.getElementById('agent-tunnel-message');
+            const agentConnectDialog = document.getElementById('agent-connect-dialog');
+            const agentConnectInfo = document.getElementById('agent-connect-info');
+            const agentConnectMessage = document.getElementById('agent-connect-message');
+            let agentTunnelCarrier = null;
+            let agentTunnelRequest = 0;
+            let agentTunnelId = null;
+            let agentTunnelActivity = [];
+            const readyAgentTunnels = new Map();
+            let agentTunnelConnection = null;
+            let agentConnectActivity = [];
+            let agentConnectRequest = 0;
+
+            function renderAgentConnectionActivity(elementId, entries) {
+                document.getElementById(elementId).textContent = entries.length ? entries.map(entry => {
+                    const time = Number(entry.last_request_at);
+                    return `${entry.terminal_id}: ${time > 0 && Number.isFinite(time)
+                        ? `last authenticated request ${new Date(time * 1000).toLocaleString()}` : 'waiting for agent'}`;
+                }).join('\n') : 'No active grants. Enable Agent and authorize the intended tabs first.';
+            }
+
+            async function copyAgentConnectionField(fieldId, messageElement) {
+                const field = document.getElementById(fieldId);
+                if (!field.value) return;
+                try {
+                    await navigator.clipboard.writeText(field.value);
+                    messageElement.textContent = 'Copied. Paste this to the agent in the indicated environment.';
+                } catch (_error) {
+                    field.focus();
+                    field.select();
+                    messageElement.textContent = 'Clipboard unavailable. Text selected; copy it manually.';
+                }
+            }
+
+            function requestAgentConnectInfo() {
+                const requestId = ++agentConnectRequest;
+                agentConnectActivity = [];
+                renderAgentConnectionActivity('agent-connect-activity', agentConnectActivity);
+                document.getElementById('agent-connect-url').value = '';
+                agentConnectInfo.value = '';
+                agentConnectInfo.hidden = true;
+                document.getElementById('agent-connect-copy').disabled = true;
+                document.getElementById('agent-connect-copy-url').disabled = true;
+                if (!socket.connected) {
+                    agentConnectMessage.textContent = 'Core is disconnected. Reconnect before copying connection info.';
+                    return;
+                }
+                agentConnectMessage.textContent = 'Loading connection info…';
+                socket.emit('agent_connect_info', result => {
+                    if (requestId !== agentConnectRequest || !agentConnectDialog.open) return;
+                    const available = result && result.status === 'ok';
+                    document.getElementById('agent-connect-url').value = available ? result.agentinfo_url : '';
+                    agentConnectInfo.value = available ? result.connect_info : '';
+                    agentConnectInfo.hidden = !available;
+                    document.getElementById('agent-connect-copy').disabled = !available;
+                    document.getElementById('agent-connect-copy-url').disabled = !available;
+                    agentConnectActivity = available ? result.terminals || [] : [];
+                    renderAgentConnectionActivity('agent-connect-activity', agentConnectActivity);
+                    agentConnectMessage.textContent = available
+                        ? 'Copy Prompt to the agent running on the Core host. Its first authenticated request confirms access.'
+                        : result?.message || 'Connection info unavailable.';
+                });
+            }
+
+            document.getElementById('agent-connect-btn').addEventListener('click', () => {
+                const state = getActiveTerminalState();
+                if (!state) return;
+                if (state.connectionType === 'ssh') {
+                    openAgentTunnel(true);
+                    return;
+                }
+                agentConnectInfo.hidden = true;
+                agentConnectDialog.showModal();
+                requestAgentConnectInfo();
+            });
+            document.getElementById('agent-connect-refresh').addEventListener('click', requestAgentConnectInfo);
+            document.getElementById('agent-connect-copy').addEventListener('click', () =>
+                copyAgentConnectionField('agent-connect-info', agentConnectMessage));
+            document.getElementById('agent-connect-copy-url').addEventListener('click', () =>
+                copyAgentConnectionField('agent-connect-url', agentConnectMessage));
+            document.getElementById('agent-connect-close').addEventListener('click', () => agentConnectDialog.close());
+            document.getElementById('agent-connect-open-panel').addEventListener('click', () => {
+                agentConnectDialog.close();
+                if (!document.getElementById('agent-panel').classList.contains('visible')) {
+                    document.getElementById('agent-toggle-btn').click();
+                }
+            });
+            function isCurrentAgentTunnelConnection(connection) {
+                const state = connection && terminals.get(connection.state.id);
+                return !!(socket.connected && state && state === connection.state && state.connected
+                    && state.connectionType === 'ssh' && state.connectedAt === connection.connectedAt);
+            }
+
+            function updateAgentTunnelButtons() {
+                for (const [terminalId, entry] of readyAgentTunnels) {
+                    if (!isCurrentAgentTunnelConnection(entry.connection)) readyAgentTunnels.delete(terminalId);
+                }
+                const state = getActiveTerminalState();
+                document.getElementById('agent-tunnel-btn').hidden = !state || !state.connected || state.connectionType !== 'ssh';
+                document.getElementById('agent-connect-btn').hidden = !state
+                    || (state.connectionType === 'ssh' && !readyAgentTunnels.has(state.id));
+            }
+
+            function setAgentTunnelInfoView(infoView) {
+                document.getElementById('agent-tunnel-title').textContent = infoView ? 'Agent Info for Current Tab' : 'Agent Tunnel';
+                document.getElementById('agent-tunnel-setup').hidden = infoView;
+                document.getElementById('agent-tunnel-apply').hidden = infoView;
+                document.getElementById('agent-tunnel-stop').hidden = infoView;
+                document.getElementById('agent-tunnel-manage').hidden = !infoView;
+            }
+
+            function invalidateAgentTunnel(terminalId, message) {
+                readyAgentTunnels.delete(terminalId);
+                if (terminalId === agentTunnelCarrier) {
+                    ++agentTunnelRequest;
+                    clearAgentTunnelInfo(message);
+                    document.getElementById('agent-tunnel-apply').disabled = false;
+                }
+                updateAgentTunnelButtons();
+            }
+
+            function applyAgentTunnelState(data) {
+                if (!data || typeof data.terminal_id !== 'string') return;
+                const entry = readyAgentTunnels.get(data.terminal_id);
+                if (entry && data.carrier_id !== entry.carrierId) return;
+                if (data.status === 'stopped') {
+                    invalidateAgentTunnel(data.terminal_id, 'Tunnel stopped. Start it again before copying a remote prompt.');
+                } else if (data.status === 'sync_failed' && data.carrier_id === agentTunnelId) {
+                    agentTunnelMessage.textContent = data.message;
+                }
+            }
+
+            function clearAgentTunnelInfo(message) {
+                agentTunnelId = null;
+                agentTunnelActivity = [];
+                agentTunnelInfo.value = '';
+                agentTunnelInfo.hidden = true;
+                document.getElementById('agent-tunnel-connection').hidden = true;
+                document.getElementById('agent-tunnel-url').value = '';
+                document.getElementById('agent-tunnel-check').disabled = true;
+                document.getElementById('agent-tunnel-stop').disabled = true;
+                document.getElementById('agent-tunnel-copy').hidden = true;
+                agentTunnelMessage.textContent = message;
+            }
+
+            function renderAgentTunnelTargets(selected) {
+                const list = document.getElementById('agent-tunnel-targets');
+                list.replaceChildren();
+                terminals.forEach(state => {
+                    if (!state.connected || !state.agent.attached || state.agent.mode === AGENT_MODE_DISABLED) return;
+                    const label = document.createElement('div');
+                    label.textContent = `${state.title} (${state.id}) · ${state.agent.mode}${selected.includes(state.id) ? ' · remote access ready' : ''}`;
+                    list.append(label);
+                });
+                if (!list.childElementCount) list.textContent = 'No tabs enabled. Enable access in a tab\'s Agent Panel when needed.';
+            }
+
+            function applyAgentTunnelStatus(result) {
+                const ready = result && result.status === 'ready' && isCurrentAgentTunnelConnection(agentTunnelConnection);
+                if (ready) {
+                    readyAgentTunnels.set(agentTunnelCarrier, {connection: agentTunnelConnection, carrierId: result.carrier_id});
+                    if (result.ssh_context) {
+                        document.getElementById('agent-tunnel-carrier').textContent = 'Agent runs on SSH host: ' + JSON.stringify(result.ssh_context);
+                    }
+                } else {
+                    readyAgentTunnels.delete(agentTunnelCarrier);
+                }
+                updateAgentTunnelButtons();
+                agentTunnelMessage.textContent = ready ? 'Copy Prompt to the agent running on this SSH host. The URL below belongs to that remote host. Agent activity is shown separately.'
+                    : result && result.status === 'stopped'
+                        ? (result.cleanup_pending ? 'Access revoked. Remote cleanup is pending.' : 'Tunnel stopped.')
+                    : (result && result.message) || 'Tunnel setup failed.';
+                agentTunnelInfo.value = ready ? result.connect_info : '';
+                agentTunnelInfo.hidden = !ready;
+                agentTunnelId = ready ? result.carrier_id : null;
+                agentTunnelActivity = ready ? result.terminals || [] : [];
+                document.getElementById('agent-tunnel-connection').hidden = !ready;
+                document.getElementById('agent-tunnel-url').value = ready ? result.agentinfo_url : '';
+                document.getElementById('agent-tunnel-check').disabled = !ready;
+                document.getElementById('agent-tunnel-verification').textContent = ready
+                    ? `Remote loopback and helpers verified: ${new Date(result.verified_at * 1000).toLocaleString()}` : '';
+                renderAgentConnectionActivity('agent-tunnel-activity', agentTunnelActivity);
+                document.getElementById('agent-tunnel-copy').hidden = !ready;
+                document.getElementById('agent-tunnel-stop').disabled = !ready;
+                renderAgentTunnelTargets((result && result.terminal_ids) || []);
+            }
+
+            function applyAgentConnectionActivity(data) {
+                if (!data || typeof data.terminal_id !== 'string' || !Number.isFinite(data.last_request_at)) return;
+                const remote = !!data.carrier_id;
+                if (remote && (!agentTunnelDialog.open || data.carrier_id !== agentTunnelId)) return;
+                if (!remote && !agentConnectDialog.open) return;
+                const entries = remote ? agentTunnelActivity : agentConnectActivity;
+                const entry = entries.find(item => item.terminal_id === data.terminal_id);
+                if (entry) {
+                    entry.last_request_at = data.last_request_at;
+                    renderAgentConnectionActivity(remote ? 'agent-tunnel-activity' : 'agent-connect-activity', entries);
+                } else if (!remote) {
+                    requestAgentConnectInfo();
+                }
+            }
+
+            function requestAgentTunnel(operation) {
+                if (!agentTunnelCarrier || !socket.connected) return;
+                const requestId = ++agentTunnelRequest;
+                const terminalId = agentTunnelCarrier;
+                const connection = agentTunnelConnection;
+                agentTunnelMessage.textContent = operation === 'apply' ? 'Preparing and verifying Agent access…'
+                    : operation === 'check' ? 'Checking the remote listener, helpers, and connection to Core…' : 'Updating tunnel status…';
+                document.getElementById('agent-tunnel-apply').disabled = true;
+                document.getElementById('agent-tunnel-check').disabled = true;
+                if (operation === 'apply') document.getElementById('agent-tunnel-stop').disabled = false;
+                socket.emit('agent_tunnel', { terminal_id: terminalId, operation }, result => {
+                    if (requestId !== agentTunnelRequest || terminalId !== agentTunnelCarrier
+                        || !isCurrentAgentTunnelConnection(connection)) return;
+                    document.getElementById('agent-tunnel-apply').disabled = false;
+                    applyAgentTunnelStatus(result);
+                });
+            }
+
+            function openAgentTunnel(infoView = false) {
+                const state = getActiveTerminalState();
+                if (!state || !state.connected || state.connectionType !== 'ssh') return;
+                if (infoView && !readyAgentTunnels.has(state.id)) return;
+                agentTunnelCarrier = state.id;
+                agentTunnelConnection = {state, connectedAt: state.connectedAt};
+                setAgentTunnelInfoView(infoView);
+                document.getElementById('agent-tunnel-carrier').textContent = `Agent runs on SSH host: ${state.title} (tab ${state.id})`;
+                clearAgentTunnelInfo('Loading tunnel status…');
+                renderAgentTunnelTargets([]);
+                agentTunnelDialog.showModal();
+                requestAgentTunnel('status');
+            }
+            document.getElementById('agent-tunnel-btn').addEventListener('click', () => openAgentTunnel());
+            document.getElementById('agent-tunnel-manage').addEventListener('click', () => setAgentTunnelInfoView(false));
+            document.getElementById('agent-tunnel-apply').addEventListener('click', () => requestAgentTunnel('apply'));
+            document.getElementById('agent-tunnel-stop').addEventListener('click', () => requestAgentTunnel('stop'));
+            document.getElementById('agent-tunnel-refresh').addEventListener('click', () => requestAgentTunnel('status'));
+            document.getElementById('agent-tunnel-check').addEventListener('click', () => requestAgentTunnel('check'));
+            document.getElementById('agent-tunnel-close').addEventListener('click', () => agentTunnelDialog.close());
+            document.getElementById('agent-tunnel-copy').addEventListener('click', () =>
+                copyAgentConnectionField('agent-tunnel-info', agentTunnelMessage));
+            document.getElementById('agent-tunnel-copy-url').addEventListener('click', () =>
+                copyAgentConnectionField('agent-tunnel-url', agentTunnelMessage));
 
             function getActiveTerm() {
                 const state = getActiveTerminalState();
@@ -5397,6 +5715,14 @@
                 updateAgentPanel();
                 updateTerminalApplicationTitleStatus(state);
                 updateSftpActionButton(sftpStatusBtn, state);
+                updateAgentTunnelButtons();
+                if (agentConnectDialog.open && (!state || state.connectionType === 'ssh')) agentConnectDialog.close();
+                if (agentTunnelDialog.open && agentTunnelCarrier !== activeTerminalId) agentTunnelDialog.close();
+                if (agentTunnelConnection && !isCurrentAgentTunnelConnection(agentTunnelConnection)) {
+                    invalidateAgentTunnel(agentTunnelCarrier, 'SSH connection unavailable. Start a new tunnel after reconnecting.');
+                    agentTunnelConnection = null;
+                }
+                if (agentConnectDialog.open && !socket.connected) requestAgentConnectInfo();
                 if (!state) return;
                 sshStatusEl.innerText = state.connected ? getTerminalDisplayLabel(state) : (state.connecting ? 'Connecting' : 'Disconnected');
                 sshStatusEl.style.color = state.connected ? '#34c759' : (state.connecting ? '#ffcc00' : '#ff9f0a');
@@ -5754,6 +6080,7 @@
                 if (!debugEnabled || !socket || window.terminalTest) return;
                 const emitted = [];
                 let captureTerminalIo = false;
+                let pendingAgentTunnelAcks = null;
                 const originalEmit = socket.emit.bind(socket);
                 socket.emit = (eventName, ...args) => {
                     emitted.push({
@@ -5763,6 +6090,10 @@
                     });
                     if (emitted.length > 100) emitted.shift();
                     if (captureTerminalIo && eventName === 'ssh_input') return socket;
+                    if (pendingAgentTunnelAcks && eventName === 'agent_tunnel') {
+                        pendingAgentTunnelAcks.push(args[1]);
+                        return socket;
+                    }
                     return originalEmit(eventName, ...args);
                 };
                 window.terminalTest = {
@@ -5817,6 +6148,23 @@
                     },
                     applyAgentExternalTokenStateForTest(payload) {
                         applyAgentExternalTokenState(cloneForTest(payload));
+                    },
+                    applyAgentTunnelStatusForTest(payload) {
+                        applyAgentTunnelStatus(cloneForTest(payload));
+                    },
+                    holdAgentTunnelRequestsForTest() {
+                        pendingAgentTunnelAcks = [];
+                    },
+                    completeAgentTunnelRequestForTest(index, payload) {
+                        const acknowledge = pendingAgentTunnelAcks[index];
+                        pendingAgentTunnelAcks[index] = null;
+                        acknowledge(cloneForTest(payload));
+                    },
+                    applyAgentTunnelStateForTest(payload) {
+                        applyAgentTunnelState(cloneForTest(payload));
+                    },
+                    applyAgentConnectionActivityForTest(payload) {
+                        applyAgentConnectionActivity(cloneForTest(payload));
                     },
                     activeTerminalHasFocus() {
                         const state = getActiveTerminalState();
@@ -6439,6 +6787,8 @@
             socket.on('agent_state', data => {
                 applyAgentStatePayload(data);
             });
+            socket.on('agent_tunnel_state', applyAgentTunnelState);
+            socket.on('agent_connection_activity', applyAgentConnectionActivity);
             socket.on('agent_action_request', data => {
                 applyAgentActionPayload(data);
             });
@@ -6894,14 +7244,19 @@
             function hideActionPrompt() {
                 pendingAction = null;
                 pendingActionId = null;
+                pendingActionTerminalId = null;
                 actionBox.style.display = 'none';
                 actionMessageEl.innerText = '';
                 actionQuestionEl.innerText = '';
             }
 
-            function showActionPrompt(message, question, actionType, actionId) {
+            function showActionPrompt(message, question, actionType, actionId, terminalId = activeTerminalId) {
                 pendingAction = actionType;
                 pendingActionId = actionId || null;
+                pendingActionTerminalId = terminalId;
+                actionYesBtn.innerText = actionType === 'confirm_ssh_host_key' ? 'Trust key'
+                    : (actionType === 'forget_ssh_host_key' ? 'Forget key' : 'Yes');
+                actionNoBtn.innerText = actionType === 'offer_localhost_key_setup' ? 'No' : 'Cancel';
                 actionMessageEl.innerText = message || '';
                 actionQuestionEl.innerText = question || '';
                 actionBox.style.display = 'block';
@@ -7009,6 +7364,14 @@
                 submitConnection(getConnectionFormData());
             };
             connectBtn.onclick = doConnect;
+            document.getElementById('ssh-forget-host-key').onclick = () => {
+                if (!socket || !socket.connected || getActiveTerminalState()?.connecting) return;
+                hideActionPrompt();
+                socket.emit('ssh_host_key_action', {
+                    operation: 'forget', terminal_id: activeTerminalId,
+                    host: sshHostInput.value, port: sshPortInput.value
+                });
+            };
             sshSessionPickerToggle.onclick = () => {
                 const opening = !sshSessionPickerPanel.classList.contains('open');
                 sshSessionPickerPanel.classList.toggle('open', opening);
@@ -7428,6 +7791,12 @@
             window.addEventListener('focus', () => requestFreshUartPorts('window_focus'));
 
             actionYesBtn.onclick = () => {
+                if (['confirm_ssh_host_key', 'forget_ssh_host_key'].includes(pendingAction) && pendingActionId) {
+                    const payload = { operation: 'confirm', action_id: pendingActionId, terminal_id: pendingActionTerminalId };
+                    hideActionPrompt();
+                    socket.emit('ssh_host_key_action', payload);
+                    return;
+                }
                 if (pendingAction !== 'offer_localhost_key_setup' || !pendingActionId) return;
                 pendingReconnect = getConnectionFormData();
                 const actionId = pendingActionId;
@@ -7440,6 +7809,11 @@
             };
 
             actionNoBtn.onclick = () => {
+                if (['confirm_ssh_host_key', 'forget_ssh_host_key'].includes(pendingAction) && pendingActionId) {
+                    socket.emit('ssh_host_key_action', {
+                        operation: 'cancel', action_id: pendingActionId, terminal_id: pendingActionTerminalId
+                    });
+                }
                 hideActionPrompt();
                 resetConnectButton();
             };
@@ -7451,7 +7825,7 @@
             function handleSshOutputPayload(data) {
                 if (!data || typeof data !== 'object') return;
                 const messageType = data.message_type;
-                const allowedTypes = ['terminal', 'connection_error', 'setup_result', 'ssh_connected', 'ssh_closed'];
+                const allowedTypes = ['terminal', 'connection_error', 'setup_result', 'host_key_prompt', 'host_key_result', 'ssh_connected', 'ssh_closed'];
                 if (!allowedTypes.includes(messageType)) {
                     if (debugEnabled) appendPayloadLog('socket.invalid_message_type', JSON.stringify(data));
                     return;
@@ -7479,14 +7853,26 @@
                         if (state.id === activeTerminalId) {
                             showError(data.message || 'Connection failed.');
                             resetConnectButton();
-                            if (data.action_type === 'offer_localhost_key_setup' && data.action_id) {
-                                showActionPrompt(data.action_message, data.action_question, data.action_type, data.action_id);
+                            if (['offer_localhost_key_setup', 'confirm_ssh_host_key'].includes(data.action_type) && data.action_id) {
+                                showActionPrompt(data.action_message, data.action_question, data.action_type, data.action_id, state.id);
                             } else {
                                 hideActionPrompt();
                             }
                             updateActiveTerminalUi();
                         } else {
                             updateTabState(state);
+                        }
+                        break;
+                    case 'host_key_prompt':
+                        if (state.id === activeTerminalId && data.action_type === 'forget_ssh_host_key' && data.action_id) {
+                            showActionPrompt(data.action_message, data.action_question, data.action_type, data.action_id, state.id);
+                        }
+                        break;
+                    case 'host_key_result':
+                        if (state.id === activeTerminalId) {
+                            hideActionPrompt();
+                            showError(data.message || 'SSH host key action completed.');
+                            resetConnectButton();
                         }
                         break;
                     case 'setup_result':
@@ -9323,7 +9709,7 @@
                 return !!request && request.state === getActiveTerminalState()
                     && isCurrentTerminalState(request.state) && !request.state.inPip && request.state.connected && socket.connected
                     && document.activeElement === request.focus
-                    && !document.querySelector('#settings-modal.open, #paste-review-modal.open, #session-recovery-modal.open, #browser-auth-help-modal.open');
+                    && !document.querySelector('#settings-modal.open, #paste-review-modal.open, #session-recovery-modal.open, #browser-auth-help-modal.open, #agent-tunnel-dialog[open], #agent-connect-dialog[open]');
             }
             document.addEventListener('focusin', () => {
                 if (pendingContextPaste && document.activeElement !== pendingContextPaste.focus) pendingContextPaste = null;

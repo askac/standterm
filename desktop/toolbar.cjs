@@ -23,6 +23,10 @@ function installToolbar(win, coreView, capture, commands) {
     coreView.setBounds({ x: 0, y: TOOLBAR_HEIGHT, width, height: Math.max(0, height - TOOLBAR_HEIGHT) });
   };
   win.contentView.addChildView(coreView);
+  win.on('focus', () => {
+    // Restore Core's editing target when the native window becomes active.
+    if (!coreView.webContents.isDestroyed()) coreView.webContents.focus();
+  });
   win.on('resize', layout);
   win.contentView.on('bounds-changed', layout);
   layout();

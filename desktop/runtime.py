@@ -4,6 +4,7 @@ from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import sys
 
@@ -46,6 +47,36 @@ def runtime_base():
 def venv_path(root):
     name = '.venv_win' if sys.platform == 'win32' else '.venv_macos' if sys.platform == 'darwin' else '.venv_wsl'
     return root / 'tools' / name
+
+
+def git_root():
+    return runtime_base() / 'git-core'
+
+
+def check_git_root(root):
+    check_path(root)
+    if root != git_root() or read_marker(root / '.standterm-git.json') != {'version': 1, 'kind': 'git-core'}:
+        raise UnsafeRuntime()
+    for relative in ['repo', 'repo/.git', 'tools']:
+        check_path(root / relative)
+
+
+def bundled_root(base, bundle_id):
+    recovery = base / 'core-recovery' / bundle_id
+    selection = recovery / 'selected.json'
+    check_path(selection)
+    if not selection.exists():
+        return base / 'runtimes' / bundle_id
+    saved = read_marker(selection)
+    identity = saved.get('runtime') if isinstance(saved, dict) else None
+    if not isinstance(saved, dict) or saved.get('version') != 1 or not isinstance(identity, str) or not re.fullmatch(r'[a-f0-9]{32}', identity):
+        raise UnsafeRuntime()
+    # Keep Windows extension/DLL paths short; the full bundle hash belongs in
+    # the selection record's directory, not every Python import path.
+    root = base / 'restored' / identity
+    if read_marker(root / '.standterm-bundle.json') != {'id': bundle_id}:
+        raise UnsafeRuntime()
+    return root
 
 
 @contextmanager

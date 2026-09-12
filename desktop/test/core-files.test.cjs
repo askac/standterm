@@ -17,8 +17,8 @@ test('Core bundle includes public launchers, skills, references and helpers', ()
   for (const file of REQUIRED.filter(file => file.startsWith('docs/'))) assert.ok(files.includes(file), file);
   for (const file of ['.git/config', 'desktop/dist/private.json', 'tools/.venv_wsl/bin/python',
     'handover_20260909.md', 'AGENTS.md', 'tests/agent_backend_smoke.py']) assert.ok(!coreFiles([file]).length, file);
-  assert.ok(!files.includes('scripts/base64d.sh'));
-  assert.ok(!files.includes('scripts/base64d_probe.sh'));
+  for (const file of ['agent_tunnel.py', 'scripts/agent_tunnel_runtime.py',
+    'scripts/base64d.sh', 'scripts/base64d_probe.sh']) assert.ok(files.includes(file), file);
   for (const required of REQUIRED) {
     assert.throws(() => validateCoreFiles(root, files.filter(file => file !== required)), /Missing required Core input/);
   }

@@ -20,7 +20,9 @@ import urllib.parse
 import atexit
 import tempfile
 from collections import deque
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from functools import partial
+from agent_tunnel import AgentTunnel, tunnel_ingress
 from core_version import CORE_VERSION
 from flask import Flask, Response, render_template, request, abort, make_response, redirect, send_file, jsonify, stream_with_context
 from flask_socketio import SocketIO, ConnectionRefusedError
@@ -229,6 +231,8 @@ RESERVED_BACKEND_PAYLOAD_KEYS = {
 }
 ALLOWED_CONNECTION_ACTION_TYPES = {
     'offer_localhost_key_setup',
+    'confirm_ssh_host_key',
+    'forget_ssh_host_key',
 }
 TERMINAL_ID_MAIN = 'main'
 MAX_TERMINAL_ID_LENGTH = 64
@@ -3507,7 +3511,8 @@ class ExternalAgentAttachStore:
     def __init__(self):
         self._tokens = {}
 
-    def create(self, state, idle_timeout_seconds=AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS):
+    def create(self, state, idle_timeout_seconds=AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS,
+               carrier_id=None):
         if not state:
             return None
         token = 'agt_' + secrets.token_urlsafe(24)
@@ -3529,6 +3534,7 @@ class ExternalAgentAttachStore:
             'revoked': False,
             'attached': False,
             'external_agent_id': 'exa_' + secrets.token_urlsafe(12),
+            'carrier_id': carrier_id,
         }
         return token, dict(self._tokens[token_hash])
 
@@ -3536,6 +3542,9 @@ class ExternalAgentAttachStore:
         if not isinstance(token, str) or not token.startswith('agt_'):
             return None, AGENT_ERROR_EXTERNAL_AGENT_UNAUTHORIZED
         token_hash = hash_external_agent_token(token)
+        return self.validate_hash(token_hash, terminal_id=terminal_id, renew=renew)
+
+    def validate_hash(self, token_hash, terminal_id=None, renew=False):
         record = self._tokens.get(token_hash)
         if not record:
             return None, AGENT_ERROR_EXTERNAL_AGENT_UNAUTHORIZED
@@ -3543,6 +3552,16 @@ class ExternalAgentAttachStore:
             return None, record.get('error_code') or AGENT_ERROR_EXTERNAL_AGENT_DISCONNECTED
         if record.get('revoked'):
             return None, AGENT_ERROR_EXTERNAL_AGENT_REVOKED
+        carrier_id = record.get('carrier_id')
+        if tunnel_ingress.get() and tunnel_ingress.get() != carrier_id:
+            return None, AGENT_ERROR_EXTERNAL_AGENT_UNAUTHORIZED
+        if carrier_id:
+            carrier = agent_tunnels.get(carrier_id)
+            if not carrier or not carrier.active or not carrier.transport.is_active():
+                return None, AGENT_ERROR_EXTERNAL_AGENT_DISCONNECTED
+            grant = carrier.grants.get(record['terminal_id'])
+            if not grant or grant['record']['token_hash'] != token_hash:
+                return None, AGENT_ERROR_EXTERNAL_AGENT_REVOKED
         expires_at = record.get('expires_at')
         if expires_at is not None and expires_at < time.time():
             return None, AGENT_ERROR_EXTERNAL_AGENT_EXPIRED
@@ -3599,6 +3618,7 @@ class ExternalAgentAttachStore:
         self._tokens.clear()
 
 external_agent_attach_store = ExternalAgentAttachStore()
+agent_tunnels = {}
 
 def get_agent_session_id(session_token):
     if not session_token:
@@ -3999,8 +4019,14 @@ def get_external_agent_authorized_state(record):
         return state, AGENT_ERROR_EXTERNAL_AGENT_DISABLED
     return state, None
 
+def validate_external_agent_record(record):
+    with external_agent_lock:
+        _, error_code = external_agent_attach_store.validate_hash(record.get('token_hash'))
+    return error_code
+
 def mint_external_agent_attach_token(session_token, terminal_id, sid,
-                                     idle_timeout_seconds=AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS):
+                                     idle_timeout_seconds=AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS,
+                                     carrier_id=None):
     with agent_lock:
         if not get_bridge(session_token, terminal_id):
             return None, None, AGENT_ERROR_TERMINAL_NOT_FOUND
@@ -4013,6 +4039,7 @@ def mint_external_agent_attach_token(session_token, terminal_id, sid,
             token, record = external_agent_attach_store.create(
                 state,
                 idle_timeout_seconds=idle_timeout_seconds,
+                carrier_id=carrier_id,
             )
         record_agent_audit_event(
             state,
@@ -4050,12 +4077,15 @@ def mint_external_agent_attach_token_for_viewer(session_token, terminal_id, view
         idle_timeout_seconds = AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS
         if idle_timeout_seconds is not None:
             idle_timeout_seconds *= idle_timeout_multiplier
-        return mint_external_agent_attach_token(
+        result = mint_external_agent_attach_token(
             session_token,
             terminal_id,
             state.sid,
             idle_timeout_seconds=idle_timeout_seconds,
         )
+    if not result[2]:
+        schedule_agent_tunnel_enrollment(state)
+    return result
 
 def validate_external_agent_command_token(command, require_terminal=True, renew_token=True):
     if not isinstance(command, dict):
@@ -4080,6 +4110,19 @@ def validate_external_agent_command_token(command, require_terminal=True, renew_
         state, error_code = get_external_agent_authorized_state(record)
         if error_code:
             return record, state, terminal_id, error_code
+        carrier_id = record.get('carrier_id')
+        if not carrier_id or tunnel_ingress.get() == carrier_id:
+            with external_agent_lock:
+                _, error_code = external_agent_attach_store.validate_hash(record['token_hash'])
+                if error_code:
+                    return record, state, terminal_id, error_code
+                received_at = time.time()
+                external_agent_attach_store._tokens[record['token_hash']]['last_request_at'] = received_at
+            socketio.emit('agent_connection_activity', {
+                'terminal_id': record['terminal_id'],
+                'carrier_id': carrier_id,
+                'last_request_at': received_at,
+            }, room=record['sid'])
     return record, state, terminal_id, None
 
 def get_external_agent_recommended_keepalive_ms(idle_timeout_seconds):
@@ -4157,6 +4200,8 @@ def build_external_agent_token_state_event_payload(record, token_status=None):
     }
 
 def emit_external_agent_token_state(record, token_status=None):
+    if record.get('carrier_id'):
+        return
     payload = build_external_agent_token_state_event_payload(record, token_status=token_status)
     sid = record.get('sid') if isinstance(record, dict) else None
     if payload and sid:
@@ -4944,6 +4989,10 @@ def build_agent_file_copy_action(state, record, destination_state, destination_r
                                  source_bridge, destination_bridge, source_file, upload,
                                  conflict_mode):
 
+    for owner in (record, destination_record):
+        error_code = validate_external_agent_record(owner)
+        if error_code:
+            return None, error_code
     if not reserve_agent_action_slot(state):
         return None, 'agent_action_limit_reached'
     action_id = secrets.token_urlsafe(12)
@@ -4989,6 +5038,8 @@ def build_agent_file_copy_action(state, record, destination_state, destination_r
         'destination_privacy_version': destination_state.privacy_version,
         'destination_external_agent_id': destination_record.get('external_agent_id'),
         'external_agent_id': record.get('external_agent_id'),
+        'external_agent_token_hash': record.get('token_hash'),
+        'destination_external_agent_token_hash': destination_record.get('token_hash'),
         'requires_approval': True,
         'approval_granted': False,
         'status': AGENT_STATUS_PENDING_APPROVAL,
@@ -5355,6 +5406,10 @@ def check_agent_write_allowed(session_token, terminal_id, sid, action_id, contro
     action = state.pending_actions.get(action_id)
     if not action:
         return state, None, AGENT_ERROR_ACTION_NOT_FOUND
+    if action.get('external_agent_token_hash'):
+        error_code = validate_external_agent_record({'token_hash': action['external_agent_token_hash']})
+        if error_code:
+            return state, action, error_code
     if proposal_id is not None and action.get('proposal_id') != proposal_id:
         return state, action, AGENT_ERROR_STALE_PROPOSAL
     if action.get('session_id') != state.session_id:
@@ -5435,6 +5490,8 @@ def write_agent_terminal_input(session_token, terminal_id, sid, action_id, contr
                         action['status'] = AGENT_STATUS_FAILED
                         record_agent_audit(state, action, AGENT_STATUS_FAILED, error_code=error_code)
                     return False, {'error_code': error_code, 'bytes_written': bytes_written}
+            # This chunk is dispatched; revocation fences subsequent chunks.
+            # Never hold the global Agent lock across potentially blocked I/O.
             bridge.write(chunk)
         bytes_written += len(chunk.encode('utf-8', errors='ignore'))
 
@@ -5443,6 +5500,18 @@ def write_agent_terminal_input(session_token, terminal_id, sid, action_id, contr
         if state:
             action = state.pending_actions.get(action_id)
             if action:
+                error_code = None
+                if action.get('external_agent_token_hash'):
+                    error_code = validate_external_agent_record({'token_hash': action['external_agent_token_hash']})
+                if error_code or action.get('status') not in AGENT_STATUS_WRITABLE:
+                    if action.get('status') in AGENT_STATUS_OPEN:
+                        action['status'] = AGENT_STATUS_FAILED
+                        action['error_code'] = error_code or AGENT_ERROR_ACTION_NOT_WRITABLE
+                        record_agent_audit(state, action, AGENT_STATUS_FAILED, error_code=action['error_code'])
+                    return False, {
+                        'error_code': error_code or action.get('error_code') or AGENT_ERROR_ACTION_NOT_WRITABLE,
+                        'bytes_written': bytes_written,
+                    }
                 if not action.get('requires_approval'):
                     record_agent_audit_event(
                         state,
@@ -5764,6 +5833,9 @@ def close_bridge(bridge):
     if not bridge:
         return
     bridge.closing = True
+    tunnel = getattr(bridge, 'agent_tunnel', None)
+    if tunnel:
+        tunnel.close()
     bridge.close()
 
 def record_agent_terminal_cleanup(session_token, terminal_id, reason):
@@ -6509,7 +6581,7 @@ def get_external_agent_local_base_url():
     return f'{scheme}://127.0.0.1:{DEFAULT_PORT}'
 
 def build_external_agent_cli_command(base_url, token, terminal_id, op='send', text='pwd\n',
-                                     extra_args=None):
+                                     extra_args=None, runtime=None):
     args = [
         'tools/.venv_wsl/bin/python',
         'scripts/agent_cli.py',
@@ -6520,7 +6592,12 @@ def build_external_agent_cli_command(base_url, token, terminal_id, op='send', te
         '--terminal',
         terminal_id,
     ]
-    args.extend(get_external_agent_cli_tls_args())
+    if runtime:
+        args = [runtime['python_path'], str(runtime['root'] / args[1]),
+                '--handoff', runtime['terminal_handoffs'][terminal_id]['handoff_path'],
+                '--terminal', terminal_id]
+    else:
+        args.extend(get_external_agent_cli_tls_args())
     if op == 'send':
         args.extend(['send', '--text', text])
     elif op == 'send-wait':
@@ -6531,7 +6608,7 @@ def build_external_agent_cli_command(base_url, token, terminal_id, op='send', te
         args.extend(extra_args)
     return ' '.join(shlex.quote(arg) for arg in args)
 
-def build_external_agent_repl_command(base_url, token, terminal_id):
+def build_external_agent_repl_command(base_url, token, terminal_id, runtime=None):
     args = [
         'tools/.venv_wsl/bin/python',
         'scripts/agent_repl.py',
@@ -6542,10 +6619,15 @@ def build_external_agent_repl_command(base_url, token, terminal_id):
         '--terminal',
         terminal_id,
     ]
-    args.extend(get_external_agent_cli_tls_args())
+    if runtime:
+        args = [runtime['python_path'], str(runtime['root'] / args[1]),
+                '--handoff', runtime['terminal_handoffs'][terminal_id]['handoff_path'],
+                '--terminal', terminal_id]
+    else:
+        args.extend(get_external_agent_cli_tls_args())
     return ' '.join(shlex.quote(arg) for arg in args)
 
-def build_external_agent_shcmd_command(base_url, token, terminal_id, command='pwd', extra_args=None):
+def build_external_agent_shcmd_command(base_url, token, terminal_id, command='pwd', extra_args=None, runtime=None):
     args = [
         'tools/.venv_wsl/bin/python',
         'scripts/agent_shcmd.py',
@@ -6556,13 +6638,18 @@ def build_external_agent_shcmd_command(base_url, token, terminal_id, command='pw
         '--terminal',
         terminal_id,
     ]
-    args.extend(get_external_agent_cli_tls_args())
+    if runtime:
+        args = [runtime['python_path'], str(runtime['root'] / args[1]),
+                '--handoff', runtime['terminal_handoffs'][terminal_id]['handoff_path'],
+                '--terminal', terminal_id]
+    else:
+        args.extend(get_external_agent_cli_tls_args())
     if extra_args:
         args.extend(extra_args)
     args.append(command)
     return ' '.join(shlex.quote(arg) for arg in args)
 
-def build_external_agent_jsonl_command(base_url, token, terminal_id):
+def build_external_agent_jsonl_command(base_url, token, terminal_id, runtime=None):
     args = [
         'tools/.venv_wsl/bin/python',
         'scripts/agent_jsonl.py',
@@ -6573,68 +6660,77 @@ def build_external_agent_jsonl_command(base_url, token, terminal_id):
         '--terminal',
         terminal_id,
     ]
-    args.extend(get_external_agent_cli_tls_args())
+    if runtime:
+        args = [runtime['python_path'], str(runtime['root'] / args[1]),
+                '--handoff', runtime['terminal_handoffs'][terminal_id]['handoff_path'],
+                '--terminal', terminal_id]
+    else:
+        args.extend(get_external_agent_cli_tls_args())
     return ' '.join(shlex.quote(arg) for arg in args)
 
-def build_external_agent_cli_commands(base_url, token, terminal_id):
+def build_external_agent_cli_commands(base_url, token, terminal_id, runtime=None):
+    cli_command = partial(build_external_agent_cli_command, runtime=runtime)
+    repl_command = partial(build_external_agent_repl_command, runtime=runtime)
+    shcmd_command = partial(build_external_agent_shcmd_command, runtime=runtime)
+    jsonl_command = partial(build_external_agent_jsonl_command, runtime=runtime)
     return {
-        'hello': build_external_agent_cli_command(base_url, token, terminal_id, op='hello'),
-        'state': build_external_agent_cli_command(base_url, token, terminal_id, op='state'),
-        'heartbeat': build_external_agent_cli_command(base_url, token, terminal_id, op='heartbeat'),
-        'screen': build_external_agent_cli_command(base_url, token, terminal_id, op='screen'),
-        'screen_tail': build_external_agent_cli_command(
+        'hello': cli_command(base_url, token, terminal_id, op='hello'),
+        'state': cli_command(base_url, token, terminal_id, op='state'),
+        'heartbeat': cli_command(base_url, token, terminal_id, op='heartbeat'),
+        'screen': cli_command(base_url, token, terminal_id, op='screen'),
+        'screen_tail': cli_command(
             base_url,
             token,
             terminal_id,
             op='screen',
             extra_args=['--tail-lines', '12'],
         ),
-        'screen_region': build_external_agent_cli_command(
+        'screen_region': cli_command(
             base_url,
             token,
             terminal_id,
             op='screen',
             extra_args=['--region', '0:12'],
         ),
-        'screen_wait': build_external_agent_cli_command(
+        'screen_wait': cli_command(
             base_url,
             token,
             terminal_id,
             op='screen',
             extra_args=['--wait-ms', '3000', '--quiet-ms', '500'],
         ),
-        'render': build_external_agent_cli_command(base_url, token, terminal_id, op='render'),
-        'render_visible_xterm_png': build_external_agent_cli_command(
+        'render': cli_command(base_url, token, terminal_id, op='render'),
+        'render_visible_xterm_png': cli_command(
             base_url,
             token,
             terminal_id,
             op='render',
             extra_args=['--mode', 'visible-xterm-png'],
         ),
-        'render_mirror_screen': build_external_agent_cli_command(
+        'render_mirror_screen': cli_command(
             base_url,
             token,
             terminal_id,
             op='render',
             extra_args=['--mode', 'mirror-screen'],
         ),
-        'tail': build_external_agent_cli_command(base_url, token, terminal_id, op='tail'),
-        'tail_wait': build_external_agent_cli_command(
+        'tail': cli_command(base_url, token, terminal_id, op='tail'),
+        'tail_wait': cli_command(
             base_url,
             token,
             terminal_id,
             op='tail',
             extra_args=['--wait-ms', str(AGENT_EXTERNAL_TAIL_MAX_WAIT_MS)],
         ),
-        'tail_plain': build_external_agent_cli_command(
+        'tail_plain': cli_command(
             base_url,
             token,
             terminal_id,
             op='tail',
             extra_args=['--strip-ansi'],
         ),
-        'send_pwd': build_external_agent_cli_command(base_url, token, terminal_id, op='send', text='pwd\n'),
-        'send_submit': build_external_agent_cli_command(
+        'send_pwd': cli_command(base_url, token, terminal_id, op='send', text='pwd\n'),
+        'send_submit': cli_command(
             base_url,
             token,
             terminal_id,
@@ -6642,8 +6738,8 @@ def build_external_agent_cli_commands(base_url, token, terminal_id):
             text='codex prompt',
             extra_args=['--submit'],
         ),
-        'send_wait_pwd': build_external_agent_cli_command(base_url, token, terminal_id, op='send-wait', text='pwd\n'),
-        'send_wait_plain_pwd': build_external_agent_cli_command(
+        'send_wait_pwd': cli_command(base_url, token, terminal_id, op='send-wait', text='pwd\n'),
+        'send_wait_plain_pwd': cli_command(
             base_url,
             token,
             terminal_id,
@@ -6651,20 +6747,20 @@ def build_external_agent_cli_commands(base_url, token, terminal_id):
             text='pwd\n',
             extra_args=['--strip-ansi'],
         ),
-        'repl': build_external_agent_repl_command(base_url, token, terminal_id),
-        'shcmd_pwd': build_external_agent_shcmd_command(base_url, token, terminal_id),
-        'shcmd_json_pwd': build_external_agent_shcmd_command(
+        'repl': repl_command(base_url, token, terminal_id),
+        'shcmd_pwd': shcmd_command(base_url, token, terminal_id),
+        'shcmd_json_pwd': shcmd_command(
             base_url,
             token,
             terminal_id,
             extra_args=['--json'],
         ),
-        'jsonl': build_external_agent_jsonl_command(base_url, token, terminal_id),
+        'jsonl': jsonl_command(base_url, token, terminal_id),
     }
 
 def build_external_agent_discovery_payload(
         base_url, token, terminal_id,
-        idle_timeout_seconds=AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS):
+        idle_timeout_seconds=AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS, runtime=None):
     command_base_url = build_external_agent_loopback_base_url(base_url)
     transport = {
         'type': 'loopback_http_json',
@@ -6672,7 +6768,7 @@ def build_external_agent_discovery_payload(
         'loopback_only': True,
         'tls_verify': True,
     }
-    ca_cert_path = get_external_agent_tls_ca_cert_path()
+    ca_cert_path = None if runtime else get_external_agent_tls_ca_cert_path()
     if ca_cert_path:
         transport['tls_ca_cert_path'] = ca_cert_path
     return {
@@ -6789,7 +6885,7 @@ def build_external_agent_discovery_payload(
             },
             'revoke': {'op': 'revoke'},
         },
-        'cli_commands': build_external_agent_cli_commands(command_base_url, token, terminal_id),
+        'cli_commands': build_external_agent_cli_commands(command_base_url, token, terminal_id, runtime=runtime),
         'monitoring_policy': build_external_agent_monitoring_policy_payload({
             'idle_timeout_seconds': idle_timeout_seconds,
         }),
@@ -6803,32 +6899,39 @@ def build_external_agent_discovery_payload(
         },
     }
 
-def build_external_agentinfo_recommended_commands(agentinfo_path=None, agentinfo_url=None):
+def build_external_agentinfo_recommended_commands(agentinfo_path=None, agentinfo_url=None, runtime=None):
+    root = runtime['root'] if runtime else APP_DIR
     python_arg = sys.executable
-    cli_arg = str(APP_DIR / 'scripts' / 'agent_cli.py')
-    shcmd_arg = str(APP_DIR / 'scripts' / 'agent_shcmd.py')
+    cli_arg = str(root / 'scripts' / 'agent_cli.py')
+    shcmd_arg = str(root / 'scripts' / 'agent_shcmd.py')
     handoff_arg = str(EXTERNAL_AGENT_HANDOFF_PATH)
     agentinfo_arg = str(agentinfo_url or agentinfo_path or EXTERNAL_AGENT_INFO_PATH)
-    tls_args = get_external_agent_cli_tls_args()
+    tls_args = [] if runtime else get_external_agent_cli_tls_args()
+    if runtime:
+        python_arg = runtime['python_path']
+        cli_arg = str(runtime['root'] / 'scripts/agent_cli.py')
+        shcmd_arg = str(runtime['root'] / 'scripts/agent_shcmd.py')
+        handoff_arg = str(runtime['root'] / 'handoff.json')
+    quote = partial(quote_local_command, platform_name='linux' if runtime else sys.platform)
     return {
-        'discover': quote_local_command([
+        'discover': quote([
             python_arg, cli_arg, '--agentinfo', agentinfo_arg, *tls_args, 'discover',
         ]),
-        'hello_after_token_mint': quote_local_command([
+        'hello_after_token_mint': quote([
             python_arg, cli_arg, '--handoff', handoff_arg, *tls_args, 'hello',
         ]),
-        'render_after_token_mint': quote_local_command([
+        'render_after_token_mint': quote([
             python_arg, cli_arg, '--handoff', handoff_arg, *tls_args, 'render',
         ]),
-        'shcmd_after_token_mint': quote_local_command([
+        'shcmd_after_token_mint': quote([
             python_arg, shcmd_arg, '--handoff', handoff_arg, *tls_args, '--json', 'pwd',
         ]),
     }
 
-def build_external_agentinfo_status_hints():
+def build_external_agentinfo_status_hints(states=None):
     now = time.time()
     with agent_lock:
-        states = list(agent_states.values())
+        states = list(agent_states.values()) if states is None else states
         bridged_states = [
             state for state in states
             if get_bridge(state.session_token, state.terminal_id)
@@ -6851,19 +6954,22 @@ def build_external_agentinfo_status_hints():
             ),
         }
 
-def build_external_agentinfo_payload(base_url=None, agentinfo_path=None):
+def build_external_agentinfo_payload(base_url=None, agentinfo_path=None, runtime=None):
     command_base_url = build_external_agent_loopback_base_url(base_url or get_external_agent_local_base_url())
     agentinfo_url = command_base_url.rstrip('/') + '/agentinfo'
     command_endpoint = command_base_url.rstrip('/') + '/agent/external/command'
-    handoff_path = EXTERNAL_AGENT_HANDOFF_PATH
-    terminal_handoffs = build_external_agent_terminal_handoff_index()
+    root = runtime['root'] if runtime else APP_DIR
+    if runtime:
+        agentinfo_path = root / 'agentinfo.json'
+    handoff_path = root / 'handoff.json' if runtime else EXTERNAL_AGENT_HANDOFF_PATH
+    terminal_handoffs = runtime['terminal_handoffs'] if runtime else build_external_agent_terminal_handoff_index()
     skills = {}
     for name, directory in (
         ('standterm-external-agent', 'standterm-external-agent-skill'),
         ('standterm-file-transfer', 'standterm-file-transfer'),
         ('standterm-privileged-hitl', 'standterm-privileged-hitl'),
     ):
-        skill_dir = APP_DIR / 'docs' / 'examples' / directory
+        skill_dir = root / 'docs' / 'examples' / directory
         paths = {
             'path': skill_dir / 'SKILL.md',
             'boot_prompt_path': skill_dir / 'boot_prompt.txt',
@@ -6871,7 +6977,7 @@ def build_external_agentinfo_payload(base_url=None, agentinfo_path=None):
         }
         skills[name] = {
             **{key: str(value) for key, value in paths.items()},
-            'available': all(value.is_file() for value in paths.values()),
+            'available': True if runtime else all(value.is_file() for value in paths.values()),
         }
     transport = {
         'type': 'loopback_http_json',
@@ -6881,7 +6987,7 @@ def build_external_agentinfo_payload(base_url=None, agentinfo_path=None):
         'loopback_only': True,
         'tls_verify': True,
     }
-    ca_cert_path = get_external_agent_tls_ca_cert_path()
+    ca_cert_path = None if runtime else get_external_agent_tls_ca_cert_path()
     if ca_cert_path:
         transport['tls_ca_cert_path'] = ca_cert_path
     payload = {
@@ -6894,26 +7000,26 @@ def build_external_agentinfo_payload(base_url=None, agentinfo_path=None):
         'agentinfo_url': agentinfo_url,
         'command_endpoint': command_endpoint,
         'loopback_only': True,
-        'launch_dir': str(APP_DIR),
-        'runtime_dir': str(Path(agentinfo_path or EXTERNAL_AGENT_INFO_PATH).parent),
+        'launch_dir': str(root),
+        'runtime_dir': str(root) if runtime else str(Path(agentinfo_path or EXTERNAL_AGENT_INFO_PATH).parent),
         'agentinfo_path': str(agentinfo_path or EXTERNAL_AGENT_INFO_PATH),
-        'current_agentinfo_path': str(EXTERNAL_AGENT_CURRENT_INFO_PATH) if EXTERNAL_AGENT_CURRENT_INFO_PATH else None,
+        'current_agentinfo_path': str(root / 'agentinfo.json') if runtime else (str(EXTERNAL_AGENT_CURRENT_INFO_PATH) if EXTERNAL_AGENT_CURRENT_INFO_PATH else None),
         'handoff_path': str(handoff_path),
-        'handoff_exists': handoff_path.is_file(),
+        'handoff_exists': bool(terminal_handoffs) if runtime else handoff_path.is_file(),
         'handoff_contains_secret': True,
-        'terminal_handoff_directory': str(get_external_agent_handoff_directory()),
+        'terminal_handoff_directory': str(root / 'handoffs') if runtime else str(get_external_agent_handoff_directory()),
         'terminal_handoffs': terminal_handoffs,
         'transport': transport,
-        'python_path': sys.executable,
+        'python_path': runtime['python_path'] if runtime else sys.executable,
         'scripts': {
-            'agent_cli': str(APP_DIR / 'scripts' / 'agent_cli.py'),
-            'agent_jsonl': str(APP_DIR / 'scripts' / 'agent_jsonl.py'),
-            'agent_repl': str(APP_DIR / 'scripts' / 'agent_repl.py'),
-            'agent_scp': str(APP_DIR / 'scripts' / 'agent_scp.py'),
-            'agent_shcmd': str(APP_DIR / 'scripts' / 'agent_shcmd.py'),
-            'agent_type': str(APP_DIR / 'scripts' / 'agent_type.py'),
-            'agent_rsfile': str(APP_DIR / 'scripts' / 'agent_rsfile.py'),
-            'agent_mcp': str(APP_DIR / 'scripts' / 'agent_mcp.py'),
+            'agent_cli': str(root / 'scripts' / 'agent_cli.py'),
+            'agent_jsonl': str(root / 'scripts' / 'agent_jsonl.py'),
+            'agent_repl': str(root / 'scripts' / 'agent_repl.py'),
+            'agent_scp': str(root / 'scripts' / 'agent_scp.py'),
+            'agent_shcmd': str(root / 'scripts' / 'agent_shcmd.py'),
+            'agent_type': str(root / 'scripts' / 'agent_type.py'),
+            'agent_rsfile': str(root / 'scripts' / 'agent_rsfile.py'),
+            'agent_mcp': str(root / 'scripts' / 'agent_mcp.py'),
         },
         'skill': skills['standterm-external-agent'],
         'skills': skills,
@@ -6921,8 +7027,9 @@ def build_external_agentinfo_payload(base_url=None, agentinfo_path=None):
         'recommended_commands': build_external_agentinfo_recommended_commands(
             agentinfo_path=agentinfo_path,
             agentinfo_url=agentinfo_url,
+            runtime=runtime,
         ),
-        'status_hints': build_external_agentinfo_status_hints(),
+        'status_hints': build_external_agentinfo_status_hints(runtime['states'] if runtime else None),
         'monitoring_policy': build_external_agent_monitoring_policy_payload(),
         'security': {
             'tokenless': True,
@@ -7148,13 +7255,14 @@ def cleanup_external_agent_runtime_artifacts():
         except OSError:
             pass
 
-def build_external_agent_token_payload(token, record, terminal_id, base_url):
+def build_external_agent_token_payload(token, record, terminal_id, base_url, runtime=None):
     command_base_url = build_external_agent_loopback_base_url(base_url)
     discovery = build_external_agent_discovery_payload(
         command_base_url,
         token,
         terminal_id,
         idle_timeout_seconds=record.get('idle_timeout_seconds'),
+        runtime=runtime,
     )
     cli_command = discovery['cli_commands']['send_pwd']
     payload = {
@@ -7169,7 +7277,11 @@ def build_external_agent_token_payload(token, record, terminal_id, base_url):
         'cli_command': cli_command,
     }
     payload.update(discovery)
-    write_external_agent_handoff(payload)
+    if runtime:
+        payload['handoff_path'] = runtime['terminal_handoffs'][terminal_id]['handoff_path']
+        payload['terminal_handoff_path'] = payload['handoff_path']
+    else:
+        write_external_agent_handoff(payload)
     return payload
 
 def quote_local_command(args, platform_name=None):
@@ -7223,6 +7335,324 @@ def find_external_agent_dev_state(terminal_id):
             and is_external_agent_state_visible(state)
         ]
         return matches[-1] if matches else None
+
+def build_agent_tunnel_info(tunnel, include_pending=False):
+    runtime = dict(tunnel.runtime)
+    handoffs = {}
+    states = []
+    with agent_lock:
+        for terminal_id, grant in list(tunnel.grants.items()):
+            if not include_pending and not grant.get('published'):
+                continue
+            record = grant['record']
+            if validate_external_agent_record(record):
+                continue
+            state, error_code = get_external_agent_authorized_state(record)
+            if error_code:
+                continue
+            with external_agent_lock:
+                stored = external_agent_attach_store._tokens[record['token_hash']]
+                expires_at = stored.get('expires_at')
+            states.append(state)
+            handoffs[terminal_id] = {
+                'terminal_id': terminal_id,
+                'handoff_path': str(runtime['root'] / grant['path']),
+                'expires_at': expires_at,
+            }
+    runtime.update(terminal_handoffs=handoffs, states=states)
+    return build_external_agentinfo_payload(base_url=runtime['base_url'], runtime=runtime)
+
+
+def revoke_agent_tunnel_grants(tunnel, terminal_ids=None):
+    with agent_lock:
+        for terminal_id in list(tunnel.grants):
+            if terminal_ids is not None and terminal_id not in terminal_ids:
+                continue
+            grant = tunnel.grants.pop(terminal_id)
+            record = grant['record']
+            with external_agent_lock:
+                stored = external_agent_attach_store._tokens.get(record['token_hash'])
+                if stored:
+                    stored['revoked'] = True
+                    stored['revoked_at'] = time.time()
+            state = get_agent_state(record['session_token'], terminal_id, record['sid'])
+            if state:
+                record_external_agent_revoked(state, record)
+    if terminal_ids is None:
+        agent_tunnels.pop(tunnel.id, None)
+        socketio.emit('agent_tunnel_state', {
+            'terminal_id': tunnel.bridge.terminal_id, 'carrier_id': tunnel.id, 'status': 'stopped',
+        }, room=tunnel.sid)
+
+
+def agent_tunnel_panel_targets(tunnel):
+    with agent_lock:
+        return [{
+            'terminal_id': state.terminal_id, 'agent_binding_id': state.agent_binding_id,
+        } for state in agent_states.values()
+            if state.session_token == tunnel.bridge.owner_session and state.sid == tunnel.sid
+            and is_external_agent_state_visible(state)
+            and get_bridge(state.session_token, state.terminal_id)
+            and is_terminal_bridge_allowed_for_sid(
+                get_bridge(state.session_token, state.terminal_id), tunnel.sid)]
+
+
+def schedule_agent_tunnel_enrollment(state, renew=True):
+    session_token, sid = state.session_token, state.sid
+    terminal_id, binding_id = state.terminal_id, state.agent_binding_id
+
+    def grant_version(tunnel):
+        grant = tunnel.grants.get(terminal_id)
+        if not grant:
+            return None
+        with external_agent_lock:
+            stored = external_agent_attach_store._tokens.get(grant['record']['token_hash'], {})
+            return grant['record']['token_hash'], stored.get('revoked_at')
+
+    def enroll(tunnel, expected_grant):
+        # Wait for initial provisioning too; new Enable events must not be lost.
+        with tunnel.bridge.agent_tunnel_setup_lock, tunnel.setup_lock:
+            if not tunnel.active or not tunnel.ready:
+                return
+            selected = [target for target in agent_tunnel_panel_targets(tunnel)
+                        if target['terminal_id'] == terminal_id and target['agent_binding_id'] == binding_id]
+            if not selected:
+                return
+            try:
+                update_agent_tunnel_targets(
+                    tunnel, selected, replace=False, renew=renew,
+                    expected_grant=(grant_version, expected_grant),
+                )
+            except Exception:
+                with agent_lock:
+                    current = get_agent_state(session_token, terminal_id, sid)
+                    if (not is_external_agent_state_visible(current)
+                            or current.agent_binding_id != binding_id):
+                        return
+                    grant = tunnel.grants.get(terminal_id)
+                    revoke_agent_tunnel_grants(tunnel, {terminal_id})
+                    if grant and tunnel.active:
+                        tunnel.grants[terminal_id] = grant
+                if tunnel.active:
+                    socketio.emit('agent_tunnel_state', {
+                        'terminal_id': tunnel.bridge.terminal_id, 'carrier_id': tunnel.id,
+                        'status': 'sync_failed',
+                        'message': 'Could not update Agent access. Start / Renew Access to retry.',
+                    }, room=tunnel.sid)
+
+    for tunnel in list(agent_tunnels.values()):
+        if tunnel.bridge.owner_session == session_token and tunnel.sid == sid and not tunnel._closed.is_set():
+            with agent_lock:
+                expected_grant = grant_version(tunnel)
+            socketio.start_background_task(enroll, tunnel, expected_grant)
+
+
+def update_agent_tunnel_targets(tunnel, targets, replace=True, renew=True, expected_grant=None):
+    if not isinstance(targets, list):
+        raise ValueError('Invalid Agent Panel authorization.')
+    with agent_lock:
+        if expected_grant and expected_grant[0](tunnel) != expected_grant[1]:
+            return
+        selected = {}
+        for target in targets:
+            terminal_id = validate_terminal_id_payload(target)
+            if not terminal_id or terminal_id in selected:
+                raise ValueError('Invalid or duplicate terminal authorization.')
+            state = get_agent_state(tunnel.bridge.owner_session, terminal_id, tunnel.sid)
+            if (not state or not is_external_agent_state_visible(state)
+                    or not get_bridge(tunnel.bridge.owner_session, terminal_id)
+                    or not is_terminal_bridge_allowed_for_sid(
+                        get_bridge(tunnel.bridge.owner_session, terminal_id), tunnel.sid)
+                    or target.get('agent_binding_id') != state.agent_binding_id):
+                raise ValueError('Terminal authorization changed during setup.')
+            selected[terminal_id] = state
+        if not tunnel.active or not tunnel.transport.is_active():
+            raise ValueError('SSH tunnel is disconnected.')
+        removed = set(tunnel.grants) - set(selected) if replace else set()
+        old_paths = [tunnel.grants[terminal_id]['path'] for terminal_id in removed]
+        revoke_agent_tunnel_grants(tunnel, removed)
+        publishing = {}
+        for terminal_id, state in selected.items():
+            grant = tunnel.grants.get(terminal_id)
+            if grant and (validate_external_agent_record(grant['record'])
+                          or get_external_agent_authorized_state(grant['record'])[1]):
+                if not renew:
+                    continue
+                revoke_agent_tunnel_grants(tunnel, {terminal_id})
+                grant = None
+            if not grant:
+                token, record, error_code = mint_external_agent_attach_token(
+                    state.session_token, terminal_id, tunnel.sid, carrier_id=tunnel.id,
+                )
+                if error_code:
+                    raise ValueError('Cannot authorize the selected terminal: ' + error_code)
+                tunnel.grants[terminal_id] = {
+                    'token': token, 'record': record,
+                    'published': False,
+                    'path': 'handoffs/terminal-' + hashlib.sha256(terminal_id.encode()).hexdigest()[:24] + '.json',
+                }
+            publishing[terminal_id] = tunnel.grants[terminal_id]
+    for path in old_paths:
+        tunnel.remove_file(path)
+    info = build_agent_tunnel_info(tunnel, include_pending=True)
+    runtime = {**tunnel.runtime, 'terminal_handoffs': info['terminal_handoffs']}
+    for terminal_id, grant in publishing.items():
+        if terminal_id not in runtime['terminal_handoffs']:
+            raise ValueError('Terminal authorization changed during setup.')
+        payload = build_external_agent_token_payload(
+            grant['token'], grant['record'], terminal_id, runtime['base_url'], runtime=runtime,
+        )
+        tunnel.write_json(grant['path'], payload)
+        tunnel.write_json('handoff.json', payload)
+    tunnel.write_json('agentinfo.json', info)
+    with agent_lock:
+        if not tunnel.active or not tunnel.transport.is_active():
+            raise ValueError('SSH tunnel disconnected during setup.')
+        for terminal_id, grant in publishing.items():
+            if (tunnel.grants.get(terminal_id) is not grant
+                    or validate_external_agent_record(grant['record'])
+                    or get_external_agent_authorized_state(grant['record'])[1]):
+                raise ValueError('Terminal authorization changed during setup.')
+        for grant in publishing.values():
+            grant['published'] = True
+        tunnel.ready = True
+
+
+def build_agent_connect_info(info, terminal_ids, runtime_label='Core host environment'):
+    return '\n'.join([
+        'StandTerm Agent Connection Prompt',
+        'Run the agent in: ' + runtime_label + '. The loopback URL and paths below belong to that environment.',
+        'Fetch AgentInfoURL below and read the reported skill. Run discover, then hello for each intended tab and report the result.',
+        'Verify instance_id before proceeding. Do not run terminal input until the user specifies a task.',
+        'AgentInfoURL: ' + info['agentinfo_url'],
+        'Instance ID: ' + info['instance_id'],
+        'Python: ' + info['python_path'],
+        'Skill: ' + info['skill']['path'],
+        'Discover: ' + info['recommended_commands']['discover'],
+        'Authorized tabs: ' + (', '.join(terminal_ids) or 'none; authorize the intended tabs first'),
+        'Use --agentinfo with an explicit --terminal for each authorized tab. Never expose handoff tokens.',
+    ])
+
+
+def build_agent_connection_activity(records):
+    terminals = {}
+    with agent_lock:
+        for record in records:
+            with external_agent_lock:
+                current, error_code = external_agent_attach_store.validate_hash(record['token_hash'])
+            if error_code:
+                continue
+            state, error_code = get_external_agent_authorized_state(current)
+            if error_code:
+                continue
+            terminal_id = current['terminal_id']
+            last_request_at = current.get('last_request_at')
+            previous = terminals.get(terminal_id, {}).get('last_request_at')
+            terminals[terminal_id] = {
+                'terminal_id': terminal_id,
+                'mode': state.mode,
+                'last_request_at': max(previous or 0, last_request_at or 0) or None,
+            }
+    return list(terminals.values())
+
+
+@socketio.on('agent_connect_info')
+def on_agent_connect_info():
+    session_token = socket_session_tokens.get(request.sid)
+    if not session_token or not (
+            is_local_client_ip(socket_client_ips.get(request.sid, 'unknown'))
+            or socket_browser_authorized.get(request.sid, False)):
+        return {'status': 'failed', 'message': 'Agent connection info requires a local or authorized browser.'}
+    info = build_external_agentinfo_payload()
+    with external_agent_lock:
+        records = [dict(record) for record in external_agent_attach_store._tokens.values()
+                   if record['session_token'] == session_token and record['sid'] == request.sid
+                   and not record.get('carrier_id')]
+    activity = build_agent_connection_activity(records)
+    return {
+        'status': 'ok', 'agentinfo_url': info['agentinfo_url'],
+        'connect_info': build_agent_connect_info(info, [entry['terminal_id'] for entry in activity]),
+        'terminals': activity,
+    }
+
+
+def agent_tunnel_status(tunnel):
+    if not tunnel or not tunnel.ready or not tunnel.active:
+        return {
+            'status': 'stopped', 'terminal_ids': [],
+            'cleanup_pending': bool(tunnel and (tunnel._forward_pending.is_set() or not tunnel._cleanup_done.is_set())),
+        }
+    info = build_agent_tunnel_info(tunnel)
+    endpoint = tunnel.bridge.sftp_endpoint() or {}
+    ssh_context = {'ssh_tab': tunnel.bridge.terminal_id}
+    ssh_context.update({key: endpoint[key] for key in ('host', 'port', 'user') if key in endpoint})
+    return {
+        'status': 'ready',
+        'carrier_id': tunnel.id,
+        'agentinfo_url': info['agentinfo_url'],
+        'verified_at': tunnel.verified_at,
+        'ssh_context': ssh_context,
+        'terminals': build_agent_connection_activity([
+            grant['record'] for terminal_id, grant in list(tunnel.grants.items())
+            if terminal_id in info['terminal_handoffs']
+        ]),
+        'terminal_ids': list(info['terminal_handoffs']),
+        'connect_info': build_agent_connect_info(
+            info, list(info['terminal_handoffs']), runtime_label='SSH host ' + json.dumps(ssh_context)),
+    }
+
+
+@socketio.on('agent_tunnel')
+def on_agent_tunnel(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    if not session_token or not terminal_id:
+        return {'status': 'failed', 'message': 'Invalid terminal.'}
+    bridge = get_allowed_bridge(session_token, terminal_id, request.sid)
+    if not isinstance(bridge, SSHBridge):
+        return {'status': 'failed', 'message': 'Agent tunnel requires a connected SSH terminal.'}
+    operation = data.get('operation')
+    tunnel = getattr(bridge, 'agent_tunnel', None)
+    if tunnel and tunnel.sid != request.sid and tunnel.active:
+        return {'status': 'failed', 'message': 'This SSH tunnel belongs to another browser viewer.'}
+    if operation == 'status':
+        return agent_tunnel_status(tunnel)
+    if operation == 'stop':
+        if tunnel:
+            tunnel.close()
+        return agent_tunnel_status(tunnel)
+    if operation not in {'apply', 'check'}:
+        return {'status': 'failed', 'message': 'Invalid tunnel operation.'}
+    if operation == 'check' and (not tunnel or not tunnel.ready):
+        return agent_tunnel_status(tunnel)
+    if tunnel and tunnel._closed.is_set() and (tunnel._forward_pending.is_set() or not tunnel._cleanup_done.is_set()):
+        return {'status': 'failed', 'message': 'Previous tunnel cleanup is pending. Retry after it finishes; reconnect SSH if its server never replies.'}
+    if not hasattr(bridge, 'agent_tunnel_setup_lock'):
+        bridge.agent_tunnel_setup_lock = threading.Lock()
+    if not bridge.agent_tunnel_setup_lock.acquire(blocking=False):
+        return {'status': 'failed', 'message': 'Agent tunnel setup is already in progress.'}
+    try:
+        if operation == 'check':
+            tunnel.check_connection()
+            return agent_tunnel_status(tunnel)
+        if not tunnel or not tunnel.active:
+            tunnel = AgentTunnel(
+                bridge, request.sid, APP_DIR, build_info=build_agent_tunnel_info,
+                dispatch=process_external_agent_command, revoke=revoke_agent_tunnel_grants,
+            )
+            bridge.agent_tunnel = tunnel
+            agent_tunnels[tunnel.id] = tunnel
+            tunnel.start()
+        with tunnel.setup_lock:
+            update_agent_tunnel_targets(tunnel, agent_tunnel_panel_targets(tunnel))
+        return agent_tunnel_status(tunnel)
+    except Exception as exc:
+        if tunnel:
+            tunnel.close()
+        return {'status': 'failed', 'message': str(exc)}
+    finally:
+        bridge.agent_tunnel_setup_lock.release()
+
 
 @app.route('/agentinfo', methods=['GET'])
 def external_agentinfo():
@@ -8131,12 +8561,16 @@ def on_agent_attach(data):
         return
     bridge.attach(request.sid)
     with agent_lock:
+        previous = get_agent_state(session_token, terminal_id, request.sid)
+        enabled = not previous or previous.mode == AGENT_MODE_DISABLED
         state = get_or_create_agent_state(session_token, terminal_id, request.sid)
         if state.mode == AGENT_MODE_DISABLED:
             state.mode = AGENT_MODE_OBSERVE
             bump_agent_mode_version(state)
         record_agent_audit_event(state, AGENT_AUDIT_VIEWER_ATTACH)
         emit_agent_state(request.sid, state)
+    if enabled:
+        schedule_agent_tunnel_enrollment(state)
 
 @socketio.on(AGENT_EVENT_DETACH)
 def on_agent_detach(data):
@@ -8228,6 +8662,8 @@ def on_agent_mode_set(data):
             sid=request.sid,
         )
         emit_agent_state(request.sid, state)
+    if previous_mode == AGENT_MODE_DISABLED and mode != AGENT_MODE_DISABLED:
+        schedule_agent_tunnel_enrollment(state)
 
 @socketio.on(AGENT_EVENT_PAUSE)
 def on_agent_pause(data):
@@ -8292,6 +8728,7 @@ def on_agent_resume(data):
             sid=request.sid,
         )
         emit_agent_state(request.sid, state)
+    schedule_agent_tunnel_enrollment(state, renew=False)
 
 @socketio.on(AGENT_EVENT_PRIVACY_SET)
 def on_agent_privacy_set(data):
@@ -8779,6 +9216,11 @@ def validate_agent_file_copy_execution(state, action):
         return None, None, AGENT_ERROR_ACTION_NOT_ALLOWED
     if action.get('status') not in {AGENT_STATUS_APPROVED, AGENT_STATUS_RUNNING}:
         return None, None, action.get('error_code') or AGENT_ERROR_ACTION_NOT_WRITABLE
+    for key in ('external_agent_token_hash', 'destination_external_agent_token_hash'):
+        if action.get(key):
+            error_code = validate_external_agent_record({'token_hash': action[key]})
+            if error_code:
+                return None, None, error_code
     if action.get('session_id') != state.session_id:
         return None, None, AGENT_ERROR_STALE_PROPOSAL
     if action.get('viewer_id') != state.viewer_id:
@@ -9126,11 +9568,12 @@ def record_external_agent_attached(state, record):
 
 
 def revoke_external_agent_record(token):
-    with external_agent_lock:
-        record, error_code = external_agent_attach_store.revoke(token)
-        if record:
-            remove_external_agent_handoff_for_record(record)
-        return record, error_code
+    with agent_lock:
+        with external_agent_lock:
+            record, error_code = external_agent_attach_store.revoke(token)
+            if record:
+                remove_external_agent_handoff_for_record(record)
+            return record, error_code
 
 
 def record_external_agent_revoked(state, record):
@@ -9243,6 +9686,7 @@ external_agent_wait_command_handler = ExternalAgentWaitCommandHandler(
 
 
 external_agent_send_action_executor = ExternalAgentSendActionExecutor(
+    validate_record=validate_external_agent_record,
     agent_lock=agent_lock,
     is_context_allowed=is_agent_context_allowed,
     is_human_input_lease_active=is_agent_human_input_lease_active,
@@ -10600,6 +11044,61 @@ def on_setup_localhost_key_access(data):
         room=request.sid,
     )
 
+@socketio.on('ssh_host_key_action')
+def on_ssh_host_key_action(data):
+    if not socket_session_tokens.get(request.sid):
+        return
+    data = data if isinstance(data, dict) else {}
+    terminal_id = validate_terminal_id_payload(data)
+    if not terminal_id:
+        return
+    client_ip = socket_client_ips.get(request.sid, 'unknown')
+    browser_authorized = socket_browser_authorized.get(request.sid, False)
+    result = {'status': 'failed', 'message': 'Invalid SSH host key action.', 'error_code': 'ssh_host_key_invalid_action'}
+    if not is_ssh_allowed_for_client(client_ip, browser_authorized=browser_authorized):
+        result.update(message='SSH access requires a local client or browser authorization.', error_code='ssh_remote_unauthorized')
+    elif data.get('operation') == 'forget':
+        pending_backend_actions.discard(request.sid)
+        payload, error = validate_start_ssh_payload({
+            'connection_type': CONNECTION_TYPE_SSH,
+            'terminal_id': terminal_id,
+            'host': data.get('host'),
+            'port': data.get('port'),
+        }, client_ip, browser_authorized=browser_authorized)
+        if error:
+            result['message'] = error.get('message') if isinstance(error, dict) else error
+        else:
+            try:
+                plugin = TERMINAL_BACKEND_REGISTRY.get(CONNECTION_TYPE_SSH)
+                action_id, action = plugin.prepare_host_key_forget(request.sid, payload)
+                if action:
+                    socketio.emit('ssh_output', {
+                        'message_type': 'host_key_prompt', 'terminal_id': terminal_id,
+                        'action_type': action.action_type, 'action_id': action_id,
+                        'action_message': action.message, 'action_question': action.question,
+                    }, room=request.sid)
+                    return
+                result = {'status': 'success', 'message': 'No saved SSH host key exists for this host and port.'}
+            except (OSError, ValueError) as exc:
+                result['message'] = str(exc)
+    elif data.get('operation') in {'confirm', 'cancel'}:
+        action, error = pending_backend_actions.get(
+            request.sid, data.get('action_id') if isinstance(data.get('action_id'), str) else '',
+            secrets.compare_digest, consume=True,
+        )
+        if action and action.action_type in {'confirm_ssh_host_key', 'forget_ssh_host_key'} and action.terminal_id == terminal_id:
+            if data['operation'] == 'cancel':
+                return
+            plugin = TERMINAL_BACKEND_REGISTRY.get(CONNECTION_TYPE_SSH)
+            result = plugin.execute_backend_action(action)
+        else:
+            result.update(message='No current SSH host key confirmation is available. Try again.',
+                          error_code=error or 'ssh_host_key_invalid_action')
+    socketio.emit('ssh_output', {
+        'message_type': 'host_key_result', 'terminal_id': terminal_id,
+        'message': result['message'], 'status': result['status'], 'error_code': result.get('error_code'),
+    }, room=request.sid)
+
 @socketio.on('ssh_input')
 def on_ssh_input(data):
     session_token = socket_session_tokens.get(request.sid)
@@ -10689,6 +11188,9 @@ def on_disconnect(reason=None):
     socket_settings_admin_grant_ids.pop(request.sid, None)
     agent_viewer_ids.pop(request.sid, None)
     if session_token:
+        for tunnel in list(agent_tunnels.values()):
+            if tunnel.sid == request.sid:
+                tunnel.close()
         browser_ssh_sign_request_store.discard(session_token, sid=request.sid)
         sftp_upload_ticket_store.discard(session_token, sid=request.sid)
         sftp_download_ticket_store.discard(session_token, sid=request.sid)

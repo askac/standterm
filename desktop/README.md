@@ -15,12 +15,12 @@ not a Gatekeeper-qualified public release. No signing account or private key is
 needed for a local build. Intel/Rosetta acceptance is not implied.
 
 New build filenames pair the independent Desktop and bundled Core versions:
-`StandTerm-Desktop-0.4.5-2.11.0-mac-arm64.dmg` and
-`StandTerm-Desktop-0.4.5-2.11.0-win32-x64-Setup.exe` for future matching builds.
-These are naming examples, not published download links. Core 2.11.0 is a
+`StandTerm-Desktop-0.4.5-2.12.0-mac-arm64.dmg` and
+`StandTerm-Desktop-0.4.5-2.12.0-win32-x64-Setup.exe` for future matching builds.
+These are naming examples, not published download links. Core 2.12.0 is a
 source-only release; existing 0.4.3 downloads are unchanged. Delivery archives
 and checksum sidecars retain the paired label; a future matching Desktop tag
-would be `desktop-v0.4.5-2.11.0`.
+would be `desktop-v0.4.5-2.12.0`.
 
 Staging writes `release-identity.json` from the staged package/lock versions and
 the manifest-hashed `core_version.py`. The builder revalidates this identity and
@@ -34,7 +34,7 @@ The 0.4.5 evaluation source includes updated Core terminal reads, transcript
 splitting, token-tab countdowns, asynchronous launcher status polling and the
 experimental IME anchor, plus guarded Desktop clipboard controls. Earlier local
 0.4.5 candidates contain Core `2.11.0-dev`; they must not be renamed or presented
-as containing Core 2.11.0. Rebuild both platforms and verify their manifests
+as containing Core 2.12.0. Rebuild both platforms and verify their manifests
 before publishing paired installers. Real macOS IME candidate placement and
 native clipboard/upgrade acceptance remain separate manual checks.
 
@@ -91,6 +91,68 @@ window and bootstrap in a disposable runtime. Its setup choice is scripted.
 Smoke camera/microphone denial probes use synthetic media devices, keeping them
 independent of the operator's physical audio/video hardware; permission checks
 remain enabled. Real device/OS permission behavior still needs manual acceptance.
+
+## Advanced Core source and recovery
+
+Packaged Desktop builds expose **StandTerm > Core source (Advanced)...** in the
+native app menu. Bundled Core remains the default. Git mode is optional and
+requires an already installed, usable Git in the selected Windows, macOS or WSL
+environment. Installing Git on Windows does not satisfy WSL mode. Management and
+recovery use the selected base Python; they do not require a working Core or its
+venv. Source-run development keeps its existing checkout workflow.
+
+**Enable Git Core** creates one private checkout of
+`https://github.com/askac/standterm.git`, branch `main`, and its own Python venv.
+**Update Git Core** fetches and fast-forwards that checkout after Desktop has
+stopped its owned backend. Updates never stash, reset, clean or overwrite local
+changes. Local modifications may run in this advanced mode, but updating a dirty,
+diverged, renamed-branch or changed-origin checkout is refused. Interrupted work
+is retained for retry or manual repair. There is no background update service or
+automatic rollback, and Git never replaces the installed Desktop shell.
+
+Git source files do not match the installation's bundle hashes; enabling Git
+waives only that source equality check. Owned-path and interpreter validation,
+the setup/backend lifetime lock, private control pipe, authenticated backend
+identity, loopback restrictions and renderer sandbox remain active. About and
+Diagnostics show the Git commit and local-change status observed at launch.
+Changed `requirements.txt` requires dependency preparation before launch; use
+**Prepare Git environment** if requirements were edited locally. Dependency
+installation can execute code and requires the configured package index.
+
+Before enabling Git, Desktop retains a verified `core.tar.gz` plus manifest from
+the currently installed Core. **Restore bundled Core** also creates this snapshot
+when needed. The archive is outside the Git checkout and is checked against the
+installed manifest, not a mutable Git HEAD. Normal bundled startup continues its
+existing hash checks without requiring this cache. An invalid cache is retained
+under a separate name and recreated from the verified installed bundle.
+
+Restore reuses a healthy bundled runtime. If it is damaged, Desktop creates a
+fresh runtime and venv, then remembers that recovery identity for later launches.
+The damaged source, environment and data are retained. Recovery restores Core
+files; it does not roll back user data or promise identical dependency versions.
+Missing Git never prevents bundled recovery. Missing base Python or damaged
+installed application files still require repairing Python or reinstalling
+Desktop. Startup or later Core failure opens a native retry/recovery dialog,
+independent of the Core web UI.
+
+The runtime base is `%LOCALAPPDATA%\StandTermDesktop` on Windows,
+`~/Library/Application Support/StandTermDesktop` on macOS, and
+`~/.local/share/standterm-desktop` inside WSL. Git uses `git-core/repo`,
+`git-core/tools/<platform-venv>` and `git-core/setup.log`. Recovery uses
+`core-recovery/<installed-bundle-id>/`, with `selected.json` identifying a runtime
+under `restored/<recovery-id>/`. The shorter runtime path avoids Windows DLL path
+limits. These environments are retained by the installer's optional bundled-venv
+cleanup. Core source preferences live in the existing Desktop mode profile's
+`core-source.json`; Python/distro selection stays in `launcher.json`.
+
+Changing source restarts Desktop and closes terminal sessions after confirmation.
+Core authorization and session-recovery files remain local to each source and are
+not migrated; switching may require reauthorization. Browser localStorage and
+IndexedDB keep their existing per-origin behavior. A changed Desktop version or
+bundle ID resets the source to bundled and clears pending Git operations.
+Successful Windows installer preparation also resets both, including a same-version
+reinstall. Replacing the same version of a macOS app by drag-copy does not reset
+its persistent preferences; use **Restore bundled Core** in that case.
 
 ## Windows x64 evaluation installer
 
@@ -239,7 +301,7 @@ that uncommitted changes are already a GitHub release. Build staging never copie
 the development venv or `node_modules`. The new directory gets Windows build
 dependencies; the source checkout's Linux/WSLg `node_modules` is untouched.
 
-The `StandTerm-Desktop-0.4.5-2.11.0-win32-x64-Setup.exe` is under `out/`; the unpacked
+The `StandTerm-Desktop-0.4.5-2.12.0-win32-x64-Setup.exe` is under `out/`; the unpacked
 application is under `out/win-unpacked/`. Packaging uses
 [electron-builder's assisted NSIS target](https://www.electron.build/nsis.html),
 with pinned build dependencies and scoped custom installer hooks. Squirrel
@@ -549,7 +611,7 @@ managed Core bundle SHA-256 identity when available. The same Core details are
 in Diagnostics. Core reports its version from `core_version.py`, independently
 of the Electron package version. Source checkouts have no managed build identity;
 older backends that omit version metadata show Unknown, never an inferred Git
-tag. The current source pairing is Desktop 0.4.5 / Core 2.11.0. The Core source
+tag. The current source pairing is Desktop 0.4.5 / Core 2.12.0. The Core source
 release does not publish or qualify Desktop installers. The Agent menu and
 expanded Core payload postdate the
 published 0.4.1 installer and the earlier macOS 0.4.2 candidate; they require a
@@ -662,7 +724,7 @@ Evaluation tradeoffs:
 - Platform passkeys are not part of desktop bootstrap. This prototype's IP
   origin intentionally cannot register WebAuthn credentials.
 - There is no automatic backend restart, OS login autostart,
-  OS keychain integration or updater yet.
+  OS keychain integration or automatic updater yet.
 
 Keep Electron patched: it ships Chromium and Node.js, independently of the
 user's installed Edge/Chrome. Official support covers the latest three major
@@ -714,6 +776,23 @@ behavior, pipe-EOF exit, port closure and runtime artifact cleanup.
 
 `desktop/test/bootstrap_smoke.py` checks manifest tampering, traversal/link
 rejection, existing-data preservation and retry after dependency failure.
+`desktop/test/core_manager_smoke.py` uses local temporary Git repositories for
+update/refusal, readiness, archive tampering, recovery selection and cancellation
+checks. `test/core-source.test.cjs` covers source routing, installation resets,
+pending actions, native recovery choices and confirmed backend termination.
+`desktop/test/core_manager_integration.py <stage>` runs through a prepared test
+venv, copies its dependencies into disposable runtimes, and checks the staged
+installed bridge, real Core authentication, live leases, local Git updates and a
+fresh-process recovery launch. It does not download packages or qualify dependency
+resolution from an index. The test's recovery preparation uses copied fixture
+dependencies; the regular bootstrap lifecycle is covered separately.
+`test/core-failure-smoke.cjs`, run with checkout Electron, exercises packaged
+startup failure with scripted native dialog choices and an intercepted relaunch.
+Its `--capture-cancel` variant verifies that canceling capture shutdown saves no
+Core action; `--exit-during-load <test-venv-python> <stage>` stops a real backend
+after HTTP verification and page load to check the native recovery path before
+Desktop declares itself ready. These tests use isolated profiles and do not
+replace native macOS or installer lifecycle acceptance.
 `desktop/test/bootstrap-integration.cjs <prepared-platform-venv-python> <staged-bundle>`
 creates a fresh test runtime under ignored `desktop/dist/`, installs dependencies
 and verifies reuse. It requires internet access. Keep its stdin open while setup

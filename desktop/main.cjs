@@ -8,7 +8,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const { backendCommand, parseHandoff, allowedRequest, allowedNavigation } = require('./policy.cjs');
 const { DesktopCapture } = require('./capture.cjs');
-const { preparePackagedBackend, focusSetup, cancelSetup, confirmSetupQuit } = require('./setup.cjs');
+const { preparePackagedBackend, manageCore, focusSetup, cancelSetup, confirmSetupQuit } = require('./setup.cjs');
+const { installedStore, coreController } = require('./core-source.cjs');
+const { stopOwnedBackend } = require('./backend-stop.cjs');
 const { isSquirrelEvent, handleSquirrelEvent } = require('./squirrel-events.cjs');
 const { MODES, APP_ID, desktopMode } = require('./desktop-mode.cjs');
 const { startWithPort, parsePortConflict, checkHostPort } = require('./port.cjs');
@@ -83,6 +85,10 @@ let quitting = false;
 let stopped = false;
 let exitCode = 0;
 let booting = true;
+let coreStore;
+let coreManager;
+let restartRequest;
+let failurePending;
 const diagnostics = createDiagnostics(path.join(app.getPath('userData'), 'diagnostics'), {
   mode, version: app.getVersion(),
 });
@@ -121,10 +127,8 @@ function launchBackend(preparedCommand, port = 0) {
       diagnostics.write('backend_exit', { exitCode: code, expected: expectedBackendExits.has(backend) || quitting });
       clearTimeout(timer);
       if (!received) reject(new Error('Backend exited before startup. Check its Python dependencies.'));
-      else if (!quitting && !expectedBackendExits.has(backend)) {
-        exitCode = 1;
-        if (!smoke) dialog.showErrorBox('StandTerm backend stopped', 'Restart StandTerm Desktop to start a new session.');
-        app.quit();
+      else if (!booting && !quitting && !expectedBackendExits.has(backend)) {
+        void handleCoreFailure(new Error('The owned Core backend stopped unexpectedly.'));
       }
     });
     child.stdout.on('data', chunk => {
@@ -229,7 +233,15 @@ function createTray() {
 
 async function start() {
   diagnostics.write('setup_start');
-  const prepared = app.isPackaged && !smoke ? await preparePackagedBackend(mode) : null;
+  if (app.isPackaged && !smoke) {
+    coreStore = await installedStore(app.getPath('userData'), process.resourcesPath, app.getVersion());
+    coreManager = coreController({ store: coreStore, prepareBundled: () => preparePackagedBackend(mode),
+      manage: action => manageCore(mode, action), dialog,
+      openLogs: () => shell.openPath(path.dirname(diagnostics.file)),
+      restart: action => { restartRequest = { action }; app.quit(); },
+    });
+  }
+  const prepared = coreManager ? await coreManager.prepare() : null;
   diagnostics.write('setup_ready');
   const settingsPath = path.join(app.getPath('userData'), `port-${mode}.json`);
   const testPort = smoke ? process.env.STANDTERM_DESKTOP_TEST_PORT : undefined;
@@ -343,15 +355,17 @@ async function start() {
   });
   const connectionInfo = agentConnectionInfo({ origin: handoff.origin, instanceId: handoff.instance_id, mode });
   const coreVersion = handoff.core_version || 'Unknown (older Core)';
-  const coreBuild = handoff.core_bundle_id || 'Source checkout / no managed bundle identity';
+  const coreBuild = prepared?.source === 'git' ? prepared.coreSource
+    : handoff.core_bundle_id || 'Source checkout / no managed bundle identity';
   const pythonVersion = handoff.python_version || 'Unknown (older Core)';
-  const aboutDetails = `Core version: ${coreVersion}\nCore bundle SHA-256: ${coreBuild}\n`
+  const buildLabel = prepared?.source === 'git' ? 'Core Git revision' : 'Core bundle SHA-256';
+  const aboutDetails = `Core version: ${coreVersion}\n${buildLabel}: ${coreBuild}\n`
     + `Backend: ${MODES[mode]}\nPython: ${pythonVersion}\n`
     + `Electron: ${process.versions.electron}\nChromium: ${process.versions.chrome}\nNode.js: ${process.versions.node}\n`
     + `Platform: ${process.platform} / ${process.arch}\n\nEvaluation build; updates are installed manually.`;
   const openStatus = createStatusWindow(win, () => ({ rows: [
     ['Desktop version', app.getVersion()], ['Backend mode', MODES[mode]],
-    ['Core version', coreVersion], ['Core bundle SHA-256', coreBuild], ['Python version', pythonVersion],
+    ['Core version', coreVersion], [buildLabel, coreBuild], ['Python version', pythonVersion],
     ['Backend URL', handoff.origin], ['Instance ID', handoff.instance_id],
     ['Platform', `${process.platform} / ${process.arch}`],
     ['Electron / Chromium / Node', `${process.versions.electron} / ${process.versions.chrome} / ${process.versions.node}`],
@@ -368,6 +382,9 @@ async function start() {
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { id: 'standterm', label: 'StandTerm', submenu: [
       commands.item('settings'),
+      ...(coreManager ? [{ label: 'Core source (Advanced)...', click: () => {
+        void coreManager.showManager().catch(error => dialog.showErrorBox('Core management unavailable', error.message));
+      } }] : []),
       { label: 'Capture Settings...', click: () => capture.configure() },
       browserAccess.menu,
       { type: 'separator' },
@@ -470,13 +487,13 @@ async function start() {
     if (isMainFrame && capture.active) void capture.stop();
   });
   contents.on('render-process-gone', () => {
-    exitCode = 1;
-    app.quit();
+    void handleCoreFailure(new Error('The Core renderer stopped unexpectedly.'));
   });
   await win.loadURL(toolbar.url);
   if (process.platform !== 'darwin') win.setMenuBarVisibility(false);
   toolbar.layout();
   await contents.loadURL(`${handoff.origin}/${smoke ? '?debug=1' : ''}`);
+  if (child.exitCode !== null || child.signalCode !== null) throw new Error('The owned Core exited during startup.');
   diagnostics.write('window_ready', { port: Number(new URL(handoff.origin).port) });
   booting = false;
   if (smoke) {
@@ -496,13 +513,30 @@ async function start() {
 }
 
 async function stopBackend() {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return;
-  expectedBackendExits.add(child);
-  await new Promise(resolve => {
-    const timer = setTimeout(() => { child.kill(); resolve(); }, 5000);
-    child.once('exit', () => { clearTimeout(timer); resolve(); });
-    child.stdin.end();
-  });
+  if (child) expectedBackendExits.add(child);
+  await stopOwnedBackend(child);
+}
+
+async function handleCoreFailure(error) {
+  if (failurePending || quitting) return;
+  failurePending = true;
+  booting = true;
+  diagnostics.write('core_failed', { code: error.code });
+  try {
+    await stopBackend();
+    if (coreManager) {
+      if (await coreManager.failure(error) === 'quit') app.quit();
+    } else {
+      exitCode = 1;
+      if (smoke) console.error(error.stack || error.message);
+      else dialog.showErrorBox('StandTerm Desktop could not start', `${error.message}\n\nDiagnostics: ${diagnostics.file}`);
+      app.quit();
+    }
+  } catch (failure) {
+    restartRequest = null;
+    dialog.showErrorBox('StandTerm Desktop could not recover', failure.message);
+    app.quit();
+  } finally { failurePending = false; }
 }
 
 async function finishBackendAndBrowser() {
@@ -522,18 +556,23 @@ app.on('before-quit', event => {
   quitting = true;
   diagnostics.write('shutdown');
   (async () => {
-    if (!await confirmSetupQuit()) { quitting = false; return; }
+    if (!await confirmSetupQuit()) { restartRequest = null; quitting = false; return; }
     if (capture?.active) {
       const allowed = smoke ? (await capture.stop(), true) : await capture.confirmStop('quitting StandTerm');
-      if (!allowed) { quitting = false; return; }
+      if (!allowed) { restartRequest = null; quitting = false; return; }
     }
     cancelSetup();
     await finishBackendAndBrowser();
+    if (restartRequest) {
+      if (restartRequest.action) await coreStore.queue(restartRequest.action);
+      app.relaunch();
+    }
     stopped = true;
     if (tray) tray.destroy();
     app.exit(exitCode);
-  })().catch(async () => {
-    try { await finishBackendAndBrowser(); } catch { /* Next startup resets stale authentication before navigation. */ }
+  })().catch(error => {
+    restartRequest = null;
+    if (!smoke) dialog.showErrorBox('StandTerm could not complete shutdown', error.message);
     stopped = true;
     app.exit(1);
   });
@@ -548,10 +587,7 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(start).catch(error => {
     diagnostics.write('startup_failed', { code: error.code });
     if (error.code === 'SETUP_CANCELED') { app.quit(); return; }
-    exitCode = 1;
-    if (smoke) console.error(error.stack || error.message);
-    else dialog.showErrorBox('StandTerm Desktop could not start', `${error.message}\n\nDiagnostics: ${diagnostics.file}`);
-    app.quit();
+    void handleCoreFailure(error);
   });
 }
 process.on('SIGINT', () => app.quit());

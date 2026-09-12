@@ -11,6 +11,10 @@ import time
 from pathlib import Path
 
 from .base import BackendAction, BackendSettingSchema, BackendStartFieldSchema, TerminalBackendPlugin, TerminalBridge
+from .ssh_host_keys import (
+    HOST_KEY_ACTION_TYPES, ConfirmHostKeyPolicy, HostKeyConfirmationRequired,
+    SSHHostKeyStore, fingerprint, host_key_name,
+)
 from runtime_logging import log_message
 
 
@@ -101,12 +105,16 @@ class SSHBridge(TerminalBridge):
         ssh_term,
         local_public_key_types,
         request_browser_signature=None,
+        known_hosts_path=None,
     ):
         super().__init__(owner_session, terminal_id)
         self._get_paramiko = get_paramiko
         self._ssh_term = ssh_term
         self._local_public_key_types = local_public_key_types
         self._request_browser_signature = request_browser_signature
+        self._host_key_store = SSHHostKeyStore(get_paramiko(), known_hosts_path)
+        self._host_key_snapshot = None
+        self._pending_host_key = None
         self._browser_signer_sid = None
         self._sftp_lock = threading.Lock()
         self._sftp_file_refs_lock = threading.Lock()
@@ -645,11 +653,16 @@ class SSHBridge(TerminalBridge):
         if self.ssh:
             self.ssh.close()
         self.ssh = paramiko_module.SSHClient()
-        self.ssh.load_system_host_keys()
+        if self._host_key_snapshot is not None:
+            for key in self._host_key_snapshot['keys']:
+                keys = self.ssh.get_host_keys()
+                target = self._host_key_snapshot['host_key_name']
+                if not keys.lookup(target) or key.get_name() not in keys.lookup(target):
+                    keys.add(target, key.get_name(), key)
         if trust_unknown_host:
             self.ssh.set_missing_host_key_policy(paramiko_module.AutoAddPolicy())
         else:
-            self.ssh.set_missing_host_key_policy(paramiko_module.RejectPolicy())
+            self.ssh.set_missing_host_key_policy(ConfirmHostKeyPolicy())
 
     @staticmethod
     def _is_local_target(host):
@@ -831,6 +844,15 @@ class SSHBridge(TerminalBridge):
         return self._append_public_key_entry_to_authorized_keys(missing_entries[0])
 
     def prepare_backend_action(self, action_type, payload, expires_at, message=None, question=None):
+        if action_type == 'confirm_ssh_host_key' and self._pending_host_key is not None:
+            return BackendAction(
+                action_type=action_type,
+                terminal_id=payload['terminal_id'],
+                metadata={'snapshot': self._host_key_snapshot, 'key': self._pending_host_key},
+                expires_at=expires_at,
+                message=message,
+                question=question,
+            )
         if action_type != 'offer_localhost_key_setup':
             return None
         missing_entries = self._get_missing_local_public_keys()
@@ -852,6 +874,17 @@ class SSHBridge(TerminalBridge):
 
     @classmethod
     def execute_backend_action(cls, action, **bridge_kwargs):
+        if action.action_type in HOST_KEY_ACTION_TYPES:
+            try:
+                store = SSHHostKeyStore(bridge_kwargs['get_paramiko'](), bridge_kwargs.get('known_hosts_path'))
+                store.update(action.metadata['snapshot'], action.metadata.get('key'))
+                return {
+                    'status': 'success',
+                    'message': ('SSH host key forgotten.' if action.action_type == 'forget_ssh_host_key'
+                                else 'SSH host key saved. Connect again to continue.'),
+                }
+            except (OSError, ValueError) as exc:
+                return {'status': 'failed', 'message': str(exc), 'error_code': 'ssh_host_key_update_failed'}
         if action.action_type != 'offer_localhost_key_setup':
             return {
                 'status': 'failed',
@@ -941,6 +974,8 @@ class SSHBridge(TerminalBridge):
         except paramiko_module.AuthenticationException as exc:
             auth_errors.append(f"agent/default keys: {exc}")
         except Exception as exc:
+            if isinstance(exc, getattr(paramiko_module, 'BadHostKeyException', ())):
+                raise
             auth_errors.append(f"agent/default keys: {exc}")
 
         for key_path in self._iter_local_private_key_files():
@@ -968,6 +1003,8 @@ class SSHBridge(TerminalBridge):
                 log_message(f"[+] Local key auth succeeded via {key_path.name} for {self.sid}")
                 return True, None
             except Exception as exc:
+                if isinstance(exc, getattr(paramiko_module, 'BadHostKeyException', ())):
+                    raise
                 auth_errors.append(f"{key_path.name}: {exc}")
 
         return False, '; '.join(auth_errors)
@@ -1004,6 +1041,8 @@ class SSHBridge(TerminalBridge):
     def connect(self, host, port, user, password=None, browser_key=None, cols=80, rows=24):
         paramiko_module = self._get_paramiko()
         try:
+            self._pending_host_key = None
+            self._host_key_snapshot = self._host_key_store.snapshot(host, port)
             pwd = password if password else ""
             log_message(f"[*] Attempting SSH connection for {user!r} at {host!r}:{port}...")
 
@@ -1053,6 +1092,8 @@ class SSHBridge(TerminalBridge):
             }
             log_message(f"[+] SSH connection established for {self.sid}")
             return True, None
+        except HostKeyConfirmationRequired as exc:
+            return False, self._host_key_confirmation_hint(exc.key)
         except BrowserSSHKeyError as exc:
             log_message(f"[!] Browser SSH key error: {exc}")
             return False, {
@@ -1060,9 +1101,31 @@ class SSHBridge(TerminalBridge):
                 'error_code': 'ssh_browser_key_failed',
             }
         except Exception as e:
+            if isinstance(e, getattr(paramiko_module, 'BadHostKeyException', ())):
+                return False, self._host_key_confirmation_hint(e.key)
             error_msg = str(e)
             log_message(f"[!] SSH Connection Error: {error_msg}")
             return False, {'message': error_msg}
+
+    def _host_key_confirmation_hint(self, key):
+        self._pending_host_key = key
+        saved = self._host_key_snapshot['keys']
+        target = self._host_key_snapshot['host_key_name']
+        message = f'SSH host key {"changed" if saved else "is unknown"} for {target}.'
+        details = [message]
+        if saved:
+            details.append('Saved: ' + '; '.join(fingerprint(item) for item in saved))
+        details.append('Received: ' + fingerprint(key))
+        details.append('Verify this fingerprint with the host administrator before trusting it.')
+        details.append('This updates the Core account\'s known_hosts file, shared with other SSH clients.')
+        return {
+            'message': message,
+            'error_code': 'ssh_host_key_changed' if saved else 'ssh_host_key_unknown',
+            'action_type': 'confirm_ssh_host_key',
+            'action_message': '\n'.join(details),
+            'action_question': ('Replace the saved keys for this host and port?' if saved
+                                else 'Remember this host key?'),
+        }
 
     def read_loop(self):
         log_message(f"[*] Starting SSH read loop for {self.sid}")
@@ -1422,6 +1485,10 @@ class SSHBackendPlugin(TerminalBackendPlugin):
             return None, 'Host is empty or too long.'
         if self._has_control_chars(host):
             return None, 'Host contains invalid control characters.'
+        try:
+            host_key_name(host, 22)
+        except ValueError as exc:
+            return None, str(exc)
 
         try:
             port = int(data.get('port', self._get_default_port(context=context)))
@@ -1536,7 +1603,7 @@ class SSHBackendPlugin(TerminalBackendPlugin):
             action_question = None
 
         action_id = None
-        if action_type == 'offer_localhost_key_setup':
+        if action_type in {'offer_localhost_key_setup', 'confirm_ssh_host_key'}:
             action = bridge.prepare_backend_action(
                 action_type,
                 payload,
@@ -1561,6 +1628,25 @@ class SSHBackendPlugin(TerminalBackendPlugin):
         return failure
 
     def execute_backend_action(self, action):
-        if action.action_type != 'offer_localhost_key_setup':
+        if action.action_type not in {'offer_localhost_key_setup', *HOST_KEY_ACTION_TYPES}:
             return super().execute_backend_action(action)
         return self._bridge_cls.execute_backend_action(action, **self._bridge_kwargs)
+
+    def prepare_host_key_forget(self, sid, payload):
+        store = SSHHostKeyStore(self._bridge_kwargs['get_paramiko'](), self._bridge_kwargs.get('known_hosts_path'))
+        snapshot = store.snapshot(payload['host'], payload['port'])
+        if not snapshot['keys']:
+            return None, None
+        action = BackendAction(
+            action_type='forget_ssh_host_key',
+            terminal_id=payload['terminal_id'],
+            metadata={'snapshot': snapshot},
+            expires_at=self._time_func() + self._key_setup_ttl_seconds,
+            message=(f"Saved SSH host keys for {snapshot['host_key_name']}:\n"
+                     + '\n'.join(fingerprint(key) for key in snapshot['keys'])
+                     + '\nThis also affects other SSH clients using this known_hosts file.'),
+            question='Forget these keys? Existing connections will remain open.',
+        )
+        action_id = self._token_urlsafe(16)
+        self._backend_action_store.set(sid, action_id, action)
+        return action_id, action

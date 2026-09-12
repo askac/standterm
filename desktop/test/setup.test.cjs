@@ -10,13 +10,13 @@ const { EventEmitter } = require('node:events');
 
 async function fixture({ consent = true, pythonMissing = false, ready = false, native = false,
   macos = false, machine = 'arm64', wrongVenv = false,
+  coreError = null,
   holdPrepare = false, cleanupConfirm = false, closeDecision = async () => ({ response: 0 }) } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'standterm-setup-test-'));
   await fs.mkdir(path.join(root, 'bundle'));
   const id = 'a'.repeat(64);
   await fs.writeFile(path.join(root, 'bundle', 'manifest.json'), JSON.stringify({ id }));
   const calls = [];
-  let dialogs = 0;
   let progressWindow;
   let preparedChild;
   let completePrepare;
@@ -54,9 +54,8 @@ async function fixture({ consent = true, pythonMissing = false, ready = false, n
         assert.equal(options.cancelId, 0);
         return closeDecision();
       }
-      dialogs++;
       assert.equal(options.cancelId, options.defaultId);
-      if (!native && !macos && dialogs === 1) return { response: 0 };
+      if (options.title === 'StandTerm Desktop: select WSL') return { response: 0 };
       if (options.title === 'StandTerm Desktop: Python required') return { response: 0 };
       assert.match(options.detail, /Requires Python 3.10\+/);
       return { response: consent ? 1 : 0 };
@@ -75,7 +74,17 @@ async function fixture({ consent = true, pythonMissing = false, ready = false, n
     queueMicrotask(() => {
       let bytes;
       let code = 0;
-      if (executable === 'where.exe') bytes = Buffer.from('C:\\Python\\python.exe\r\n');
+      if (args.includes('--action')) {
+        const action = args[args.indexOf('--action') + 1];
+        if (coreError) { code = 1; bytes = Buffer.from(JSON.stringify({ type: 'error', code: coreError }) + '\n'); }
+        else bytes = Buffer.from(JSON.stringify(action === 'status' ? { type: 'core_status', git_available: false, workspace: 'absent' }
+          : { type: 'ready', source: action === 'recover' ? 'bundled' : 'git', bundle_id: id,
+            root: native ? 'C:\\Runtime' : '/home/test/runtime',
+            core_root: native ? 'C:\\Runtime\\repo' : '/home/test/runtime/repo', commit: 'b'.repeat(40), dirty: true,
+            python: native ? 'C:\\Runtime\\tools\\.venv_win\\Scripts\\python.exe'
+              : `/home/test/runtime/tools/${macos ? '.venv_macos' : '.venv_wsl'}/bin/python` }) + '\n');
+      }
+      else if (executable === 'where.exe') bytes = Buffer.from('C:\\Python\\python.exe\r\n');
       else if (args.includes('--inventory')) bytes = Buffer.from(JSON.stringify({ type: 'cleanup_inventory',
         results: [{ id, status: 'candidate', source: 'C:\\Runtime\\tools\\.venv_win' }] }) + '\n');
       else if (args.includes('--detach-idle-venvs')) bytes = Buffer.from(JSON.stringify({ type: 'cleanup_summary',
@@ -107,10 +116,37 @@ async function fixture({ consent = true, pythonMissing = false, ready = false, n
     process: { resourcesPath: root, arch: 'arm64', env: {} }, Buffer, setTimeout, clearTimeout });
   vm.runInContext(await fs.readFile(path.join(__dirname, '..', 'setup.cjs'), 'utf8'), context);
   return { run: options => context.module.exports.preparePackagedBackend(macos ? 'macos' : native ? 'windows' : 'wsl', options), root, calls,
+    manage: action => context.module.exports.manageCore(macos ? 'macos' : native ? 'windows' : 'wsl', action),
     cleanup: () => context.module.exports.cleanupManagedVenvs(native ? 'windows' : 'wsl'),
     preparing, window: () => progressWindow, child: () => preparedChild, complete: () => completePrepare(),
     closeDialogs: () => closeDialogs, quit: () => context.module.exports.confirmSetupQuit() };
 }
+
+test('Core management probes the selected base environment without preparing bundled Core', async () => {
+  for (const options of [{ native: true }, { macos: true }, {}]) {
+    const f = await fixture(options);
+    assert.equal((await f.manage('status')).git_available, false);
+    assert.equal(f.calls.some(args => args.some(arg => arg.endsWith('/bootstrap.py') || arg.endsWith('\\bootstrap.py'))), false);
+    assert.equal(f.calls.some(args => args.includes('--prepare')), false);
+    const command = await f.manage('check');
+    assert.equal(command.source, 'git');
+    assert.match(command.coreSource, /local changes/);
+    assert.equal(command.args.includes('--git-core'), true);
+    const bridge = command.args[command.args.indexOf('-u') + 1];
+    assert.match(bridge, /bundle[\\/]backend\.py$/);
+    assert.equal(bridge.includes('repo'), false);
+    assert.equal(command.args.includes('--distribution'), !options.native && !options.macos);
+  }
+});
+
+test('Core recovery uses bundled identity and typed Git failures survive the adapter', async () => {
+  const f = await fixture({ native: true });
+  const restored = await f.manage('recover');
+  assert.equal(restored.source, 'bundled');
+  assert.equal(restored.args.includes('--git-core'), false);
+  const failed = await fixture({ native: true, coreError: 'git_dirty' });
+  await assert.rejects(failed.manage('update'), { code: 'git_dirty' });
+});
 
 test('setup requires explicit consent before installing and stores only non-secret settings', async () => {
   const f = await fixture();

@@ -9,8 +9,9 @@ to the StandTerm server process across page reloads.
 [Download and install StandTerm Desktop](#desktop-downloads-evaluation), or use
 the [browser-based Core quick start](#quick-start).
 
-**Core 2.11.0** is a [source release](https://github.com/askac/standterm/releases/tag/v2.11.0).
-It includes terminal latency, clipboard, agent-tab status and launcher UI updates.
+**Core 2.12.0** is a [source release](https://github.com/askac/standterm/releases/tag/v2.12.0).
+It adds SSH Agent Tunnel with shared skills and helpers, Agent Panel permission
+sync, Agent Info for the current tab, and SSH host fingerprint management.
 IME input-line anchoring remains an [experimental PoC](docs/ime_anchor_poc.md).
 This release does not publish new Desktop installers: the downloads below remain
 Desktop 0.4.3 evaluation builds with their original bundled Core snapshot.
@@ -317,6 +318,20 @@ SSH targets. Use **Settings > SSH Sessions** to create, update, reorder, or
 delete profiles and to clear history. Profiles and history stay in the current
 browser and never store passwords.
 
+For an unknown remote SSH host, Quick Connect shows its SHA256 host-key
+fingerprint before authentication. Verify it independently, choose **Trust key**,
+then connect again. A changed key shows both saved and received fingerprints and
+requires explicit replacement; **Cancel** is the default. **Forget host key...**
+removes only the host and port currently entered after confirmation. Existing
+connections remain open. These actions edit the Core execution account's
+`~/.ssh/known_hosts`, shared with other SSH clients; they do not delete browser
+authentication keys. Special policy records and symlinked files require manual
+management. The existing localhost key setup behavior is unchanged.
+
+Locations using the same IP and port share one host identity, so switching
+between them requires reviewing and replacing the saved key. Saved profile names
+do not create separate host identities.
+
 A saved profile can explicitly generate an Ed25519 key with **Use browser key
 authentication**. The private `CryptoKey` is non-extractable and stays in that
 browser's IndexedDB. Copy the displayed OpenSSH public key to the remote
@@ -502,6 +517,53 @@ Python environment.
 UART access follows the same local-client/browser-authorization gate as Local
 Shell unless `STANDTERM_ALLOW_REMOTE_UART=1` is set.
 
+## SSH Agent Tunnel
+
+On a connected SSH tab, **Agent Tunnel** can provision remote Agent access
+without reconnecting the terminal. Use each tab's Agent Panel to enable access
+and choose its permission, then choose **Start / Renew Access**. The tunnel
+automatically includes tabs enabled later in the same browser viewer; there is
+no second selection list. You can also start with no enabled tabs. Give the
+resulting **Copy Prompt** text to the agent running on that SSH host. It uses the same skills,
+Python helpers, discovery, and per-tab permissions as a local external agent,
+including normal file-copy approval between two authorized tabs.
+
+The dialog shows the remote **Agent Info URL** with **Copy URL** and **Copy
+Prompt** actions. **Agent Info for Current Tab** appears in the toolbar only after that
+SSH tab's tunnel is ready, and opens the same prompt and activity information.
+The URL's `127.0.0.1` belongs to the SSH host. Paste the prompt
+to the agent there; it identifies the SSH host and tab and includes the existing skill and discovery
+command and asks the agent to run `hello` for each intended tab. Local token
+minting is not required: Start creates separate grants for Agent-enabled tabs.
+
+**Check Tunnel** checks the remote listener, helper bundle, and connection to
+this Core instance again. The verification timestamp confirms that path works;
+each tab separately shows **waiting for agent** until Core receives an
+authenticated request through this tunnel. **Last authenticated request** is a
+historical timestamp, not a continuous connection indicator. **Refresh Status**
+reloads the current grants and activity without renewing their tokens.
+
+The SSH host needs Python 3.9+, SFTP, remote forwarding, and a way to inspect
+its listener bindings. Core supports Linux `/proc/net`, FreeBSD `netstat` JSON,
+and `lsof` (including macOS). Hosts are not rejected during preparation based
+on their OS name; setup fails when a required capability or verification is
+unavailable. Helpers are clients of the same HTTP API on every host.
+Core verifies the actual listener is loopback-only and checks the complete
+helper and skill bundle before showing usable Connect Info. OpenSSH
+`GatewayPorts yes` is rejected; use `no` or `clientspecified`. Helpers and secret
+handoffs live in a private temporary directory on the SSH host. The tunnel
+exposes only scoped Agent discovery and commands over HTTP inside SSH.
+
+Disabling or pausing access in Agent Panel immediately restricts remote access.
+**Start / Renew Access**, a new Enable, or an explicit browser Mint can renew
+expired or revoked grants. Reading info, checking the tunnel, ordinary mode
+changes, and resume do not renew invalid grants. **Stop Tunnel**, SSH disconnect, or browser viewer disconnect
+revokes this tunnel's grants and pending input without revoking local agents.
+Stopping preserves the SSH terminal and Files connection. An interrupted
+command is never replayed automatically. If SSH is already unreachable, remote
+temporary files may remain; their tokens are invalid. Reconnecting requires a
+new tunnel and Connect Info. ProxyJump is planned separately.
+
 ## Agent And External Agent Mirror
 
 The browser Agent panel is an operator gate around typed terminal actions. It
@@ -523,8 +585,17 @@ Typical local flow:
 4. Mint a standard or 3x-idle external-agent token from the browser Agent UI.
    When the Agent panel is hidden, the same actions are available in the status
    bar for the active terminal.
-5. Use explicit connection fields from the browser Agent UI or the startup
-   banner's `External Agent CLI hello` or `render` command.
+5. On a local tab, open **Agent Info for Current Tab** in the toolbar. **Copy URL** provides the
+   local Agent Info URL; **Copy Prompt** includes the skill, discovery
+   command, and instructions to run `hello` for each intended tab. Give this to
+   the agent running in the Core host environment (WSL when Core runs in WSL).
+   The dialog shows each tab's last authenticated request to confirm access.
+
+Reading or copying a prompt does not mint tokens. The single **Agent Info for
+Current Tab** button chooses the environment from the active tab: local tabs
+show Core host information; SSH tabs show that host's information after **Agent
+Tunnel** is ready. The dialog identifies where to run the agent. This choice
+does not narrow access to one tab; permissions still follow Agent Panel.
 
 Startup writes a tokenless bootstrap file in the per-user External Agent runtime
 directory:
@@ -641,6 +712,17 @@ file operations. File contents stream through bounded backend
 buffers and are not typed through the terminal or returned to the agent. If an
 SSH publish returns `file_copy_publish_outcome_unknown`, inspect the destination
 before retrying because the server may already have completed the atomic rename.
+
+For manually authorized rescue work on minimal POSIX systems,
+`sh scripts/base64d_probe.sh` reports available decoders and checks binary byte
+output with `cksum` or `od`. `sh scripts/base64d.sh 'AP8K' > output.bin` decodes
+one Base64 argument using shell builtins, including NUL bytes. It validates the
+entire argument before emitting output, accepts whitespace, and limits each
+input line to 4096 characters. Use small chunks; shell argument limits still
+apply. The probe needs a writable `${TMPDIR:-/tmp}` and creates a private
+temporary directory. These are standalone utilities, not an automatic
+`agent_rsfile.py` fallback; transfer verification and overwrite decisions remain
+the caller's responsibility.
 
 Prefer the exact absolute commands printed by the StandTerm startup banner. They
 use the active runtime Python, platform-appropriate quoting, and the generated

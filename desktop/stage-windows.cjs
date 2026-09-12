@@ -33,6 +33,7 @@ const shellFiles = [
   'browser-access.cjs',
   'context-paste.cjs',
   'release-identity.cjs',
+  'core-source.cjs', 'backend-stop.cjs',
 ];
 fs.mkdirSync(path.join(__dirname, 'dist'), { recursive: true });
 const stage = fs.mkdtempSync(path.join(__dirname, 'dist', `${platform}-build-`));
@@ -47,6 +48,8 @@ copy(path.join(__dirname, 'bootstrap.py'), path.join(stage, 'bundle', 'bootstrap
 copy(path.join(__dirname, 'windows_job.py'), path.join(stage, 'bundle', 'windows_job.py'));
 copy(path.join(__dirname, 'runtime.py'), path.join(stage, 'bundle', 'runtime.py'));
 copy(path.join(__dirname, 'runtime_cleanup.py'), path.join(stage, 'bundle', 'runtime_cleanup.py'));
+copy(path.join(__dirname, 'core_manager.py'), path.join(stage, 'bundle', 'core_manager.py'));
+copy(path.join(__dirname, 'backend.py'), path.join(stage, 'bundle', 'backend.py'));
 writeIcon(path.join(stage, 'standterm.ico'));
 if (platform === 'macos') {
   // Reuse the existing terminal glyph at native icon sizes using macOS build tools.

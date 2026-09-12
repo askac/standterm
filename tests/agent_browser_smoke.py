@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import json
 import os
 import queue
 import re
@@ -3827,6 +3828,272 @@ def test_terminal_payload_text_is_not_control(browser, access_url):
         close_context(context)
 
 
+def test_core_agent_connect_info_can_be_copied_and_confirmed(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        parsed = urllib.parse.urlparse(access_url)
+        agentinfo_url = urllib.parse.urlunparse(parsed._replace(
+            netloc='127.0.0.1:' + str(parsed.port), path='/agentinfo', query='', fragment=''))
+        page.evaluate('''() => Object.defineProperty(navigator, 'clipboard', {
+            configurable: true, value: {writeText: async text => {window.copiedAgentText = text;}}
+        })''')
+        page.click('#agent-connect-btn')
+        page.wait_for_selector('#agent-connect-copy:not([disabled])')
+        check(page.input_value('#agent-connect-url') == agentinfo_url, 'Core did not expose its Agent Info URL')
+        info_text = page.input_value('#agent-connect-info')
+        check('Core host environment' in info_text and 'Run discover, then hello' in info_text,
+              'Connect Info did not explain where and how to confirm access')
+        check('--token' not in info_text and 'agt_' not in info_text, 'Connect Info exposed a token')
+        check(page.locator('.terminal-tab.agent-token-active').count() == 0, 'Reading Connect Info minted a token')
+        check('No active grants' in page.inner_text('#agent-connect-activity'), 'Missing authorization was not explained')
+        check(page.locator('#agent-tunnel-btn').is_hidden(), 'Local shell offered an SSH tunnel')
+        check(page.locator('#agent-remote-info-btn').count() == 0, 'A separate remote Agent Info button remains')
+        check(page.inner_text('#agent-connect-btn') == 'Agent Info for Current Tab', 'Info button did not identify its tab context')
+        check(page.inner_text('#agent-connect-copy') == 'Copy Prompt', 'Local info did not offer a prompt')
+        page.click('#agent-connect-copy-url')
+        page.wait_for_function('url => window.copiedAgentText === url', arg=agentinfo_url)
+        page.click('#agent-connect-copy')
+        page.wait_for_function('text => window.copiedAgentText === text', arg=info_text)
+        page.focus('#agent-connect-url')
+        page.evaluate("() => { window.dispatchEvent(new Event('blur')); window.dispatchEvent(new Event('focus')); }")
+        page.wait_for_timeout(150)
+        check(page.evaluate("() => document.activeElement.id === 'agent-connect-url'"),
+              'Window focus stole focus from the Agent Info URL')
+        page.click('#agent-connect-open-panel')
+        page.wait_for_selector('#agent-panel.visible')
+        page.click('#agent-access-toggle-btn')
+        wait_for_agent(page, "state.mode === 'observe'")
+        page.click('#agent-external-token-btn')
+        page.wait_for_selector('.terminal-tab.agent-token-active', state='attached')
+        page.click('#agent-connect-btn')
+        page.wait_for_function("() => document.getElementById('agent-connect-activity').innerText.includes('main: waiting for agent')")
+        with urllib.request.urlopen(agentinfo_url, timeout=5) as response:
+            info = json.load(response)
+        hello = subprocess.run([
+            info['python_path'], info['scripts']['agent_cli'], '--agentinfo', agentinfo_url,
+            '--terminal', 'main', 'hello',
+        ], capture_output=True, text=True, timeout=15)
+        check(hello.returncode == 0, 'The copied Agent Info URL could not run the shared hello helper')
+        page.wait_for_function("() => document.getElementById('agent-connect-activity').innerText.includes('last authenticated request')")
+        page.evaluate("() => { navigator.clipboard.writeText = async () => { throw new Error('Denied'); }; }")
+        page.click('#agent-connect-copy-url')
+        page.wait_for_function("() => document.getElementById('agent-connect-message').innerText.includes('copy it manually')")
+        selection = page.locator('#agent-connect-url').evaluate('field => field.value.slice(field.selectionStart, field.selectionEnd)')
+        check(selection == agentinfo_url, 'Clipboard fallback did not select the URL')
+        page.click('#agent-connect-close')
+    finally:
+        close_context(context)
+
+
+def test_agent_tunnel_uses_panel_permissions_and_keeps_focus(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        attach_agent(page)
+        page.evaluate('() => window.terminalTest.captureTerminalIoForTest()')
+        page.evaluate('''() => window.terminalTest.applyTerminalListForTest({terminals: [
+            {terminal_id: 'main', connected: true, connection_type: 'ssh', terminal_label: '<img src=x>'},
+            {terminal_id: 'third', connected: true, connection_type: 'ssh', terminal_label: 'Unenrolled'}
+        ]})''')
+        check(page.locator('#agent-connect-btn').is_hidden(), 'SSH info appeared before tunnel setup')
+        page.click('#agent-tunnel-btn')
+        page.wait_for_selector('#agent-tunnel-apply:not([disabled])')
+        check(page.locator('#agent-tunnel-targets input').count() == 0,
+              'tunnel duplicated Agent Panel permission controls')
+        check(page.locator('#agent-tunnel-targets img').count() == 0,
+              'terminal label was interpreted as HTML')
+        check('Unenrolled' not in page.inner_text('#agent-tunnel-targets'), 'Disabled tab appeared authorized')
+        page.evaluate('() => window.terminalTest.clearEmitted()')
+        page.click('#agent-tunnel-apply')
+        page.wait_for_selector('#agent-tunnel-apply:not([disabled])')
+        requests = page.evaluate("() => window.terminalTest.getEmitted().filter(e => e.event === 'agent_tunnel')")
+        check(len(requests) == 1, 'Apply sent duplicate tunnel operations')
+        request = requests[0]['args'][0]
+        check(request['terminal_id'] == 'main' and request['operation'] == 'apply', 'carrier scope is wrong')
+        check('targets' not in request, 'Browser supplied a second authorization list')
+        page.focus('#agent-tunnel-close')
+        page.evaluate("() => { window.dispatchEvent(new Event('blur')); window.dispatchEvent(new Event('focus')); }")
+        page.wait_for_timeout(150)
+        check(page.evaluate("() => document.activeElement.id === 'agent-tunnel-close'"),
+              'window focus stole focus from tunnel controls')
+        check(page.locator('#agent-tunnel-info').is_hidden(), 'failed setup advertised usable Connect Info')
+        # Backend integration tests cover real SSH; this fixture exercises the ready-state controls.
+        remote_url = 'http://127.0.0.1:43210/agentinfo'
+        page.evaluate('payload => window.terminalTest.applyAgentTunnelStatusForTest(payload)', {
+            'status': 'ready', 'carrier_id': 'test-tunnel', 'agentinfo_url': remote_url,
+            'verified_at': time.time(), 'connect_info': 'Run the agent on this SSH host. AgentInfoURL: ' + remote_url,
+            'ssh_context': {'host': '<img src=x>', 'ssh_tab': 'main'},
+            'terminal_ids': ['main'], 'terminals': [{'terminal_id': 'main', 'last_request_at': None}],
+        })
+        check(page.input_value('#agent-tunnel-url') == remote_url, 'Tunnel showed the local Core URL')
+        check(page.locator('#agent-connect-btn').is_visible(), 'Ready tunnel did not reveal remote info')
+        check(page.locator('#agent-tunnel-carrier img').count() == 0, 'SSH host context was rendered as HTML')
+        check('verified:' in page.inner_text('#agent-tunnel-verification'), 'Tunnel verification time is missing')
+        check('waiting for agent' in page.inner_text('#agent-tunnel-activity'), 'Ready falsely confirmed agent access')
+        page.evaluate('''() => Object.defineProperty(navigator, 'clipboard', {
+            configurable: true, value: {writeText: async text => {window.copiedAgentText = text;}}
+        })''')
+        page.click('#agent-tunnel-copy-url')
+        page.wait_for_function('url => window.copiedAgentText === url', arg=remote_url)
+        prompt = page.input_value('#agent-tunnel-info')
+        page.click('#agent-tunnel-copy')
+        page.wait_for_function('text => window.copiedAgentText === text', arg=prompt)
+        for carrier in ('unrelated-tunnel', 'test-tunnel'):
+            page.evaluate('payload => window.terminalTest.applyAgentConnectionActivityForTest(payload)', {
+                'terminal_id': 'main', 'carrier_id': carrier, 'last_request_at': time.time(),
+            })
+            expected = 'waiting for agent' if carrier == 'unrelated-tunnel' else 'last authenticated request'
+            check(expected in page.inner_text('#agent-tunnel-activity'), 'Activity did not match the current SSH tunnel')
+        page.evaluate('() => window.terminalTest.clearEmitted()')
+        page.click('#agent-tunnel-check')
+        page.wait_for_selector('#agent-tunnel-apply:not([disabled])')
+        requests = page.evaluate("() => window.terminalTest.getEmitted().filter(e => e.event === 'agent_tunnel')")
+        check(len(requests) == 1 and requests[0]['args'][0]['operation'] == 'check', 'Check did not verify the current tunnel')
+        check(page.locator('#agent-tunnel-connection').is_hidden(), 'Failed check retained usable remote connection info')
+        check(page.locator('#agent-connect-btn').is_hidden(), 'Failed check retained remote info shortcut')
+        page.click('#agent-tunnel-close')
+        check(not page.locator('#agent-tunnel-dialog').is_visible(), 'Close did not dismiss tunnel dialog')
+    finally:
+        close_context(context)
+
+
+def test_remote_agent_info_tracks_ssh_carrier_and_rejects_late_replies(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        page.evaluate('''() => {
+            window.terminalTest.holdAgentTunnelRequestsForTest();
+            Object.defineProperty(navigator, 'clipboard', {
+                configurable: true, value: {writeText: async text => {window.copiedAgentText = text;}}
+            });
+            window.terminalTest.applyTerminalListForTest({terminals: [
+                {terminal_id: 'main', connected: true, connection_type: 'ssh', terminal_label: 'Host A'},
+                {terminal_id: 'second', connected: true, connection_type: 'ssh', terminal_label: 'Host B'}
+            ]});
+        }''')
+
+        def ready(carrier, port):
+            url = 'http://127.0.0.1:' + str(port) + '/agentinfo'
+            return {'status': 'ready', 'carrier_id': carrier, 'agentinfo_url': url,
+                    'verified_at': time.time(), 'terminal_ids': [], 'terminals': [],
+                    'ssh_context': {'host': carrier}, 'connect_info': 'Run on ' + carrier + '. AgentInfoURL: ' + url}
+
+        first, second = ready('host-a', 43210), ready('host-b', 43211)
+        page.click('#agent-tunnel-btn')
+        page.evaluate('payload => window.terminalTest.completeAgentTunnelRequestForTest(0, payload)', first)
+        prompt = page.input_value('#agent-tunnel-info')
+        page.click('#agent-tunnel-copy')
+        page.wait_for_function('text => window.copiedAgentText === text', arg=prompt)
+        page.click('#agent-tunnel-close')
+        page.click('#agent-connect-btn')
+        check(page.inner_text('#agent-tunnel-title') == 'Agent Info for Current Tab', 'Remote shortcut opened the wrong view')
+        check(page.locator('#agent-tunnel-setup').is_hidden(), 'Remote info repeated setup controls')
+        check(page.locator('#agent-tunnel-copy').is_hidden(), 'Remote shortcut offered a stale cached prompt')
+        page.evaluate('payload => window.terminalTest.completeAgentTunnelRequestForTest(1, payload)', first)
+        page.click('#agent-tunnel-copy')
+        page.wait_for_function('text => window.copiedAgentText === text', arg=prompt)
+        page.click('#agent-tunnel-manage')
+        check(page.locator('#agent-tunnel-setup').is_visible(), 'Manage did not reveal tunnel controls')
+        page.click('#agent-tunnel-refresh')
+        page.click('#agent-tunnel-close')
+        page.click('.terminal-tab[data-terminal-id="second"]')
+        check(page.locator('#agent-connect-btn').is_hidden(), 'Host B inherited Host A remote info')
+        page.click('#agent-tunnel-btn')
+        page.evaluate('payload => window.terminalTest.completeAgentTunnelRequestForTest(3, payload)', second)
+        page.evaluate('payload => window.terminalTest.completeAgentTunnelRequestForTest(2, payload)', first)
+        check(page.input_value('#agent-tunnel-info') == second['connect_info'], 'Late Host A reply replaced Host B prompt')
+        page.evaluate("() => window.terminalTest.applyAgentTunnelStateForTest({terminal_id: 'second', carrier_id: 'old-b', status: 'stopped'})")
+        check(page.input_value('#agent-tunnel-info') == second['connect_info'], 'Old carrier stop cleared the new tunnel')
+        page.evaluate("() => window.terminalTest.applyAgentTunnelStateForTest({terminal_id: 'second', carrier_id: 'host-b', status: 'stopped'})")
+        check(page.locator('#agent-tunnel-copy').is_hidden(), 'Stop retained a usable prompt')
+        check(page.locator('#agent-connect-btn').is_hidden(), 'Stop retained the remote shortcut')
+        page.click('#agent-tunnel-apply')
+        page.evaluate('''() => window.terminalTest.applyTerminalListForTest({terminals: [
+            {terminal_id: 'main', connected: true, connection_type: 'ssh'},
+            {terminal_id: 'second', connected: false, connection_type: 'ssh'}
+        ]})''')
+        page.evaluate('payload => window.terminalTest.completeAgentTunnelRequestForTest(4, payload)', second)
+        check(page.input_value('#agent-tunnel-info') == '', 'Disconnected SSH accepted a late setup result')
+        page.click('#agent-tunnel-close')
+        check(page.locator('#agent-connect-btn').is_hidden(), 'Disconnected SSH offered local info as a fallback')
+        page.evaluate('''() => window.terminalTest.applyTerminalListForTest({terminals: [
+            {terminal_id: 'main', connected: true, connection_type: 'local_shell'},
+            {terminal_id: 'second', connected: false, connection_type: 'ssh'}
+        ]})''')
+        page.click('.terminal-tab[data-terminal-id="main"]')
+        check(page.locator('#agent-connect-btn').is_visible(), 'Returning to a local tab did not restore Agent Info')
+        page.click('#agent-connect-btn')
+        page.wait_for_selector('#agent-connect-copy:not([disabled])')
+        check(page.locator('#agent-tunnel-dialog').is_hidden(), 'Local tab opened SSH info')
+        check('Core host environment' in page.input_value('#agent-connect-info'), 'Local tab retained the SSH prompt')
+        page.click('#agent-connect-close')
+    finally:
+        close_context(context)
+
+
+def test_ssh_host_key_prompts_default_to_cancel_and_bind_actions(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        page.evaluate('() => window.terminalTest.captureTerminalIoForTest()')
+        prompt = {
+            'terminal_id': 'main', 'message_type': 'connection_error',
+            'error_code': 'ssh_host_key_unknown', 'message': 'SSH host key is unknown.',
+            'action_type': 'confirm_ssh_host_key', 'action_id': 'observed-key',
+            'action_message': 'Received: ssh-ed25519 SHA256:example\n<img src=x onerror=alert(1)>',
+            'action_question': 'Remember this host key?',
+        }
+        page.evaluate('payload => window.terminalTest.handleSshOutput(payload)', prompt)
+        page.wait_for_function("() => document.activeElement.id === 'actionNoBtn'")
+        check(page.locator('#actionNoBtn').inner_text() == 'Cancel', 'host key prompt did not default to Cancel')
+        check(page.locator('#actionMessage img').count() == 0, 'fingerprint text was interpreted as HTML')
+        check('<img' in page.locator('#actionMessage').inner_text(), 'fingerprint text was lost')
+        page.evaluate('() => window.terminalTest.clearEmitted()')
+        page.click('#actionNoBtn')
+        emitted = page.evaluate('() => window.terminalTest.getEmitted()')
+        actions = [entry['args'][0] for entry in emitted if entry['event'] == 'ssh_host_key_action']
+        check(actions == [{'operation': 'cancel', 'action_id': 'observed-key', 'terminal_id': 'main'}],
+              'Cancel did not revoke the displayed action')
+
+        prompt.update(error_code='ssh_host_key_changed', action_message='Saved: SHA256:old\nReceived: SHA256:new')
+        page.evaluate('payload => window.terminalTest.handleSshOutput(payload)', prompt)
+        page.wait_for_function("() => document.activeElement.id === 'actionNoBtn'")
+        emitted = page.evaluate("""() => {
+            document.getElementById('host').value = 'edited.example';
+            window.terminalTest.clearEmitted();
+            document.getElementById('actionYesBtn').click();
+            document.getElementById('actionYesBtn').click();
+            return window.terminalTest.getEmitted();
+        }""")
+        actions = [entry['args'][0] for entry in emitted if entry['event'] == 'ssh_host_key_action']
+        check(actions == [{'operation': 'confirm', 'action_id': 'observed-key', 'terminal_id': 'main'}],
+              'Trust replayed an action or submitted the edited target')
+        check(not any(entry['event'] == 'start_ssh' for entry in emitted), 'Trust silently reconnected an edited form')
+        page.evaluate("""() => window.terminalTest.handleSshOutput({
+            terminal_id: 'main', message_type: 'host_key_result', status: 'success',
+            message: 'SSH host key saved. Connect again to continue.'
+        })""")
+        check('Connect again' in page.locator('#errorBox').inner_text(), 'Trust result omitted next step')
+
+        emitted = page.evaluate("""() => {
+            window.terminalTest.clearEmitted();
+            document.getElementById('host').value = '192.168.167.254';
+            document.getElementById('port').value = '2222';
+            document.getElementById('ssh-forget-host-key').click();
+            return window.terminalTest.getEmitted();
+        }""")
+        actions = [entry['args'][0] for entry in emitted if entry['event'] == 'ssh_host_key_action']
+        check(actions == [{'operation': 'forget', 'terminal_id': 'main', 'host': '192.168.167.254', 'port': '2222'}],
+              'Forget did not use the selected host and port')
+        page.evaluate("""() => window.terminalTest.handleSshOutput({
+            terminal_id: 'main', message_type: 'host_key_prompt', action_type: 'forget_ssh_host_key',
+            action_id: 'forget-key', action_message: 'Saved: SHA256:old', action_question: 'Forget this key?'
+        })""")
+        page.wait_for_function("() => document.activeElement.id === 'actionNoBtn'")
+        check(page.locator('#actionYesBtn').inner_text() == 'Forget key', 'Forget prompt used the wrong action label')
+        page.evaluate("() => document.getElementById('new-tab-btn').click()")
+        check(page.locator('#actionBox').is_hidden(), 'switching terminals left an actionable old prompt')
+    finally:
+        close_context(context)
+
+
 def test_ssh_history_and_auto_profile_follow_structured_success(browser, access_url):
     context = browser.new_context(viewport={'width': 1280, 'height': 800})
     page = context.new_page()
@@ -4488,6 +4755,10 @@ def main():
         test_access_url_token_is_remembered_only_for_recovery,
         test_connection_controls_follow_start_fields_without_legacy_payload,
         test_terminal_payload_text_is_not_control,
+        test_ssh_host_key_prompts_default_to_cancel_and_bind_actions,
+        test_core_agent_connect_info_can_be_copied_and_confirmed,
+        test_agent_tunnel_uses_panel_permissions_and_keeps_focus,
+        test_remote_agent_info_tracks_ssh_carrier_and_rejects_late_replies,
         test_ssh_history_and_auto_profile_follow_structured_success,
         test_ssh_profile_picker_and_settings_save_semantics,
         test_browser_ssh_key_lifecycle_and_settings_transfer,

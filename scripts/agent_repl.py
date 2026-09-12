@@ -56,7 +56,7 @@ def build_ssl_context(ca_file=None, insecure=False):
 
 
 class AgentHttpClient:
-    def __init__(self, base_url, token=None, terminal_id='main', timeout=30, debug=False,
+    def __init__(self, base_url, token=None, terminal_id='main', timeout=cli.COMMAND_TIMEOUT_SECONDS, debug=False,
                  ca_file=None, insecure=False):
         self.base_url = base_url.rstrip('/')
         self.token = token
