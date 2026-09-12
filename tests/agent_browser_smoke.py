@@ -3847,7 +3847,8 @@ def test_core_agent_connect_info_can_be_copied_and_confirmed(browser, access_url
         check(page.locator('.terminal-tab.agent-token-active').count() == 0, 'Reading Connect Info minted a token')
         check('No active grants' in page.inner_text('#agent-connect-activity'), 'Missing authorization was not explained')
         check(page.locator('#agent-tunnel-btn').is_hidden(), 'Local shell offered an SSH tunnel')
-        check(page.locator('#agent-remote-info-btn').is_hidden(), 'Local shell offered remote Agent Info')
+        check(page.locator('#agent-remote-info-btn').count() == 0, 'A separate remote Agent Info button remains')
+        check(page.inner_text('#agent-connect-btn') == 'Agent Info for Current Tab', 'Info button did not identify its tab context')
         check(page.inner_text('#agent-connect-copy') == 'Copy Prompt', 'Local info did not offer a prompt')
         page.click('#agent-connect-copy-url')
         page.wait_for_function('url => window.copiedAgentText === url', arg=agentinfo_url)
@@ -3893,12 +3894,7 @@ def test_agent_tunnel_uses_panel_permissions_and_keeps_focus(browser, access_url
             {terminal_id: 'main', connected: true, connection_type: 'ssh', terminal_label: '<img src=x>'},
             {terminal_id: 'third', connected: true, connection_type: 'ssh', terminal_label: 'Unenrolled'}
         ]})''')
-        check(page.locator('#agent-connect-btn').is_visible(), 'All-SSH tabs hid local Core Agent Info')
-        check(page.locator('#agent-remote-info-btn').is_hidden(), 'Remote info appeared before tunnel setup')
-        page.click('#agent-connect-btn')
-        page.wait_for_selector('#agent-connect-copy:not([disabled])')
-        check('Core host environment' in page.input_value('#agent-connect-info'), 'SSH tab replaced local info')
-        page.click('#agent-connect-close')
+        check(page.locator('#agent-connect-btn').is_hidden(), 'SSH info appeared before tunnel setup')
         page.click('#agent-tunnel-btn')
         page.wait_for_selector('#agent-tunnel-apply:not([disabled])')
         check(page.locator('#agent-tunnel-targets input').count() == 0,
@@ -3929,7 +3925,7 @@ def test_agent_tunnel_uses_panel_permissions_and_keeps_focus(browser, access_url
             'terminal_ids': ['main'], 'terminals': [{'terminal_id': 'main', 'last_request_at': None}],
         })
         check(page.input_value('#agent-tunnel-url') == remote_url, 'Tunnel showed the local Core URL')
-        check(page.locator('#agent-remote-info-btn').is_visible(), 'Ready tunnel did not reveal remote info')
+        check(page.locator('#agent-connect-btn').is_visible(), 'Ready tunnel did not reveal remote info')
         check(page.locator('#agent-tunnel-carrier img').count() == 0, 'SSH host context was rendered as HTML')
         check('verified:' in page.inner_text('#agent-tunnel-verification'), 'Tunnel verification time is missing')
         check('waiting for agent' in page.inner_text('#agent-tunnel-activity'), 'Ready falsely confirmed agent access')
@@ -3953,7 +3949,7 @@ def test_agent_tunnel_uses_panel_permissions_and_keeps_focus(browser, access_url
         requests = page.evaluate("() => window.terminalTest.getEmitted().filter(e => e.event === 'agent_tunnel')")
         check(len(requests) == 1 and requests[0]['args'][0]['operation'] == 'check', 'Check did not verify the current tunnel')
         check(page.locator('#agent-tunnel-connection').is_hidden(), 'Failed check retained usable remote connection info')
-        check(page.locator('#agent-remote-info-btn').is_hidden(), 'Failed check retained remote info shortcut')
+        check(page.locator('#agent-connect-btn').is_hidden(), 'Failed check retained remote info shortcut')
         page.click('#agent-tunnel-close')
         check(not page.locator('#agent-tunnel-dialog').is_visible(), 'Close did not dismiss tunnel dialog')
     finally:
@@ -3987,8 +3983,8 @@ def test_remote_agent_info_tracks_ssh_carrier_and_rejects_late_replies(browser, 
         page.click('#agent-tunnel-copy')
         page.wait_for_function('text => window.copiedAgentText === text', arg=prompt)
         page.click('#agent-tunnel-close')
-        page.click('#agent-remote-info-btn')
-        check(page.inner_text('#agent-tunnel-title') == 'Remote Agent Info', 'Remote shortcut opened the wrong view')
+        page.click('#agent-connect-btn')
+        check(page.inner_text('#agent-tunnel-title') == 'Agent Info for Current Tab', 'Remote shortcut opened the wrong view')
         check(page.locator('#agent-tunnel-setup').is_hidden(), 'Remote info repeated setup controls')
         check(page.locator('#agent-tunnel-copy').is_hidden(), 'Remote shortcut offered a stale cached prompt')
         page.evaluate('payload => window.terminalTest.completeAgentTunnelRequestForTest(1, payload)', first)
@@ -3999,7 +3995,7 @@ def test_remote_agent_info_tracks_ssh_carrier_and_rejects_late_replies(browser, 
         page.click('#agent-tunnel-refresh')
         page.click('#agent-tunnel-close')
         page.click('.terminal-tab[data-terminal-id="second"]')
-        check(page.locator('#agent-remote-info-btn').is_hidden(), 'Host B inherited Host A remote info')
+        check(page.locator('#agent-connect-btn').is_hidden(), 'Host B inherited Host A remote info')
         page.click('#agent-tunnel-btn')
         page.evaluate('payload => window.terminalTest.completeAgentTunnelRequestForTest(3, payload)', second)
         page.evaluate('payload => window.terminalTest.completeAgentTunnelRequestForTest(2, payload)', first)
@@ -4008,7 +4004,7 @@ def test_remote_agent_info_tracks_ssh_carrier_and_rejects_late_replies(browser, 
         check(page.input_value('#agent-tunnel-info') == second['connect_info'], 'Old carrier stop cleared the new tunnel')
         page.evaluate("() => window.terminalTest.applyAgentTunnelStateForTest({terminal_id: 'second', carrier_id: 'host-b', status: 'stopped'})")
         check(page.locator('#agent-tunnel-copy').is_hidden(), 'Stop retained a usable prompt')
-        check(page.locator('#agent-remote-info-btn').is_hidden(), 'Stop retained the remote shortcut')
+        check(page.locator('#agent-connect-btn').is_hidden(), 'Stop retained the remote shortcut')
         page.click('#agent-tunnel-apply')
         page.evaluate('''() => window.terminalTest.applyTerminalListForTest({terminals: [
             {terminal_id: 'main', connected: true, connection_type: 'ssh'},
@@ -4017,7 +4013,18 @@ def test_remote_agent_info_tracks_ssh_carrier_and_rejects_late_replies(browser, 
         page.evaluate('payload => window.terminalTest.completeAgentTunnelRequestForTest(4, payload)', second)
         check(page.input_value('#agent-tunnel-info') == '', 'Disconnected SSH accepted a late setup result')
         page.click('#agent-tunnel-close')
-        check(page.locator('#agent-connect-btn').is_visible(), 'Disconnect hid local Core Agent Info')
+        check(page.locator('#agent-connect-btn').is_hidden(), 'Disconnected SSH offered local info as a fallback')
+        page.evaluate('''() => window.terminalTest.applyTerminalListForTest({terminals: [
+            {terminal_id: 'main', connected: true, connection_type: 'local_shell'},
+            {terminal_id: 'second', connected: false, connection_type: 'ssh'}
+        ]})''')
+        page.click('.terminal-tab[data-terminal-id="main"]')
+        check(page.locator('#agent-connect-btn').is_visible(), 'Returning to a local tab did not restore Agent Info')
+        page.click('#agent-connect-btn')
+        page.wait_for_selector('#agent-connect-copy:not([disabled])')
+        check(page.locator('#agent-tunnel-dialog').is_hidden(), 'Local tab opened SSH info')
+        check('Core host environment' in page.input_value('#agent-connect-info'), 'Local tab retained the SSH prompt')
+        page.click('#agent-connect-close')
     finally:
         close_context(context)
 

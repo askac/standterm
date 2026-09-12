@@ -528,7 +528,7 @@ Python helpers, discovery, and per-tab permissions as a local external agent,
 including normal file-copy approval between two authorized tabs.
 
 The dialog shows the remote **Agent Info URL** with **Copy URL** and **Copy
-Prompt** actions. **Remote Agent Info** appears in the toolbar only after that
+Prompt** actions. **Agent Info for Current Tab** appears in the toolbar only after that
 SSH tab's tunnel is ready, and opens the same prompt and activity information.
 The URL's `127.0.0.1` belongs to the SSH host. Paste the prompt
 to the agent there; it identifies the SSH host and tab and includes the existing skill and discovery
@@ -584,15 +584,17 @@ Typical local flow:
 4. Mint a standard or 3x-idle external-agent token from the browser Agent UI.
    When the Agent panel is hidden, the same actions are available in the status
    bar for the active terminal.
-5. Open **Local Agent Info** in the Core toolbar. **Copy URL** provides the
+5. On a local tab, open **Agent Info for Current Tab** in the toolbar. **Copy URL** provides the
    local Agent Info URL; **Copy Prompt** includes the skill, discovery
    command, and instructions to run `hello` for each intended tab. Give this to
    the agent running in the Core host environment (WSL when Core runs in WSL).
    The dialog shows each tab's last authenticated request to confirm access.
 
-Reading or copying a prompt does not mint tokens. **Local Agent Info** remains
-available while viewing SSH tabs, and links to the Agent Panel. Use **Agent
-Tunnel** on the SSH tab to set up access for an agent running on that SSH host.
+Reading or copying a prompt does not mint tokens. The single **Agent Info for
+Current Tab** button chooses the environment from the active tab: local tabs
+show Core host information; SSH tabs show that host's information after **Agent
+Tunnel** is ready. The dialog identifies where to run the agent. This choice
+does not narrow access to one tab; permissions still follow Agent Panel.
 
 Startup writes a tokenless bootstrap file in the per-user External Agent runtime
 directory:

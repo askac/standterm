@@ -1144,10 +1144,9 @@
         <button id="agent-status-mint-btn" class="status-action agent-status-mint" title="Mint a standard external-agent token for the active terminal">Mint</button>
         <button id="agent-status-mint-3x-btn" class="status-action agent-status-mint" title="Mint a 3x idle-time external-agent token for the active terminal">Mint 3&times;</button>
         <div id="terminal-tools">
-            <button id="agent-connect-btn" class="status-action" type="button" title="Copy a prompt for an agent running on the Core host">Local Agent Info</button>
+            <button id="agent-connect-btn" class="status-action" type="button" title="Copy the agent prompt for the current tab's environment">Agent Info for Current Tab</button>
             <button id="agent-toggle-btn" class="status-action" type="button" title="Show Agent panel">Show Agent Panel</button>
             <button id="agent-tunnel-btn" class="status-action" type="button" title="Set up remote Agent access through this SSH connection" hidden>Agent Tunnel</button>
-            <button id="agent-remote-info-btn" class="status-action" type="button" title="Copy a prompt for an agent on this SSH host" hidden>Remote Agent Info</button>
             <button id="sftp-status-btn" class="status-action status-sftp" type="button" title="Open Files" aria-label="Open Files" hidden>&#x1F4C1;</button>
             <button id="quick-settings" class="status-action" type="button" title="Settings" aria-label="Settings">&#x2699;&#xFE0F;</button>
             <details id="tab-more">
@@ -1157,7 +1156,7 @@
         </div>
     </div>
     <dialog id="agent-connect-dialog" aria-labelledby="agent-connect-title">
-        <h3 id="agent-connect-title">Local Agent Info</h3>
+        <h3 id="agent-connect-title">Agent Info for Current Tab</h3>
         <p>For an agent running on the <strong>Core host</strong>. If you launched Core with <code>run_wsl.bat</code>, this means WSL, not the Windows browser environment. It can access any individually authorized tab.</p>
         <ol class="agent-connect-steps">
             <li>On each target tab, open the Agent panel, enable external agent, choose its permission, and click <strong>Mint</strong>.</li>
@@ -1165,8 +1164,8 @@
             <li>Ask the agent to run <strong>discover</strong>, then <strong>hello</strong>. Its authenticated requests appear below.</li>
         </ol>
         <div class="agent-connect-url">
-            <label for="agent-connect-url">Local Agent Info URL</label>
-            <input id="agent-connect-url" readonly aria-label="Local Agent Info URL">
+            <label for="agent-connect-url">Agent Info URL</label>
+            <input id="agent-connect-url" readonly aria-label="Agent Info URL">
             <button id="agent-connect-copy-url" type="button" disabled>Copy URL</button>
         </div>
         <p id="agent-connect-message" role="status"></p>
@@ -1193,10 +1192,10 @@
         </div>
         <p id="agent-tunnel-message" role="status"></p>
         <div id="agent-tunnel-connection" hidden>
-            <h4>Remote Agent Info</h4>
+            <h4>Agent Info</h4>
             <div class="agent-connect-url">
-                <label for="agent-tunnel-url">Remote Agent Info URL</label>
-                <input id="agent-tunnel-url" readonly aria-label="Remote Agent Info URL">
+                <label for="agent-tunnel-url">Agent Info URL</label>
+                <input id="agent-tunnel-url" readonly aria-label="Agent Info URL">
                 <button id="agent-tunnel-copy-url" type="button">Copy URL</button>
             </div>
             <p id="agent-tunnel-verification"></p>
@@ -2604,6 +2603,12 @@
             }
 
             document.getElementById('agent-connect-btn').addEventListener('click', () => {
+                const state = getActiveTerminalState();
+                if (!state) return;
+                if (state.connectionType === 'ssh') {
+                    openAgentTunnel(true);
+                    return;
+                }
                 agentConnectInfo.hidden = true;
                 agentConnectDialog.showModal();
                 requestAgentConnectInfo();
@@ -2632,11 +2637,12 @@
                 }
                 const state = getActiveTerminalState();
                 document.getElementById('agent-tunnel-btn').hidden = !state || !state.connected || state.connectionType !== 'ssh';
-                document.getElementById('agent-remote-info-btn').hidden = !state || !readyAgentTunnels.has(state.id);
+                document.getElementById('agent-connect-btn').hidden = !state
+                    || (state.connectionType === 'ssh' && !readyAgentTunnels.has(state.id));
             }
 
             function setAgentTunnelInfoView(infoView) {
-                document.getElementById('agent-tunnel-title').textContent = infoView ? 'Remote Agent Info' : 'Agent Tunnel';
+                document.getElementById('agent-tunnel-title').textContent = infoView ? 'Agent Info for Current Tab' : 'Agent Tunnel';
                 document.getElementById('agent-tunnel-setup').hidden = infoView;
                 document.getElementById('agent-tunnel-apply').hidden = infoView;
                 document.getElementById('agent-tunnel-stop').hidden = infoView;
@@ -2766,7 +2772,6 @@
                 requestAgentTunnel('status');
             }
             document.getElementById('agent-tunnel-btn').addEventListener('click', () => openAgentTunnel());
-            document.getElementById('agent-remote-info-btn').addEventListener('click', () => openAgentTunnel(true));
             document.getElementById('agent-tunnel-manage').addEventListener('click', () => setAgentTunnelInfoView(false));
             document.getElementById('agent-tunnel-apply').addEventListener('click', () => requestAgentTunnel('apply'));
             document.getElementById('agent-tunnel-stop').addEventListener('click', () => requestAgentTunnel('stop'));
@@ -5711,6 +5716,8 @@
                 updateTerminalApplicationTitleStatus(state);
                 updateSftpActionButton(sftpStatusBtn, state);
                 updateAgentTunnelButtons();
+                if (agentConnectDialog.open && (!state || state.connectionType === 'ssh')) agentConnectDialog.close();
+                if (agentTunnelDialog.open && agentTunnelCarrier !== activeTerminalId) agentTunnelDialog.close();
                 if (agentTunnelConnection && !isCurrentAgentTunnelConnection(agentTunnelConnection)) {
                     invalidateAgentTunnel(agentTunnelCarrier, 'SSH connection unavailable. Start a new tunnel after reconnecting.');
                     agentTunnelConnection = null;
