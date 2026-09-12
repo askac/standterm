@@ -14,6 +14,10 @@ import urllib.request
 from agent_input import KEY_INPUTS
 
 
+# Allow the server's 30-second long poll to finish before the HTTP timeout.
+COMMAND_TIMEOUT_SECONDS = 45
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description='StandTerm external agent CLI')
     parser.add_argument('--handoff', help='Read url, token, and terminal from a StandTerm external agent handoff JSON file')
@@ -353,7 +357,7 @@ def post_json(base_url, payload, dev_mode=False, ca_file=None, insecure=False):
     )
     context = build_ssl_context(ca_file=ca_file, insecure=insecure)
     try:
-        with urllib.request.urlopen(request, timeout=30, context=context) as response:
+        with urllib.request.urlopen(request, timeout=COMMAND_TIMEOUT_SECONDS, context=context) as response:
             return response.status, json.loads(response.read().decode('utf-8'))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode('utf-8', errors='replace')

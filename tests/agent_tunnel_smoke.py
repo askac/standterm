@@ -169,6 +169,73 @@ class AgentTunnelTests(unittest.TestCase):
         self.approve('main', actions[1])
         self.assertEqual(self.bridges['main'].writes, ['approved text'])
 
+    def test_core_connect_info_is_tokenless_and_reports_actual_activity(self):
+        before = len(standterm.external_agent_attach_store._tokens)
+        info = self.client.emit('agent_connect_info', callback=True)
+        self.assertEqual(info['status'], 'ok')
+        self.assertEqual(info['agentinfo_url'], standterm.get_external_agent_local_base_url() + '/agentinfo')
+        self.assertIn('Core host environment', info['connect_info'])
+        self.assertEqual(info['terminals'], [])
+        self.assertEqual(len(standterm.external_agent_attach_store._tokens), before)
+        token, record = self.mint()
+        standterm.build_external_agent_token_payload(token, record, 'main', standterm.get_external_agent_local_base_url())
+        info = self.client.emit('agent_connect_info', callback=True)
+        self.assertIsNone(info['terminals'][0]['last_request_at'])
+        result = standterm.process_external_agent_command({'op': 'hello', 'token': token, 'terminal_id': 'main'})
+        self.assertEqual(result['status'], 'ok')
+        activity = fixture.last_payload(self.client, 'agent_connection_activity')
+        self.assertEqual(activity['terminal_id'], 'main')
+        self.assertIsNone(activity['carrier_id'])
+        info = self.client.emit('agent_connect_info', callback=True)
+        self.assertGreater(info['terminals'][0]['last_request_at'], 0)
+        self.assertNotIn('agt_', json.dumps(info))
+        standterm.process_external_agent_command({'op': 'revoke', 'token': token, 'terminal_id': 'main'})
+        self.assertEqual(self.client.emit('agent_connect_info', callback=True)['terminals'], [])
+        standterm.socket_client_ips[self.sid] = '203.0.113.10'
+        self.assertEqual(self.client.emit('agent_connect_info', callback=True)['status'], 'failed')
+
+    def test_tunnel_check_is_separate_from_authenticated_agent_activity(self):
+        with ssh_server() as ssh:
+            tunnel = self.open_tunnel(ssh)
+            initial = standterm.agent_tunnel_status(tunnel)
+            self.assertEqual(initial['agentinfo_url'], tunnel.runtime['base_url'] + '/agentinfo')
+            self.assertIn('this SSH host', initial['connect_info'])
+            self.assertTrue(all(entry['last_request_at'] is None for entry in initial['terminals']))
+            token = tunnel.grants['main']['token']
+            standterm.process_external_agent_command({'op': 'hello', 'token': token, 'terminal_id': 'main'})
+            self.assertTrue(all(entry['last_request_at'] is None
+                                for entry in standterm.agent_tunnel_status(tunnel)['terminals']))
+            checked = self.client.emit('agent_tunnel', {'terminal_id': 'carrier', 'operation': 'check'}, callback=True)
+            self.assertEqual(checked['status'], 'ready', checked)
+            self.assertGreater(checked['verified_at'], initial['verified_at'])
+            self.assertTrue(all(entry['last_request_at'] is None for entry in checked['terminals']))
+            request_json(tunnel.runtime['base_url'] + '/agent/external/command',
+                         {'op': 'hello', 'token': 'agt_invalid', 'terminal_id': 'main'})
+            self.assertTrue(all(entry['last_request_at'] is None
+                                for entry in standterm.agent_tunnel_status(tunnel)['terminals']))
+            self.assertEqual(self.command(tunnel, 'main', 'hello')['status'], 'ok')
+            activity = fixture.last_payload(self.client, 'agent_connection_activity')
+            self.assertEqual(activity['carrier_id'], tunnel.id)
+            self.assertEqual(activity['terminal_id'], 'main')
+            status = standterm.agent_tunnel_status(tunnel)
+            by_terminal = {entry['terminal_id']: entry for entry in status['terminals']}
+            self.assertGreater(by_terminal['main']['last_request_at'], 0)
+            self.assertIsNone(by_terminal['second']['last_request_at'])
+            self.assertNotIn('agt_', json.dumps(status))
+
+    def test_tunnel_check_rejects_a_missing_remote_listener(self):
+        with ssh_server() as ssh:
+            tunnel = self.open_tunnel(ssh)
+            token = tunnel.grants['main']['token']
+            tunnel.transport.cancel_port_forward('127.0.0.1', tunnel.port)
+            result = self.client.emit('agent_tunnel', {'terminal_id': 'carrier', 'operation': 'check'}, callback=True)
+            self.assertEqual(result['status'], 'failed')
+            self.assertNotIn('connect_info', result)
+            self.assertFalse(tunnel.ready)
+            self.assertTrue(ssh.get_transport().is_active())
+            self.assertEqual(standterm.process_external_agent_command({'op': 'hello', 'token': token})['error_code'],
+                             standterm.AGENT_ERROR_EXTERNAL_AGENT_REVOKED)
+
     def test_revoke_does_not_wait_for_in_flight_terminal_io(self):
         self.client.emit(standterm.AGENT_EVENT_MODE_SET, {'terminal_id': 'main', 'mode': 'direct'})
         token, _ = self.mint()

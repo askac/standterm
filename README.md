@@ -525,6 +525,19 @@ tabs individually, then choose **Start / Apply Selection**. Give the resulting
 Python helpers, discovery, and per-tab permissions as a local external agent,
 including normal file-copy approval between two authorized tabs.
 
+The dialog shows the remote **Agent Info URL** with **Copy URL** and **Copy
+Connect Info** actions. The URL's `127.0.0.1` belongs to the SSH host. Paste
+Connect Info to the agent there; it includes the existing skill and discovery
+command and asks the agent to run `hello` for each intended tab. Local token
+minting is not required: Start creates separate grants for the selected tabs.
+
+**Check Tunnel** checks the remote listener, helper bundle, and connection to
+this Core instance again. The verification timestamp confirms that path works;
+each tab separately shows **waiting for agent** until Core receives an
+authenticated request through this tunnel. **Last authenticated request** is a
+historical timestamp, not a continuous connection indicator. **Refresh Status**
+reloads the current grants and activity without renewing their tokens.
+
 The SSH host needs Linux or macOS, Python 3.9+, SFTP, and remote forwarding.
 Core verifies the actual listener is loopback-only and checks the complete
 helper and skill bundle before showing usable Connect Info. OpenSSH
@@ -561,8 +574,14 @@ Typical local flow:
 4. Mint a standard or 3x-idle external-agent token from the browser Agent UI.
    When the Agent panel is hidden, the same actions are available in the status
    bar for the active terminal.
-5. Use explicit connection fields from the browser Agent UI or the startup
-   banner's `External Agent CLI hello` or `render` command.
+5. Open **Agent Connect Info** in the Core toolbar. **Copy URL** provides the
+   local Agent Info URL; **Copy Connect Info** includes the skill, discovery
+   command, and instructions to run `hello` for each intended tab. Give this to
+   the agent running in the Core host environment (WSL when Core runs in WSL).
+   The dialog shows each tab's last authenticated request to confirm access.
+
+Reading or copying Connect Info does not mint tokens. The dialog also links to
+the Agent panel and, on a connected SSH tab, **Agent Tunnel** for remote agents.
 
 Startup writes a tokenless bootstrap file in the per-user External Agent runtime
 directory:

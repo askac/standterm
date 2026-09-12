@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import json
 import os
 import queue
 import re
@@ -3827,6 +3828,60 @@ def test_terminal_payload_text_is_not_control(browser, access_url):
         close_context(context)
 
 
+def test_core_agent_connect_info_can_be_copied_and_confirmed(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        parsed = urllib.parse.urlparse(access_url)
+        agentinfo_url = urllib.parse.urlunparse(parsed._replace(
+            netloc='127.0.0.1:' + str(parsed.port), path='/agentinfo', query='', fragment=''))
+        page.evaluate('''() => Object.defineProperty(navigator, 'clipboard', {
+            configurable: true, value: {writeText: async text => {window.copiedAgentText = text;}}
+        })''')
+        page.click('#agent-connect-btn')
+        page.wait_for_selector('#agent-connect-copy:not([disabled])')
+        check(page.input_value('#agent-connect-url') == agentinfo_url, 'Core did not expose its Agent Info URL')
+        info_text = page.input_value('#agent-connect-info')
+        check('Core host environment' in info_text and 'Run discover, then hello' in info_text,
+              'Connect Info did not explain where and how to confirm access')
+        check('--token' not in info_text and 'agt_' not in info_text, 'Connect Info exposed a token')
+        check(page.locator('.terminal-tab.agent-token-active').count() == 0, 'Reading Connect Info minted a token')
+        check('No active grants' in page.inner_text('#agent-connect-activity'), 'Missing authorization was not explained')
+        check(page.locator('#agent-connect-open-tunnel').is_disabled(), 'Local shell offered an SSH tunnel')
+        page.click('#agent-connect-copy-url')
+        page.wait_for_function('url => window.copiedAgentText === url', arg=agentinfo_url)
+        page.click('#agent-connect-copy')
+        page.wait_for_function('text => window.copiedAgentText === text', arg=info_text)
+        page.focus('#agent-connect-url')
+        page.evaluate("() => { window.dispatchEvent(new Event('blur')); window.dispatchEvent(new Event('focus')); }")
+        page.wait_for_timeout(150)
+        check(page.evaluate("() => document.activeElement.id === 'agent-connect-url'"),
+              'Window focus stole focus from the Agent Info URL')
+        page.click('#agent-connect-open-panel')
+        page.wait_for_selector('#agent-panel.visible')
+        page.click('#agent-access-toggle-btn')
+        wait_for_agent(page, "state.mode === 'observe'")
+        page.click('#agent-external-token-btn')
+        page.wait_for_selector('.terminal-tab.agent-token-active', state='attached')
+        page.click('#agent-connect-btn')
+        page.wait_for_function("() => document.getElementById('agent-connect-activity').innerText.includes('main: waiting for agent')")
+        with urllib.request.urlopen(agentinfo_url, timeout=5) as response:
+            info = json.load(response)
+        hello = subprocess.run([
+            info['python_path'], info['scripts']['agent_cli'], '--agentinfo', agentinfo_url,
+            '--terminal', 'main', 'hello',
+        ], capture_output=True, text=True, timeout=15)
+        check(hello.returncode == 0, 'The copied Agent Info URL could not run the shared hello helper')
+        page.wait_for_function("() => document.getElementById('agent-connect-activity').innerText.includes('last authenticated request')")
+        page.evaluate("() => { navigator.clipboard.writeText = async () => { throw new Error('Denied'); }; }")
+        page.click('#agent-connect-copy-url')
+        page.wait_for_function("() => document.getElementById('agent-connect-message').innerText.includes('copy it manually')")
+        selection = page.locator('#agent-connect-url').evaluate('field => field.value.slice(field.selectionStart, field.selectionEnd)')
+        check(selection == agentinfo_url, 'Clipboard fallback did not select the URL')
+        page.click('#agent-connect-close')
+    finally:
+        close_context(context)
+
+
 def test_agent_tunnel_requires_explicit_targets_and_keeps_focus(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
@@ -3866,6 +3921,33 @@ def test_agent_tunnel_requires_explicit_targets_and_keeps_focus(browser, access_
         check(page.evaluate("() => document.activeElement.id === 'agent-tunnel-close'"),
               'window focus stole focus from tunnel controls')
         check(page.locator('#agent-tunnel-info').is_hidden(), 'failed setup advertised usable Connect Info')
+        # Backend integration tests cover real SSH; this fixture exercises the ready-state controls.
+        remote_url = 'http://127.0.0.1:43210/agentinfo'
+        page.evaluate('payload => window.terminalTest.applyAgentTunnelStatusForTest(payload)', {
+            'status': 'ready', 'carrier_id': 'test-tunnel', 'agentinfo_url': remote_url,
+            'verified_at': time.time(), 'connect_info': 'Run the agent on this SSH host. AgentInfoURL: ' + remote_url,
+            'terminal_ids': ['main'], 'terminals': [{'terminal_id': 'main', 'last_request_at': None}],
+        })
+        check(page.input_value('#agent-tunnel-url') == remote_url, 'Tunnel showed the local Core URL')
+        check('verified:' in page.inner_text('#agent-tunnel-verification'), 'Tunnel verification time is missing')
+        check('waiting for agent' in page.inner_text('#agent-tunnel-activity'), 'Ready falsely confirmed agent access')
+        page.evaluate('''() => Object.defineProperty(navigator, 'clipboard', {
+            configurable: true, value: {writeText: async text => {window.copiedAgentText = text;}}
+        })''')
+        page.click('#agent-tunnel-copy-url')
+        page.wait_for_function('url => window.copiedAgentText === url', arg=remote_url)
+        for carrier in ('unrelated-tunnel', 'test-tunnel'):
+            page.evaluate('payload => window.terminalTest.applyAgentConnectionActivityForTest(payload)', {
+                'terminal_id': 'main', 'carrier_id': carrier, 'last_request_at': time.time(),
+            })
+            expected = 'waiting for agent' if carrier == 'unrelated-tunnel' else 'last authenticated request'
+            check(expected in page.inner_text('#agent-tunnel-activity'), 'Activity did not match the current SSH tunnel')
+        page.evaluate('() => window.terminalTest.clearEmitted()')
+        page.click('#agent-tunnel-check')
+        page.wait_for_selector('#agent-tunnel-apply:not([disabled])')
+        requests = page.evaluate("() => window.terminalTest.getEmitted().filter(e => e.event === 'agent_tunnel')")
+        check(len(requests) == 1 and requests[0]['args'][0]['operation'] == 'check', 'Check did not verify the current tunnel')
+        check(page.locator('#agent-tunnel-connection').is_hidden(), 'Failed check retained usable remote connection info')
         page.click('#agent-tunnel-close')
         check(not page.locator('#agent-tunnel-dialog').is_visible(), 'Close did not dismiss tunnel dialog')
     finally:
@@ -4599,6 +4681,7 @@ def main():
         test_connection_controls_follow_start_fields_without_legacy_payload,
         test_terminal_payload_text_is_not_control,
         test_ssh_host_key_prompts_default_to_cancel_and_bind_actions,
+        test_core_agent_connect_info_can_be_copied_and_confirmed,
         test_agent_tunnel_requires_explicit_targets_and_keeps_focus,
         test_ssh_history_and_auto_profile_follow_structured_success,
         test_ssh_profile_picker_and_settings_save_semantics,

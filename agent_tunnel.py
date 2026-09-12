@@ -49,6 +49,7 @@ class AgentTunnel:
         self.port = None
         self.active = False
         self.ready = False
+        self.verified_at = None
         self.grants = {}
         self.error = None
         self.lock = threading.RLock()
@@ -279,12 +280,26 @@ class AgentTunnel:
             )))
             if result.get('verified') is not True:
                 raise RuntimeError('Remote loopback verification failed.')
+            self.verified_at = time.time()
             if self._closed.is_set():
                 raise RuntimeError('SSH tunnel setup was cancelled.')
             threading.Thread(target=self._monitor, daemon=True).start()
         except Exception:
             self.close()
             raise
+
+    def check_connection(self):
+        with self.setup_lock:
+            if not self.ready or not self.active or not self.transport.is_active():
+                raise RuntimeError('SSH tunnel is not ready.')
+            instance_id = self.build_info(self)['instance_id']
+            result = self._exec(' '.join(shlex.quote(part) for part in (
+                self.runtime['python_path'], str(self.runtime['root'] / 'scripts/agent_tunnel_runtime.py'),
+                'verify', str(self.port), instance_id,
+            )))
+            if result.get('verified') is not True or not self.active:
+                raise RuntimeError('Remote loopback verification failed.')
+            self.verified_at = time.time()
 
     def _monitor(self):
         while not self._closed.wait(TUNNEL_MONITOR_INTERVAL):

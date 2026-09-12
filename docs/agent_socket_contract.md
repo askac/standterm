@@ -66,17 +66,39 @@ server-side display view when no browser snapshot is available. Snapshot and
 headless-grid text are untrusted display data and must not be used as a control
 signal.
 
+## Agent Connection Info Controls
+
+An authenticated local or authorized browser may send `agent_connect_info`
+without a payload. Its acknowledgement returns `status: "ok"`, the Core host's
+loopback `agentinfo_url`, tokenless `connect_info`, and `terminals` entries with
+`terminal_id`, `mode`, and nullable `last_request_at` (Unix seconds). Only valid
+local grants for that browser viewer are included. Reading info neither mints
+nor renews tokens. Failures return `status: "failed"` with `message`.
+
+`agent_connection_activity` is sent only to the granting viewer after token
+and binding validation, with `terminal_id`, `carrier_id` (null for local access),
+and `last_request_at`. A tunnel grant records activity only through its own
+tunnel ingress. This marks receipt of an authenticated request, not successful
+terminal input or a persistent connection. Tunnel self-checks do not count as
+agent activity. Local and remote Connect Info use the same tokenless format,
+skill and helper workflow, with paths and URL belonging to the stated runtime.
+
 ## SSH Agent Tunnel Controls
 
 The browser can send `agent_tunnel` with an SSH carrier `terminal_id` and
-`operation: "status" | "apply" | "stop"`. `apply` includes a nonempty `targets`
+`operation: "status" | "apply" | "check" | "stop"`. `apply` includes a nonempty `targets`
 array. Each entry carries `terminal_id`, `agent_binding_id`, `mode_version`, and
 `privacy_version` from that viewer's current Agent state. Stale selections fail;
 there is no automatic enrollment. These are browser controls, not external
 agent operations.
 
 The acknowledgement has `status: "ready" | "stopped" | "failed"`, current
-`terminal_ids`, and tokenless `connect_info` only when ready. A stopped response
+`terminal_ids`, and tokenless `connect_info` only when ready. Ready responses
+also include `carrier_id`, remote `agentinfo_url`, `verified_at` (Unix seconds),
+and per-tab `terminals` activity in the same format as `agent_connect_info`.
+`check` verifies the remote listener, helper bundle, and Core instance again
+without renewing grants or sending terminal input; a failed check revokes the
+tunnel and reports failure while preserving the SSH terminal. A stopped response
 can have `cleanup_pending: true`; local access is already revoked. Failures
 carry `message`. `agent_tunnel_state` notifies the owning viewer when a carrier
 stops. Starting while an earlier SSH forwarding request or cleanup is pending

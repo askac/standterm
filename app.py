@@ -4107,6 +4107,19 @@ def validate_external_agent_command_token(command, require_terminal=True, renew_
         state, error_code = get_external_agent_authorized_state(record)
         if error_code:
             return record, state, terminal_id, error_code
+        carrier_id = record.get('carrier_id')
+        if not carrier_id or tunnel_ingress.get() == carrier_id:
+            with external_agent_lock:
+                _, error_code = external_agent_attach_store.validate_hash(record['token_hash'])
+                if error_code:
+                    return record, state, terminal_id, error_code
+                received_at = time.time()
+                external_agent_attach_store._tokens[record['token_hash']]['last_request_at'] = received_at
+            socketio.emit('agent_connection_activity', {
+                'terminal_id': record['terminal_id'],
+                'carrier_id': carrier_id,
+                'last_request_at': received_at,
+            }, room=record['sid'])
     return record, state, terminal_id, None
 
 def get_external_agent_recommended_keepalive_ms(idle_timeout_seconds):
@@ -7435,6 +7448,64 @@ def update_agent_tunnel_targets(tunnel, targets):
         tunnel.ready = True
 
 
+def build_agent_connect_info(info, terminal_ids, runtime_label='Core host environment'):
+    return '\n'.join([
+        'StandTerm Agent Connect Info',
+        'Run the agent in: ' + runtime_label + '. The loopback URL and paths below belong to that environment.',
+        'Read the public skill below. Run discover, then hello for each intended tab and report the result.',
+        'Verify instance_id before proceeding. Do not run terminal input until the user specifies a task.',
+        'AgentInfoURL: ' + info['agentinfo_url'],
+        'Instance ID: ' + info['instance_id'],
+        'Python: ' + info['python_path'],
+        'Skill: ' + info['skill']['path'],
+        'Discover: ' + info['recommended_commands']['discover'],
+        'Authorized tabs: ' + (', '.join(terminal_ids) or 'none; authorize the intended tabs first'),
+        'Use --agentinfo with an explicit --terminal for each authorized tab. Never expose handoff tokens.',
+    ])
+
+
+def build_agent_connection_activity(records):
+    terminals = {}
+    with agent_lock:
+        for record in records:
+            with external_agent_lock:
+                current, error_code = external_agent_attach_store.validate_hash(record['token_hash'])
+            if error_code:
+                continue
+            state, error_code = get_external_agent_authorized_state(current)
+            if error_code:
+                continue
+            terminal_id = current['terminal_id']
+            last_request_at = current.get('last_request_at')
+            previous = terminals.get(terminal_id, {}).get('last_request_at')
+            terminals[terminal_id] = {
+                'terminal_id': terminal_id,
+                'mode': state.mode,
+                'last_request_at': max(previous or 0, last_request_at or 0) or None,
+            }
+    return list(terminals.values())
+
+
+@socketio.on('agent_connect_info')
+def on_agent_connect_info():
+    session_token = socket_session_tokens.get(request.sid)
+    if not session_token or not (
+            is_local_client_ip(socket_client_ips.get(request.sid, 'unknown'))
+            or socket_browser_authorized.get(request.sid, False)):
+        return {'status': 'failed', 'message': 'Agent connection info requires a local or authorized browser.'}
+    info = build_external_agentinfo_payload()
+    with external_agent_lock:
+        records = [dict(record) for record in external_agent_attach_store._tokens.values()
+                   if record['session_token'] == session_token and record['sid'] == request.sid
+                   and not record.get('carrier_id')]
+    activity = build_agent_connection_activity(records)
+    return {
+        'status': 'ok', 'agentinfo_url': info['agentinfo_url'],
+        'connect_info': build_agent_connect_info(info, [entry['terminal_id'] for entry in activity]),
+        'terminals': activity,
+    }
+
+
 def agent_tunnel_status(tunnel):
     if not tunnel or not tunnel.ready or not tunnel.active:
         return {
@@ -7444,15 +7515,15 @@ def agent_tunnel_status(tunnel):
     info = build_agent_tunnel_info(tunnel)
     return {
         'status': 'ready',
-        'terminal_ids': list(info['terminal_handoffs']),
-        'connect_info': '\n'.join([
-            'StandTerm Agent Connect Info (operator-provisioned SSH transport)',
-            'AgentInfoURL: ' + info['agentinfo_url'],
-            'Python: ' + info['python_path'],
-            'Skill: ' + info['skill']['path'],
-            'Discover: ' + info['recommended_commands']['discover'],
-            'Use --agentinfo with an explicit --terminal for each authorized tab.',
+        'carrier_id': tunnel.id,
+        'agentinfo_url': info['agentinfo_url'],
+        'verified_at': tunnel.verified_at,
+        'terminals': build_agent_connection_activity([
+            grant['record'] for terminal_id, grant in list(tunnel.grants.items())
+            if terminal_id in info['terminal_handoffs']
         ]),
+        'terminal_ids': list(info['terminal_handoffs']),
+        'connect_info': build_agent_connect_info(info, list(info['terminal_handoffs']), runtime_label='this SSH host'),
     }
 
 
@@ -7475,10 +7546,12 @@ def on_agent_tunnel(data):
         if tunnel:
             tunnel.close()
         return agent_tunnel_status(tunnel)
-    if operation != 'apply':
+    if operation not in {'apply', 'check'}:
         return {'status': 'failed', 'message': 'Invalid tunnel operation.'}
-    if not isinstance(data.get('targets'), list) or not 1 <= len(data['targets']) <= 64:
+    if operation == 'apply' and (not isinstance(data.get('targets'), list) or not 1 <= len(data['targets']) <= 64):
         return {'status': 'failed', 'message': 'Select at least one Agent-enabled terminal.'}
+    if operation == 'check' and (not tunnel or not tunnel.ready):
+        return agent_tunnel_status(tunnel)
     if tunnel and tunnel._closed.is_set() and (tunnel._forward_pending.is_set() or not tunnel._cleanup_done.is_set()):
         return {'status': 'failed', 'message': 'Previous tunnel cleanup is pending. Retry after it finishes; reconnect SSH if its server never replies.'}
     if not hasattr(bridge, 'agent_tunnel_setup_lock'):
@@ -7486,6 +7559,9 @@ def on_agent_tunnel(data):
     if not bridge.agent_tunnel_setup_lock.acquire(blocking=False):
         return {'status': 'failed', 'message': 'Agent tunnel setup is already in progress.'}
     try:
+        if operation == 'check':
+            tunnel.check_connection()
+            return agent_tunnel_status(tunnel)
         if not tunnel or not tunnel.active:
             tunnel = AgentTunnel(
                 bridge, request.sid, APP_DIR, build_info=build_agent_tunnel_info,
