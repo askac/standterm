@@ -81,7 +81,7 @@ jobs:
         id: setup
         continue-on-error: true
         timeout-minutes: 10
-        run: desktop/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron desktop/test/macos-setup-integration.cjs "$GITHUB_WORKSPACE/tools/.venv_macos/bin/python" "$DESKTOP_STAGE" > desktop/dist/evidence/setup-integration.log 2>&1
+        run: node desktop/node_modules/electron/cli.js desktop/test/macos-setup-integration.cjs "$GITHUB_WORKSPACE/tools/.venv_macos/bin/python" "$DESKTOP_STAGE" > desktop/dist/evidence/setup-integration.log 2>&1
       - name: Record build identity and verification results
         if: always() && env.DESKTOP_APP != ''
         env:
