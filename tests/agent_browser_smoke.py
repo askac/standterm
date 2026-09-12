@@ -3827,6 +3827,71 @@ def test_terminal_payload_text_is_not_control(browser, access_url):
         close_context(context)
 
 
+def test_ssh_host_key_prompts_default_to_cancel_and_bind_actions(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        page.evaluate('() => window.terminalTest.captureTerminalIoForTest()')
+        prompt = {
+            'terminal_id': 'main', 'message_type': 'connection_error',
+            'error_code': 'ssh_host_key_unknown', 'message': 'SSH host key is unknown.',
+            'action_type': 'confirm_ssh_host_key', 'action_id': 'observed-key',
+            'action_message': 'Received: ssh-ed25519 SHA256:example\n<img src=x onerror=alert(1)>',
+            'action_question': 'Remember this host key?',
+        }
+        page.evaluate('payload => window.terminalTest.handleSshOutput(payload)', prompt)
+        page.wait_for_function("() => document.activeElement.id === 'actionNoBtn'")
+        check(page.locator('#actionNoBtn').inner_text() == 'Cancel', 'host key prompt did not default to Cancel')
+        check(page.locator('#actionMessage img').count() == 0, 'fingerprint text was interpreted as HTML')
+        check('<img' in page.locator('#actionMessage').inner_text(), 'fingerprint text was lost')
+        page.evaluate('() => window.terminalTest.clearEmitted()')
+        page.click('#actionNoBtn')
+        emitted = page.evaluate('() => window.terminalTest.getEmitted()')
+        actions = [entry['args'][0] for entry in emitted if entry['event'] == 'ssh_host_key_action']
+        check(actions == [{'operation': 'cancel', 'action_id': 'observed-key', 'terminal_id': 'main'}],
+              'Cancel did not revoke the displayed action')
+
+        prompt.update(error_code='ssh_host_key_changed', action_message='Saved: SHA256:old\nReceived: SHA256:new')
+        page.evaluate('payload => window.terminalTest.handleSshOutput(payload)', prompt)
+        page.wait_for_function("() => document.activeElement.id === 'actionNoBtn'")
+        emitted = page.evaluate("""() => {
+            document.getElementById('host').value = 'edited.example';
+            window.terminalTest.clearEmitted();
+            document.getElementById('actionYesBtn').click();
+            document.getElementById('actionYesBtn').click();
+            return window.terminalTest.getEmitted();
+        }""")
+        actions = [entry['args'][0] for entry in emitted if entry['event'] == 'ssh_host_key_action']
+        check(actions == [{'operation': 'confirm', 'action_id': 'observed-key', 'terminal_id': 'main'}],
+              'Trust replayed an action or submitted the edited target')
+        check(not any(entry['event'] == 'start_ssh' for entry in emitted), 'Trust silently reconnected an edited form')
+        page.evaluate("""() => window.terminalTest.handleSshOutput({
+            terminal_id: 'main', message_type: 'host_key_result', status: 'success',
+            message: 'SSH host key saved. Connect again to continue.'
+        })""")
+        check('Connect again' in page.locator('#errorBox').inner_text(), 'Trust result omitted next step')
+
+        emitted = page.evaluate("""() => {
+            window.terminalTest.clearEmitted();
+            document.getElementById('host').value = '192.168.167.254';
+            document.getElementById('port').value = '2222';
+            document.getElementById('ssh-forget-host-key').click();
+            return window.terminalTest.getEmitted();
+        }""")
+        actions = [entry['args'][0] for entry in emitted if entry['event'] == 'ssh_host_key_action']
+        check(actions == [{'operation': 'forget', 'terminal_id': 'main', 'host': '192.168.167.254', 'port': '2222'}],
+              'Forget did not use the selected host and port')
+        page.evaluate("""() => window.terminalTest.handleSshOutput({
+            terminal_id: 'main', message_type: 'host_key_prompt', action_type: 'forget_ssh_host_key',
+            action_id: 'forget-key', action_message: 'Saved: SHA256:old', action_question: 'Forget this key?'
+        })""")
+        page.wait_for_function("() => document.activeElement.id === 'actionNoBtn'")
+        check(page.locator('#actionYesBtn').inner_text() == 'Forget key', 'Forget prompt used the wrong action label')
+        page.evaluate("() => document.getElementById('new-tab-btn').click()")
+        check(page.locator('#actionBox').is_hidden(), 'switching terminals left an actionable old prompt')
+    finally:
+        close_context(context)
+
+
 def test_ssh_history_and_auto_profile_follow_structured_success(browser, access_url):
     context = browser.new_context(viewport={'width': 1280, 'height': 800})
     page = context.new_page()
@@ -4488,6 +4553,7 @@ def main():
         test_access_url_token_is_remembered_only_for_recovery,
         test_connection_controls_follow_start_fields_without_legacy_payload,
         test_terminal_payload_text_is_not_control,
+        test_ssh_host_key_prompts_default_to_cancel_and_bind_actions,
         test_ssh_history_and_auto_profile_follow_structured_success,
         test_ssh_profile_picker_and_settings_save_semantics,
         test_browser_ssh_key_lifecycle_and_settings_transfer,

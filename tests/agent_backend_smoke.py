@@ -7187,6 +7187,95 @@ def test_ssh_bridge_is_provided_by_backend_module():
     bridge.close()
 
 
+def test_ssh_host_key_actions_require_confirmation_and_authorization():
+    from unittest.mock import patch
+    from terminal_backends.ssh_host_keys import SSHHostKeyStore
+
+    client = make_client()
+    session_token = current_session_token()
+    sid = current_sid_for_session(session_token)
+    plugin = standterm.TERMINAL_BACKEND_REGISTRY.get(standterm.CONNECTION_TYPE_SSH)
+    paramiko = standterm.get_paramiko()
+    key = paramiko.RSAKey.generate(2048)
+    target = {'terminal_id': 'main', 'host': '192.168.167.254', 'port': 22}
+    with tempfile.TemporaryDirectory(prefix='standterm-host-key-actions-') as directory:
+        path = Path(directory) / 'known_hosts'
+        store = SSHHostKeyStore(paramiko, path)
+        store.update(store.snapshot(target['host'], 22), key)
+        original = path.read_bytes()
+        with patch.dict(plugin._bridge_kwargs, {'known_hosts_path': path}):
+            client.emit('ssh_host_key_action', dict(target, operation='forget'))
+            prompt = last_payload(client, 'ssh_output')
+            assert prompt['message_type'] == 'host_key_prompt'
+            assert prompt['action_type'] == 'forget_ssh_host_key'
+            assert path.read_bytes() == original
+
+            for action_id in (None, [], 'wrong', '\u00e9'):
+                client.emit('ssh_host_key_action', dict(target, operation='confirm', action_id=action_id))
+                assert last_payload(client, 'ssh_output')['status'] == 'failed'
+                assert path.read_bytes() == original
+
+            standterm.socket_client_ips[sid] = '203.0.113.4'
+            client.emit('ssh_host_key_action', dict(target, operation='confirm', action_id=prompt['action_id']))
+            assert last_payload(client, 'ssh_output')['error_code'] == 'ssh_remote_unauthorized'
+            assert path.read_bytes() == original
+            standterm.socket_client_ips[sid] = '127.0.0.1'
+
+            client.emit('ssh_host_key_action', dict(target, operation='cancel', action_id=prompt['action_id']))
+            client.emit('ssh_host_key_action', dict(target, operation='confirm', action_id=prompt['action_id']))
+            assert last_payload(client, 'ssh_output')['status'] == 'failed'
+            assert path.read_bytes() == original
+
+            client.emit('ssh_host_key_action', dict(target, operation='forget'))
+            prompt = last_payload(client, 'ssh_output')
+            client.emit('ssh_host_key_action', dict(target, operation='confirm', action_id=prompt['action_id']))
+            assert last_payload(client, 'ssh_output')['status'] == 'success'
+            assert store.snapshot(target['host'], 22)['keys'] == []
+            client.emit('ssh_host_key_action', dict(target, operation='confirm', action_id=prompt['action_id']))
+            assert last_payload(client, 'ssh_output')['status'] == 'failed'
+
+            for damaged in ('|1|bad|hash ssh-rsa AAAA\n', '192.168.167.254 ssh-rsa invalid\n'):
+                path.write_text(damaged)
+                client.emit('ssh_host_key_action', dict(target, operation='forget'))
+                assert last_payload(client, 'ssh_output')['status'] == 'failed'
+                assert path.read_text() == damaged
+    client.disconnect()
+
+
+def test_ssh_host_key_confirmation_uses_server_observation():
+    from unittest.mock import patch
+
+    client = make_client()
+    sid = current_sid_for_session(current_session_token())
+    plugin = standterm.TERMINAL_BACKEND_REGISTRY.get(standterm.CONNECTION_TYPE_SSH)
+    paramiko = standterm.get_paramiko()
+    key = paramiko.RSAKey.generate(2048)
+    payload = {'terminal_id': 'main', 'host': '192.168.167.254', 'port': 22}
+    with tempfile.TemporaryDirectory(prefix='standterm-host-key-confirm-') as directory:
+        path = Path(directory) / 'known_hosts'
+        with patch.dict(plugin._bridge_kwargs, {'known_hosts_path': path}):
+            bridge = plugin.create_bridge(current_session_token(), 'main', payload)
+            bridge._host_key_snapshot = bridge._host_key_store.snapshot(payload['host'], 22)
+            failure = plugin.prepare_connection_failure(sid, bridge, payload, bridge._host_key_confirmation_hint(key))
+            bridge.close()
+            assert failure['action_type'] == 'confirm_ssh_host_key'
+            assert not path.exists()
+            client.emit('ssh_host_key_action', {
+                'terminal_id': 'other', 'operation': 'confirm', 'action_id': failure['action_id'],
+            })
+            assert last_payload(client, 'ssh_output')['status'] == 'failed'
+            assert not path.exists()
+            failure = plugin.prepare_connection_failure(sid, bridge, payload, bridge._host_key_confirmation_hint(key))
+            client.emit('ssh_host_key_action', {
+                'terminal_id': 'main', 'operation': 'confirm', 'action_id': failure['action_id'],
+                'host': 'attacker.test', 'key': 'attacker-key',
+            })
+            assert last_payload(client, 'ssh_output')['status'] == 'success'
+            assert bridge._host_key_store.snapshot(payload['host'], 22)['keys'] == [key]
+            assert bridge._host_key_store.snapshot('attacker.test', 22)['keys'] == []
+    client.disconnect()
+
+
 def test_local_shell_bridge_is_provided_by_backend_module():
     assert standterm.LocalShellBridge.__module__ == 'terminal_backends.local_shell'
     plugin = standterm.TERMINAL_BACKEND_REGISTRY.get(standterm.CONNECTION_TYPE_LOCAL_SHELL)
@@ -8339,6 +8428,8 @@ def main():
         test_settings_admin_grant_is_scoped_and_revocable,
         test_ssh_backend_action_contract_uses_public_bridge_method,
         test_ssh_bridge_is_provided_by_backend_module,
+        test_ssh_host_key_actions_require_confirmation_and_authorization,
+        test_ssh_host_key_confirmation_uses_server_observation,
         test_local_shell_bridge_is_provided_by_backend_module,
         test_local_shell_environment_advertises_truecolor_without_changing_term,
         test_local_shell_output_decode_tolerates_non_utf8_bytes,

@@ -229,6 +229,8 @@ RESERVED_BACKEND_PAYLOAD_KEYS = {
 }
 ALLOWED_CONNECTION_ACTION_TYPES = {
     'offer_localhost_key_setup',
+    'confirm_ssh_host_key',
+    'forget_ssh_host_key',
 }
 TERMINAL_ID_MAIN = 'main'
 MAX_TERMINAL_ID_LENGTH = 64
@@ -10599,6 +10601,61 @@ def on_setup_localhost_key_access(data):
         },
         room=request.sid,
     )
+
+@socketio.on('ssh_host_key_action')
+def on_ssh_host_key_action(data):
+    if not socket_session_tokens.get(request.sid):
+        return
+    data = data if isinstance(data, dict) else {}
+    terminal_id = validate_terminal_id_payload(data)
+    if not terminal_id:
+        return
+    client_ip = socket_client_ips.get(request.sid, 'unknown')
+    browser_authorized = socket_browser_authorized.get(request.sid, False)
+    result = {'status': 'failed', 'message': 'Invalid SSH host key action.', 'error_code': 'ssh_host_key_invalid_action'}
+    if not is_ssh_allowed_for_client(client_ip, browser_authorized=browser_authorized):
+        result.update(message='SSH access requires a local client or browser authorization.', error_code='ssh_remote_unauthorized')
+    elif data.get('operation') == 'forget':
+        pending_backend_actions.discard(request.sid)
+        payload, error = validate_start_ssh_payload({
+            'connection_type': CONNECTION_TYPE_SSH,
+            'terminal_id': terminal_id,
+            'host': data.get('host'),
+            'port': data.get('port'),
+        }, client_ip, browser_authorized=browser_authorized)
+        if error:
+            result['message'] = error.get('message') if isinstance(error, dict) else error
+        else:
+            try:
+                plugin = TERMINAL_BACKEND_REGISTRY.get(CONNECTION_TYPE_SSH)
+                action_id, action = plugin.prepare_host_key_forget(request.sid, payload)
+                if action:
+                    socketio.emit('ssh_output', {
+                        'message_type': 'host_key_prompt', 'terminal_id': terminal_id,
+                        'action_type': action.action_type, 'action_id': action_id,
+                        'action_message': action.message, 'action_question': action.question,
+                    }, room=request.sid)
+                    return
+                result = {'status': 'success', 'message': 'No saved SSH host key exists for this host and port.'}
+            except (OSError, ValueError) as exc:
+                result['message'] = str(exc)
+    elif data.get('operation') in {'confirm', 'cancel'}:
+        action, error = pending_backend_actions.get(
+            request.sid, data.get('action_id') if isinstance(data.get('action_id'), str) else '',
+            secrets.compare_digest, consume=True,
+        )
+        if action and action.action_type in {'confirm_ssh_host_key', 'forget_ssh_host_key'} and action.terminal_id == terminal_id:
+            if data['operation'] == 'cancel':
+                return
+            plugin = TERMINAL_BACKEND_REGISTRY.get(CONNECTION_TYPE_SSH)
+            result = plugin.execute_backend_action(action)
+        else:
+            result.update(message='No current SSH host key confirmation is available. Try again.',
+                          error_code=error or 'ssh_host_key_invalid_action')
+    socketio.emit('ssh_output', {
+        'message_type': 'host_key_result', 'terminal_id': terminal_id,
+        'message': result['message'], 'status': result['status'], 'error_code': result.get('error_code'),
+    }, room=request.sid)
 
 @socketio.on('ssh_input')
 def on_ssh_input(data):

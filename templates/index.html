@@ -1092,6 +1092,7 @@
                     <button type="button" id="ssh-session-picker-toggle" aria-expanded="false" aria-controls="ssh-session-picker-panel">History &amp; Profiles</button>
                     <div id="ssh-session-picker-panel" role="listbox"></div>
                 </div>
+                <button type="button" id="ssh-forget-host-key">Forget host key...</button>
                 <div id="ssh-session-message" aria-live="polite"></div>
             </div>
             <div id="local-shell-fields">
@@ -2099,6 +2100,7 @@
             let payloadEntries = [];
             let pendingAction = null;
             let pendingActionId = null;
+            let pendingActionTerminalId = null;
             let pendingReconnect = null;
             let overlayFallbackTimer = null;
             let socket = null;
@@ -6894,14 +6896,19 @@
             function hideActionPrompt() {
                 pendingAction = null;
                 pendingActionId = null;
+                pendingActionTerminalId = null;
                 actionBox.style.display = 'none';
                 actionMessageEl.innerText = '';
                 actionQuestionEl.innerText = '';
             }
 
-            function showActionPrompt(message, question, actionType, actionId) {
+            function showActionPrompt(message, question, actionType, actionId, terminalId = activeTerminalId) {
                 pendingAction = actionType;
                 pendingActionId = actionId || null;
+                pendingActionTerminalId = terminalId;
+                actionYesBtn.innerText = actionType === 'confirm_ssh_host_key' ? 'Trust key'
+                    : (actionType === 'forget_ssh_host_key' ? 'Forget key' : 'Yes');
+                actionNoBtn.innerText = actionType === 'offer_localhost_key_setup' ? 'No' : 'Cancel';
                 actionMessageEl.innerText = message || '';
                 actionQuestionEl.innerText = question || '';
                 actionBox.style.display = 'block';
@@ -7009,6 +7016,14 @@
                 submitConnection(getConnectionFormData());
             };
             connectBtn.onclick = doConnect;
+            document.getElementById('ssh-forget-host-key').onclick = () => {
+                if (!socket || !socket.connected || getActiveTerminalState()?.connecting) return;
+                hideActionPrompt();
+                socket.emit('ssh_host_key_action', {
+                    operation: 'forget', terminal_id: activeTerminalId,
+                    host: sshHostInput.value, port: sshPortInput.value
+                });
+            };
             sshSessionPickerToggle.onclick = () => {
                 const opening = !sshSessionPickerPanel.classList.contains('open');
                 sshSessionPickerPanel.classList.toggle('open', opening);
@@ -7428,6 +7443,12 @@
             window.addEventListener('focus', () => requestFreshUartPorts('window_focus'));
 
             actionYesBtn.onclick = () => {
+                if (['confirm_ssh_host_key', 'forget_ssh_host_key'].includes(pendingAction) && pendingActionId) {
+                    const payload = { operation: 'confirm', action_id: pendingActionId, terminal_id: pendingActionTerminalId };
+                    hideActionPrompt();
+                    socket.emit('ssh_host_key_action', payload);
+                    return;
+                }
                 if (pendingAction !== 'offer_localhost_key_setup' || !pendingActionId) return;
                 pendingReconnect = getConnectionFormData();
                 const actionId = pendingActionId;
@@ -7440,6 +7461,11 @@
             };
 
             actionNoBtn.onclick = () => {
+                if (['confirm_ssh_host_key', 'forget_ssh_host_key'].includes(pendingAction) && pendingActionId) {
+                    socket.emit('ssh_host_key_action', {
+                        operation: 'cancel', action_id: pendingActionId, terminal_id: pendingActionTerminalId
+                    });
+                }
                 hideActionPrompt();
                 resetConnectButton();
             };
@@ -7451,7 +7477,7 @@
             function handleSshOutputPayload(data) {
                 if (!data || typeof data !== 'object') return;
                 const messageType = data.message_type;
-                const allowedTypes = ['terminal', 'connection_error', 'setup_result', 'ssh_connected', 'ssh_closed'];
+                const allowedTypes = ['terminal', 'connection_error', 'setup_result', 'host_key_prompt', 'host_key_result', 'ssh_connected', 'ssh_closed'];
                 if (!allowedTypes.includes(messageType)) {
                     if (debugEnabled) appendPayloadLog('socket.invalid_message_type', JSON.stringify(data));
                     return;
@@ -7479,14 +7505,26 @@
                         if (state.id === activeTerminalId) {
                             showError(data.message || 'Connection failed.');
                             resetConnectButton();
-                            if (data.action_type === 'offer_localhost_key_setup' && data.action_id) {
-                                showActionPrompt(data.action_message, data.action_question, data.action_type, data.action_id);
+                            if (['offer_localhost_key_setup', 'confirm_ssh_host_key'].includes(data.action_type) && data.action_id) {
+                                showActionPrompt(data.action_message, data.action_question, data.action_type, data.action_id, state.id);
                             } else {
                                 hideActionPrompt();
                             }
                             updateActiveTerminalUi();
                         } else {
                             updateTabState(state);
+                        }
+                        break;
+                    case 'host_key_prompt':
+                        if (state.id === activeTerminalId && data.action_type === 'forget_ssh_host_key' && data.action_id) {
+                            showActionPrompt(data.action_message, data.action_question, data.action_type, data.action_id, state.id);
+                        }
+                        break;
+                    case 'host_key_result':
+                        if (state.id === activeTerminalId) {
+                            hideActionPrompt();
+                            showError(data.message || 'SSH host key action completed.');
+                            resetConnectButton();
                         }
                         break;
                     case 'setup_result':

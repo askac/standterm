@@ -317,6 +317,20 @@ SSH targets. Use **Settings > SSH Sessions** to create, update, reorder, or
 delete profiles and to clear history. Profiles and history stay in the current
 browser and never store passwords.
 
+For an unknown remote SSH host, Quick Connect shows its SHA256 host-key
+fingerprint before authentication. Verify it independently, choose **Trust key**,
+then connect again. A changed key shows both saved and received fingerprints and
+requires explicit replacement; **Cancel** is the default. **Forget host key...**
+removes only the host and port currently entered after confirmation. Existing
+connections remain open. These actions edit the Core execution account's
+`~/.ssh/known_hosts`, shared with other SSH clients; they do not delete browser
+authentication keys. Special policy records and symlinked files require manual
+management. The existing localhost key setup behavior is unchanged.
+
+Locations using the same IP and port share one host identity, so switching
+between them requires reviewing and replacing the saved key. Saved profile names
+do not create separate host identities.
+
 A saved profile can explicitly generate an Ed25519 key with **Use browser key
 authentication**. The private `CryptoKey` is non-extractable and stays in that
 browser's IndexedDB. Copy the displayed OpenSSH public key to the remote

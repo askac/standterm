@@ -118,23 +118,35 @@ class BackendActionStore:
     def __init__(self, time_func=None):
         self._actions_by_sid = {}
         self._time_func = time_func or time.time
+        self._lock = threading.RLock()
 
     def clear(self):
-        self._actions_by_sid.clear()
+        with self._lock:
+            self._actions_by_sid.clear()
 
     def discard(self, sid):
-        self._actions_by_sid.pop(sid, None)
+        with self._lock:
+            self._actions_by_sid.pop(sid, None)
 
     def pop(self, sid, default=None):
-        return self._actions_by_sid.pop(sid, default)
+        with self._lock:
+            return self._actions_by_sid.pop(sid, default)
 
     def set(self, sid, action_id, action):
-        self._actions_by_sid[sid] = {
-            'action_id': action_id,
-            'action': action,
-        }
+        with self._lock:
+            self._actions_by_sid[sid] = {
+                'action_id': action_id,
+                'action': action,
+            }
 
-    def get(self, sid, action_id=None, compare_digest=None):
+    def get(self, sid, action_id=None, compare_digest=None, consume=False):
+        with self._lock:
+            result = self._get(sid, action_id, compare_digest)
+            if consume and action_id is not None and compare_digest is not None and result[0] is not None:
+                self._actions_by_sid.pop(sid, None)
+            return result
+
+    def _get(self, sid, action_id, compare_digest):
         if action_id is None or compare_digest is None:
             return self._actions_by_sid.get(sid)
         pending = self._actions_by_sid.get(sid)
@@ -147,7 +159,7 @@ class BackendActionStore:
         if self._time_func() > action.expires_at:
             self._actions_by_sid.pop(sid, None)
             return None, 'backend_action_expired'
-        if not isinstance(action_id, str) or not compare_digest(action_id, pending.get('action_id', '')):
+        if not isinstance(action_id, str) or not action_id.isascii() or not compare_digest(action_id, pending.get('action_id', '')):
             return None, 'backend_action_no_pending_action'
         return action, None
 
