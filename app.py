@@ -4077,12 +4077,15 @@ def mint_external_agent_attach_token_for_viewer(session_token, terminal_id, view
         idle_timeout_seconds = AGENT_EXTERNAL_ATTACH_TOKEN_IDLE_TIMEOUT_SECONDS
         if idle_timeout_seconds is not None:
             idle_timeout_seconds *= idle_timeout_multiplier
-        return mint_external_agent_attach_token(
+        result = mint_external_agent_attach_token(
             session_token,
             terminal_id,
             state.sid,
             idle_timeout_seconds=idle_timeout_seconds,
         )
+    if not result[2]:
+        schedule_agent_tunnel_enrollment(state)
+    return result
 
 def validate_external_agent_command_token(command, require_terminal=True, renew_token=True):
     if not isinstance(command, dict):
@@ -7378,38 +7381,103 @@ def revoke_agent_tunnel_grants(tunnel, terminal_ids=None):
     if terminal_ids is None:
         agent_tunnels.pop(tunnel.id, None)
         socketio.emit('agent_tunnel_state', {
-            'terminal_id': tunnel.bridge.terminal_id, 'status': 'stopped',
+            'terminal_id': tunnel.bridge.terminal_id, 'carrier_id': tunnel.id, 'status': 'stopped',
         }, room=tunnel.sid)
 
 
-def update_agent_tunnel_targets(tunnel, targets):
-    if not isinstance(targets, list) or not targets or len(targets) > 64:
-        raise ValueError('Select at least one Agent-enabled terminal.')
+def agent_tunnel_panel_targets(tunnel):
     with agent_lock:
+        return [{
+            'terminal_id': state.terminal_id, 'agent_binding_id': state.agent_binding_id,
+        } for state in agent_states.values()
+            if state.session_token == tunnel.bridge.owner_session and state.sid == tunnel.sid
+            and is_external_agent_state_visible(state)
+            and get_bridge(state.session_token, state.terminal_id)
+            and is_terminal_bridge_allowed_for_sid(
+                get_bridge(state.session_token, state.terminal_id), tunnel.sid)]
+
+
+def schedule_agent_tunnel_enrollment(state, renew=True):
+    session_token, sid = state.session_token, state.sid
+    terminal_id, binding_id = state.terminal_id, state.agent_binding_id
+
+    def grant_version(tunnel):
+        grant = tunnel.grants.get(terminal_id)
+        if not grant:
+            return None
+        with external_agent_lock:
+            stored = external_agent_attach_store._tokens.get(grant['record']['token_hash'], {})
+            return grant['record']['token_hash'], stored.get('revoked_at')
+
+    def enroll(tunnel, expected_grant):
+        # Wait for initial provisioning too; new Enable events must not be lost.
+        with tunnel.bridge.agent_tunnel_setup_lock, tunnel.setup_lock:
+            if not tunnel.active or not tunnel.ready:
+                return
+            selected = [target for target in agent_tunnel_panel_targets(tunnel)
+                        if target['terminal_id'] == terminal_id and target['agent_binding_id'] == binding_id]
+            if not selected:
+                return
+            try:
+                update_agent_tunnel_targets(
+                    tunnel, selected, replace=False, renew=renew,
+                    expected_grant=(grant_version, expected_grant),
+                )
+            except Exception:
+                with agent_lock:
+                    current = get_agent_state(session_token, terminal_id, sid)
+                    if (not is_external_agent_state_visible(current)
+                            or current.agent_binding_id != binding_id):
+                        return
+                    grant = tunnel.grants.get(terminal_id)
+                    revoke_agent_tunnel_grants(tunnel, {terminal_id})
+                    if grant and tunnel.active:
+                        tunnel.grants[terminal_id] = grant
+                if tunnel.active:
+                    socketio.emit('agent_tunnel_state', {
+                        'terminal_id': tunnel.bridge.terminal_id, 'carrier_id': tunnel.id,
+                        'status': 'sync_failed',
+                        'message': 'Could not update Agent access. Start / Renew Access to retry.',
+                    }, room=tunnel.sid)
+
+    for tunnel in list(agent_tunnels.values()):
+        if tunnel.bridge.owner_session == session_token and tunnel.sid == sid and not tunnel._closed.is_set():
+            with agent_lock:
+                expected_grant = grant_version(tunnel)
+            socketio.start_background_task(enroll, tunnel, expected_grant)
+
+
+def update_agent_tunnel_targets(tunnel, targets, replace=True, renew=True, expected_grant=None):
+    if not isinstance(targets, list):
+        raise ValueError('Invalid Agent Panel authorization.')
+    with agent_lock:
+        if expected_grant and expected_grant[0](tunnel) != expected_grant[1]:
+            return
         selected = {}
         for target in targets:
             terminal_id = validate_terminal_id_payload(target)
             if not terminal_id or terminal_id in selected:
-                raise ValueError('Invalid or duplicate terminal selection.')
+                raise ValueError('Invalid or duplicate terminal authorization.')
             state = get_agent_state(tunnel.bridge.owner_session, terminal_id, tunnel.sid)
             if (not state or not is_external_agent_state_visible(state)
                     or not get_bridge(tunnel.bridge.owner_session, terminal_id)
                     or not is_terminal_bridge_allowed_for_sid(
                         get_bridge(tunnel.bridge.owner_session, terminal_id), tunnel.sid)
-                    or target.get('agent_binding_id') != state.agent_binding_id
-                    or target.get('mode_version') != state.mode_version
-                    or target.get('privacy_version') != state.privacy_version):
-                raise ValueError('Terminal authorization changed. Refresh and select it again.')
+                    or target.get('agent_binding_id') != state.agent_binding_id):
+                raise ValueError('Terminal authorization changed during setup.')
             selected[terminal_id] = state
         if not tunnel.active or not tunnel.transport.is_active():
             raise ValueError('SSH tunnel is disconnected.')
-        removed = set(tunnel.grants) - set(selected)
+        removed = set(tunnel.grants) - set(selected) if replace else set()
         old_paths = [tunnel.grants[terminal_id]['path'] for terminal_id in removed]
         revoke_agent_tunnel_grants(tunnel, removed)
+        publishing = {}
         for terminal_id, state in selected.items():
             grant = tunnel.grants.get(terminal_id)
             if grant and (validate_external_agent_record(grant['record'])
                           or get_external_agent_authorized_state(grant['record'])[1]):
+                if not renew:
+                    continue
                 revoke_agent_tunnel_grants(tunnel, {terminal_id})
                 grant = None
             if not grant:
@@ -7423,11 +7491,12 @@ def update_agent_tunnel_targets(tunnel, targets):
                     'published': False,
                     'path': 'handoffs/terminal-' + hashlib.sha256(terminal_id.encode()).hexdigest()[:24] + '.json',
                 }
+            publishing[terminal_id] = tunnel.grants[terminal_id]
     for path in old_paths:
         tunnel.remove_file(path)
     info = build_agent_tunnel_info(tunnel, include_pending=True)
     runtime = {**tunnel.runtime, 'terminal_handoffs': info['terminal_handoffs']}
-    for terminal_id, grant in list(tunnel.grants.items()):
+    for terminal_id, grant in publishing.items():
         if terminal_id not in runtime['terminal_handoffs']:
             raise ValueError('Terminal authorization changed during setup.')
         payload = build_external_agent_token_payload(
@@ -7439,20 +7508,21 @@ def update_agent_tunnel_targets(tunnel, targets):
     with agent_lock:
         if not tunnel.active or not tunnel.transport.is_active():
             raise ValueError('SSH tunnel disconnected during setup.')
-        for grant in tunnel.grants.values():
-            if (validate_external_agent_record(grant['record'])
+        for terminal_id, grant in publishing.items():
+            if (tunnel.grants.get(terminal_id) is not grant
+                    or validate_external_agent_record(grant['record'])
                     or get_external_agent_authorized_state(grant['record'])[1]):
                 raise ValueError('Terminal authorization changed during setup.')
-        for grant in tunnel.grants.values():
+        for grant in publishing.values():
             grant['published'] = True
         tunnel.ready = True
 
 
 def build_agent_connect_info(info, terminal_ids, runtime_label='Core host environment'):
     return '\n'.join([
-        'StandTerm Agent Connect Info',
+        'StandTerm Agent Connection Prompt',
         'Run the agent in: ' + runtime_label + '. The loopback URL and paths below belong to that environment.',
-        'Read the public skill below. Run discover, then hello for each intended tab and report the result.',
+        'Fetch AgentInfoURL below and read the reported skill. Run discover, then hello for each intended tab and report the result.',
         'Verify instance_id before proceeding. Do not run terminal input until the user specifies a task.',
         'AgentInfoURL: ' + info['agentinfo_url'],
         'Instance ID: ' + info['instance_id'],
@@ -7513,17 +7583,22 @@ def agent_tunnel_status(tunnel):
             'cleanup_pending': bool(tunnel and (tunnel._forward_pending.is_set() or not tunnel._cleanup_done.is_set())),
         }
     info = build_agent_tunnel_info(tunnel)
+    endpoint = tunnel.bridge.sftp_endpoint() or {}
+    ssh_context = {'ssh_tab': tunnel.bridge.terminal_id}
+    ssh_context.update({key: endpoint[key] for key in ('host', 'port', 'user') if key in endpoint})
     return {
         'status': 'ready',
         'carrier_id': tunnel.id,
         'agentinfo_url': info['agentinfo_url'],
         'verified_at': tunnel.verified_at,
+        'ssh_context': ssh_context,
         'terminals': build_agent_connection_activity([
             grant['record'] for terminal_id, grant in list(tunnel.grants.items())
             if terminal_id in info['terminal_handoffs']
         ]),
         'terminal_ids': list(info['terminal_handoffs']),
-        'connect_info': build_agent_connect_info(info, list(info['terminal_handoffs']), runtime_label='this SSH host'),
+        'connect_info': build_agent_connect_info(
+            info, list(info['terminal_handoffs']), runtime_label='SSH host ' + json.dumps(ssh_context)),
     }
 
 
@@ -7548,8 +7623,6 @@ def on_agent_tunnel(data):
         return agent_tunnel_status(tunnel)
     if operation not in {'apply', 'check'}:
         return {'status': 'failed', 'message': 'Invalid tunnel operation.'}
-    if operation == 'apply' and (not isinstance(data.get('targets'), list) or not 1 <= len(data['targets']) <= 64):
-        return {'status': 'failed', 'message': 'Select at least one Agent-enabled terminal.'}
     if operation == 'check' and (not tunnel or not tunnel.ready):
         return agent_tunnel_status(tunnel)
     if tunnel and tunnel._closed.is_set() and (tunnel._forward_pending.is_set() or not tunnel._cleanup_done.is_set()):
@@ -7571,7 +7644,7 @@ def on_agent_tunnel(data):
             agent_tunnels[tunnel.id] = tunnel
             tunnel.start()
         with tunnel.setup_lock:
-            update_agent_tunnel_targets(tunnel, data.get('targets'))
+            update_agent_tunnel_targets(tunnel, agent_tunnel_panel_targets(tunnel))
         return agent_tunnel_status(tunnel)
     except Exception as exc:
         if tunnel:
@@ -8488,12 +8561,16 @@ def on_agent_attach(data):
         return
     bridge.attach(request.sid)
     with agent_lock:
+        previous = get_agent_state(session_token, terminal_id, request.sid)
+        enabled = not previous or previous.mode == AGENT_MODE_DISABLED
         state = get_or_create_agent_state(session_token, terminal_id, request.sid)
         if state.mode == AGENT_MODE_DISABLED:
             state.mode = AGENT_MODE_OBSERVE
             bump_agent_mode_version(state)
         record_agent_audit_event(state, AGENT_AUDIT_VIEWER_ATTACH)
         emit_agent_state(request.sid, state)
+    if enabled:
+        schedule_agent_tunnel_enrollment(state)
 
 @socketio.on(AGENT_EVENT_DETACH)
 def on_agent_detach(data):
@@ -8585,6 +8662,8 @@ def on_agent_mode_set(data):
             sid=request.sid,
         )
         emit_agent_state(request.sid, state)
+    if previous_mode == AGENT_MODE_DISABLED and mode != AGENT_MODE_DISABLED:
+        schedule_agent_tunnel_enrollment(state)
 
 @socketio.on(AGENT_EVENT_PAUSE)
 def on_agent_pause(data):
@@ -8649,6 +8728,7 @@ def on_agent_resume(data):
             sid=request.sid,
         )
         emit_agent_state(request.sid, state)
+    schedule_agent_tunnel_enrollment(state, renew=False)
 
 @socketio.on(AGENT_EVENT_PRIVACY_SET)
 def on_agent_privacy_set(data):

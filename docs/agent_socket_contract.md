@@ -86,27 +86,34 @@ skill and helper workflow, with paths and URL belonging to the stated runtime.
 ## SSH Agent Tunnel Controls
 
 The browser can send `agent_tunnel` with an SSH carrier `terminal_id` and
-`operation: "status" | "apply" | "check" | "stop"`. `apply` includes a nonempty `targets`
-array. Each entry carries `terminal_id`, `agent_binding_id`, `mode_version`, and
-`privacy_version` from that viewer's current Agent state. Stale selections fail;
-there is no automatic enrollment. These are browser controls, not external
-agent operations.
+`operation: "status" | "apply" | "check" | "stop"`. `apply` derives authorized
+tabs from Agent Panel state for the same session and browser viewer; client
+`targets` are ignored. An empty set is valid. New Enable events automatically
+provision the tab's handoff in active tunnels, with binding validation before
+publication. Agent mode, privacy, and human-input gates still apply to every
+command. These are browser controls, not external agent operations.
 
 The acknowledgement has `status: "ready" | "stopped" | "failed"`, current
 `terminal_ids`, and tokenless `connect_info` only when ready. Ready responses
 also include `carrier_id`, remote `agentinfo_url`, `verified_at` (Unix seconds),
+`ssh_context` (`ssh_tab` plus available `host`, `port`, and `user`),
 and per-tab `terminals` activity in the same format as `agent_connect_info`.
 `check` verifies the remote listener, helper bundle, and Core instance again
 without renewing grants or sending terminal input; a failed check revokes the
 tunnel and reports failure while preserving the SSH terminal. A stopped response
 can have `cleanup_pending: true`; local access is already revoked. Failures
-carry `message`. `agent_tunnel_state` notifies the owning viewer when a carrier
-stops. Starting while an earlier SSH forwarding request or cleanup is pending
+carry `message`. `agent_tunnel_state` includes `terminal_id` and `carrier_id`
+and notifies the owning viewer when a carrier stops (`status: "stopped"`) or a
+background enrollment fails (`status: "sync_failed"`, with `message`). Starting while an earlier SSH forwarding request or cleanup is pending
 fails until that operation settles or the operator reconnects SSH.
 
 The tunnel exposes the same `/agentinfo` schema and `/agent/external/command`
 dispatcher with runtime-specific paths and URL. Only fully provisioned target
 handoffs are advertised; existing targets remain usable during enrollment.
+Info reads, status, checks, and resume never reissue expired or revoked grants.
+Explicit Start, new Enable, and browser Mint may do so; queued enrollment does
+not override a later revoke. Disabling access immediately denies commands even
+when an obsolete handoff file remains in the private remote runtime until Stop.
 Each grant is bound to its SSH connection instance and viewer, independently of
 local tokens. Both endpoints of file-copy must belong to the same tunnel.
 Stop/disconnect fences grants and queued actions before asynchronous remote

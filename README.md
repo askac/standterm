@@ -519,17 +519,21 @@ Shell unless `STANDTERM_ALLOW_REMOTE_UART=1` is set.
 ## SSH Agent Tunnel
 
 On a connected SSH tab, **Agent Tunnel** can provision remote Agent access
-without reconnecting the terminal. Enable Agent on each target tab, select the
-tabs individually, then choose **Start / Apply Selection**. Give the resulting
-**Connect Info** to the agent running on that SSH host. It uses the same skills,
+without reconnecting the terminal. Use each tab's Agent Panel to enable access
+and choose its permission, then choose **Start / Renew Access**. The tunnel
+automatically includes tabs enabled later in the same browser viewer; there is
+no second selection list. You can also start with no enabled tabs. Give the
+resulting **Copy Prompt** text to the agent running on that SSH host. It uses the same skills,
 Python helpers, discovery, and per-tab permissions as a local external agent,
 including normal file-copy approval between two authorized tabs.
 
 The dialog shows the remote **Agent Info URL** with **Copy URL** and **Copy
-Connect Info** actions. The URL's `127.0.0.1` belongs to the SSH host. Paste
-Connect Info to the agent there; it includes the existing skill and discovery
+Prompt** actions. **Remote Agent Info** appears in the toolbar only after that
+SSH tab's tunnel is ready, and opens the same prompt and activity information.
+The URL's `127.0.0.1` belongs to the SSH host. Paste the prompt
+to the agent there; it identifies the SSH host and tab and includes the existing skill and discovery
 command and asks the agent to run `hello` for each intended tab. Local token
-minting is not required: Start creates separate grants for the selected tabs.
+minting is not required: Start creates separate grants for Agent-enabled tabs.
 
 **Check Tunnel** checks the remote listener, helper bundle, and connection to
 this Core instance again. The verification timestamp confirms that path works;
@@ -549,8 +553,10 @@ helper and skill bundle before showing usable Connect Info. OpenSSH
 handoffs live in a private temporary directory on the SSH host. The tunnel
 exposes only scoped Agent discovery and commands over HTTP inside SSH.
 
-Applying a new selection removes unchecked grants and can renew expired or
-revoked grants. **Stop Tunnel**, SSH disconnect, or browser viewer disconnect
+Disabling or pausing access in Agent Panel immediately restricts remote access.
+**Start / Renew Access**, a new Enable, or an explicit browser Mint can renew
+expired or revoked grants. Reading info, checking the tunnel, ordinary mode
+changes, and resume do not renew invalid grants. **Stop Tunnel**, SSH disconnect, or browser viewer disconnect
 revokes this tunnel's grants and pending input without revoking local agents.
 Stopping preserves the SSH terminal and Files connection. An interrupted
 command is never replayed automatically. If SSH is already unreachable, remote
@@ -578,14 +584,15 @@ Typical local flow:
 4. Mint a standard or 3x-idle external-agent token from the browser Agent UI.
    When the Agent panel is hidden, the same actions are available in the status
    bar for the active terminal.
-5. Open **Agent Connect Info** in the Core toolbar. **Copy URL** provides the
-   local Agent Info URL; **Copy Connect Info** includes the skill, discovery
+5. Open **Local Agent Info** in the Core toolbar. **Copy URL** provides the
+   local Agent Info URL; **Copy Prompt** includes the skill, discovery
    command, and instructions to run `hello` for each intended tab. Give this to
    the agent running in the Core host environment (WSL when Core runs in WSL).
    The dialog shows each tab's last authenticated request to confirm access.
 
-Reading or copying Connect Info does not mint tokens. The dialog also links to
-the Agent panel and, on a connected SSH tab, **Agent Tunnel** for remote agents.
+Reading or copying a prompt does not mint tokens. **Local Agent Info** remains
+available while viewing SSH tabs, and links to the Agent Panel. Use **Agent
+Tunnel** on the SSH tab to set up access for an agent running on that SSH host.
 
 Startup writes a tokenless bootstrap file in the per-user External Agent runtime
 directory:

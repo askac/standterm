@@ -133,14 +133,18 @@ class AgentTunnelTests(unittest.TestCase):
                                      ssh_term='xterm', local_public_key_types=[])
         bridge.ssh.close()
         bridge.ssh = ssh
+        host, port = ssh.get_transport().getpeername()
+        bridge._sftp_endpoint = {'host': host, 'port': port, 'user': getpass.getuser(), 'route': 'direct'}
         standterm.set_bridge(self.session, 'carrier', bridge)
         return bridge
 
     def open_tunnel(self, ssh, terminal_ids=('main', 'second')):
+        for terminal_id in self.bridges:
+            if terminal_id not in terminal_ids:
+                self.client.emit(standterm.AGENT_EVENT_MODE_SET, {'terminal_id': terminal_id, 'mode': 'disabled'})
         bridge = self.carrier(ssh)
         result = self.client.emit('agent_tunnel', {
             'terminal_id': 'carrier', 'operation': 'apply',
-            'targets': targets(self.session, self.sid, terminal_ids),
         }, callback=True)
         self.assertEqual(result['status'], 'ready', result)
         return bridge.agent_tunnel
@@ -202,7 +206,9 @@ class AgentTunnelTests(unittest.TestCase):
             tunnel = self.open_tunnel(ssh)
             initial = standterm.agent_tunnel_status(tunnel)
             self.assertEqual(initial['agentinfo_url'], tunnel.runtime['base_url'] + '/agentinfo')
-            self.assertIn('this SSH host', initial['connect_info'])
+            self.assertIn('SSH host', initial['connect_info'])
+            self.assertIn('"ssh_tab": "carrier"', initial['connect_info'])
+            self.assertEqual(initial['ssh_context']['host'], '127.0.0.1')
             self.assertTrue(all(entry['last_request_at'] is None for entry in initial['terminals']))
             token = tunnel.grants['main']['token']
             standterm.process_external_agent_command({'op': 'hello', 'token': token, 'terminal_id': 'main'})
@@ -409,7 +415,6 @@ class AgentTunnelTests(unittest.TestCase):
             entered = threading.Event()
             release = threading.Event()
             original = tunnel.write_json
-            errors = []
 
             def blocked_write(path, payload):
                 if payload.get('terminal_id') == 'second':
@@ -417,15 +422,8 @@ class AgentTunnelTests(unittest.TestCase):
                     self.assertTrue(release.wait(5))
                 return original(path, payload)
 
-            def update():
-                try:
-                    standterm.update_agent_tunnel_targets(tunnel, targets(self.session, self.sid, ['main', 'second']))
-                except Exception as exc:
-                    errors.append(exc)
-
             with patch.object(tunnel, 'write_json', blocked_write):
-                thread = threading.Thread(target=update)
-                thread.start()
+                self.client.emit(standterm.AGENT_EVENT_MODE_SET, {'terminal_id': 'second', 'mode': 'approval'})
                 try:
                     self.assertTrue(entered.wait(5))
                     status, info = request_json(tunnel.runtime['base_url'] + '/agentinfo')
@@ -434,9 +432,8 @@ class AgentTunnelTests(unittest.TestCase):
                     self.assertEqual(self.command(tunnel, 'main', 'heartbeat')['status'], 'ok')
                 finally:
                     release.set()
-                    thread.join(5)
-            self.assertFalse(thread.is_alive())
-            self.assertEqual(errors, [])
+                    fixture.wait_until(lambda: tunnel.grants.get('second', {}).get('published'),
+                                       'newly enabled tab did not become available')
             self.assertEqual(set(standterm.build_agent_tunnel_info(tunnel)['terminal_handoffs']), {'main', 'second'})
 
     def test_file_copy_keeps_approval_and_checks_both_grants(self):
@@ -466,6 +463,146 @@ class AgentTunnelTests(unittest.TestCase):
             standterm.update_agent_tunnel_targets(tunnel, targets(self.session, self.sid, ['main']))
             self.approve('main', pending['action_id'])
             self.assertFalse(Path(fields['destination_path']).exists())
+
+    def test_empty_tunnel_follows_panel_permissions_and_excludes_other_viewers(self):
+        with ssh_server() as ssh:
+            tunnel = self.open_tunnel(ssh, ())
+            other = standterm.get_or_create_agent_state(self.session, 'third', self.sid + '-other')
+            other.mode = standterm.AGENT_MODE_OBSERVE
+            result = self.client.emit('agent_tunnel', {
+                'terminal_id': 'carrier', 'operation': 'apply',
+                'targets': [{'terminal_id': 'third'}],
+            }, callback=True)
+            self.assertEqual(result['status'], 'ready', result)
+            self.assertEqual(result['terminal_ids'], [])
+            self.client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': 'main'})
+            fixture.wait_until(lambda: tunnel.grants.get('main', {}).get('published'), 'Enable did not enroll the tab')
+            self.assertEqual(self.command(tunnel, 'main', 'hello')['status'], 'ok')
+            self.client.emit(standterm.AGENT_EVENT_PAUSE, {'terminal_id': 'main'})
+            self.assertEqual(standterm.agent_tunnel_status(tunnel)['terminal_ids'], [])
+            self.assertEqual(self.command(tunnel, 'main', 'hello')['status'], 'failed')
+            self.client.emit(standterm.AGENT_EVENT_RESUME, {'terminal_id': 'main'})
+            self.assertEqual(self.command(tunnel, 'main', 'hello')['status'], 'ok')
+            self.client.emit(standterm.AGENT_EVENT_MODE_SET, {'terminal_id': 'main', 'mode': 'disabled'})
+            self.assertEqual(self.command(tunnel, 'main', 'hello')['status'], 'failed')
+            self.assertNotIn('third', tunnel.grants)
+
+    def test_reads_and_unrelated_enable_do_not_revive_invalid_grants(self):
+        with ssh_server() as ssh:
+            tunnel = self.open_tunnel(ssh)
+            self.assertEqual(self.command(tunnel, 'main', 'revoke')['status'], 'ok')
+            expired = tunnel.grants['second']['record']
+            with standterm.external_agent_lock:
+                standterm.external_agent_attach_store._tokens[expired['token_hash']]['expires_at'] = time.time() - 1
+            original = {key: grant['token'] for key, grant in tunnel.grants.items()}
+            count = len(standterm.external_agent_attach_store._tokens)
+            for operation in ('status', 'check'):
+                result = self.client.emit('agent_tunnel', {'terminal_id': 'carrier', 'operation': operation}, callback=True)
+                self.assertEqual(result['terminal_ids'], [])
+            self.assertEqual(request_json(tunnel.runtime['base_url'] + '/agentinfo')[1]['terminal_handoffs'], {})
+            self.client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': 'main'})
+            state = standterm.get_agent_state(self.session, 'main', self.sid)
+            standterm.emit_agent_state(self.sid, state)
+            with patch.object(standterm.socketio, 'start_background_task') as tasks:
+                self.client.emit(standterm.AGENT_EVENT_RESUME, {'terminal_id': 'second'})
+                for call in tasks.call_args_list:
+                    call.args[0](*call.args[1:])
+            self.assertEqual(len(standterm.external_agent_attach_store._tokens), count)
+            self.client.emit(standterm.AGENT_EVENT_MODE_SET, {'terminal_id': 'third', 'mode': 'observe'})
+            fixture.wait_until(lambda: tunnel.grants.get('third', {}).get('published'), 'new Enable did not finish')
+            self.assertEqual(standterm.agent_tunnel_status(tunnel)['terminal_ids'], ['third'])
+            self.assertEqual({key: tunnel.grants[key]['token'] for key in original}, original)
+
+    def test_queued_mint_cannot_override_a_later_revoke(self):
+        with ssh_server() as ssh:
+            tunnel = self.open_tunnel(ssh)
+            state = standterm.get_agent_state(self.session, 'main', self.sid)
+            old_token = tunnel.grants['main']['token']
+
+            def mint_and_run(revoke):
+                with patch.object(standterm.socketio, 'start_background_task') as tasks:
+                    result = standterm.mint_external_agent_attach_token_for_viewer(
+                        self.session, 'main', state.viewer_id, state.agent_binding_id)
+                    self.assertIsNone(result[2])
+                    self.assertEqual(tasks.call_count, 1)
+                    if revoke:
+                        self.assertEqual(self.command(tunnel, 'main', 'revoke')['status'], 'ok')
+                    call = tasks.call_args
+                    call.args[0](*call.args[1:])
+
+            mint_and_run(True)
+            self.assertEqual(tunnel.grants['main']['token'], old_token)
+            self.assertEqual(self.command(tunnel, 'main', 'hello')['status'], 'failed')
+            mint_and_run(False)
+            self.assertNotEqual(tunnel.grants['main']['token'], old_token)
+            self.assertEqual(self.command(tunnel, 'main', 'hello')['status'], 'ok')
+
+    def test_disable_during_enrollment_does_not_block_other_tabs(self):
+        with ssh_server() as ssh:
+            tunnel = self.open_tunnel(ssh, ('main',))
+            entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+            original_write = tunnel.write_json
+            original_update = standterm.update_agent_tunnel_targets
+
+            def blocked_write(path, payload):
+                if payload.get('terminal_id') == 'second':
+                    entered.set()
+                    self.assertTrue(release.wait(5))
+                return original_write(path, payload)
+
+            def update(*args, **kwargs):
+                try:
+                    return original_update(*args, **kwargs)
+                finally:
+                    finished.set()
+
+            with patch.object(tunnel, 'write_json', blocked_write), patch.object(standterm, 'update_agent_tunnel_targets', update):
+                self.client.emit(standterm.AGENT_EVENT_MODE_SET, {'terminal_id': 'second', 'mode': 'observe'})
+                try:
+                    self.assertTrue(entered.wait(5))
+                    self.client.emit(standterm.AGENT_EVENT_MODE_SET, {'terminal_id': 'second', 'mode': 'disabled'})
+                    self.assertEqual(self.command(tunnel, 'second', 'hello')['status'], 'failed')
+                    self.assertEqual(self.command(tunnel, 'main', 'heartbeat')['status'], 'ok')
+                    self.assertEqual(standterm.agent_tunnel_status(tunnel)['terminal_ids'], ['main'])
+                    old_token = tunnel.grants['second']['token']
+                    self.client.emit(standterm.AGENT_EVENT_DETACH, {'terminal_id': 'second'})
+                    self.client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': 'second'})
+                finally:
+                    release.set()
+                    self.assertTrue(finished.wait(5))
+            fixture.wait_until(lambda: tunnel.grants.get('second', {}).get('published'), 'new binding was not enrolled')
+            self.assertNotEqual(tunnel.grants['second']['token'], old_token)
+            self.assertEqual(standterm.process_external_agent_command({
+                'op': 'hello', 'token': old_token, 'terminal_id': 'second',
+            })['status'], 'failed')
+            self.assertEqual(self.command(tunnel, 'second', 'hello')['status'], 'ok')
+
+    def test_enable_during_initial_setup_is_not_lost(self):
+        with ssh_server() as ssh:
+            entered, release = threading.Event(), threading.Event()
+            original = AgentTunnel.write_json
+            results = []
+
+            def blocked_write(tunnel, path, payload):
+                if payload.get('terminal_id') == 'main':
+                    entered.set()
+                    self.assertTrue(release.wait(5))
+                return original(tunnel, path, payload)
+
+            with patch.object(AgentTunnel, 'write_json', blocked_write):
+                thread = threading.Thread(target=lambda: results.append(self.open_tunnel(ssh, ('main',))))
+                thread.start()
+                try:
+                    self.assertTrue(entered.wait(10))
+                    self.client.emit(standterm.AGENT_EVENT_MODE_SET, {'terminal_id': 'second', 'mode': 'observe'})
+                finally:
+                    release.set()
+                    thread.join(10)
+                self.assertFalse(thread.is_alive())
+                self.assertEqual(len(results), 1)
+                tunnel = results[0]
+                fixture.wait_until(lambda: tunnel.grants.get('second', {}).get('published'), 'setup lost the Enable event')
+            self.assertEqual(set(standterm.agent_tunnel_status(tunnel)['terminal_ids']), {'main', 'second'})
 
     def test_missing_source_reference_is_rejected_before_ssh(self):
         bridge = type('Bridge', (), {'ssh': type('SSH', (), {'get_transport': lambda _: None})()})()
