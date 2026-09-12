@@ -15,12 +15,12 @@ not a Gatekeeper-qualified public release. No signing account or private key is
 needed for a local build. Intel/Rosetta acceptance is not implied.
 
 New build filenames pair the independent Desktop and bundled Core versions:
-`StandTerm-Desktop-0.4.5-2.11.0-mac-arm64.dmg` and
-`StandTerm-Desktop-0.4.5-2.11.0-win32-x64-Setup.exe` for future matching builds.
-These are naming examples, not published download links. Core 2.11.0 is a
+`StandTerm-Desktop-0.4.5-2.12.0-mac-arm64.dmg` and
+`StandTerm-Desktop-0.4.5-2.12.0-win32-x64-Setup.exe` for future matching builds.
+These are naming examples, not published download links. Core 2.12.0 is a
 source-only release; existing 0.4.3 downloads are unchanged. Delivery archives
 and checksum sidecars retain the paired label; a future matching Desktop tag
-would be `desktop-v0.4.5-2.11.0`.
+would be `desktop-v0.4.5-2.12.0`.
 
 Staging writes `release-identity.json` from the staged package/lock versions and
 the manifest-hashed `core_version.py`. The builder revalidates this identity and
@@ -34,7 +34,7 @@ The 0.4.5 evaluation source includes updated Core terminal reads, transcript
 splitting, token-tab countdowns, asynchronous launcher status polling and the
 experimental IME anchor, plus guarded Desktop clipboard controls. Earlier local
 0.4.5 candidates contain Core `2.11.0-dev`; they must not be renamed or presented
-as containing Core 2.11.0. Rebuild both platforms and verify their manifests
+as containing Core 2.12.0. Rebuild both platforms and verify their manifests
 before publishing paired installers. Real macOS IME candidate placement and
 native clipboard/upgrade acceptance remain separate manual checks.
 
@@ -301,7 +301,7 @@ that uncommitted changes are already a GitHub release. Build staging never copie
 the development venv or `node_modules`. The new directory gets Windows build
 dependencies; the source checkout's Linux/WSLg `node_modules` is untouched.
 
-The `StandTerm-Desktop-0.4.5-2.11.0-win32-x64-Setup.exe` is under `out/`; the unpacked
+The `StandTerm-Desktop-0.4.5-2.12.0-win32-x64-Setup.exe` is under `out/`; the unpacked
 application is under `out/win-unpacked/`. Packaging uses
 [electron-builder's assisted NSIS target](https://www.electron.build/nsis.html),
 with pinned build dependencies and scoped custom installer hooks. Squirrel
@@ -611,7 +611,7 @@ managed Core bundle SHA-256 identity when available. The same Core details are
 in Diagnostics. Core reports its version from `core_version.py`, independently
 of the Electron package version. Source checkouts have no managed build identity;
 older backends that omit version metadata show Unknown, never an inferred Git
-tag. The current source pairing is Desktop 0.4.5 / Core 2.11.0. The Core source
+tag. The current source pairing is Desktop 0.4.5 / Core 2.12.0. The Core source
 release does not publish or qualify Desktop installers. The Agent menu and
 expanded Core payload postdate the
 published 0.4.1 installer and the earlier macOS 0.4.2 candidate; they require a

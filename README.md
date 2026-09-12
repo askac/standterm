@@ -9,8 +9,9 @@ to the StandTerm server process across page reloads.
 [Download and install StandTerm Desktop](#desktop-downloads-evaluation), or use
 the [browser-based Core quick start](#quick-start).
 
-**Core 2.11.0** is a [source release](https://github.com/askac/standterm/releases/tag/v2.11.0).
-It includes terminal latency, clipboard, agent-tab status and launcher UI updates.
+**Core 2.12.0** is a [source release](https://github.com/askac/standterm/releases/tag/v2.12.0).
+It adds SSH Agent Tunnel with shared skills and helpers, Agent Panel permission
+sync, Agent Info for the current tab, and SSH host fingerprint management.
 IME input-line anchoring remains an [experimental PoC](docs/ime_anchor_poc.md).
 This release does not publish new Desktop installers: the downloads below remain
 Desktop 0.4.3 evaluation builds with their original bundled Core snapshot.
