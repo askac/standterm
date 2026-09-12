@@ -656,6 +656,17 @@ buffers and are not typed through the terminal or returned to the agent. If an
 SSH publish returns `file_copy_publish_outcome_unknown`, inspect the destination
 before retrying because the server may already have completed the atomic rename.
 
+For manually authorized rescue work on minimal POSIX systems,
+`sh scripts/base64d_probe.sh` reports available decoders and checks binary byte
+output with `cksum` or `od`. `sh scripts/base64d.sh 'AP8K' > output.bin` decodes
+one Base64 argument using shell builtins, including NUL bytes. It validates the
+entire argument before emitting output, accepts whitespace, and limits each
+input line to 4096 characters. Use small chunks; shell argument limits still
+apply. The probe needs a writable `${TMPDIR:-/tmp}` and creates a private
+temporary directory. These are standalone utilities, not an automatic
+`agent_rsfile.py` fallback; transfer verification and overwrite decisions remain
+the caller's responsibility.
+
 Prefer the exact absolute commands printed by the StandTerm startup banner. They
 use the active runtime Python, platform-appropriate quoting, and the generated
 local CA path when StandTerm is serving HTTPS with its local development
