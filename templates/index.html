@@ -443,6 +443,26 @@
         #controls input, #controls select { display: block; width: 100%; margin-bottom: 15px; padding: 10px; background: #333; border: 1px solid #555; color: white; border-radius: 4px; box-sizing: border-box; }
         #controls button { width: 100%; padding: 12px; background: #0a84ff; border: none; color: white; border-radius: 4px; cursor: pointer; font-weight: bold; }
         #controls button:hover { background: #007aff; }
+        #controls.ssh-login-active { width: min(700px, calc(100vw - 24px)); max-height: 90vh; overflow: auto; padding: 20px; }
+        #controls.ssh-login-active #connection-form { display: none !important; }
+        .ssh-login-progress { color: #999; line-height: 1.8; margin-bottom: 14px; overflow-wrap: anywhere; }
+        .ssh-login-card { border: 1px solid #444; border-radius: 5px; padding: 12px; margin: 8px 0; color: #888; }
+        .ssh-login-card-heading { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+        .ssh-login-card-heading strong { min-width: 44px; }
+        .ssh-login-endpoint { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .ssh-login-card-status { max-width: 140px; text-align: right; }
+        .ssh-login-card[data-phase="authenticated"], .ssh-login-card[data-phase="complete"] { color: #78ba8b; background: #203126; border-color: #395b44; }
+        .ssh-login-progress [data-phase="authenticated"], .ssh-login-progress [data-phase="complete"] { color: #78ba8b; }
+        .ssh-login-progress span:not([data-phase="waiting"]):not([data-phase="authenticated"]):not([data-phase="complete"]) { color: #0a84ff; }
+        .ssh-login-card:not([data-phase="waiting"]):not([data-phase="authenticated"]):not([data-phase="complete"]) { color: #ddd; border-color: #0a84ff; }
+        .ssh-login-card[data-phase="password"], .ssh-login-card[data-phase="host_key"] { background: #233146; }
+        .ssh-login-card[data-phase="failed"] { border-color: #ff9f0a !important; }
+        .ssh-login-card-body p, .ssh-login-message { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.5; }
+        .ssh-login-card-body label { font-size: 12px; }
+        #controls .ssh-login-card-body input { margin: 6px 0 10px; }
+        #controls .ssh-login-card-body button { margin-top: 6px; padding: 8px 12px; }
+        .ssh-login-actions { margin-top: 14px; }
+        #controls .ssh-login-actions button { background: #444; padding: 9px 12px; }
         #server-availability-message {
             display: none; margin-bottom: 16px; padding: 12px;
             background: #3a2618; border: 1px solid #8a572f; border-radius: 5px;
@@ -1173,6 +1193,7 @@
             </div>
             <button id="connectBtn">Connect to SSH</button>
         </div>
+        <div id="ssh-login-panel" hidden></div>
     </div>
 
     <div id="browser-auth-help-modal" aria-hidden="true">
@@ -1380,6 +1401,7 @@
 
     <script src="{{ url_for('static', filename='js/standterm-ssh-routes.js') }}"></script>
     <script src="{{ url_for('static', filename='js/standterm-ssh-route-editor.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/standterm-ssh-login.js') }}"></script>
     <script>
         const SshRoutes = window.StandTermSshRoutes;
         // --- Official Windows Terminal Color Schemes Replicated ---
@@ -2199,6 +2221,7 @@
             let userSelectedConnectionType = null;
             const userEditedConnectionFields = new Set();
             const pendingSshConnectionDrafts = new Map();
+            const sshLoginFlows = new Map();
             let sshConnectionFormRevision = 0;
             let sshSessionState = normalizeSshSessionState(null);
             let sshSessionReady = null;
@@ -4355,16 +4378,55 @@
                 hideActionPrompt();
             }
 
-            function cancelSshConnection() {
-                const state = getActiveTerminalState();
-                const attemptId = pendingSshConnectionDrafts.get(activeTerminalId)?.attemptId;
-                pendingSshConnectionDrafts.delete(activeTerminalId);
-                if (socket?.connected) socket.emit('cancel_ssh_start', { terminal_id: activeTerminalId, attempt_id: attemptId });
+            function cancelSshConnection(terminalId = activeTerminalId) {
+                const state = terminals.get(terminalId);
+                const attemptId = pendingSshConnectionDrafts.get(terminalId)?.attemptId;
+                pendingSshConnectionDrafts.delete(terminalId);
+                if (socket?.connected) socket.emit('cancel_ssh_start', { terminal_id: terminalId, attempt_id: attemptId });
+                discardSshLogin(terminalId);
                 if (state) { state.connecting = false; state.error = false; }
+                if (terminalId !== activeTerminalId) return;
                 hideActionPrompt();
                 resetConnectButton();
                 document.getElementById('ssh-cancel-start').hidden = true;
                 setSshSessionMessage('Connection cancelled.');
+                updateActiveTerminalUi();
+            }
+
+            function discardSshLogin(terminalId) {
+                if (pendingReconnect?.terminalId === terminalId) pendingReconnect = null;
+                sshLoginFlows.get(terminalId)?.destroy();
+                sshLoginFlows.delete(terminalId);
+            }
+
+            function renderSshLogin() {
+                const current = sshLoginFlows.get(activeTerminalId);
+                document.getElementById('ssh-login-panel').hidden = !current;
+                document.getElementById('controls').classList.toggle('ssh-login-active', !!current);
+                for (const [terminalId, flow] of sshLoginFlows) flow.element.hidden = terminalId !== activeTerminalId;
+            }
+
+            function startSshLogin(formData) {
+                const terminalId = formData.terminal_id;
+                discardSshLogin(terminalId);
+                const flow = StandTermSshLogin({
+                    terminalId, attemptId: formData.attempt_id, route: formData.route,
+                    isActive: () => activeTerminalId === terminalId && sshLoginFlows.get(terminalId) === flow,
+                    send: payload => {
+                        if (socket.connected && pendingSshConnectionDrafts.get(terminalId)?.attemptId === payload.attempt_id) {
+                            socket.emit('ssh_login_response', payload);
+                        }
+                    },
+                    cancel: () => cancelSshConnection(terminalId),
+                    back: () => {
+                        pendingSshConnectionDrafts.delete(terminalId);
+                        discardSshLogin(terminalId);
+                        hideActionPrompt();
+                        updateActiveTerminalUi();
+                    }
+                });
+                sshLoginFlows.set(terminalId, flow);
+                document.getElementById('ssh-login-panel').append(flow.element);
             }
 
             async function retrySshConnectionAfterTrust(terminalId, draft) {
@@ -4378,14 +4440,24 @@
                 if (pendingSshConnectionDrafts.get(terminalId) === draft) submitConnection(draft.payload);
             }
 
-            async function prepareSshConnection(formData) {
+            async function prepareSshConnection(formData, interactiveLogin = false) {
                 await sshSessionReady;
                 await sshSessionWriteQueue;
                 const snapshot = await SshRoutes.load(openSshSessionsDb, normalizeLegacySshSessionState, true);
                 const selected = currentSshEntry(snapshot.state);
                 if (selectedSshPickerEntry && !selected) throw new Error('The SSH entry was removed. Reload the settings.');
                 if (snapshot.state.revision !== sshSessionState.revision) throw new Error('SSH settings changed in another window. Reload before connecting.');
-                if (!selected) return formData;
+                if (!selected) {
+                    if (!interactiveLogin) return formData;
+                    const nodeId = SshRoutes.id();
+                    const signers = formData.use_browser_key && quickConnectSshKeyRecord ? [{
+                        nodeId, profileId: formData.profile_id, keyId: formData.key_id,
+                        publicKeyFingerprintHex: quickConnectSshKeyRecord.publicKeyFingerprintHex
+                    }] : [];
+                    return { ...formData, route: [{ ...formData, node_id: nodeId }],
+                        attempt_id: createSshSessionId('attempt'), interactive_login: true,
+                        _revision: snapshot.state.revision, _signers: signers };
+                }
                 const path = SshRoutes.clone(SshRoutes.checkedPath(snapshot.state, selected));
                 const target = path.at(-1);
                 if (getSshTargetKey(target.endpoint) !== getSshTargetKey(formData)) {
@@ -4419,7 +4491,7 @@
                     }
                     route.push(payload);
                 }
-                return { ...formData, route, attempt_id: attemptId,
+                return { ...formData, route, attempt_id: attemptId, interactive_login: interactiveLogin,
                     _routePath: path, _revision: snapshot.state.revision, _signers: signers };
             }
 
@@ -5915,6 +5987,7 @@
                 sshStatusEl.style.color = state.connected ? '#34c759' : (state.connecting ? '#ffcc00' : '#ff9f0a');
                 document.getElementById('uptime-section').style.display = state.connectedAt ? 'inline' : 'none';
                 document.getElementById('controls').style.display = state.connected ? 'none' : 'block';
+                renderSshLogin();
                 if (state.connecting) {
                     connectBtn.innerText = 'Connecting...';
                     connectBtn.disabled = true;
@@ -5937,7 +6010,8 @@
                 updateActiveTerminalUi();
                 requestAnimationFrame(() => {
                     fitAndNotifyResize();
-                    nextState.term.focus();
+                    if (sshLoginFlows.has(nextState.id) && nextState.connecting) sshLoginFlows.get(nextState.id).focus();
+                    else nextState.term.focus();
                     scheduleAgentViewportSnapshot(nextState);
                 });
             }
@@ -6111,6 +6185,7 @@
 
             function removeTerminalState(state, options = {}) {
                 pendingSshConnectionDrafts.delete(state.id);
+                discardSshLogin(state.id);
                 const notifyServer = options.notifyServer !== false && isCurrentTerminalState(state);
                 restoreTerminalFromPip(state, {
                     closeWindow: true,
@@ -6274,7 +6349,10 @@
                 socket.emit = (eventName, ...args) => {
                     emitted.push({
                         event: eventName,
-                        args: cloneForTest(eventName === 'start_ssh' && args[0]?.connection_type === 'ssh'
+                        args: cloneForTest(eventName === 'ssh_login_response' ? [{
+                            terminal_id: args[0]?.terminal_id, attempt_id: args[0]?.attempt_id,
+                            node_id: args[0]?.node_id, request_id: args[0]?.request_id, kind: args[0]?.kind
+                        }] : eventName === 'start_ssh' && args[0]?.connection_type === 'ssh'
                             ? [sshConnectionDiagnostic(args[0])] : args),
                         at: new Date().toISOString()
                     });
@@ -7029,6 +7107,7 @@
                 clearBrowserPairingResponseTimer();
                 setBrowserAuthBusy(false);
                 pendingSshConnectionDrafts.clear();
+                for (const terminalId of [...sshLoginFlows.keys()]) discardSshLogin(terminalId);
                 handledSshSignRequestIds.clear();
                 agentDecisionActionIds.clear();
                 clearSessionRenewTimer();
@@ -7567,9 +7646,18 @@
                 } else {
                     pendingSshConnectionDrafts.delete(formData.terminal_id);
                 }
+                if (formData.interactive_login) startSshLogin(formData);
+                else discardSshLogin(formData.terminal_id);
                 updateActiveTerminalUi();
                 const { _routePath, _revision, _signers, ...payload } = formData;
                 socket.emit('start_ssh', payload);
+                if (formData.interactive_login) {
+                    sshPasswordInput.value = '';
+                    document.querySelectorAll('#ssh-hop-passwords input').forEach(input => { input.value = ''; });
+                    // Login replies are sent once and never kept in retry/history state.
+                    const draft = pendingSshConnectionDrafts.get(formData.terminal_id);
+                    draft.payload = { ...draft.payload, password: '', route: draft.payload.route.map(node => ({ ...node, password: '' })) };
+                }
                 document.getElementById('ssh-cancel-start').hidden = formData.connection_type !== 'ssh';
                 connectBtn.innerText = "Connecting...";
                 connectBtn.disabled = true;
@@ -7591,13 +7679,13 @@
                 try {
                     const revision = ++sshConnectionFormRevision;
                     const form = getConnectionFormData();
-                    const prepared = form.connection_type === 'ssh' ? await prepareSshConnection(form) : form;
+                    const prepared = form.connection_type === 'ssh' ? await prepareSshConnection(form, true) : form;
                     if (revision !== sshConnectionFormRevision || form.terminal_id !== activeTerminalId) return;
                     submitConnection(prepared);
                 } catch (err) { setSshSessionMessage(err.message, true); }
             };
             connectBtn.onclick = doConnect;
-            document.getElementById('ssh-cancel-start').onclick = cancelSshConnection;
+            document.getElementById('ssh-cancel-start').onclick = () => cancelSshConnection();
             document.getElementById('ssh-edit-route').onclick = () => {
                 try {
                     invalidateSshRetry();
@@ -7609,7 +7697,7 @@
                             renderSshSessionState();
                             applySshPickerEntry(state.profiles.some(entry => entry.id === entryId) ? 'profile' : 'history', entryId);
                             document.getElementById('ssh-jump-summary').parentElement.open = true;
-                            setSshSessionMessage('SSH route saved. Enter the Target password and each Jump password, then Connect.');
+                            setSshSessionMessage('SSH route saved. Connect to log in at each site.');
                         }
                     });
                 } catch (err) { setSshSessionMessage(err.message, true); }
@@ -8055,13 +8143,17 @@
                     return;
                 }
                 if (pendingAction !== 'offer_localhost_key_setup' || !pendingActionId) return;
-                pendingReconnect = getConnectionFormData();
                 const actionId = pendingActionId;
+                const terminalId = pendingActionTerminalId;
+                const draft = pendingSshConnectionDrafts.get(terminalId);
+                if (draft?.payload.interactive_login && draft.setupActionId !== actionId) return;
+                pendingReconnect = { terminalId, actionId, sourceAttemptId: draft?.attemptId || null,
+                    payload: draft?.payload.interactive_login ? draft.payload : getConnectionFormData() };
                 hideActionPrompt();
                 connectBtn.innerText = "Setting up key...";
                 connectBtn.disabled = true;
                 socket.emit('setup_localhost_key_access', {
-                    action_id: actionId
+                    action_id: actionId, terminal_id: terminalId
                 });
             };
 
@@ -8083,7 +8175,7 @@
             function handleSshOutputPayload(data) {
                 if (!data || typeof data !== 'object') return;
                 const messageType = data.message_type;
-                const allowedTypes = ['ssh_connect_progress', 'terminal', 'connection_error', 'setup_result', 'host_key_prompt', 'host_key_result', 'ssh_connected', 'ssh_closed'];
+                const allowedTypes = ['ssh_connect_progress', 'ssh_login_prompt', 'terminal', 'connection_error', 'setup_result', 'host_key_prompt', 'host_key_result', 'ssh_connected', 'ssh_closed'];
                 if (!allowedTypes.includes(messageType)) {
                     if (debugEnabled) appendPayloadLog('socket.invalid_message_type', JSON.stringify(data));
                     return;
@@ -8102,8 +8194,14 @@
                     );
                 }
                 if (data.attempt_id && pendingSshConnectionDrafts.get(state.id)?.attemptId !== data.attempt_id) return;
+                if (sshLoginFlows.has(state.id) && ['ssh_connect_progress', 'ssh_login_prompt', 'connection_error', 'ssh_connected'].includes(messageType)
+                        && data.attempt_id !== pendingSshConnectionDrafts.get(state.id)?.attemptId) return;
                 switch (messageType) {
+                    case 'ssh_login_prompt':
+                        sshLoginFlows.get(state.id)?.handle(data);
+                        break;
                     case 'ssh_connect_progress':
+                        sshLoginFlows.get(state.id)?.handle(data);
                         if (state.id === activeTerminalId) {
                             const phases = { connect: 'Connecting', forward: 'Opening the next hop',
                                 verify_and_authenticate: 'Verifying host and authenticating', shell: 'Opening terminal' };
@@ -8112,8 +8210,11 @@
                         break;
                     case 'connection_error':
                         const failedDraft = pendingSshConnectionDrafts.get(state.id);
+                        sshLoginFlows.get(state.id)?.finish(false, data.message || 'Connection failed.', data.route_context);
                         if (data.action_type === 'confirm_ssh_host_key' && failedDraft && data.action_id) {
                             failedDraft.trustActionId = data.action_id;
+                        } else if (data.action_type === 'offer_localhost_key_setup' && failedDraft && data.action_id) {
+                            failedDraft.setupActionId = data.action_id;
                         } else pendingSshConnectionDrafts.delete(state.id);
                         document.getElementById('ssh-cancel-start').hidden = true;
                         state.connected = false;
@@ -8156,14 +8257,18 @@
                         }
                         break;
                     case 'setup_result':
+                        const setupRetry = pendingReconnect;
+                        if (!setupRetry || data.action_id !== setupRetry.actionId || data.terminal_id !== setupRetry.terminalId
+                                || (data.attempt_id || null) !== setupRetry.sourceAttemptId
+                                || (pendingSshConnectionDrafts.get(state.id)?.attemptId || null) !== setupRetry.sourceAttemptId) break;
+                        pendingReconnect = null;
                         if (state.id === activeTerminalId) {
                             hideActionPrompt();
-                            if (data.setup_status === 'success' && pendingReconnect) {
+                            if (data.setup_status === 'success') {
                                 showError(data.message || 'Localhost key setup completed. Reconnecting...');
-                                submitConnection(pendingReconnect);
-                                pendingReconnect = null;
+                                submitConnection({ ...setupRetry.payload,
+                                    ...(setupRetry.payload.interactive_login ? { attempt_id: createSshSessionId('attempt') } : {}) });
                             } else {
-                                pendingReconnect = null;
                                 showError(data.message || 'Localhost key setup completed.');
                                 resetConnectButton();
                                 updateActiveTerminalUi();
@@ -8172,6 +8277,8 @@
                         break;
                     case 'ssh_connected':
                         const successfulSshDraft = pendingSshConnectionDrafts.get(state.id) || null;
+                        sshLoginFlows.get(state.id)?.finish(true);
+                        discardSshLogin(state.id);
                         pendingSshConnectionDrafts.delete(state.id);
                         state.connected = true;
                         state.connecting = false;
@@ -8205,6 +8312,7 @@
                         break;
                     case 'ssh_closed':
                         pendingSshConnectionDrafts.delete(state.id);
+                        discardSshLogin(state.id);
                         state.connected = false;
                         state.connecting = false;
                         state.error = false;

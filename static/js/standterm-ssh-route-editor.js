@@ -417,7 +417,7 @@
         }
         scope.onchange = updateScopeNotice;
         const help = document.createElement('p');
-        help.textContent = `Connect from Core through the cards, top to bottom. The last card is the Target. Drag the handle or use Move up / Move down. Up to ${routes.MAX_JUMPS} jumps. Enter passwords in Quick Connect after saving.`;
+        help.textContent = `Connect from Core through the cards, top to bottom. The last card is the Target. Drag the handle or use ↑ / ↓. Up to ${routes.MAX_JUMPS} jumps. Save, then Connect to log in at each site.`;
         dialog.append(title, help, heading, advanced, scopeNotice, rows, preview, status, actions);
         dialog.addEventListener('close', () => dialog.remove());
         document.body.append(dialog);

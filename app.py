@@ -78,6 +78,7 @@ from terminal_backends import (
     UARTBridge,
 )
 from runtime_logging import log_message
+from terminal_backends.ssh import SSH_BROWSER_KEY_ID_PATTERN, SSH_BROWSER_KEY_ID_MAX_LENGTH, SSH_LOGIN_MAX_PASSWORD_BYTES
 from session_recovery import (
     SessionRecoveryCredentialStore,
     SessionRecoveryError,
@@ -177,7 +178,7 @@ def parse_positive_int_env(name, default):
 
 SSH_TERM = 'xterm-256color'
 MAX_SSH_INPUT_BYTES = 65536
-MAX_PASSWORD_BYTES = 4096
+MAX_PASSWORD_BYTES = SSH_LOGIN_MAX_PASSWORD_BYTES
 MAX_HOST_LENGTH = 255
 MAX_USERNAME_LENGTH = 128
 SESSION_COOKIE_NAME = 'standterm_session'
@@ -5873,6 +5874,9 @@ def begin_terminal_start(session_token, terminal_id, sid=None, attempt_id=None):
     start_token = secrets.token_urlsafe(18)
     key = (session_token, terminal_id)
     with terminal_start_lock:
+        previous = pending_terminal_bridges.get(key)
+        if isinstance(previous, SSHBridge):
+            previous.cancel_connection()
         previous = pending_terminal_bridges.pop(key, None)
         pending_terminal_starts[key] = start_token
         pending_terminal_start_context[key] = {'sid': sid, 'attempt_id': attempt_id}
@@ -5904,6 +5908,9 @@ def cancel_terminal_starts(session_token, terminal_id=None, *, sid=None, attempt
                 continue
             if attempt_id is not None and context.get('attempt_id') != attempt_id:
                 continue
+            bridge = pending_terminal_bridges.get(key)
+            if isinstance(bridge, SSHBridge):
+                bridge.cancel_connection()
             pending_terminal_starts.pop(key, None)
             pending_terminal_start_context.pop(key, None)
             bridge = pending_terminal_bridges.pop(key, None)
@@ -10188,6 +10195,7 @@ def start_terminal_backend(sid, session_token, payload, start_token):
             'Terminal limit reached.',
             error_code='terminal_limit_reached',
             terminal_id=terminal_id,
+            attempt_id=payload.get('attempt_id'),
         )
         finish_terminal_start(session_token, terminal_id, start_token)
         return
@@ -10200,6 +10208,7 @@ def start_terminal_backend(sid, session_token, payload, start_token):
             'Connection type must be ssh, local_shell, or uart.',
             error_code='invalid_start_ssh_payload',
             terminal_id=terminal_id,
+            attempt_id=payload.get('attempt_id'),
         )
         finish_terminal_start(session_token, terminal_id, start_token)
         return
@@ -10230,6 +10239,7 @@ def start_terminal_backend(sid, session_token, payload, start_token):
                 'Connection failed.',
                 error_code='backend_start_failed',
                 terminal_id=terminal_id,
+                attempt_id=payload.get('attempt_id'),
             )
         return
 
@@ -11030,7 +11040,11 @@ def on_start_ssh(data):
             message = validation_error
             error_code = 'invalid_start_ssh_payload'
         terminal_id = validate_terminal_id_payload(data, default=TERMINAL_ID_MAIN) or TERMINAL_ID_MAIN
-        emit_connection_error(request.sid, message, error_code=error_code, terminal_id=terminal_id)
+        attempt_id = data.get('attempt_id') if isinstance(data, dict) else None
+        if (not isinstance(attempt_id, str) or len(attempt_id) > SSH_BROWSER_KEY_ID_MAX_LENGTH
+                or not SSH_BROWSER_KEY_ID_PATTERN.fullmatch(attempt_id)):
+            attempt_id = None
+        emit_connection_error(request.sid, message, error_code=error_code, terminal_id=terminal_id, attempt_id=attempt_id)
         return
 
     browser_ssh_sign_request_store.discard(session_token, terminal_id=payload['terminal_id'])
@@ -11084,6 +11098,8 @@ def on_setup_localhost_key_access(data):
         {
             'message_type': 'setup_result',
             'terminal_id': action.terminal_id if action else TERMINAL_ID_MAIN,
+            'action_id': action_id,
+            'attempt_id': action.metadata.get('attempt_id') if action else None,
             'message': result['message'],
             'setup_status': result['status'],
             'error_code': result.get('error_code'),
@@ -11164,6 +11180,23 @@ def on_cancel_ssh_start(data):
         cancel_terminal_starts(session_token, terminal_id, sid=request.sid, attempt_id=data.get('attempt_id'))
         browser_ssh_sign_request_store.discard(session_token, terminal_id=terminal_id)
         pending_backend_actions.discard(request.sid)
+
+@socketio.on('ssh_login_response')
+def on_ssh_login_response(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    if not session_token or not terminal_id:
+        return
+    if not is_ssh_allowed_for_client(socket_client_ips.get(request.sid, 'unknown'),
+                                     browser_authorized=socket_browser_authorized.get(request.sid, False)):
+        return
+    with terminal_start_lock:
+        context = pending_terminal_start_context.get((session_token, terminal_id))
+        bridge = pending_terminal_bridges.get((session_token, terminal_id))
+        if (not context or context.get('sid') != request.sid or context.get('attempt_id') != data.get('attempt_id')
+                or not isinstance(bridge, SSHBridge)):
+            return
+        bridge.resolve_login_input(request.sid, data)
 
 @socketio.on('ssh_input')
 def on_ssh_input(data):

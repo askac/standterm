@@ -319,9 +319,9 @@ SSH targets. Use **Settings > SSH Sessions** to create, update, reorder, or
 delete profiles and to clear history. Profiles and history stay in the current
 browser and never store passwords.
 
-For an unknown remote SSH host, Quick Connect shows its SHA256 host-key
-fingerprint before authentication. Verify it independently and choose **Trust key**
-to retry the same connection. A changed key shows both saved and received fingerprints and
+For an unknown remote SSH host, its login card shows the SHA256 host-key
+fingerprint before authentication. Verify it independently and choose **Trust and continue**
+to continue on that connection. A changed key shows both saved and received fingerprints and
 requires explicit replacement; **Cancel** is the default. **Forget host key...**
 removes only the host and port currently entered after confirmation. Existing
 connections remain open. These actions edit the Core execution account's
@@ -345,9 +345,18 @@ Target. Cards connect from **Core** top to bottom; drag a card's handle or use t
 becomes the **Target**. Add and arrange cards before filling them in; **Save route**
 checks the completed route for invalid fields, cycles and the jump limit, opening
 the card that needs correction. An Entry
-name is optional and defaults to the final username and host. Enter the Target
-password and each Jump password in Quick Connect after saving, or choose
-**Browser key from:** an existing key owner in the route editor.
+name is optional and defaults to the final username and host. Choose password
+authentication or **Browser key from:** an existing key owner in the route editor.
+
+After **Connect**, the connection form becomes a per-site login view with a
+**Core → Node 1 → … → Target** progress line. Completed nodes turn green and
+collapse; the current node expands when it needs a password or host-key confirmation,
+while later nodes stay collapsed. Passwords can be entered here or supplied in
+Quick Connect before starting. A rejected password can be retried at the same
+node without reconnecting completed jump hosts. The Target shows **OK** only
+after its terminal opens. **Cancel connection** closes the entire pending route;
+switching tabs preserves its progress without moving focus to a background prompt.
+Passwords are never saved in profiles or history.
 
 Only Entries appear in the picker. Each Entry points to an independently stored
 chain of nodes. Under **Advanced node settings**, **Reference route after this node** shares existing nodes;

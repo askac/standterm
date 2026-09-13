@@ -133,10 +133,19 @@ class SSHJumpTests(unittest.TestCase):
     def test_three_jumps_terminal_and_reverse_forward_share_final_transport(self):
         servers = [self.stack.enter_context(server()) for _ in range(4)]
         route = self.route(servers)
-        self.trust(route, servers)
         bridge = self.bridge(servers)
-        success, result = self.connect(bridge, route)
+        def accept_host(value):
+            self.progress.append(value)
+            if value['message_type'] == 'ssh_login_prompt':
+                self.assertEqual(value['kind'], 'host_key')
+                self.assertEqual(self.signatures, list(range(value['hop'] - 1)))
+                response = {key: value[key] for key in ('attempt_id', 'node_id', 'kind', 'request_id')}
+                self.assertTrue(bridge.resolve_login_input('test-sid', {**response, 'terminal_id': 'main', 'accept': True}))
+        bridge.emit_output = accept_host
+        success, result = bridge.connect(route[-1]['host'], route[-1]['port'], route[-1]['username'],
+                                         route=route, attempt_id='test-attempt', interactive_login=True)
         self.assertTrue(success, result)
+        self.assertEqual(self.signatures, [0, 1, 2, 3])
         stdin, stdout, stderr = bridge.ssh.exec_command('printf STANDTERM_JUMP_OK', timeout=5)
         self.assertEqual(stdout.read(), b'STANDTERM_JUMP_OK')
         self.assertEqual(stdout.channel.recv_exit_status(), 0)
