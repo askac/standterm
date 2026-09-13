@@ -7,9 +7,9 @@
         let draft = routes.clone(state);
         let entry = [...draft.profiles, ...draft.history].find(item => item.id === entryId);
         if (!entry) {
-            const node = { id: routes.id(), endpoint: routes.endpoint(target), nextNodeId: null,
+            const node = { id: routes.id(), endpoint: { host: target.host || '', port: target.port || '22', username: target.username || '' }, nextNodeId: null,
                 hostKeyAlias: '', authentication: { method: 'password' } };
-            entry = { id: routes.id(), name: `${target.username}@${target.host}`, startNodeId: node.id,
+            entry = { id: routes.id(), name: '', startNodeId: node.id,
                 sortOrder: draft.profiles.length, keyId: null, keyTarget: null };
             draft.nodes.push(node);
             draft.profiles.push(entry);
@@ -29,6 +29,9 @@
             scope.add(new Option(label, value));
         }
         const rows = document.createElement('div');
+        rows.className = 'ssh-route-cards';
+        const preview = document.createElement('p');
+        preview.className = 'ssh-route-preview';
         const status = document.createElement('p');
         status.setAttribute('role', 'status');
         const actions = document.createElement('div');
@@ -45,25 +48,76 @@
         };
         const fail = err => { status.textContent = err.message || 'SSH route could not be saved.'; };
         let controls = [];
+        let draggingIndex = null;
         const labelPath = path => `Core host → ${path.map(node => `${node.endpoint.username}@${node.endpoint.host}:${node.endpoint.port}`).join(' → ')}`;
 
-        function flush(skipIndex = -1) {
-            const previousPath = routes.checkedPath(draft, entry);
-            const updated = controls.map((control, index) => index === skipIndex ? previousPath[index] : control.read());
-            updated.forEach((node, index) => {
-                if (JSON.stringify(node) !== JSON.stringify(previousPath[index])) {
-                    routes.replaceNode(draft, entry, index, node, scope.value);
-                }
+        function path() { return routes.resolve(draft, entry.startNodeId).path; }
+
+        // Keep incomplete values inside the modal. Persistent nodes are validated on Save.
+        function replaceDraftNode(index, replacement) {
+            const result = routes.resolve(draft, entry.startNodeId);
+            const current = result.path[index];
+            if (scope.value === 'all') {
+                draft.nodes[draft.nodes.findIndex(node => node.id === current.id)] = { ...replacement, id: current.id };
+            } else {
+                const prefix = result.error === 'cycle' ? result.path : result.path.slice(0, index + 1);
+                const copies = prefix.map(node => ({ ...routes.clone(node), id: routes.id() }));
+                const mapping = new Map(prefix.map((node, i) => [node.id, copies[i].id]));
+                copies[index] = { ...replacement, id: copies[index].id };
+                copies.forEach((node, i) => {
+                    if (i < copies.length - 1 || result.error === 'cycle') {
+                        node.nextNodeId = mapping.get(node.nextNodeId) || node.nextNodeId;
+                    }
+                });
+                draft.nodes.push(...copies);
+                entry.startNodeId = copies[0].id;
+            }
+        }
+
+        function flush() {
+            controls.forEach(control => control.card.classList.remove('invalid'));
+            controls.map(control => control.read()).forEach((fields, index) => {
+                const current = path()[index];
+                const updated = { ...current, ...fields };
+                if (JSON.stringify(updated) !== JSON.stringify(current)) replaceDraftNode(index, updated);
             });
             entry.name = name.value.trim();
-            if (!entry.name) throw new Error('Entry name is required.');
             routes.project(draft);
+        }
+
+        function canChangeOrder() {
+            const result = routes.resolve(draft, entry.startNodeId);
+            if (result.error && result.error !== 'depth') {
+                throw new Error('Save route to review the invalid link before changing card order.');
+            }
         }
 
         function replacePath(path) {
             entry.startNodeId = routes.copyPath(draft, path);
             routes.project(draft);
             render();
+        }
+
+        function moveCard(from, to) {
+            if (from === to) return;
+            canChangeOrder();
+            flush();
+            const reordered = path();
+            reordered.splice(to, 0, reordered.splice(from, 1)[0]);
+            replacePath(reordered);
+            controls[to].handle.focus();
+        }
+
+        function discardUnusedDraftNodes() {
+            // Preserve all pre-existing nodes, including stored orphans and their tails.
+            const keep = new Set(original.nodes.map(node => node.id));
+            for (const item of [...draft.profiles, ...draft.history]) keep.add(item.startNodeId);
+            const nodes = new Map(draft.nodes.map(node => [node.id, node]));
+            for (const nodeId of keep) {
+                const next = nodes.get(nodeId)?.nextNodeId;
+                if (next) keep.add(next);
+            }
+            draft.nodes = draft.nodes.filter(node => keep.has(node.id));
         }
 
         function offerRepair() {
@@ -82,7 +136,6 @@
                     selected.startNodeId = routes.copyPath(repaired, candidate.path);
                     draft = routes.project(repaired);
                     entry = selected;
-                    routes.validate(draft);
                     status.textContent = 'Repair selected. Review the target, then Save route.';
                     render();
                 }, status);
@@ -94,33 +147,102 @@
             controls = [];
             rows.replaceChildren();
             const result = routes.resolve(draft, entry.startNodeId);
-            const pathText = document.createElement('p');
-            pathText.textContent = labelPath(result.path);
-            rows.append(pathText);
+            const source = document.createElement('div');
+            source.className = 'ssh-route-source';
+            source.textContent = 'Core';
+            rows.append(source);
+            preview.textContent = labelPath(result.path);
             result.path.forEach((node, index) => {
+                if (index === result.path.length - 1) {
+                    const add = button('Add jump node', () => {
+                        canChangeOrder();
+                        flush();
+                        const current = path();
+                        current.splice(current.length - 1, 0, { id: routes.id(),
+                            endpoint: { host: '', port: '22', username: target.username || '' },
+                            hostKeyAlias: '', nextNodeId: null, authentication: { method: 'password' } });
+                        replacePath(current);
+                        controls[current.length - 2].host.focus();
+                    }, rows);
+                    add.className = 'ssh-route-add';
+                }
                 const fieldset = document.createElement('fieldset');
                 const legend = document.createElement('legend');
-                legend.textContent = index === result.path.length - 1 ? 'Target' : `Jump host ${index + 1}`;
+                const role = index === result.path.length - 1 ? 'Target' : `Jump ${index + 1}`;
+                legend.textContent = role;
+                fieldset.dataset.role = role;
                 fieldset.append(legend);
+                const nodeButtons = document.createElement('div');
+                nodeButtons.className = 'ssh-route-buttons ssh-route-card-actions';
+                const handle = button('≡', () => {}, nodeButtons);
+                handle.className = 'ssh-route-drag';
+                handle.setAttribute('aria-label', `Reorder ${role}`);
+                handle.title = 'Drag to reorder, or use the arrow keys';
+                handle.draggable = true;
+                handle.ondragstart = event => {
+                    draggingIndex = index;
+                    event.dataTransfer.effectAllowed = 'move';
+                    event.dataTransfer.setData('text/plain', String(index));
+                    event.dataTransfer.setDragImage(fieldset, 20, 20);
+                };
+                handle.ondragend = () => {
+                    draggingIndex = null;
+                    rows.querySelectorAll('.drag-over').forEach(card => card.classList.remove('drag-over'));
+                };
+                handle.onkeydown = event => {
+                    const next = event.key === 'ArrowUp' ? index - 1 : event.key === 'ArrowDown' ? index + 1 : index;
+                    if (next === index) return;
+                    event.preventDefault();
+                    if (next >= 0 && next < controls.length) {
+                        try { moveCard(index, next); } catch (err) { fail(err); }
+                    }
+                };
+                fieldset.ondragover = event => {
+                    if (draggingIndex === null) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = 'move';
+                    fieldset.classList.add('drag-over');
+                };
+                fieldset.ondragleave = event => {
+                    if (!fieldset.contains(event.relatedTarget)) fieldset.classList.remove('drag-over');
+                };
+                fieldset.ondrop = event => {
+                    if (draggingIndex === null) return;
+                    event.preventDefault();
+                    const from = draggingIndex;
+                    draggingIndex = null;
+                    fieldset.classList.remove('drag-over');
+                    try { moveCard(from, index); } catch (err) { fail(err); }
+                };
+                const earlier = button('Move up', () => moveCard(index, index - 1), nodeButtons);
+                earlier.disabled = index === 0;
+                const later = button('Move down', () => moveCard(index, index + 1), nodeButtons);
+                later.disabled = index === result.path.length - 1;
+                if (result.path.length > 1) button('Remove', () => {
+                    canChangeOrder();
+                    flush();
+                    replacePath(path().filter((_, i) => i !== index));
+                }, nodeButtons);
+                fieldset.append(nodeButtons);
                 const fields = document.createElement('div');
                 fields.className = 'ssh-route-fields';
                 fieldset.append(fields);
-                const input = (label, value) => {
+                const input = (label, value, parent = fields) => {
                     const wrapper = document.createElement('label');
                     wrapper.textContent = label;
                     const field = document.createElement('input');
                     field.value = value;
-                    field.setAttribute('aria-label', `${legend.textContent} ${label}`);
+                    field.setAttribute('aria-label', `${role} ${label}`);
                     wrapper.append(field);
-                    fields.append(wrapper);
+                    parent.append(wrapper);
                     return field;
                 };
                 const host = input('Host', node.endpoint.host);
                 const port = input('Port', node.endpoint.port);
                 const username = input('Username', node.endpoint.username);
-                const alias = input('Host key alias (optional)', node.hostKeyAlias);
+                port.inputMode = 'numeric';
                 const auth = document.createElement('select');
-                auth.setAttribute('aria-label', `${legend.textContent} Authentication`);
+                auth.setAttribute('aria-label', `${role} Authentication`);
                 auth.add(new Option('Password (entered when connecting)', 'password'));
                 const keyRefs = new Map();
                 draft.profiles.filter(owner => owner.keyId).forEach(owner => {
@@ -136,69 +258,86 @@
                 const authLabel = document.createElement('label');
                 authLabel.textContent = 'Authentication';
                 authLabel.append(auth);
+                authLabel.className = 'ssh-route-auth';
                 fields.append(authLabel);
+                const advanced = document.createElement('details');
+                const advancedTitle = document.createElement('summary');
+                advancedTitle.textContent = 'Advanced node settings';
+                advanced.append(advancedTitle);
+                fieldset.append(advanced);
+                const alias = input('Host key alias (optional)', node.hostKeyAlias, advanced);
                 const affected = document.createElement('p');
-                affected.textContent = `Referenced by: ${routes.references(draft, node.id).map(item => item.name || item.host).join(', ')}`;
-                fieldset.append(affected);
-                controls.push({ read: () => routes.publicNode({ ...node,
+                affected.textContent = `Referenced by: ${routes.references(draft, node.id).map(item => item.name || 'This Entry').join(', ')}`;
+                advanced.append(affected);
+                controls.push({ card: fieldset, handle, host, advanced, read: () => ({
                     endpoint: { host: host.value, port: port.value, username: username.value },
                     hostKeyAlias: alias.value.trim(), authentication: auth.value === 'password'
                         ? { method: 'password' } : { method: 'browser-key', keyRef: keyRefs.get(auth.value) || null }
                 }) });
                 const otherEntries = document.createElement('select');
-                otherEntries.setAttribute('aria-label', `${legend.textContent} Next route`);
+                otherEntries.setAttribute('aria-label', `${role} Next route`);
                 otherEntries.add(new Option('Choose the next route...', ''));
                 draft.profiles.forEach(item => otherEntries.add(new Option(item.name, item.id)));
-                fieldset.append(otherEntries);
-                const nodeButtons = document.createElement('div');
-                nodeButtons.className = 'ssh-route-buttons';
-                fieldset.append(nodeButtons);
+                advanced.append(otherEntries);
+                const referenceButtons = document.createElement('div');
+                referenceButtons.className = 'ssh-route-buttons';
+                advanced.append(referenceButtons);
                 for (const copy of [false, true]) {
                     button(copy ? 'Copy route after this node' : 'Reference route after this node', () => {
                         const selected = draft.profiles.find(item => item.id === otherEntries.value);
                         if (!selected) throw new Error('Choose a route to append.');
+                        canChangeOrder();
                         flush();
                         const previous = routes.clone(draft);
                         try {
-                            const nextId = copy ? routes.copyPath(draft, routes.checkedPath(draft, selected)) : selected.startNodeId;
-                            const current = routes.checkedPath(draft, entry);
-                            routes.replaceNode(draft, entry, index, { ...current[index], nextNodeId: nextId }, scope.value);
-                            if (!offerRepair()) { routes.validate(draft); routes.project(draft); render(); }
+                            const selectedPath = routes.resolve(draft, selected.startNodeId);
+                            if (copy && selectedPath.error && selectedPath.error !== 'depth') throw new Error('Repair the selected route before copying it.');
+                            const nextId = copy ? routes.copyPath(draft, selectedPath.path) : selected.startNodeId;
+                            replaceDraftNode(index, { ...path()[index], nextNodeId: nextId });
+                            routes.project(draft);
+                            status.textContent = 'Route appended. Review the final target, then Save route to check the links.';
+                            render();
                         } catch (err) {
                             draft = previous;
                             entry = [...draft.profiles, ...draft.history].find(item => item.id === entry.id);
                             render();
                             throw err;
                         }
-                    }, nodeButtons);
+                    }, referenceButtons);
                 }
-                if (index > 0) button('Move earlier', () => {
-                    flush();
-                    const path = routes.checkedPath(draft, entry);
-                    [path[index - 1], path[index]] = [path[index], path[index - 1]];
-                    replacePath(path);
-                }, nodeButtons);
-                if (result.path.length > 1) button('Remove from this Entry', () => {
-                    flush(index);
-                    replacePath(routes.checkedPath(draft, entry).filter((_, i) => i !== index));
-                }, nodeButtons);
+                fieldset.addEventListener('input', () => {
+                    fieldset.classList.remove('invalid');
+                    preview.textContent = labelPath(controls.map(control => control.read()));
+                    status.replaceChildren();
+                });
                 rows.append(fieldset);
             });
+            updateScopeNotice();
         }
 
-        button('Add jump host first', () => {
-            flush();
-            const path = routes.checkedPath(draft, entry);
-            if (path.length >= routes.MAX_JUMPS + 1) throw new Error(`Use at most ${routes.MAX_JUMPS} jump hosts.`);
-            const node = { id: routes.id(), endpoint: { host: '', port: '22', username: target.username },
-                hostKeyAlias: '', nextNodeId: entry.startNodeId, authentication: { method: 'password' } };
-            draft.nodes.push(node);
-            entry.startNodeId = node.id;
-            render();
-        });
         const saveButton = button('Save route', async () => {
-            if (offerRepair()) return;
             flush();
+            if (offerRepair()) return;
+            const current = routes.checkedPath(draft, entry);
+            current.forEach((node, index) => {
+                let validEndpoint = false;
+                try {
+                    routes.endpoint(node.endpoint);
+                    validEndpoint = true;
+                    routes.publicNode(node);
+                } catch (err) {
+                    const control = controls[index];
+                    control.card.classList.add('invalid');
+                    if (validEndpoint) control.advanced.open = true;
+                    control.host.focus();
+                    throw new Error(`${index === current.length - 1 ? 'Target' : `Jump ${index + 1}`}: ${err.message}`);
+                }
+            });
+            if (!entry.name) {
+                const endpoint = current.at(-1).endpoint;
+                entry.name = `${endpoint.username.trim()}@${endpoint.host.trim()}`;
+            }
+            discardUnusedDraftNodes();
             routes.validate(draft);
             const result = await save(draft);
             dialog.close();
@@ -208,13 +347,26 @@
         button('Cancel', () => dialog.close());
         const heading = document.createElement('div');
         heading.className = 'ssh-route-heading';
-        for (const [text, field] of [['Entry name', name], ['Edit scope', scope]]) {
+        for (const [text, field] of [['Entry name (optional)', name]]) {
             const label = document.createElement('label');
             label.textContent = text;
             label.append(field);
             heading.append(label);
         }
-        dialog.append(title, heading, rows, status, actions);
+        const advanced = document.createElement('details');
+        const advancedTitle = document.createElement('summary');
+        advancedTitle.textContent = 'Advanced sharing';
+        advanced.append(advancedTitle, scope);
+        const scopeNotice = document.createElement('p');
+        scopeNotice.hidden = true;
+        function updateScopeNotice() {
+            scopeNotice.hidden = scope.value !== 'all';
+            scopeNotice.textContent = `Node edits also affect: ${[...new Set(path().flatMap(node => routes.references(draft, node.id).map(item => item.name || 'This Entry')))].join(', ')}. Reordering and removing cards only change this Entry.`;
+        }
+        scope.onchange = updateScopeNotice;
+        const help = document.createElement('p');
+        help.textContent = `Connect from Core through the cards, top to bottom. The last card is the Target. Drag the handle or use Move up / Move down. Up to ${routes.MAX_JUMPS} jumps. Enter passwords in Quick Connect after saving.`;
+        dialog.append(title, help, heading, advanced, scopeNotice, rows, preview, status, actions);
         dialog.addEventListener('close', () => dialog.remove());
         document.body.append(dialog);
         render();

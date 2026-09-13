@@ -28,6 +28,64 @@ def select(page, entry_id):
     }""", entry_id)
 
 
+def test_ordered_cards_allow_incomplete_drafts_and_move_target(browser, url):
+    context, page = fixture.new_page(browser, url)
+    try:
+        show_ssh(page)
+        # Native drag_to needs both cards visible; small windows can use Move buttons.
+        page.set_viewport_size({'width': 1100, 'height': 1600})
+        page.fill('#host', '')
+        page.fill('#username', '')
+        page.locator('#ssh-jump-summary').click()
+        page.locator('#ssh-edit-route').click()
+        editor = page.locator('#ssh-route-editor')
+        cards = editor.locator('fieldset')
+        assert cards.count() == 1
+        page.get_by_role('button', name='Add jump node', exact=True).click()
+        page.get_by_role('button', name='Add jump node', exact=True).click()
+        assert cards.locator('legend').all_text_contents() == ['Jump 1', 'Jump 2', 'Target']
+        assert not editor.locator('[role=status]').inner_text()
+        cards.last.get_by_role('button', name='Move up', exact=True).click()
+        page.get_by_role('button', name='Save route', exact=True).click()
+        assert 'Jump 1:' in editor.locator('[role=status]').inner_text()
+        for role, host, user, port in [('Jump 1', 'first.test', 'one', '2221'),
+                                       ('Jump 2', 'second.test', 'two', '2222'),
+                                       ('Target', 'last.test', 'last', '2223')]:
+            page.get_by_role('textbox', name=f'{role} Host', exact=True).fill(host)
+            page.get_by_role('textbox', name=f'{role} Username', exact=True).fill(user)
+            page.get_by_role('textbox', name=f'{role} Port', exact=True).fill(port)
+        cards.last.locator('summary').click()
+        page.get_by_role('textbox', name='Target Host key alias (optional)', exact=True).fill('last-site')
+        # Move the Target with a real drag, then move it with keyboard controls.
+        page.get_by_role('button', name='Reorder Target', exact=True).drag_to(cards.first)
+        assert cards.locator('legend').all_text_contents() == ['Jump 1', 'Jump 2', 'Target']
+        assert page.get_by_role('textbox', name='Jump 1 Host', exact=True).input_value() == 'last.test'
+        page.get_by_role('button', name='Reorder Jump 1', exact=True).press('ArrowDown')
+        assert page.get_by_role('textbox', name='Jump 2 Host', exact=True).input_value() == 'last.test'
+        # Removing a new, unfinished card must not leave an invalid hidden node.
+        page.get_by_role('button', name='Add jump node', exact=True).click()
+        cards.nth(2).get_by_role('button', name='Remove', exact=True).click()
+        page.get_by_role('button', name='Save route', exact=True).click()
+        page.wait_for_selector('#ssh-route-editor', state='detached')
+        state = page.evaluate('() => window.terminalTest.getSshSessionState()')
+        assert len(state['nodes']) == 3, state
+        assert state['profiles'][0]['name'] == 'two@second.test'
+        assert page.input_value('#host') == 'second.test'
+        page.fill('#password', 'target-password')
+        passwords = page.locator('#ssh-hop-passwords input')
+        assert passwords.count() == 2 and passwords.first.is_visible()
+        passwords.nth(0).fill('first-password')
+        passwords.nth(1).fill('last-password')
+        payload = page.evaluate('() => window.terminalTest.prepareSshConnectionForTest()')
+        assert [(hop['host'], hop['username'], str(hop['port'])) for hop in payload['route']] == [
+            ('first.test', 'one', '2221'), ('last.test', 'last', '2223'), ('second.test', 'two', '2222')], payload
+        assert [hop['password'] for hop in payload['route']] == ['first-password', 'last-password', 'target-password']
+        assert [hop['host_key_alias'] for hop in payload['route']] == ['', 'last-site', '']
+        assert 'password' not in str(state['nodes'][0]['endpoint'])
+    finally:
+        fixture.close_context(context)
+
+
 def test_shared_editor_and_atomic_storage(browser, url):
     context, page = fixture.new_page(browser, url)
     try:
@@ -86,6 +144,55 @@ def test_shared_editor_and_atomic_storage(browser, url):
         }""")
         assert sorted(result['statuses']) == ['fulfilled', 'rejected'], result
         assert result['reason'] == 'stale' and result['nodeRecords'] >= 6, result
+    finally:
+        fixture.close_context(context)
+
+
+def test_shared_card_scope_tracks_references_and_preserves_stored_nodes(browser, url):
+    context, page = fixture.new_page(browser, url)
+    try:
+        page.evaluate("""async () => {
+            await window.terminalTest.setSshSessionState({profiles:[
+                {id:'a',name:'Entry A',host:'a.test',port:'22',username:'a'},
+                {id:'b',name:'Entry B',host:'b.test',port:'22',username:'b'}
+            ],history:[]});
+            const state = await window.terminalTest.getSshSessionState();
+            state.nodes.push({...structuredClone(state.nodes[0]),id:'stored-orphan'});
+            await window.terminalTest.setSshSessionState(state);
+        }""")
+        show_ssh(page)
+        select(page, 'a')
+        page.locator('#ssh-jump-summary').click()
+        page.locator('#ssh-edit-route').click()
+        editor = page.locator('#ssh-route-editor')
+        page.get_by_text('Advanced sharing', exact=True).click()
+        page.get_by_role('combobox', name='Edit scope', exact=True).select_option('all')
+        notice = editor.locator('p').filter(has_text='Node edits also affect:')
+        assert 'Entry B' not in notice.inner_text()
+        editor.locator('fieldset summary').click()
+        page.get_by_role('combobox', name='Target Next route', exact=True).select_option('b')
+        page.get_by_role('button', name='Reference route after this node', exact=True).click()
+        assert 'Entry B' in notice.inner_text() and notice.is_visible()
+        page.get_by_text('Advanced sharing', exact=True).click()
+        assert notice.is_visible(), 'Shared-edit notice disappeared with advanced settings'
+        page.get_by_role('textbox', name='Target Host', exact=True).fill('shared-change.test')
+        page.get_by_role('button', name='Save route', exact=True).click()
+        page.wait_for_selector('#ssh-route-editor', state='detached')
+        state = page.evaluate('() => window.terminalTest.getSshSessionState()')
+        assert next(item for item in state['profiles'] if item['id'] == 'b')['host'] == 'shared-change.test'
+        assert next(item for item in state['nodes'] if item['id'] == 'stored-orphan')['endpoint']['host'] == 'a.test'
+        page.locator('#ssh-edit-route').click()
+        page.get_by_text('Advanced sharing', exact=True).click()
+        page.get_by_role('combobox', name='Edit scope', exact=True).select_option('all')
+        assert 'Entry B' in notice.inner_text()
+        editor.locator('fieldset').first.get_by_role('button', name='Move down', exact=True).click()
+        assert 'Entry B' not in notice.inner_text(), 'Reordering retained a stale shared-edit warning'
+        page.get_by_role('button', name='Save route', exact=True).click()
+        page.wait_for_selector('#ssh-route-editor', state='detached')
+        state = page.evaluate('() => window.terminalTest.getSshSessionState()')
+        assert next(item for item in state['profiles'] if item['id'] == 'a')['host'] == 'a.test'
+        assert next(item for item in state['profiles'] if item['id'] == 'b')['host'] == 'shared-change.test'
+        assert next(item for item in state['nodes'] if item['id'] == 'stored-orphan')['endpoint']['host'] == 'a.test'
     finally:
         fixture.close_context(context)
 
@@ -159,14 +266,28 @@ def test_cycle_repair_and_rejected_depth_leave_other_entries_intact(browser, url
         select(page, 'entry-a')
         page.locator('#ssh-jump-summary').click()
         page.locator('#ssh-edit-route').click()
+        page.locator('#ssh-route-editor fieldset').last.locator('summary').click()
         page.get_by_role('combobox', name='Target Next route', exact=True).select_option('entry-b')
         page.locator('#ssh-route-editor fieldset').last.get_by_role('button', name='Reference route after this node', exact=True).click()
+        assert page.locator('#ssh-route-editor fieldset').count() == 5
+        page.get_by_role('button', name='Save route', exact=True).click()
         page.wait_for_function("() => document.querySelector('#ssh-route-editor [role=status]').textContent.includes('at most 3')")
-        assert page.locator('#ssh-route-editor fieldset').count() == 3, 'Rejected depth left an invalid draft'
+        # Reject on Save, retain the draft for review, and leave storage untouched.
+        assert page.locator('#ssh-route-editor fieldset').count() == 5
+        saved = page.evaluate('() => window.terminalTest.getSshSessionState()')
+        assert len(saved['nodes']) == 3
+        page.get_by_role('button', name='Cancel', exact=True).click()
+        page.locator('#ssh-edit-route').click()
+        page.get_by_text('Advanced sharing', exact=True).click()
         page.get_by_role('combobox', name='Edit scope', exact=True).select_option('all')
+        page.locator('#ssh-route-editor fieldset').last.locator('summary').click()
         page.get_by_role('combobox', name='Target Next route', exact=True).select_option('entry-b')
         page.locator('#ssh-route-editor fieldset').last.get_by_role('button', name='Reference route after this node', exact=True).click()
         status = page.locator('#ssh-route-editor [role=status]')
+        # Ordering a cyclic, truncated view must not silently erase its back edge.
+        page.locator('#ssh-route-editor fieldset').last.get_by_role('button', name='Move up', exact=True).click()
+        assert 'invalid link' in status.inner_text()
+        page.get_by_role('button', name='Save route', exact=True).click()
         assert 'cycle rejected' in status.inner_text()
         assert 'target u@b.test:22' in status.inner_text() and 'target u@c.test:22' in status.inner_text()
         status.get_by_role('button', name='Remove loop:', exact=False).click()
@@ -288,7 +409,10 @@ def main():
         with fixture.load_playwright()[0]() as playwright:
             browser = playwright.chromium.launch(headless=True)
             try:
-                for test in (test_shared_editor_and_atomic_storage, test_receiver_and_owner_renames_preserve_credentials,
+                for test in (test_ordered_cards_allow_incomplete_drafts_and_move_target,
+                             test_shared_editor_and_atomic_storage,
+                             test_shared_card_scope_tracks_references_and_preserves_stored_nodes,
+                             test_receiver_and_owner_renames_preserve_credentials,
                              test_cycle_repair_and_rejected_depth_leave_other_entries_intact,
                              test_v1_migration_preserves_old_record_and_private_key,
                              test_trust_retry_matches_attempt_action_and_revision_without_logging_passwords):

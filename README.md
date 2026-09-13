@@ -337,16 +337,23 @@ host/port identity. Saved profile names do not create separate trust identities.
 ### SSH Jump Routes
 
 Quick Connect supports up to **three jump hosts plus the final target**, equivalent
-to an ordered SSH `-J` route. Open **Jump hosts > Edit route...**, name the Entry,
-and use **Add jump host first**. The displayed path starts at the Core host and
-ends at the actual target. Enter each jump password when connecting, or choose
+to an ordered SSH `-J` route. Open **Jump hosts > Edit route...** to start with a
+Target card. **Add jump node** inserts a card immediately before the Target.
+Cards connect from **Core** top to bottom; drag a card's handle or use **Move up** /
+**Move down** to change the order. All cards can move, and the last card always
+becomes the **Target**. Add and arrange cards before filling them in; **Save route**
+checks the completed route for invalid fields, cycles and the jump limit. An Entry
+name is optional and defaults to the final username and host. Enter the Target
+password and each Jump password in Quick Connect after saving, or choose
 **Browser key from:** an existing key owner in the route editor.
 
 Only Entries appear in the picker. Each Entry points to an independently stored
-chain of nodes. **Reference route after this node** shares existing nodes;
+chain of nodes. Under **Advanced node settings**, **Reference route after this node** shares existing nodes;
 **Copy route after this node** creates independent nodes. **Only this Entry**
 copies the necessary prefix when editing a shared node. **Apply node edits to all
-references** deliberately changes shared nodes; the editor lists affected Entries.
+references**, under **Advanced sharing**, deliberately changes shared nodes;
+the editor lists affected Entries. Reordering or removing cards changes only the
+current Entry, even when node edits apply to all references.
 Removing a node from an Entry or deleting an Entry does not recursively delete
 shared nodes. Browser key ownership is separate: a referenced key must be released
 by its other routes before its owner can be deleted or the key rebound.
