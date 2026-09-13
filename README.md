@@ -320,8 +320,8 @@ delete profiles and to clear history. Profiles and history stay in the current
 browser and never store passwords.
 
 For an unknown remote SSH host, Quick Connect shows its SHA256 host-key
-fingerprint before authentication. Verify it independently, choose **Trust key**,
-then connect again. A changed key shows both saved and received fingerprints and
+fingerprint before authentication. Verify it independently and choose **Trust key**
+to retry the same connection. A changed key shows both saved and received fingerprints and
 requires explicit replacement; **Cancel** is the default. **Forget host key...**
 removes only the host and port currently entered after confirmation. Existing
 connections remain open. These actions edit the Core execution account's
@@ -329,15 +329,56 @@ connections remain open. These actions edit the Core execution account's
 authentication keys. Special policy records and symlinked files require manual
 management. The existing localhost key setup behavior is unchanged.
 
-Locations using the same IP and port share one host identity, so switching
-between them requires reviewing and replacing the saved key. Saved profile names
-do not create separate host identities.
+Use **Jump hosts > Edit route...** to assign an optional **Host key alias** when
+different locations use the same IP and port. Each alias has its own saved trust
+identity; it does not change the network address. A blank alias keeps the normal
+host/port identity. Saved profile names do not create separate trust identities.
+
+### SSH Jump Routes
+
+Quick Connect supports up to **three jump hosts plus the final target**, equivalent
+to an ordered SSH `-J` route. Open **Jump hosts > Edit route...**, name the Entry,
+and use **Add jump host first**. The displayed path starts at the Core host and
+ends at the actual target. Enter each jump password when connecting, or choose
+**Browser key from:** an existing key owner in the route editor.
+
+Only Entries appear in the picker. Each Entry points to an independently stored
+chain of nodes. **Reference route after this node** shares existing nodes;
+**Copy route after this node** creates independent nodes. **Only this Entry**
+copies the necessary prefix when editing a shared node. **Apply node edits to all
+references** deliberately changes shared nodes; the editor lists affected Entries.
+Removing a node from an Entry or deleting an Entry does not recursively delete
+shared nodes. Browser key ownership is separate: a referenced key must be released
+by its other routes before its owner can be deleted or the key rebound.
+
+Cycles are rejected by node ID, including cycles beyond the supported hop count.
+Repeating an IP is allowed. For `A → B → C → B`, the editor offers `A → B` (remove
+the loop) and `A → B → C` (stop before the back edge), with each final endpoint
+shown explicitly. A repair creates a copy for the current Entry after review;
+it never silently changes the target or cuts another Entry's shared links.
+
+Every hop verifies its host key before authentication. Intermediate servers need
+SSH TCP forwarding; they do not need StandTerm. Hostnames after the first hop are
+reached from the previous server. There is no direct fallback if a jump fails.
+Localhost reached through a jump uses ordinary fingerprint confirmation, not the
+Core host's localhost key setup. Terminal, Files, and Agent Tunnel all use the
+final SSH transport. **Cancel connection**, closing the tab, closing all tabs,
+or disconnecting the initiating browser cancels pending hops.
+
+Routes and keys are read from one IndexedDB snapshot for each connection attempt.
+Concurrent settings saves reject stale revisions. Migration preserves the old
+direct-profile record for older Core installations; subsequent route edits use
+independent version 2 records. Exports include the nodes reachable from saved
+Entries and recent history. Settings imports create fresh Entry/node IDs and
+leave imported browser-key authentication unresolved until a key is selected.
+Passwords and private keys are never saved or exported.
 
 A saved profile can explicitly generate an Ed25519 key with **Use browser key
 authentication**. The private `CryptoKey` is non-extractable and stays in that
 browser's IndexedDB. Copy the displayed OpenSSH public key to the remote
 account's `~/.ssh/authorized_keys`, then select the exact saved profile in Quick
-Connect. **Use key** remains optional, even when the profile has a key. Browser
+Connect. **Use key** remains optional for a direct target; jump routes select
+authentication separately for each node. Browser
 key authentication is allowed only from loopback or an authorized HTTPS browser.
 
 During authentication, Python sends the SSH challenge to the initiating browser
@@ -563,7 +604,7 @@ revokes this tunnel's grants and pending input without revoking local agents.
 Stopping preserves the SSH terminal and Files connection. An interrupted
 command is never replayed automatically. If SSH is already unreachable, remote
 temporary files may remain; their tokens are invalid. Reconnecting requires a
-new tunnel and Connect Info. ProxyJump is planned separately.
+new tunnel and Connect Info. SSH jump routes use the final host as the tunnel carrier.
 
 ## Agent And External Agent Mirror
 

@@ -4080,7 +4080,7 @@ def test_ssh_host_key_prompts_default_to_cancel_and_bind_actions(browser, access
             return window.terminalTest.getEmitted();
         }""")
         actions = [entry['args'][0] for entry in emitted if entry['event'] == 'ssh_host_key_action']
-        check(actions == [{'operation': 'forget', 'terminal_id': 'main', 'host': '192.168.167.254', 'port': '2222'}],
+        check(actions == [{'operation': 'forget', 'terminal_id': 'main', 'host': '192.168.167.254', 'port': '2222', 'host_key_alias': ''}],
               'Forget did not use the selected host and port')
         page.evaluate("""() => window.terminalTest.handleSshOutput({
             terminal_id: 'main', message_type: 'host_key_prompt', action_type: 'forget_ssh_host_key',
@@ -4118,7 +4118,8 @@ def test_ssh_history_and_auto_profile_follow_structured_success(browser, access_
             }"""
         )
         failed_state = page.evaluate("() => window.terminalTest.getSshSessionState()")
-        check(failed_state == {'version': 1, 'profiles': [], 'history': []}, 'failed SSH connection was stored')
+        check(failed_state['version'] == 2 and not failed_state['profiles'] and not failed_state['history']
+              and not failed_state['nodes'], 'failed SSH connection was stored')
 
         page.evaluate(
             """() => {
@@ -4203,9 +4204,9 @@ def test_ssh_history_and_auto_profile_follow_structured_success(browser, access_
         check(len(saved_state['profiles']) == 1, 'matching Save session connections created duplicate profiles')
         check(saved_state['profiles'][0]['name'] == 'bob@saved.example', 'automatic profile name is incorrect')
         check(saved_state['profiles'][0]['keyId'] is None, 'automatic profile did not reserve an empty key ID')
-        serialized = repr(saved_state).lower()
+        serialized = json.dumps(saved_state).lower()
         check('must-not-persist' not in serialized, 'SSH session storage retained a password')
-        check('password' not in serialized, 'SSH session storage contains a password field')
+        check('"password":' not in serialized, 'SSH session storage contains a password field')
     finally:
         close_context(context)
 
@@ -4664,12 +4665,13 @@ def test_browser_ssh_key_lifecycle_and_settings_transfer(browser, access_url):
         page.wait_for_function('() => !!window.terminalTest', timeout=10000)
         merged = page.evaluate('() => window.terminalTest.getSshSessionState()')
         check(
-            [profile['id'] for profile in merged['profiles']]
-            == ['profile-primary', 'profile-local', 'profile-imported'],
-            'settings import did not update by stable ID and append new profiles',
+            len(merged['profiles']) == 4
+            and [profile['id'] for profile in merged['profiles'][:2]] == ['profile-primary', 'profile-local']
+            and all(profile['id'] not in {'profile-primary', 'profile-local', 'profile-imported'} for profile in merged['profiles'][2:]),
+            'settings import did not preserve existing Entries and remap imported IDs',
         )
         primary = next(profile for profile in merged['profiles'] if profile['id'] == 'profile-primary')
-        check(primary['name'] == 'Primary', 'settings import did not update the matching stable profile ID')
+        check(primary['name'] == 'Changed Locally', 'settings import overwrote an existing Entry')
         check(primary['keyId'] == metadata['keyId'], 'settings import changed the existing browser key link')
         check(len(merged['history']) == 2, 'settings import did not merge SSH history')
         check(page.locator('#ssh-save-history').is_checked(), 'settings import did not restore browser preferences')

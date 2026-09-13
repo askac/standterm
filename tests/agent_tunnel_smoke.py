@@ -160,6 +160,33 @@ class AgentTunnelTests(unittest.TestCase):
         self.client.emit(standterm.AGENT_EVENT_ACTION_APPROVE,
                          standterm.public_agent_action(state.pending_actions[action_id]))
 
+    def test_agent_tunnel_uses_final_transport_through_two_jump_hosts(self):
+        from ssh_jump_smoke import SSHJumpTests, server
+        helper = SSHJumpTests()
+        helper.setUp()
+        try:
+            servers = [helper.stack.enter_context(server()) for _ in range(3)]
+            route = helper.route(servers)
+            helper.trust(route, servers)
+            bridge = helper.bridge(servers)
+            bridge.owner_session = self.session
+            bridge.terminal_id = 'carrier'
+            success, result = helper.connect(bridge, route)
+            self.assertTrue(success, result)
+            standterm.set_bridge(self.session, 'carrier', bridge)
+            with patch.object(self, 'carrier', return_value=bridge):
+                tunnel = self.open_tunnel(bridge.ssh)
+            status, info = request_json(tunnel.runtime['base_url'] + '/agentinfo')
+            self.assertEqual(status, 200)
+            self.assertEqual(set(tunnel.grants), {'main', 'second'})
+            self.assertEqual(self.command(tunnel, 'main', 'hello')['status'], 'ok')
+            self.assertEqual(self.command(tunnel, 'second', 'hello')['status'], 'ok')
+            tunnel.close()
+            self.assertTrue(tunnel._cleanup_done.wait(5))
+            self.assertFalse(bridge.ssh.get_transport() is None)
+        finally:
+            helper.doCleanups()
+
     def test_revoke_cancels_only_its_pending_input(self):
         first, _ = self.mint()
         second, _ = self.mint()

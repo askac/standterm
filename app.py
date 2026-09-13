@@ -2077,6 +2077,9 @@ class BrowserSSHSignRequestStore:
                 'timeout_seconds': self._timeout_seconds,
                 'expires_at': wall_now + self._timeout_seconds,
             }
+            for field in ('attempt_id', 'node_id'):
+                if browser_key.get(field):
+                    payload[field] = browser_key[field]
             self._requests[request_id] = {
                 'request': payload,
                 'session_token': session_token,
@@ -2113,6 +2116,9 @@ class BrowserSSHSignRequestStore:
                     or not isinstance(expected_value, str)
                     or not secrets.compare_digest(actual_value, expected_value)
                 ):
+                    return 'ssh_browser_key_sign_stale'
+            for field in ('attempt_id', 'node_id'):
+                if expected.get(field) and data.get(field) != expected[field]:
                     return 'ssh_browser_key_sign_stale'
             if entry['event'].is_set():
                 return 'ssh_browser_key_sign_stale'
@@ -2379,6 +2385,7 @@ def request_browser_ssh_signature(bridge, signer_sid, browser_key, challenge, al
         socket_session_tokens.get(signer_sid) != session_token
         or not isinstance(browser_id, str)
         or not signer_allowed
+        or bridge._connection_cancelled.is_set()
     ):
         raise RuntimeError('Browser SSH signer is unavailable.')
     request_payload, error_code = browser_ssh_sign_request_store.create(
@@ -2404,6 +2411,7 @@ def request_browser_ssh_signature(bridge, signer_sid, browser_key, challenge, al
         or socket_session_tokens.get(signer_sid) != session_token
         or current_identity.get('browser_id') != browser_id
         or not signer_still_allowed
+        or bridge._connection_cancelled.is_set()
     ):
         if error_message:
             raise RuntimeError(f'Browser SSH signing did not complete: {error_message}')
@@ -2503,6 +2511,8 @@ TERMINAL_BACKEND_REGISTRY = TerminalBackendRegistry([
 
 bridges = {}
 pending_terminal_starts = {}
+pending_terminal_bridges = {}
+pending_terminal_start_context = {}
 active_sessions = {}
 socket_session_tokens = {}
 socket_client_ips = {}
@@ -5859,10 +5869,14 @@ def record_agent_terminal_cleanup(session_token, terminal_id, reason):
 def get_bridge(session_token, terminal_id):
     return bridges.get(session_token, {}).get(terminal_id)
 
-def begin_terminal_start(session_token, terminal_id):
+def begin_terminal_start(session_token, terminal_id, sid=None, attempt_id=None):
     start_token = secrets.token_urlsafe(18)
+    key = (session_token, terminal_id)
     with terminal_start_lock:
-        pending_terminal_starts[(session_token, terminal_id)] = start_token
+        previous = pending_terminal_bridges.pop(key, None)
+        pending_terminal_starts[key] = start_token
+        pending_terminal_start_context[key] = {'sid': sid, 'attempt_id': attempt_id}
+    close_bridge(previous)
     return start_token
 
 def is_current_terminal_start(session_token, terminal_id, start_token):
@@ -5875,13 +5889,28 @@ def finish_terminal_start(session_token, terminal_id, start_token):
         if pending_terminal_starts.get(key) != start_token:
             return False
         pending_terminal_starts.pop(key, None)
+        pending_terminal_bridges.pop(key, None)
+        pending_terminal_start_context.pop(key, None)
         return True
 
-def cancel_terminal_starts(session_token, terminal_id=None):
+def cancel_terminal_starts(session_token, terminal_id=None, *, sid=None, attempt_id=None):
+    pending = []
     with terminal_start_lock:
         for key in list(pending_terminal_starts):
-            if key[0] == session_token and (terminal_id is None or key[1] == terminal_id):
-                pending_terminal_starts.pop(key, None)
+            context = pending_terminal_start_context.get(key, {})
+            if key[0] != session_token or (terminal_id is not None and key[1] != terminal_id):
+                continue
+            if sid is not None and context.get('sid') != sid:
+                continue
+            if attempt_id is not None and context.get('attempt_id') != attempt_id:
+                continue
+            pending_terminal_starts.pop(key, None)
+            pending_terminal_start_context.pop(key, None)
+            bridge = pending_terminal_bridges.pop(key, None)
+            if bridge:
+                pending.append(bridge)
+    for bridge in pending:
+        close_bridge(bridge)
 
 def set_bridge(session_token, terminal_id, bridge):
     bridges.setdefault(session_token, {})[terminal_id] = bridge
@@ -6089,7 +6118,7 @@ def log_terminal_input(sid, terminal_id, data):
     )
 
 def emit_connection_error(sid, message, error_code=None, action_type=None, action_message=None,
-                          action_question=None, action_id=None, terminal_id=TERMINAL_ID_MAIN):
+                          action_question=None, action_id=None, terminal_id=TERMINAL_ID_MAIN, attempt_id=None, route_context=None):
     socketio.emit(
         'ssh_output',
         {
@@ -6101,6 +6130,8 @@ def emit_connection_error(sid, message, error_code=None, action_type=None, actio
             'action_message': action_message,
             'action_question': action_question,
             'action_id': action_id,
+            'attempt_id': attempt_id,
+            'route_context': route_context,
         },
         room=sid,
     )
@@ -10146,9 +10177,10 @@ def on_agent_viewport_render_result(data):
 
 def start_terminal_backend(sid, session_token, payload, start_token):
     terminal_id = payload['terminal_id']
-    if not is_current_terminal_start(session_token, terminal_id, start_token):
-        return
-    pending_backend_actions.discard(sid)
+    with terminal_start_lock:
+        if not is_current_terminal_start(session_token, terminal_id, start_token):
+            return
+        pending_backend_actions.discard(sid)
     replacing_existing = get_bridge(session_token, terminal_id) is not None
     if not replacing_existing and len(bridges.get(session_token, {})) >= MAX_TERMINALS_PER_CLIENT:
         emit_connection_error(
@@ -10180,9 +10212,14 @@ def start_terminal_backend(sid, session_token, payload, start_token):
             raise TypeError('Backend did not return a terminal bridge.')
         if bridge.connection_type != connection_type:
             raise ValueError('Backend returned a bridge with a mismatched connection type.')
-        if payload.get('browser_key') and isinstance(bridge, SSHBridge):
+        if isinstance(bridge, SSHBridge):
             bridge.set_browser_signer_sid(sid)
         bridge.attach(sid)
+        with terminal_start_lock:
+            if not is_current_terminal_start(session_token, terminal_id, start_token):
+                close_bridge(bridge)
+                return
+            pending_terminal_bridges[(session_token, terminal_id)] = bridge
         success, result = plugin.connect_bridge(bridge, payload, cols, rows)
     except Exception as exc:
         log_message(f"[!] Backend start error for {connection_type}: {exc}")
@@ -10197,35 +10234,45 @@ def start_terminal_backend(sid, session_token, payload, start_token):
         return
 
     if success:
-        if (
-            socket_session_tokens.get(sid) != session_token
-            or not finish_terminal_start(session_token, terminal_id, start_token)
-        ):
+        with terminal_start_lock:
+            current = is_current_terminal_start(session_token, terminal_id, start_token)
+            authorized = socket_session_tokens.get(sid) == session_token
+            if current:
+                finish_terminal_start(session_token, terminal_id, start_token)
+            if current and authorized:
+                previous = pop_bridge(session_token, terminal_id)
+                close_terminal_bridge(session_token, terminal_id)
+                bridge.update_terminal_size(cols, rows)
+                set_bridge(session_token, terminal_id, bridge)
+            else:
+                previous = None
+        close_bridge(previous)
+        if not current or not authorized:
             close_bridge(bridge)
             return
-        close_terminal_bridge(session_token, terminal_id)
-        bridge.update_terminal_size(cols, rows)
-        set_bridge(session_token, terminal_id, bridge)
         connected_payload = {'message_type': 'ssh_connected'}
+        if payload.get('attempt_id'):
+            connected_payload['attempt_id'] = payload['attempt_id']
         connected_payload.update(bridge.metadata())
         bridge.emit_output(connected_payload)
         socketio.start_background_task(target=bridge.read_loop)
         return
 
-    failure = plugin.build_connection_failure(sid, bridge, payload, result)
+    with terminal_start_lock:
+        if (not is_current_terminal_start(session_token, terminal_id, start_token)
+                or socket_session_tokens.get(sid) != session_token):
+            finish_terminal_start(session_token, terminal_id, start_token)
+            failure = None
+        else:
+            failure = plugin.build_connection_failure(sid, bridge, payload, result)
+            finish_terminal_start(session_token, terminal_id, start_token)
+            emit_connection_error(
+                sid, failure['message'], error_code=failure.get('error_code'),
+                action_type=failure.get('action_type'), action_message=failure.get('action_message'),
+                action_question=failure.get('action_question'), action_id=failure.get('action_id'),
+                terminal_id=terminal_id, attempt_id=payload.get('attempt_id'),
+                route_context=result.get('route_context') if isinstance(result, dict) else None)
     close_bridge(bridge)
-    if not finish_terminal_start(session_token, terminal_id, start_token):
-        return
-    emit_connection_error(
-        sid,
-        failure['message'],
-        error_code=failure.get('error_code'),
-        action_type=failure.get('action_type'),
-        action_message=failure.get('action_message'),
-        action_question=failure.get('action_question'),
-        action_id=failure.get('action_id'),
-        terminal_id=terminal_id,
-    )
 
 
 @socketio.on(SSH_BROWSER_SIGN_RESPONSE_EVENT)
@@ -10987,8 +11034,8 @@ def on_start_ssh(data):
         return
 
     browser_ssh_sign_request_store.discard(session_token, terminal_id=payload['terminal_id'])
-    start_token = begin_terminal_start(session_token, payload['terminal_id'])
-    if payload.get('browser_key'):
+    start_token = begin_terminal_start(session_token, payload['terminal_id'], request.sid, payload.get('attempt_id'))
+    if payload.get('browser_key') or payload.get('route'):
         socketio.start_background_task(start_terminal_backend, request.sid, session_token, payload, start_token)
         return
     start_terminal_backend(request.sid, session_token, payload, start_token)
@@ -11055,6 +11102,7 @@ def on_ssh_host_key_action(data):
     client_ip = socket_client_ips.get(request.sid, 'unknown')
     browser_authorized = socket_browser_authorized.get(request.sid, False)
     result = {'status': 'failed', 'message': 'Invalid SSH host key action.', 'error_code': 'ssh_host_key_invalid_action'}
+    action = None
     if not is_ssh_allowed_for_client(client_ip, browser_authorized=browser_authorized):
         result.update(message='SSH access requires a local client or browser authorization.', error_code='ssh_remote_unauthorized')
     elif data.get('operation') == 'forget':
@@ -11064,6 +11112,7 @@ def on_ssh_host_key_action(data):
             'terminal_id': terminal_id,
             'host': data.get('host'),
             'port': data.get('port'),
+            'host_key_alias': data.get('host_key_alias'),
         }, client_ip, browser_authorized=browser_authorized)
         if error:
             result['message'] = error.get('message') if isinstance(error, dict) else error
@@ -11097,7 +11146,24 @@ def on_ssh_host_key_action(data):
     socketio.emit('ssh_output', {
         'message_type': 'host_key_result', 'terminal_id': terminal_id,
         'message': result['message'], 'status': result['status'], 'error_code': result.get('error_code'),
+        'action_id': data.get('action_id'), 'operation': data.get('operation'),
+        'action_type': action.action_type if action else None,
+        'attempt_id': action.metadata.get('attempt_id') if action else None,
     }, room=request.sid)
+
+@socketio.on('cancel_ssh_start')
+def on_cancel_ssh_start(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    if not session_token or not terminal_id:
+        return
+    with terminal_start_lock:
+        context = pending_terminal_start_context.get((session_token, terminal_id))
+        if not context or context.get('sid') != request.sid or context.get('attempt_id') != data.get('attempt_id'):
+            return
+        cancel_terminal_starts(session_token, terminal_id, sid=request.sid, attempt_id=data.get('attempt_id'))
+        browser_ssh_sign_request_store.discard(session_token, terminal_id=terminal_id)
+        pending_backend_actions.discard(request.sid)
 
 @socketio.on('ssh_input')
 def on_ssh_input(data):
@@ -11151,6 +11217,8 @@ def on_close_terminal(data):
     terminal_id = validate_terminal_id_payload(data)
     if not session_token or not terminal_id:
         return
+    cancel_terminal_starts(session_token, terminal_id, sid=request.sid)
+    browser_ssh_sign_request_store.discard(session_token, terminal_id=terminal_id, sid=request.sid)
     bridge = get_allowed_bridge(session_token, terminal_id, request.sid, emit_error=True)
     if bridge:
         bridge.emit_output({
@@ -11164,6 +11232,8 @@ def on_close_all_terminals():
     session_token = socket_session_tokens.get(request.sid)
     if not session_token:
         return
+    cancel_terminal_starts(session_token, sid=request.sid)
+    browser_ssh_sign_request_store.discard(session_token, sid=request.sid)
     session_sids = get_session_sids(session_token)
     for terminal_id, bridge in list(bridges.get(session_token, {}).items()):
         if is_terminal_bridge_allowed_for_sid(bridge, request.sid):
@@ -11188,6 +11258,7 @@ def on_disconnect(reason=None):
     socket_settings_admin_grant_ids.pop(request.sid, None)
     agent_viewer_ids.pop(request.sid, None)
     if session_token:
+        cancel_terminal_starts(session_token, sid=request.sid)
         for tunnel in list(agent_tunnels.values()):
             if tunnel.sid == request.sid:
                 tunnel.close()

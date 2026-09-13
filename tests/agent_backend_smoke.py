@@ -113,6 +113,8 @@ class InvalidProvider(standterm.AgentProvider):
 def reset_state():
     standterm.bridges.clear()
     standterm.pending_terminal_starts.clear()
+    standterm.pending_terminal_bridges.clear()
+    standterm.pending_terminal_start_context.clear()
     standterm.pending_localhost_key_setups.clear()
     standterm.active_sessions.clear()
     standterm.socket_session_tokens.clear()
