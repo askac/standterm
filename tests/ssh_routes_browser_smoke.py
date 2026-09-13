@@ -28,6 +28,12 @@ def select(page, entry_id):
     }""", entry_id)
 
 
+def open_card(page, role):
+    toggle = page.get_by_role('button', name=f'Edit {role}', exact=True)
+    if toggle.get_attribute('aria-expanded') != 'true':
+        toggle.click()
+
+
 def test_ordered_cards_allow_incomplete_drafts_and_move_target(browser, url):
     context, page = fixture.new_page(browser, url)
     try:
@@ -51,6 +57,7 @@ def test_ordered_cards_allow_incomplete_drafts_and_move_target(browser, url):
         for role, host, user, port in [('Jump 1', 'first.test', 'one', '2221'),
                                        ('Jump 2', 'second.test', 'two', '2222'),
                                        ('Target', 'last.test', 'last', '2223')]:
+            open_card(page, role)
             page.get_by_role('textbox', name=f'{role} Host', exact=True).fill(host)
             page.get_by_role('textbox', name=f'{role} Username', exact=True).fill(user)
             page.get_by_role('textbox', name=f'{role} Port', exact=True).fill(port)
@@ -108,6 +115,7 @@ def test_shared_editor_and_atomic_storage(browser, url):
         select(page, 'entry-a')
         page.locator('#ssh-jump-summary').click()
         page.locator('#ssh-edit-route').click()
+        open_card(page, 'Target')
         page.get_by_role('textbox', name='Target Host', exact=True).fill('changed.test')
         page.get_by_role('button', name='Save route', exact=True).click()
         page.wait_for_selector('#ssh-route-editor', state='detached')
@@ -175,6 +183,7 @@ def test_shared_card_scope_tracks_references_and_preserves_stored_nodes(browser,
         assert 'Entry B' in notice.inner_text() and notice.is_visible()
         page.get_by_text('Advanced sharing', exact=True).click()
         assert notice.is_visible(), 'Shared-edit notice disappeared with advanced settings'
+        open_card(page, 'Target')
         page.get_by_role('textbox', name='Target Host', exact=True).fill('shared-change.test')
         page.get_by_role('button', name='Save route', exact=True).click()
         page.wait_for_selector('#ssh-route-editor', state='detached')
@@ -266,6 +275,7 @@ def test_cycle_repair_and_rejected_depth_leave_other_entries_intact(browser, url
         select(page, 'entry-a')
         page.locator('#ssh-jump-summary').click()
         page.locator('#ssh-edit-route').click()
+        open_card(page, 'Target')
         page.locator('#ssh-route-editor fieldset').last.locator('summary').click()
         page.get_by_role('combobox', name='Target Next route', exact=True).select_option('entry-b')
         page.locator('#ssh-route-editor fieldset').last.get_by_role('button', name='Reference route after this node', exact=True).click()
@@ -280,6 +290,7 @@ def test_cycle_repair_and_rejected_depth_leave_other_entries_intact(browser, url
         page.locator('#ssh-edit-route').click()
         page.get_by_text('Advanced sharing', exact=True).click()
         page.get_by_role('combobox', name='Edit scope', exact=True).select_option('all')
+        open_card(page, 'Target')
         page.locator('#ssh-route-editor fieldset').last.locator('summary').click()
         page.get_by_role('combobox', name='Target Next route', exact=True).select_option('entry-b')
         page.locator('#ssh-route-editor fieldset').last.get_by_role('button', name='Reference route after this node', exact=True).click()

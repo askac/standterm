@@ -373,12 +373,12 @@
         #ssh-route-editor label { display: grid; gap: 5px; color: #aaa; font-size: 12px; }
         #ssh-route-editor input, #ssh-route-editor select { width: 100%; min-width: 0; box-sizing: border-box; padding: 7px 8px; background: #2c2c2e; color: #fff; border: 1px solid #555; border-radius: 4px; font-size: 12px; }
         #ssh-route-editor input:focus, #ssh-route-editor select:focus { outline: 1px solid #0a84ff; }
-        #ssh-route-editor fieldset { position: relative; margin: 24px 0 0; padding: 12px; border: 1px solid #555; border-radius: 6px; background: #2a2a2b; min-width: 0; }
-        #ssh-route-editor fieldset::before { content: '↓'; position: absolute; top: -32px; left: 20px; color: #888; }
+        #ssh-route-editor fieldset { position: relative; margin: 18px 0 0; padding: 6px; border: 1px solid #555; border-radius: 6px; background: #2a2a2b; min-width: 0; }
+        #ssh-route-editor fieldset::before { content: '↓'; position: absolute; top: -18px; left: 20px; color: #888; }
         #ssh-route-editor fieldset[data-role="Target"] { border-color: #64a9ff; }
         #ssh-route-editor fieldset.drag-over { outline: 2px solid #64a9ff; }
         #ssh-route-editor fieldset.invalid { border-color: #ff9f0a; }
-        #ssh-route-editor legend { color: #64a9ff; padding: 0 5px; font-size: 14px; font-weight: 600; }
+        .ssh-route-accessible-label { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
         #ssh-route-editor p { overflow-wrap: anywhere; line-height: 1.5; }
         #ssh-route-editor details { margin-top: 12px; }
         #ssh-route-editor summary { cursor: pointer; color: #aaa; margin-bottom: 10px; }
@@ -389,11 +389,19 @@
         .ssh-route-fields { grid-template-columns: minmax(0, 2fr) minmax(65px, 0.7fr) minmax(0, 1.3fr); }
         .ssh-route-fields .ssh-route-auth { grid-column: 1 / -1; }
         .ssh-route-buttons { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
-        .ssh-route-card-actions { margin: 0 0 12px; }
+        .ssh-route-card-header { display: flex; align-items: center; gap: 4px; }
+        .ssh-route-card-body { padding: 10px 6px 4px; }
         #ssh-route-editor button { padding: 7px 10px; border: 1px solid #555; border-radius: 4px; background: #3a3a3c; color: #fff; cursor: pointer; font-size: 12px; }
         #ssh-route-editor button:hover:not(:disabled) { background: #48484a; }
         #ssh-route-editor button:disabled { opacity: 0.4; cursor: default; }
-        #ssh-route-editor .ssh-route-drag { cursor: grab; font-size: 18px; padding: 2px 12px; }
+        #ssh-route-editor .ssh-route-card-header > button { flex-shrink: 0; padding: 5px 8px; border-color: transparent; background: transparent; }
+        #ssh-route-editor .ssh-route-drag { cursor: grab; font-size: 18px; }
+        #ssh-route-editor .ssh-route-card-toggle { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; text-align: left; }
+        .ssh-route-card-toggle strong { color: #64a9ff; min-width: 46px; }
+        .ssh-route-card-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+        .ssh-route-card-auth { color: #aaa; font-size: 11px; }
+        .ssh-route-card-toggle::after { content: '▸'; color: #aaa; }
+        .ssh-route-card-toggle[aria-expanded="true"]::after { content: '▾'; }
         #ssh-route-editor .ssh-route-add { display: block; margin: 16px 0 0 42px; border-style: dashed; color: #64a9ff; }
         #ssh-route-editor .primary { background: #0a84ff; border-color: #0a84ff; }
         .ssh-route-actions { position: sticky; bottom: -18px; background: #252526; padding: 12px 0; }
@@ -403,6 +411,11 @@
         #ssh-hop-passwords label { display: block; margin: 8px 0; color: #bbb; }
         @media (max-width: 640px) {
             .ssh-route-heading, .ssh-route-fields { grid-template-columns: 1fr; }
+            #ssh-route-editor { box-sizing: border-box; width: 94vw; padding: 12px; }
+            #ssh-route-editor .ssh-route-card-toggle { flex-wrap: wrap; gap: 3px 6px; }
+            .ssh-route-card-summary { flex-basis: 100%; order: 1; }
+            .ssh-route-card-toggle::after { margin-left: auto; }
+            .ssh-route-actions { bottom: -12px; }
         }
         .ssh-key-controls { display: grid; gap: 8px; padding: 9px; border: 1px solid #3a3a3c; border-radius: 6px; background: #171717; }
         .ssh-key-controls > label { display: flex; grid-template-columns: none; align-items: center; gap: 8px; color: #ddd; }

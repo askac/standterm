@@ -338,11 +338,13 @@ host/port identity. Saved profile names do not create separate trust identities.
 
 Quick Connect supports up to **three jump hosts plus the final target**, equivalent
 to an ordered SSH `-J` route. Open **Jump hosts > Edit route...** to start with a
-Target card. **Add jump node** inserts a card immediately before the Target.
-Cards connect from **Core** top to bottom; drag a card's handle or use **Move up** /
-**Move down** to change the order. All cards can move, and the last card always
+Target card. Existing routes show compact summaries; click a summary to edit one
+node at a time. **Add jump node** inserts and opens a card immediately before the
+Target. Cards connect from **Core** top to bottom; drag a card's handle or use the
+**↑** / **↓** buttons to change the order. All cards can move, and the last card always
 becomes the **Target**. Add and arrange cards before filling them in; **Save route**
-checks the completed route for invalid fields, cycles and the jump limit. An Entry
+checks the completed route for invalid fields, cycles and the jump limit, opening
+the card that needs correction. An Entry
 name is optional and defaults to the final username and host. Enter the Target
 password and each Jump password in Quick Connect after saving, or choose
 **Browser key from:** an existing key owner in the route editor.

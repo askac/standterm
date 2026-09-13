@@ -49,6 +49,7 @@
         const fail = err => { status.textContent = err.message || 'SSH route could not be saved.'; };
         let controls = [];
         let draggingIndex = null;
+        let expandedIndex = path().length === 1 ? 0 : -1;
         const labelPath = path => `Core host → ${path.map(node => `${node.endpoint.username}@${node.endpoint.host}:${node.endpoint.port}`).join(' → ')}`;
 
         function path() { return routes.resolve(draft, entry.startNodeId).path; }
@@ -92,10 +93,19 @@
             }
         }
 
-        function replacePath(path) {
+        function replacePath(path, nextExpandedIndex = expandedIndex) {
             entry.startNodeId = routes.copyPath(draft, path);
+            expandedIndex = nextExpandedIndex;
             routes.project(draft);
             render();
+        }
+
+        function expandCard(index) {
+            expandedIndex = index;
+            controls.forEach((control, i) => {
+                control.body.hidden = i !== index;
+                control.toggle.setAttribute('aria-expanded', String(i === index));
+            });
         }
 
         function moveCard(from, to) {
@@ -104,7 +114,11 @@
             flush();
             const reordered = path();
             reordered.splice(to, 0, reordered.splice(from, 1)[0]);
-            replacePath(reordered);
+            let nextExpandedIndex = expandedIndex;
+            if (expandedIndex === from) nextExpandedIndex = to;
+            else if (from < expandedIndex && to >= expandedIndex) nextExpandedIndex -= 1;
+            else if (from > expandedIndex && to <= expandedIndex) nextExpandedIndex += 1;
+            replacePath(reordered, nextExpandedIndex);
             controls[to].handle.focus();
         }
 
@@ -161,7 +175,7 @@
                         current.splice(current.length - 1, 0, { id: routes.id(),
                             endpoint: { host: '', port: '22', username: target.username || '' },
                             hostKeyAlias: '', nextNodeId: null, authentication: { method: 'password' } });
-                        replacePath(current);
+                        replacePath(current, current.length - 2);
                         controls[current.length - 2].host.focus();
                     }, rows);
                     add.className = 'ssh-route-add';
@@ -170,14 +184,25 @@
                 const legend = document.createElement('legend');
                 const role = index === result.path.length - 1 ? 'Target' : `Jump ${index + 1}`;
                 legend.textContent = role;
+                legend.className = 'ssh-route-accessible-label';
                 fieldset.dataset.role = role;
                 fieldset.append(legend);
                 const nodeButtons = document.createElement('div');
-                nodeButtons.className = 'ssh-route-buttons ssh-route-card-actions';
+                nodeButtons.className = 'ssh-route-card-header';
                 const handle = button('≡', () => {}, nodeButtons);
                 handle.className = 'ssh-route-drag';
                 handle.setAttribute('aria-label', `Reorder ${role}`);
                 handle.title = 'Drag to reorder, or use the arrow keys';
+                const toggle = button('', () => expandCard(expandedIndex === index ? -1 : index), nodeButtons);
+                toggle.className = 'ssh-route-card-toggle';
+                toggle.setAttribute('aria-label', `Edit ${role}`);
+                const roleLabel = document.createElement('strong');
+                roleLabel.textContent = role;
+                const summary = document.createElement('span');
+                summary.className = 'ssh-route-card-summary';
+                const authSummary = document.createElement('small');
+                authSummary.className = 'ssh-route-card-auth';
+                toggle.append(roleLabel, summary, authSummary);
                 handle.draggable = true;
                 handle.ondragstart = event => {
                     draggingIndex = index;
@@ -214,19 +239,35 @@
                     fieldset.classList.remove('drag-over');
                     try { moveCard(from, index); } catch (err) { fail(err); }
                 };
-                const earlier = button('Move up', () => moveCard(index, index - 1), nodeButtons);
+                const earlier = button('↑', () => moveCard(index, index - 1), nodeButtons);
+                earlier.setAttribute('aria-label', 'Move up');
+                earlier.title = 'Move up';
                 earlier.disabled = index === 0;
-                const later = button('Move down', () => moveCard(index, index + 1), nodeButtons);
+                const later = button('↓', () => moveCard(index, index + 1), nodeButtons);
+                later.setAttribute('aria-label', 'Move down');
+                later.title = 'Move down';
                 later.disabled = index === result.path.length - 1;
-                if (result.path.length > 1) button('Remove', () => {
-                    canChangeOrder();
-                    flush();
-                    replacePath(path().filter((_, i) => i !== index));
-                }, nodeButtons);
+                if (result.path.length > 1) {
+                    const remove = button('×', () => {
+                        canChangeOrder();
+                        flush();
+                        const remaining = path().filter((_, i) => i !== index);
+                        const nextExpandedIndex = expandedIndex === index ? Math.min(index, remaining.length - 1)
+                            : expandedIndex > index ? expandedIndex - 1 : expandedIndex;
+                        replacePath(remaining, nextExpandedIndex);
+                    }, nodeButtons);
+                    remove.setAttribute('aria-label', 'Remove');
+                    remove.title = `Remove ${role}`;
+                }
                 fieldset.append(nodeButtons);
+                const body = document.createElement('div');
+                body.className = 'ssh-route-card-body';
+                body.id = `ssh-route-card-body-${index}`;
+                toggle.setAttribute('aria-controls', body.id);
+                fieldset.append(body);
                 const fields = document.createElement('div');
                 fields.className = 'ssh-route-fields';
-                fieldset.append(fields);
+                body.append(fields);
                 const input = (label, value, parent = fields) => {
                     const wrapper = document.createElement('label');
                     wrapper.textContent = label;
@@ -264,12 +305,12 @@
                 const advancedTitle = document.createElement('summary');
                 advancedTitle.textContent = 'Advanced node settings';
                 advanced.append(advancedTitle);
-                fieldset.append(advanced);
+                body.append(advanced);
                 const alias = input('Host key alias (optional)', node.hostKeyAlias, advanced);
                 const affected = document.createElement('p');
                 affected.textContent = `Referenced by: ${routes.references(draft, node.id).map(item => item.name || 'This Entry').join(', ')}`;
                 advanced.append(affected);
-                controls.push({ card: fieldset, handle, host, advanced, read: () => ({
+                controls.push({ card: fieldset, handle, host, advanced, body, toggle, read: () => ({
                     endpoint: { host: host.value, port: port.value, username: username.value },
                     hostKeyAlias: alias.value.trim(), authentication: auth.value === 'password'
                         ? { method: 'password' } : { method: 'browser-key', keyRef: keyRefs.get(auth.value) || null }
@@ -305,13 +346,23 @@
                         }
                     }, referenceButtons);
                 }
+                function updateSummary() {
+                    const endpoint = `${username.value.trim() ? `${username.value.trim()}@` : ''}${host.value.trim() || 'Enter host'}:${port.value || '22'}`;
+                    summary.textContent = `${endpoint}${alias.value.trim() ? ` · ${alias.value.trim()}` : ''}`;
+                    authSummary.textContent = auth.value === 'password' ? 'Password' : auth.value === 'unresolved' ? 'Key unavailable' : 'Key';
+                    const aliasText = alias.value.trim() ? ` · Alias: ${alias.value.trim()}` : '';
+                    toggle.title = `${role}: ${endpoint} · ${auth.selectedOptions[0].text}${aliasText}`;
+                }
+                updateSummary();
                 fieldset.addEventListener('input', () => {
                     fieldset.classList.remove('invalid');
+                    updateSummary();
                     preview.textContent = labelPath(controls.map(control => control.read()));
                     status.replaceChildren();
                 });
                 rows.append(fieldset);
             });
+            expandCard(expandedIndex < controls.length ? expandedIndex : -1);
             updateScopeNotice();
         }
 
@@ -328,6 +379,7 @@
                 } catch (err) {
                     const control = controls[index];
                     control.card.classList.add('invalid');
+                    expandCard(index);
                     if (validEndpoint) control.advanced.open = true;
                     control.host.focus();
                     throw new Error(`${index === current.length - 1 ? 'Target' : `Jump ${index + 1}`}: ${err.message}`);
