@@ -1,7 +1,7 @@
 Flask
 Flask-SocketIO
 simple-websocket
-paramiko
+paramiko>=3.2
 eventlet
 cryptography
 webauthn>=3,<4

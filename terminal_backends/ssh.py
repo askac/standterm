@@ -2,9 +2,11 @@ import base64
 import codecs
 import getpass
 import hashlib
+import json
 import os
 import re
 import secrets
+import socket
 import stat
 import threading
 import time
@@ -21,6 +23,14 @@ from runtime_logging import log_message
 SSH_PROFILE_NAME_MAX_LENGTH = 64
 SSH_BROWSER_KEY_ID_MAX_LENGTH = 128
 SSH_BROWSER_KEY_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]+$')
+SSH_MAX_JUMP_HOSTS = 3
+SSH_CONNECT_TIMEOUT_SECONDS = 15
+SSH_AUTH_TIMEOUT_SECONDS = 45
+SSH_FORWARD_TIMEOUT_SECONDS = 15
+SSH_LOGIN_TIMEOUT_SECONDS = 180
+SSH_LOGIN_PASSWORD_ATTEMPTS = 3
+SSH_LOGIN_MAX_PASSWORD_BYTES = 4096
+SSH_LOGIN_POLL_SECONDS = 0.25
 SFTP_FILE_REFERENCE_TTL_SECONDS = 5 * 60
 SFTP_FILE_REFERENCE_MAX_RECORDS = 4096
 SFTP_FILE_REFERENCE_TOKEN_BYTES = 12
@@ -116,6 +126,12 @@ class SSHBridge(TerminalBridge):
         self._host_key_snapshot = None
         self._pending_host_key = None
         self._browser_signer_sid = None
+        self._connection_resources = []
+        self._connection_lock = threading.RLock()
+        self._connection_cancelled = threading.Event()
+        self._connection_node = None
+        self._login_request = None
+        self.attempt_id = None
         self._sftp_lock = threading.Lock()
         self._sftp_file_refs_lock = threading.Lock()
         self._sftp_file_refs = {}
@@ -648,11 +664,35 @@ class SSHBridge(TerminalBridge):
             raise BrowserSSHKeyError('Browser SSH signer is already assigned.')
         self._browser_signer_sid = sid
 
-    def _reset_ssh_client(self, trust_unknown_host=False):
+    def _reset_ssh_client(self, trust_unknown_host=False, interactive_node=None, local_direct=False):
+        if self._connection_cancelled.is_set():
+            raise RuntimeError('SSH connection cancelled.')
         paramiko_module = self._get_paramiko()
         if self.ssh:
             self.ssh.close()
         self.ssh = paramiko_module.SSHClient()
+        if interactive_node is not None:
+            bridge = self
+
+            class LoginHostKeyPolicy(paramiko_module.MissingHostKeyPolicy):
+                def missing_host_key(self, client, hostname, key):
+                    saved = bridge._host_key_snapshot['keys']
+                    if any(item == key for item in saved) or (local_direct and not saved):
+                        return
+                    hint = bridge._host_key_confirmation_hint(key)
+                    answer = bridge._request_login_input(interactive_node, 'host_key',
+                                                        message=hint['action_message'],
+                                                        question=hint['action_question'])
+                    if answer is not True:
+                        raise RuntimeError('SSH host key was not accepted.')
+                    with bridge._connection_lock:
+                        bridge._check_connection_active()
+                        bridge._host_key_store.update(bridge._host_key_snapshot, key)
+                    bridge._pending_host_key = None
+
+            # Verify both unknown and changed keys in the policy, before authentication.
+            self.ssh.set_missing_host_key_policy(LoginHostKeyPolicy())
+            return
         if self._host_key_snapshot is not None:
             for key in self._host_key_snapshot['keys']:
                 keys = self.ssh.get_host_keys()
@@ -848,7 +888,8 @@ class SSHBridge(TerminalBridge):
             return BackendAction(
                 action_type=action_type,
                 terminal_id=payload['terminal_id'],
-                metadata={'snapshot': self._host_key_snapshot, 'key': self._pending_host_key},
+                metadata={'snapshot': self._host_key_snapshot, 'key': self._pending_host_key,
+                          'attempt_id': self.attempt_id},
                 expires_at=expires_at,
                 message=message,
                 question=question,
@@ -865,6 +906,7 @@ class SSHBridge(TerminalBridge):
                 'host': payload['host'],
                 'port': payload['port'],
                 'username': payload['username'],
+                'attempt_id': self.attempt_id,
                 'key_entry': missing_entries[0],
             },
             expires_at=expires_at,
@@ -1038,7 +1080,207 @@ class SSHBridge(TerminalBridge):
         )
         self.auth_method = 'browser-key'
 
-    def connect(self, host, port, user, password=None, browser_key=None, cols=80, rows=24):
+    def _own_connection_resource(self, resource):
+        with self._connection_lock:
+            if self._connection_cancelled.is_set():
+                resource.close()
+                raise RuntimeError('SSH connection cancelled.')
+            self._connection_resources.append(resource)
+        return resource
+
+    def _check_connection_active(self):
+        if self._connection_cancelled.is_set():
+            raise RuntimeError('SSH connection cancelled.')
+
+    def _request_login_input(self, node, kind, **details):
+        with self._connection_lock:
+            self._check_connection_active()
+            payload = {
+                'message_type': 'ssh_login_prompt', 'attempt_id': self.attempt_id,
+                **self._connection_node, 'node_id': node['node_id'], 'kind': kind, 'phase': kind,
+                'request_id': secrets.token_urlsafe(24), 'timeout_seconds': SSH_LOGIN_TIMEOUT_SECONDS,
+                'host': node['host'], 'port': node['port'], 'username': node['username'], **details,
+            }
+            pending = {'payload': payload, 'event': threading.Event(), 'answer': None, 'answered': False,
+                       'deadline': time.monotonic() + SSH_LOGIN_TIMEOUT_SECONDS}
+            self._login_request = pending
+            self._connection_node['phase'] = kind
+        try:
+            self.emit_output(payload)
+            while not pending['event'].wait(min(SSH_LOGIN_POLL_SECONDS, max(0, pending['deadline'] - time.monotonic()))):
+                self._check_connection_active()
+                if time.monotonic() >= pending['deadline']:
+                    raise RuntimeError('SSH login input timed out.')
+                transport = self.ssh.get_transport() if self.ssh else None
+                if transport is not None and not transport.is_active():
+                    raise RuntimeError('SSH server closed the connection while waiting for login input.')
+            with self._connection_lock:
+                self._check_connection_active()
+                if not pending['answered']:
+                    raise RuntimeError('SSH login input was cancelled.')
+                return pending['answer']
+        finally:
+            with self._connection_lock:
+                if self._login_request is pending:
+                    self._login_request = None
+                pending['answer'] = None
+
+    def resolve_login_input(self, sid, data):
+        with self._connection_lock:
+            pending = self._login_request
+            if (not pending or pending['answered'] or time.monotonic() >= pending['deadline'] or self._connection_cancelled.is_set()
+                    or sid != self._browser_signer_sid or not isinstance(data, dict)):
+                return False
+            expected = pending['payload']
+            if data.get('terminal_id') != self.terminal_id or any(
+                    data.get(field) != expected[field] for field in ('attempt_id', 'node_id', 'request_id', 'kind')):
+                return False
+            if expected['kind'] == 'password':
+                answer = data.get('password')
+                if not isinstance(answer, str) or len(answer.encode('utf-8')) > SSH_LOGIN_MAX_PASSWORD_BYTES:
+                    return False
+            else:
+                answer = data.get('accept')
+                if not isinstance(answer, bool):
+                    return False
+            pending.update(answer=answer, answered=True)
+            pending['event'].set()
+            return True
+
+    def _login_auth_strategy(self, node, index, total, pkey):
+        paramiko_module = self._get_paramiko()
+        bridge = self
+
+        class LoginAuthStrategy(paramiko_module.AuthStrategy):
+            def authenticate(self, transport):
+                if pkey:
+                    bridge._connection_progress(node, index, total, 'authenticate')
+                    transport.auth_publickey(node['username'], pkey)
+                else:
+                    for attempt in range(SSH_LOGIN_PASSWORD_ATTEMPTS):
+                        password = node.get('password') if attempt == 0 else None
+                        if not password:
+                            password = bridge._request_login_input(
+                                node, 'password', message='Password was rejected. Try again.' if attempt else '')
+                        try:
+                            bridge._connection_progress(node, index, total, 'authenticate')
+                            transport.auth_password(node['username'], password)
+                            break
+                        except paramiko_module.BadAuthenticationType as exc:
+                            if 'keyboard-interactive' in exc.allowed_types:
+                                raise RuntimeError('This server requires additional interactive SSH authentication that this login card does not support.') from exc
+                            raise RuntimeError('This SSH server does not accept password authentication. Choose a key.')
+                        except paramiko_module.AuthenticationException:
+                            if attempt == SSH_LOGIN_PASSWORD_ATTEMPTS - 1 or not transport.is_active():
+                                raise
+                        finally:
+                            password = None
+                bridge._check_connection_active()
+                if not transport.is_authenticated():
+                    raise RuntimeError('Additional SSH authentication is required and is not supported by this login card.')
+
+        return LoginAuthStrategy(ssh_config=None)
+
+    def _connection_progress(self, node, index, total, phase):
+        if self._connection_cancelled.is_set():
+            raise RuntimeError('SSH connection cancelled.')
+        self._connection_node = {'node_id': node['node_id'], 'hop': index + 1,
+                                 'total': total, 'phase': phase}
+        self.emit_output({
+            'message_type': 'ssh_connect_progress', 'attempt_id': self.attempt_id,
+            **self._connection_node, 'host': node['host'], 'port': node['port'],
+        })
+
+    def _connect_route(self, route, cols, rows, interactive_login=False):
+        paramiko_module = self._get_paramiko()
+        previous = None
+        try:
+            for index, node in enumerate(route):
+                self._connection_progress(node, index, len(route), 'connect')
+                identity = node.get('host_key_alias') or node['host']
+                self._host_key_snapshot = self._host_key_store.snapshot(identity, node['port'])
+                self._pending_host_key = None
+                if previous is None:
+                    # Connect to the network address; the alias is only a trust identity.
+                    sock = self._own_connection_resource(socket.create_connection(
+                        (node['host'], node['port']), timeout=SSH_CONNECT_TIMEOUT_SECONDS))
+                else:
+                    self._connection_progress(node, index, len(route), 'forward')
+                    sock = self._own_connection_resource(previous.get_transport().open_channel(
+                        'direct-tcpip', (node['host'], node['port']), ('127.0.0.1', 0),
+                        timeout=SSH_FORWARD_TIMEOUT_SECONDS))
+                # Retain upstream clients until the complete route is closed.
+                self.ssh = None
+                self._reset_ssh_client(
+                    interactive_node=node if interactive_login else None,
+                    local_direct=len(route) == 1 and not node.get('host_key_alias') and self._is_local_target(node['host']))
+                client = self._own_connection_resource(self.ssh)
+                key = node.get('browser_key')
+                pkey = None
+                if key:
+                    if not self._browser_signer_sid or not self._request_browser_signature:
+                        raise BrowserSSHKeyError('Browser SSH signer is unavailable.')
+                    pkey = BrowserEd25519Key(
+                        paramiko_module, base64.b64decode(key['public_key']),
+                        lambda data, algorithm, bound_key=key: self._request_browser_signature(
+                            self, self._browser_signer_sid, bound_key, data, algorithm))
+                self._connection_progress(node, index, len(route), 'verify_and_authenticate')
+                auth_options = {'auth_strategy': self._login_auth_strategy(node, index, len(route), pkey)} if interactive_login else {
+                    'password': None if key else node['password'], 'pkey': pkey, 'allow_agent': False, 'look_for_keys': False}
+                client.connect(
+                    identity, port=node['port'], username=node['username'], sock=sock,
+                    timeout=SSH_CONNECT_TIMEOUT_SECONDS, banner_timeout=SSH_CONNECT_TIMEOUT_SECONDS,
+                    auth_timeout=SSH_AUTH_TIMEOUT_SECONDS, channel_timeout=SSH_FORWARD_TIMEOUT_SECONDS,
+                    **auth_options)
+                previous = client
+                self.auth_method = 'browser-key' if key else 'password'
+                self._connection_progress(node, index, len(route), 'authenticated')
+            self._connection_progress(route[-1], len(route) - 1, len(route), 'shell')
+            self.channel = self._own_connection_resource(self.ssh.invoke_shell(
+                term=self._ssh_term, width=cols, height=rows))
+            self.channel.setblocking(0)
+            target = route[-1]
+            self._sftp_endpoint = {
+                'host': target['host'], 'port': target['port'], 'user': target['username'],
+                'route': json.dumps([[n['host'].lower(), n['port'], n['username'],
+                                      n.get('host_key_alias', '')] for n in route], separators=(',', ':')),
+            }
+            return True, None
+        except Exception as exc:
+            if isinstance(exc, (HostKeyConfirmationRequired, paramiko_module.BadHostKeyException)):
+                result = self._host_key_confirmation_hint(exc.key)
+            else:
+                result = {'message': str(exc), 'error_code': 'ssh_route_failed'}
+            context = self._connection_node or {}
+            result['route_context'] = dict(context)
+            result['message'] = f"Hop {context.get('hop', 1)}/{len(route)}: {result['message']}"
+            return False, result
+
+    def connect(self, host, port, user, password=None, browser_key=None, cols=80, rows=24,
+                route=None, attempt_id=None, interactive_login=False):
+        self.attempt_id = attempt_id
+        if interactive_login:
+            node = route[0]
+            if (len(route) == 1 and not node.get('host_key_alias') and self._is_local_target(node['host'])
+                    and not node.get('browser_key') and not node.get('password')):
+                self._connection_progress(node, 0, 1, 'local_keys')
+                success, result = self.connect(host, port, user, route=route, attempt_id=attempt_id, cols=cols, rows=rows)
+                if success or (isinstance(result, dict) and result.get('action_type') == 'offer_localhost_key_setup'):
+                    if success:
+                        self._connection_progress(node, 0, 1, 'authenticated')
+                    elif isinstance(result, dict):
+                        result['route_context'] = dict(self._connection_node)
+                    return success, result
+                if self.ssh:
+                    self.ssh.close()
+                    self.ssh = None
+            return self._connect_route(route, cols, rows, interactive_login=True)
+        if route and (len(route) > 1 or route[0].get('host_key_alias')):
+            return self._connect_route(route, cols, rows)
+        if route:
+            node = route[0]
+            host, port, user = node['host'], node['port'], node['username']
+            password, browser_key = node['password'], node.get('browser_key')
         paramiko_module = self._get_paramiko()
         try:
             self._pending_host_key = None
@@ -1195,7 +1437,21 @@ class SSHBridge(TerminalBridge):
             except Exception as e:
                 log_message(f"[!] Resize error: {e}")
 
+    def cancel_connection(self):
+        self._connection_cancelled.set()
+
     def close(self):
+        self.cancel_connection()
+        with self._connection_lock:
+            if self._login_request:
+                self._login_request['answer'] = None
+                self._login_request['event'].set()
+            resources, self._connection_resources = self._connection_resources, []
+        for resource in reversed(resources):
+            try:
+                resource.close()
+            except Exception:
+                pass
         with self._sftp_file_refs_lock:
             self._sftp_file_refs.clear()
         self._sftp_endpoint = None
@@ -1477,6 +1733,44 @@ class SSHBackendPlugin(TerminalBackendPlugin):
                 'error_code': 'ssh_remote_unauthorized',
             }
 
+        if 'route' in data:
+            route = data['route']
+            interactive_login = data.get('interactive_login', False)
+            if not isinstance(interactive_login, bool):
+                return None, 'SSH interactive login flag is invalid.'
+            attempt_id = data.get('attempt_id')
+            if (not isinstance(attempt_id, str) or len(attempt_id) > SSH_BROWSER_KEY_ID_MAX_LENGTH
+                    or not SSH_BROWSER_KEY_ID_PATTERN.fullmatch(attempt_id)):
+                return None, 'SSH connection attempt id is invalid.'
+            if not isinstance(route, list) or not 1 <= len(route) <= SSH_MAX_JUMP_HOSTS + 1:
+                return None, f'SSH routes support at most {SSH_MAX_JUMP_HOSTS} jump hosts plus the target.'
+            nodes, seen = [], set()
+            for index, raw in enumerate(route):
+                if not isinstance(raw, dict) or 'route' in raw:
+                    return None, 'SSH route node is invalid.'
+                if not all(field in raw for field in ('host', 'port', 'username')):
+                    return None, 'Each SSH route node requires its host, port and username.'
+                node_id = raw.get('node_id')
+                if (not isinstance(node_id, str) or len(node_id) > SSH_BROWSER_KEY_ID_MAX_LENGTH
+                        or not SSH_BROWSER_KEY_ID_PATTERN.fullmatch(node_id) or node_id in seen):
+                    return None, 'SSH route has an invalid or repeated node id.'
+                seen.add(node_id)
+                node, error = self.validate_start_payload(
+                    raw, terminal_id, client_ip, browser_authorized, context)
+                if error:
+                    return None, error
+                node['node_id'] = node_id
+                if node['browser_key']:
+                    node['browser_key'].update(node_id=node_id, attempt_id=attempt_id)
+                nodes.append(node)
+            payload = dict(nodes[-1])
+            name = data.get('profile_name')
+            if name is not None and (not isinstance(name, str) or len(name) > SSH_PROFILE_NAME_MAX_LENGTH
+                                     or self._has_control_chars(name)):
+                return None, 'SSH entry name is invalid.'
+            payload.update(route=nodes, attempt_id=attempt_id, profile_name=name or None, interactive_login=interactive_login)
+            return payload, None
+
         host = data.get('host', self._get_default_host(context=context))
         if not isinstance(host, str):
             return None, 'Host must be a string.'
@@ -1489,6 +1783,15 @@ class SSHBackendPlugin(TerminalBackendPlugin):
             host_key_name(host, 22)
         except ValueError as exc:
             return None, str(exc)
+        alias = data.get('host_key_alias') or ''
+        if not isinstance(alias, str) or len(alias) > self._max_host_length:
+            return None, 'SSH host key alias is invalid.'
+        alias = alias.strip()
+        if alias:
+            try:
+                host_key_name(alias, 22)
+            except ValueError as exc:
+                return None, str(exc)
 
         try:
             port = int(data.get('port', self._get_default_port(context=context)))
@@ -1534,9 +1837,12 @@ class SSHBackendPlugin(TerminalBackendPlugin):
                 }
             if password:
                 return None, 'Password must be empty when browser key authentication is selected.'
-            profile_id = data.get('profile_id')
+            owner_field = 'credential_id' if data.get('credential_id') is not None else 'profile_id'
+            if owner_field == 'credential_id' and data.get('profile_id') is not None:
+                return None, 'Choose either an SSH profile key or a browser credential.'
+            owner_id = data.get(owner_field)
             key_id = data.get('key_id')
-            for field_name, field_value in (('SSH profile id', profile_id), ('SSH key id', key_id)):
+            for field_name, field_value in (('SSH key owner id', owner_id), ('SSH key id', key_id)):
                 if (
                     not isinstance(field_value, str)
                     or not field_value
@@ -1544,6 +1850,8 @@ class SSHBackendPlugin(TerminalBackendPlugin):
                     or not SSH_BROWSER_KEY_ID_PATTERN.fullmatch(field_value)
                 ):
                     return None, f'{field_name} is invalid.'
+            if owner_field == 'credential_id' and owner_id != key_id:
+                return None, 'SSH credential id must match its key id.'
             public_key = data.get('browser_public_key')
             if not isinstance(public_key, str):
                 return None, 'Browser SSH public key must be a Base64 string.'
@@ -1554,7 +1862,7 @@ class SSHBackendPlugin(TerminalBackendPlugin):
             if len(public_key_bytes) != 32:
                 return None, 'Browser SSH public key must be 32 bytes.'
             browser_key = {
-                'profile_id': profile_id,
+                owner_field: owner_id,
                 'key_id': key_id,
                 'public_key': public_key,
                 'fingerprint': hashlib.sha256(public_key_bytes).hexdigest(),
@@ -1567,6 +1875,7 @@ class SSHBackendPlugin(TerminalBackendPlugin):
             'password': password,
             'profile_name': profile_name or None,
             'browser_key': browser_key,
+            'host_key_alias': alias,
         }, None
 
     def create_bridge(self, session_token, terminal_id, payload):
@@ -1577,6 +1886,13 @@ class SSHBackendPlugin(TerminalBackendPlugin):
         return bridge
 
     def connect_bridge(self, bridge, payload, cols, rows):
+        options = {}
+        if payload.get('route'):
+            options.update(route=payload['route'], attempt_id=payload['attempt_id'])
+            if payload.get('interactive_login'):
+                options['interactive_login'] = True
+        elif payload.get('host_key_alias'):
+            options.update(route=[{**payload, 'node_id': 'direct'}])
         return bridge.connect(
             payload['host'],
             payload['port'],
@@ -1585,6 +1901,7 @@ class SSHBackendPlugin(TerminalBackendPlugin):
             browser_key=payload.get('browser_key'),
             cols=cols,
             rows=rows,
+            **options,
         )
 
     def prepare_connection_failure(self, sid, bridge, payload, result):
@@ -1634,7 +1951,7 @@ class SSHBackendPlugin(TerminalBackendPlugin):
 
     def prepare_host_key_forget(self, sid, payload):
         store = SSHHostKeyStore(self._bridge_kwargs['get_paramiko'](), self._bridge_kwargs.get('known_hosts_path'))
-        snapshot = store.snapshot(payload['host'], payload['port'])
+        snapshot = store.snapshot(payload.get('host_key_alias') or payload['host'], payload['port'])
         if not snapshot['keys']:
             return None, None
         action = BackendAction(
@@ -1650,3 +1967,8 @@ class SSHBackendPlugin(TerminalBackendPlugin):
         action_id = self._token_urlsafe(16)
         self._backend_action_store.set(sid, action_id, action)
         return action_id, action
+
+    def inspect_host_key(self, payload):
+        store = SSHHostKeyStore(self._bridge_kwargs['get_paramiko'](), self._bridge_kwargs.get('known_hosts_path'))
+        snapshot = store.snapshot(payload.get('host_key_alias') or payload['host'], payload['port'])
+        return {'identity': snapshot['host_key_name'], 'fingerprints': [fingerprint(key) for key in snapshot['keys']]}

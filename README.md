@@ -9,34 +9,38 @@ to the StandTerm server process across page reloads.
 [Download and install StandTerm Desktop](#desktop-downloads-evaluation), or use
 the [browser-based Core quick start](#quick-start).
 
-**Core 2.12.1** is a [source release](https://github.com/askac/standterm/releases/tag/v2.12.1).
-It fixes Windows local shell startup when an executable path contains spaces.
-Core 2.12 adds SSH Agent Tunnel with shared skills and helpers, Agent Panel permission
-sync, Agent Info for the current tab, and SSH host fingerprint management.
+**Core 2.13.0** is a [source release](https://github.com/askac/standterm/releases/tag/v2.13.0).
+It adds SSH routes with up to three jump hosts, ordered node editing and per-site
+login cards. Direct connections and route nodes share browser-key controls;
+new keys stay temporary unless saving is selected when connecting. Existing
+SSH Agent Tunnel, current-tab Agent Info and host fingerprint controls remain available.
 IME input-line anchoring remains an [experimental PoC](docs/ime_anchor_poc.md).
-The separate Desktop 0.5.0 evaluation below bundles the formal Core 2.12.1 source.
+The published Desktop 0.4.3 evaluation below predates these Core features;
+newer Desktop installers are still local evaluation candidates.
 
 ![StandTerm Desktop with terminal rendering tests, local and SSH tabs, and a floating PowerShell terminal](standterm_desktop.png)
 
-*Desktop preview. See the release notes for the current controls and validation.*
+*Desktop development preview. The controls shown are newer than the published
+Desktop 0.4.3 installers.*
 
 ## Desktop Downloads (Evaluation)
 
-[StandTerm Desktop 0.5.0 / Core 2.12.1](https://github.com/askac/standterm/releases/tag/desktop-v0.5.0-2.12.1)
+[StandTerm Desktop 0.4.3](https://github.com/askac/standterm/releases/tag/desktop-v0.4.3)
 is available as an evaluation pre-release, not a production-qualified release.
 
 | Platform | Download | Required before installation |
 | --- | --- | --- |
-| Windows x64, including Windows + WSL | [Windows installer (.exe)](https://github.com/askac/standterm/releases/download/desktop-v0.5.0-2.12.1/StandTerm-Desktop-0.5.0-2.12.1-win32-x64-Setup.exe) | Python 3.10+ with venv/ensurepip in each selected environment; WSL mode also needs an existing WSL distribution. |
-| macOS Apple Silicon | [macOS installer (.dmg)](https://github.com/askac/standterm/releases/download/desktop-v0.5.0-2.12.1/StandTerm-Desktop-0.5.0-2.12.1-mac-arm64.dmg) | Native arm64 Python 3.10+ with venv/ensurepip. Intel/Rosetta is not qualified. |
+| Windows x64, including Windows + WSL | [Windows installer (.exe)](https://github.com/askac/standterm/releases/download/desktop-v0.4.3/StandTerm-Desktop-0.4.3-win32-x64-Setup.exe) | Python 3.10+ with venv/ensurepip in each selected environment; WSL mode also needs an existing WSL distribution. |
+| macOS Apple Silicon | [macOS installer (.dmg)](https://github.com/askac/standterm/releases/download/desktop-v0.4.3/StandTerm-Desktop-0.4.3-mac-arm64.dmg) | Native arm64 Python 3.10+ with venv/ensurepip. Intel/Rosetta is not qualified. |
 
 Packages include Electron and Core. **Git, Node.js and npm are not required**;
 Python and its virtual environment are not bundled.
-The optional advanced Git Core source requires Git in the selected backend
-environment. Bundled Core recovery remains available without Git.
+Newer Desktop source adds an optional advanced Git Core source, which requires
+Git in the selected backend environment, plus bundled Core recovery without Git.
+Those controls are not included in the published 0.4.3 installers.
 
 1. Download the package for your platform and check the release's
-   [SHA256SUMS](https://github.com/askac/standterm/releases/download/desktop-v0.5.0-2.12.1/SHA256SUMS).
+   [SHA256SUMS](https://github.com/askac/standterm/releases/download/desktop-v0.4.3/SHA256SUMS).
 2. On Windows, run the installer and choose **Windows only**, **Windows + WSL**
    or **WSL only**. Native Windows mode needs 64-bit Windows Python; installing
    Windows Python does not satisfy WSL mode. On macOS, copy the app to a
@@ -317,34 +321,131 @@ STANDTERM_HOST=127.0.0.1 STANDTERM_PORT=5000 ./run.sh
 Quick Connect can load saved SSH profiles and the six most recent successful
 SSH targets. Use **Settings > SSH Sessions** to create, update, reorder, or
 delete profiles and to clear history. Profiles and history stay in the current
-browser and never store passwords.
+browser and never store passwords. In Direct connect, **Save session** saves the
+profile and its referenced browser key when **Connect** is pressed, before SSH
+starts. A failed connection does not undo that explicit save. History records
+only successful connections and does not implicitly save a profile or private key.
 
-For an unknown remote SSH host, Quick Connect shows its SHA256 host-key
-fingerprint before authentication. Verify it independently, choose **Trust key**,
-then connect again. A changed key shows both saved and received fingerprints and
-requires explicit replacement; **Cancel** is the default. **Forget host key...**
-removes only the host and port currently entered after confirmation. Existing
+For an unknown remote SSH host, its login card shows the SHA256 host-key
+fingerprint before authentication. Verify it independently and choose **Trust and continue**
+to continue on that connection. A changed key shows both saved and received fingerprints and
+requires explicit replacement; **Cancel** is the default. Open **Host identity**
+in Direct connect or a route node to inspect its saved fingerprint. **Forget saved
+fingerprint…** removes that identity after an inline confirmation that defaults
+to **Keep fingerprint**. This takes effect immediately, even if route editing is
+later cancelled. Existing
 connections remain open. These actions edit the Core execution account's
 `~/.ssh/known_hosts`, shared with other SSH clients; they do not delete browser
 authentication keys. Special policy records and symlinked files require manual
 management. The existing localhost key setup behavior is unchanged.
 
-Locations using the same IP and port share one host identity, so switching
-between them requires reviewing and replacing the saved key. Saved profile names
-do not create separate host identities.
+Use **Host identity** to assign an optional **Host key alias** when
+different locations use the same IP and port. Each alias has its own saved trust
+identity; it does not change the network address. A blank alias keeps the normal
+host/port identity. Saved profile names do not create separate trust identities.
+
+### SSH Jump Routes
+
+Quick Connect has two exclusive panes: **Direct connect** keeps the usual host,
+port, username, optional password, and direct History & Profiles picker;
+**Saved routes** selects a saved path and shows its jump count and full endpoint
+sequence. Expanding one collapses the other. Each keeps its own selection and
+draft. The Connect button uses the expanded pane; an empty or invalid route
+cannot connect. Completing an edited route selects Saved routes without replacing
+the Direct connect fields.
+
+StandTerm supports up to **three jump hosts plus the final target**, equivalent
+to an ordered SSH `-J` route. Open **Saved routes > Edit route...** to start with a
+Target card. Existing routes show compact summaries; click a summary to edit one
+node at a time. **Add jump node** inserts and opens a card immediately before the
+Target. Cards connect from **Core** top to bottom; drag a card's handle or use the
+**↑** / **↓** buttons to change the order. All cards can move, and the last card always
+becomes the **Target**. Add and arrange cards before filling them in; **Done**
+checks the completed route for invalid fields, cycles and the jump limit, opening
+the card that needs correction. An Entry
+name is optional and defaults to the final username and host. Each node has
+an always-visible **Use key** checkbox, a single-line read-only public-key field,
+and a Copy button. Direct connect uses the same controls: selecting Use key dims
+and disables its password field. Turning it off dims the public-key field while
+keeping the public key available to copy.
+
+An exact saved key reference takes precedence; otherwise a single compatible key
+for the host, port and username is displayed automatically. Multiple candidates
+require a choice. Selecting **Use key** with no compatible key creates a temporary
+Ed25519 key. Its public key can be copied immediately to `authorized_keys`. A
+compatible saved key does not prove that the remote account has installed it;
+server fingerprints are still checked separately during SSH login.
+
+The editor ends with **Save route**, **Cancel**, and **Done**. Done retains only
+the connection draft. **Connect** saves the route and referenced temporary keys
+together only when Save route is selected; otherwise they remain temporary.
+Cancelling an editor discards changes made since opening it. Temporary private
+keys never enter IndexedDB and are lost when their browser context is discarded.
+The **Temporary key** label makes this visible before copying a public key.
+
+After **Connect**, the connection form becomes a per-site login view with a
+**Core → Node 1 → … → Target** progress line. Completed nodes turn green and
+collapse; the current node expands when it needs a password or host-key confirmation,
+while later nodes stay collapsed. Route passwords are entered here; Direct
+connect also accepts an optional password before starting. A rejected password can be retried at the same
+node without reconnecting completed jump hosts. The Target shows **OK** only
+after its terminal opens. **Cancel connection** closes the entire pending route;
+switching tabs preserves its progress without moving focus to a background prompt.
+Passwords are never saved in profiles or history.
+
+Only Entries appear in the picker. Each Entry points to an independently stored
+chain of nodes. Under **Advanced node settings**, **Reference route after this node** shares existing nodes;
+**Copy route after this node** creates independent nodes. **Only this Entry**
+copies the necessary prefix when editing a shared node. **Apply node edits to all
+references**, under **Advanced sharing**, deliberately changes shared nodes;
+the editor lists affected Entries. Reordering or removing cards changes only the
+current Entry, even when node edits apply to all references.
+Removing a node from an Entry or deleting an Entry does not recursively delete
+shared nodes. Node credentials keep stable identities across copying and
+reordering. Turning Use key off removes its authentication reference but retains
+the credential for reuse at the same endpoint. Older profile-owned keys remain
+supported: other routes must release their references before the owning profile
+can be deleted or its key rebound.
+
+Cycles are rejected by node ID, including cycles beyond the supported hop count.
+Repeating an IP is allowed. For `A → B → C → B`, the editor offers `A → B` (remove
+the loop) and `A → B → C` (stop before the back edge), with each final endpoint
+shown explicitly. A repair creates a copy for the current Entry after review;
+it never silently changes the target or cuts another Entry's shared links.
+
+Every hop verifies its host key before authentication. Intermediate servers need
+SSH TCP forwarding; they do not need StandTerm. Hostnames after the first hop are
+reached from the previous server. There is no direct fallback if a jump fails.
+Localhost reached through a jump uses ordinary fingerprint confirmation, not the
+Core host's localhost key setup. Terminal, Files, and Agent Tunnel all use the
+final SSH transport. **Cancel connection**, closing the tab, closing all tabs,
+or disconnecting the initiating browser cancels pending hops.
+
+Routes and keys are read from one IndexedDB snapshot for each connection attempt.
+Concurrent settings saves reject stale revisions. Migration preserves the old
+direct-profile record for older Core installations; subsequent route edits use
+independent version 2 records. Exports include the nodes reachable from saved
+Entries and recent history. Settings imports create fresh Entry/node IDs and
+leave imported browser-key authentication unresolved until a key is selected.
+Passwords are never saved. Private keys never enter portable route data or exports;
+saved non-extractable CryptoKeys live only in the separate browser key store.
+History retains temporary-key authentication as unresolved, without persisting
+the temporary key ID. History writes wait for pending SSH attempts to finish so
+they do not invalidate another tab's signing request.
 
 A saved profile can explicitly generate an Ed25519 key with **Use browser key
 authentication**. The private `CryptoKey` is non-extractable and stays in that
 browser's IndexedDB. Copy the displayed OpenSSH public key to the remote
-account's `~/.ssh/authorized_keys`, then select the exact saved profile in Quick
-Connect. **Use key** remains optional, even when the profile has a key. Browser
+account's `~/.ssh/authorized_keys`, then select the exact saved profile in Direct
+Connect. **Use key** remains optional for a direct target; jump routes select
+authentication separately for each node. Browser
 key authentication is allowed only from loopback or an authorized HTTPS browser.
 
 During authentication, Python sends the SSH challenge to the initiating browser
 and receives only its Ed25519 signature; the private key is never sent to the
 StandTerm Python process. A changed host, port, or username disables the profile
-key binding. Deleting or unlinking a keyed profile permanently deletes that
-browser key. These keys are protected from export, but they are not hardware
+key binding. Deleting or unlinking a legacy keyed profile permanently deletes its
+profile-owned key; independently created node credentials are retained. These keys are protected from export, but they are not hardware
 keys: script running in the same browser origin could still request signatures.
 
 ### Why This SSH Architecture Matters
@@ -352,8 +453,8 @@ keys: script running in the same browser origin could still request signatures.
 | Design choice | Practical advantage |
 | --- | --- |
 | Non-extractable browser-owned private key | Private key bytes do not cross the browser boundary or enter Python memory, configuration files, settings exports, or terminal payloads. |
-| Explicit key creation and per-connection **Use key** control | A key exists only after the user opts in for a saved profile, and password or host-side authentication remains available when key use is off. |
-| Typed, short-lived signing requests | Each request is bound to the initiating browser connection, terminal, profile, key, public-key fingerprint, and challenge hash. Expired, replayed, stale, or mismatched responses fail closed. |
+| Explicit key creation and per-node authentication | Users create keys in a node or saved profile; each node chooses its authentication, while Direct connect keeps an optional **Use key** control. |
+| Typed, short-lived signing requests | Each request is bound to the initiating browser connection, terminal, attempt, node, credential or profile, key, public-key fingerprint, and challenge hash. Expired, replayed, stale, or mismatched responses fail closed. |
 | Exact host, port, and username binding | Editing a Quick Connect target cannot silently reuse a profile key for another SSH account or endpoint. |
 | Standard OpenSSH Ed25519 public key | The remote host only needs the copied key in `authorized_keys`; it does not need StandTerm, a browser component, or an agent. |
 | Separate settings and key stores | Profiles, history, and browser preferences remain portable while private keys and key identifiers stay local to the browser that created them. |
@@ -361,9 +462,9 @@ keys: script running in the same browser origin could still request signatures.
 The signing path keeps authentication authority narrow. Paramiko passes an SSH
 challenge to StandTerm's browser-key adapter. StandTerm emits a structured
 request only to the browser connection that started that terminal. The browser
-validates the active connection and exact profile binding before signing, then
+validates the active connection and exact credential or profile binding before signing, then
 returns a 64-byte Ed25519 signature. Python verifies that signature against the
-profile's public key before returning it to Paramiko. The browser uses a bounded
+key's public key before returning it to Paramiko. The browser uses a bounded
 relative signing window, while Python enforces the authoritative monotonic
 deadline, so Windows/WSL wall-clock skew cannot invalidate a fresh request. A
 browser disconnect, timeout, changed connection draft, or stale terminal start
@@ -563,7 +664,7 @@ revokes this tunnel's grants and pending input without revoking local agents.
 Stopping preserves the SSH terminal and Files connection. An interrupted
 command is never replayed automatically. If SSH is already unreachable, remote
 temporary files may remain; their tokens are invalid. Reconnecting requires a
-new tunnel and Connect Info. ProxyJump is planned separately.
+new tunnel and Connect Info. SSH jump routes use the final host as the tunnel carrier.
 
 ## Agent And External Agent Mirror
 

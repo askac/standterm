@@ -4076,12 +4076,13 @@ def test_ssh_host_key_prompts_default_to_cancel_and_bind_actions(browser, access
             window.terminalTest.clearEmitted();
             document.getElementById('host').value = '192.168.167.254';
             document.getElementById('port').value = '2222';
-            document.getElementById('ssh-forget-host-key').click();
+            document.getElementById('ssh-direct-identity-body').querySelector('button').click();
             return window.terminalTest.getEmitted();
         }""")
-        actions = [entry['args'][0] for entry in emitted if entry['event'] == 'ssh_host_key_action']
-        check(actions == [{'operation': 'forget', 'terminal_id': 'main', 'host': '192.168.167.254', 'port': '2222'}],
-              'Forget did not use the selected host and port')
+        actions = [entry['args'][0] for entry in emitted if entry['event'] == 'ssh_host_identity']
+        check(len(actions) == 1 and all(actions[0].get(key) == value for key, value in {
+            'operation': 'inspect', 'terminal_id': 'main', 'host': '192.168.167.254', 'port': '2222', 'host_key_alias': ''
+        }.items()), 'Fingerprint inspection did not use the current direct host and port')
         page.evaluate("""() => window.terminalTest.handleSshOutput({
             terminal_id: 'main', message_type: 'host_key_prompt', action_type: 'forget_ssh_host_key',
             action_id: 'forget-key', action_message: 'Saved: SHA256:old', action_question: 'Forget this key?'
@@ -4094,7 +4095,7 @@ def test_ssh_host_key_prompts_default_to_cancel_and_bind_actions(browser, access
         close_context(context)
 
 
-def test_ssh_history_and_auto_profile_follow_structured_success(browser, access_url):
+def test_ssh_history_records_success_without_saving_profiles(browser, access_url):
     context = browser.new_context(viewport={'width': 1280, 'height': 800})
     page = context.new_page()
     try:
@@ -4118,7 +4119,8 @@ def test_ssh_history_and_auto_profile_follow_structured_success(browser, access_
             }"""
         )
         failed_state = page.evaluate("() => window.terminalTest.getSshSessionState()")
-        check(failed_state == {'version': 1, 'profiles': [], 'history': []}, 'failed SSH connection was stored')
+        check(failed_state['version'] == 2 and not failed_state['profiles'] and not failed_state['history']
+              and not failed_state['nodes'], 'failed SSH connection was stored')
 
         page.evaluate(
             """() => {
@@ -4138,12 +4140,12 @@ def test_ssh_history_and_auto_profile_follow_structured_success(browser, access_
 
         history_disabled = page.evaluate(
             """async () => {
-                const before = window.terminalTest.getSshSessionState();
+                const before = await window.terminalTest.getSshSessionState();
                 await window.terminalTest.recordSuccessfulSshConnectionForTest({
                     host: 'private.example', port: '22', username: 'alice',
                     saveHistory: false, saveSession: false
                 });
-                return { before, after: window.terminalTest.getSshSessionState() };
+                return { before, after: await window.terminalTest.getSshSessionState() };
             }"""
         )
         check(
@@ -4162,12 +4164,12 @@ def test_ssh_history_and_auto_profile_follow_structured_success(browser, access_
         )
         check(len(profile_only['history']) == 1, 'Save session implicitly enabled SSH history')
         check(
-            [profile['host'] for profile in profile_only['profiles']] == ['profile-only.example'],
-            'Save session did not create a profile while history was disabled',
+            profile_only['profiles'] == [],
+            'Successful login saved a profile outside the Connect transaction',
         )
         page.evaluate(
             """async () => window.terminalTest.setSshSessionState({
-                profiles: [], history: window.terminalTest.getSshSessionState().history
+                profiles: [], history: (await window.terminalTest.getSshSessionState()).history
             })"""
         )
 
@@ -4200,12 +4202,10 @@ def test_ssh_history_and_auto_profile_follow_structured_success(browser, access_
                 return window.terminalTest.getSshSessionState();
             }"""
         )
-        check(len(saved_state['profiles']) == 1, 'matching Save session connections created duplicate profiles')
-        check(saved_state['profiles'][0]['name'] == 'bob@saved.example', 'automatic profile name is incorrect')
-        check(saved_state['profiles'][0]['keyId'] is None, 'automatic profile did not reserve an empty key ID')
-        serialized = repr(saved_state).lower()
+        check(saved_state['profiles'] == [], 'Successful history recording implicitly saved a profile')
+        serialized = json.dumps(saved_state).lower()
         check('must-not-persist' not in serialized, 'SSH session storage retained a password')
-        check('password' not in serialized, 'SSH session storage contains a password field')
+        check('"password":' not in serialized, 'SSH session storage contains a password field')
     finally:
         close_context(context)
 
@@ -4618,7 +4618,7 @@ def test_browser_ssh_key_lifecycle_and_settings_transfer(browser, access_url):
         page.fill('#port', '2222')
         page.locator('#port').dispatch_event('input')
         page.wait_for_function(
-            "() => document.getElementById('ssh-use-browser-key-label').hidden",
+            "() => !document.getElementById('ssh-use-browser-key').checked && !document.querySelector('#ssh-direct-key .ssh-node-public-key').value",
             timeout=5000,
         )
         check(page.locator('#password').is_enabled(), 'modified profile target kept key-only authentication active')
@@ -4664,12 +4664,13 @@ def test_browser_ssh_key_lifecycle_and_settings_transfer(browser, access_url):
         page.wait_for_function('() => !!window.terminalTest', timeout=10000)
         merged = page.evaluate('() => window.terminalTest.getSshSessionState()')
         check(
-            [profile['id'] for profile in merged['profiles']]
-            == ['profile-primary', 'profile-local', 'profile-imported'],
-            'settings import did not update by stable ID and append new profiles',
+            len(merged['profiles']) == 4
+            and [profile['id'] for profile in merged['profiles'][:2]] == ['profile-primary', 'profile-local']
+            and all(profile['id'] not in {'profile-primary', 'profile-local', 'profile-imported'} for profile in merged['profiles'][2:]),
+            'settings import did not preserve existing Entries and remap imported IDs',
         )
         primary = next(profile for profile in merged['profiles'] if profile['id'] == 'profile-primary')
-        check(primary['name'] == 'Primary', 'settings import did not update the matching stable profile ID')
+        check(primary['name'] == 'Changed Locally', 'settings import overwrote an existing Entry')
         check(primary['keyId'] == metadata['keyId'], 'settings import changed the existing browser key link')
         check(len(merged['history']) == 2, 'settings import did not merge SSH history')
         check(page.locator('#ssh-save-history').is_checked(), 'settings import did not restore browser preferences')
@@ -4759,7 +4760,7 @@ def main():
         test_core_agent_connect_info_can_be_copied_and_confirmed,
         test_agent_tunnel_uses_panel_permissions_and_keeps_focus,
         test_remote_agent_info_tracks_ssh_carrier_and_rejects_late_replies,
-        test_ssh_history_and_auto_profile_follow_structured_success,
+        test_ssh_history_records_success_without_saving_profiles,
         test_ssh_profile_picker_and_settings_save_semantics,
         test_browser_ssh_key_lifecycle_and_settings_transfer,
     ]
