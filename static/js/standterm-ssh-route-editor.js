@@ -2,14 +2,13 @@
     'use strict';
     const routes = window.StandTermSshRoutes;
 
-    routes.edit = function({ state, entryId, target, save, onSaved, keys = [], keyAllowed = false,
+    routes.edit = function({ state, entryId, target, onDone, keys = [], temporaryKeys = [], saveRoute = false, keyAllowed = false,
         createKey, copyPublicKey, hostIdentity }) {
-        let original = routes.clone(state);
+        const original = routes.clone(state);
         const savedKeys = [...keys];
-        const newKeys = new Map();
+        const newKeys = new Map(temporaryKeys.map(record => [record.keyId, record]));
         const editorId = routes.id();
         let pendingGenerations = 0;
-        let saving = false;
         let draft = routes.clone(state);
         let entry = [...draft.profiles, ...draft.history].find(item => item.id === entryId);
         if (!entry) {
@@ -61,12 +60,10 @@
         function path() { return routes.resolve(draft, entry.startNodeId).path; }
 
         function updateSaveState() {
-            const hasNewKeys = controls.some(control => newKeys.has(control.read().authentication.keyRef?.keyId));
-            saveButton.textContent = hasNewKeys ? 'Save & show public keys' : 'Save route';
-            saveButton.disabled = saving || pendingGenerations > 0;
+            doneButton.disabled = pendingGenerations > 0;
         }
 
-        // Keep incomplete values inside the modal. Persistent nodes are validated on Save.
+        // Keep incomplete values inside the modal. Done validates the completed draft.
         function replaceDraftNode(index, replacement) {
             const result = routes.resolve(draft, entry.startNodeId);
             const current = result.path[index];
@@ -101,7 +98,7 @@
         function canChangeOrder() {
             const result = routes.resolve(draft, entry.startNodeId);
             if (result.error && result.error !== 'depth') {
-                throw new Error('Save route to review the invalid link before changing card order.');
+                throw new Error('Select Done to review the invalid link before changing card order.');
             }
         }
 
@@ -162,7 +159,7 @@
                     selected.startNodeId = routes.copyPath(repaired, candidate.path);
                     draft = routes.project(repaired);
                     entry = selected;
-                    status.textContent = 'Repair selected. Review the target, then Save route.';
+                    status.textContent = 'Repair selected. Review the target, then select Done.';
                     render();
                 }, status);
             }
@@ -351,7 +348,7 @@
                             const nextId = copy ? routes.copyPath(draft, selectedPath.path) : selected.startNodeId;
                             replaceDraftNode(index, { ...path()[index], nextNodeId: nextId });
                             routes.project(draft);
-                            status.textContent = 'Route appended. Review the final target, then Save route to check the links.';
+                            status.textContent = 'Route appended. Review the final target, then select Done to check the links.';
                             render();
                         } catch (err) {
                             draft = previous;
@@ -382,8 +379,17 @@
             updateSaveState();
         }
 
-        const saveButton = button('Save route', async () => {
-            if (saving || pendingGenerations) return;
+        const saveRouteLabel = document.createElement('label');
+        const saveRouteInput = document.createElement('input');
+        saveRouteInput.type = 'checkbox';
+        saveRouteInput.checked = saveRoute;
+        saveRouteLabel.className = 'ssh-key-toggle';
+        saveRouteLabel.append(saveRouteInput, document.createTextNode('Save route on Connect'));
+        saveRouteInput.setAttribute('aria-label', 'Save route');
+        actions.append(saveRouteLabel);
+        button('Cancel', () => dialog.close());
+        const doneButton = button('Done', () => {
+            if (pendingGenerations) return;
             flush();
             if (offerRepair()) return;
             const current = routes.checkedPath(draft, entry);
@@ -412,32 +418,10 @@
             discardUnusedDraftNodes();
             routes.validate(draft);
             const used = new Set(draft.nodes.map(node => node.authentication.keyRef?.keyId));
-            const keyChanges = [...newKeys.values()].filter(record => used.has(record.keyId)).map(record => ({ type: 'put', record }));
-            saving = true;
-            dialog.inert = true;
-            updateSaveState();
-            cancelButton.disabled = true;
-            try {
-                const result = await save(draft, keyChanges);
-                onSaved(result, entry.id);
-                if (!keyChanges.length) { dialog.close(); return; }
-                savedKeys.push(...keyChanges.map(change => change.record));
-                newKeys.clear();
-                original = routes.clone(result);
-                draft = routes.clone(result);
-                entry = [...draft.profiles, ...draft.history].find(item => item.id === entry.id);
-                render();
-                status.textContent = 'Saved. Copy each public key to its remote account’s authorized_keys before connecting.';
-                cancelButton.textContent = 'Close';
-            } finally {
-                saving = false;
-                dialog.inert = false;
-                cancelButton.disabled = false;
-                updateSaveState();
-            }
+            onDone(draft, entry.id, [...newKeys.values()].filter(record => used.has(record.keyId)), saveRouteInput.checked);
+            dialog.close();
         });
-        saveButton.className = 'primary';
-        const cancelButton = button('Cancel', () => dialog.close());
+        doneButton.className = 'primary';
         const heading = document.createElement('div');
         heading.className = 'ssh-route-heading';
         for (const [text, field] of [['Entry name (optional)', name]]) {
@@ -458,10 +442,9 @@
         }
         scope.onchange = updateScopeNotice;
         const help = document.createElement('p');
-        help.textContent = `Connect from Core through the cards, top to bottom. The last card is the Target. Drag the handle or use ↑ / ↓. Up to ${routes.MAX_JUMPS} jumps. Save, then Connect to log in at each site.`;
+        help.textContent = `Connect from Core through the cards, top to bottom. The last card is the Target. Drag the handle or use ↑ / ↓. Up to ${routes.MAX_JUMPS} jumps. Done returns to connection settings. Connect saves only when Save route is selected.`;
         dialog.append(title, help, heading, advanced, scopeNotice, rows, preview, status, actions);
         dialog.addEventListener('close', () => dialog.remove());
-        dialog.addEventListener('cancel', event => { if (saving) event.preventDefault(); });
         document.body.append(dialog);
         render();
         dialog.showModal();

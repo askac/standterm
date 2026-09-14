@@ -2,9 +2,17 @@
 import base64
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import agent_browser_smoke as fixture
+
+
+def new_page(browser, url):
+    context, page = fixture.new_page(browser, url)
+    page.click('#new-tab-btn')
+    page.evaluate('() => window.terminalTest.captureTerminalIoForTest()')
+    return context, page
 
 
 def show_ssh(page):
@@ -41,7 +49,7 @@ def open_card(page, role):
 
 
 def test_ordered_cards_allow_incomplete_drafts_and_move_target(browser, url):
-    context, page = fixture.new_page(browser, url)
+    context, page = new_page(browser, url)
     try:
         show_ssh(page)
         # Native drag_to needs both cards visible; small windows can use Move buttons.
@@ -58,7 +66,8 @@ def test_ordered_cards_allow_incomplete_drafts_and_move_target(browser, url):
         assert cards.locator('legend').all_text_contents() == ['Jump 1', 'Jump 2', 'Target']
         assert not editor.locator(':scope > [role=status]').inner_text()
         cards.last.get_by_role('button', name='Move up', exact=True).click()
-        page.get_by_role('button', name='Save route', exact=True).click()
+        page.get_by_role('checkbox', name='Save route', exact=True).check()
+        page.get_by_role('button', name='Done', exact=True).click()
         assert 'Jump 1:' in editor.locator(':scope > [role=status]').inner_text()
         for role, host, user, port in [('Jump 1', 'first.test', 'one', '2221'),
                                        ('Jump 2', 'second.test', 'two', '2222'),
@@ -78,8 +87,10 @@ def test_ordered_cards_allow_incomplete_drafts_and_move_target(browser, url):
         # Removing a new, unfinished card must not leave an invalid hidden node.
         page.get_by_role('button', name='Add jump node', exact=True).click()
         cards.nth(2).get_by_role('button', name='Remove', exact=True).click()
-        page.get_by_role('button', name='Save route', exact=True).click()
+        page.get_by_role('checkbox', name='Save route', exact=True).check()
+        page.get_by_role('button', name='Done', exact=True).click()
         page.wait_for_selector('#ssh-route-editor', state='detached')
+        page.evaluate('() => window.terminalTest.prepareSshConnectionForTest(true)')
         state = page.evaluate('() => window.terminalTest.getSshSessionState()')
         assert len(state['nodes']) == 3, state
         assert state['profiles'][0]['name'] == 'two@second.test'
@@ -97,7 +108,7 @@ def test_ordered_cards_allow_incomplete_drafts_and_move_target(browser, url):
 
 
 def test_shared_editor_and_atomic_storage(browser, url):
-    context, page = fixture.new_page(browser, url)
+    context, page = new_page(browser, url)
     try:
         page.evaluate("""async () => {
             await window.terminalTest.setSshSessionState({ profiles: [
@@ -120,8 +131,10 @@ def test_shared_editor_and_atomic_storage(browser, url):
         page.locator('#ssh-edit-route').click()
         open_card(page, 'Target')
         page.get_by_role('textbox', name='Target Host', exact=True).fill('changed.test')
-        page.get_by_role('button', name='Save route', exact=True).click()
+        page.get_by_role('checkbox', name='Save route', exact=True).check()
+        page.get_by_role('button', name='Done', exact=True).click()
         page.wait_for_selector('#ssh-route-editor', state='detached')
+        page.evaluate('() => window.terminalTest.prepareSshConnectionForTest(true)')
         result = page.evaluate("""async () => {
             const state = await window.terminalTest.getSshSessionState();
             return state.profiles.map(entry => StandTermSshRoutes.checkedPath(state, entry).map(node => node.endpoint.host));
@@ -167,7 +180,7 @@ def test_shared_editor_and_atomic_storage(browser, url):
 
 
 def test_shared_card_scope_tracks_references_and_preserves_stored_nodes(browser, url):
-    context, page = fixture.new_page(browser, url)
+    context, page = new_page(browser, url)
     try:
         page.evaluate("""async () => {
             await window.terminalTest.setSshSessionState({profiles:[
@@ -195,8 +208,10 @@ def test_shared_card_scope_tracks_references_and_preserves_stored_nodes(browser,
         assert notice.is_visible(), 'Shared-edit notice disappeared with advanced settings'
         open_card(page, 'Target')
         page.get_by_role('textbox', name='Target Host', exact=True).fill('shared-change.test')
-        page.get_by_role('button', name='Save route', exact=True).click()
+        page.get_by_role('checkbox', name='Save route', exact=True).check()
+        page.get_by_role('button', name='Done', exact=True).click()
         page.wait_for_selector('#ssh-route-editor', state='detached')
+        page.evaluate('() => window.terminalTest.prepareSshConnectionForTest(true)')
         state = page.evaluate('() => window.terminalTest.getSshSessionState()')
         assert next(item for item in state['profiles'] if item['id'] == 'b')['host'] == 'shared-change.test'
         assert next(item for item in state['nodes'] if item['id'] == 'stored-orphan')['endpoint']['host'] == 'a.test'
@@ -206,8 +221,10 @@ def test_shared_card_scope_tracks_references_and_preserves_stored_nodes(browser,
         assert 'Entry B' in notice.inner_text()
         editor.locator('fieldset').first.get_by_role('button', name='Move down', exact=True).click()
         assert 'Entry B' not in notice.inner_text(), 'Reordering retained a stale shared-edit warning'
-        page.get_by_role('button', name='Save route', exact=True).click()
+        page.get_by_role('checkbox', name='Save route', exact=True).check()
+        page.get_by_role('button', name='Done', exact=True).click()
         page.wait_for_selector('#ssh-route-editor', state='detached')
+        page.evaluate('() => window.terminalTest.prepareSshConnectionForTest(true)')
         state = page.evaluate('() => window.terminalTest.getSshSessionState()')
         assert next(item for item in state['profiles'] if item['id'] == 'a')['host'] == 'a.test'
         assert next(item for item in state['profiles'] if item['id'] == 'b')['host'] == 'shared-change.test'
@@ -217,7 +234,7 @@ def test_shared_card_scope_tracks_references_and_preserves_stored_nodes(browser,
 
 
 def test_receiver_and_owner_renames_preserve_credentials(browser, url):
-    context, page = fixture.new_page(browser, url)
+    context, page = new_page(browser, url)
     try:
         page.evaluate("""async () => {
             await window.terminalTest.setSshSessionState({profiles:[
@@ -272,7 +289,7 @@ def test_receiver_and_owner_renames_preserve_credentials(browser, url):
 
 
 def test_cycle_repair_and_rejected_depth_leave_other_entries_intact(browser, url):
-    context, page = fixture.new_page(browser, url)
+    context, page = new_page(browser, url)
     try:
         page.evaluate("""async () => {
             const state = {version:2,revision:0,history:[],profiles:[
@@ -290,9 +307,10 @@ def test_cycle_repair_and_rejected_depth_leave_other_entries_intact(browser, url
         page.get_by_role('combobox', name='Target Next route', exact=True).select_option('entry-b')
         page.locator('#ssh-route-editor fieldset').last.get_by_role('button', name='Reference route after this node', exact=True).click()
         assert page.locator('#ssh-route-editor fieldset').count() == 5
-        page.get_by_role('button', name='Save route', exact=True).click()
+        page.get_by_role('checkbox', name='Save route', exact=True).check()
+        page.get_by_role('button', name='Done', exact=True).click()
         page.wait_for_function("() => document.querySelector('#ssh-route-editor > [role=status]').textContent.includes('at most 3')")
-        # Reject on Save, retain the draft for review, and leave storage untouched.
+        # Reject on Done, retain the draft for review, and leave storage untouched.
         assert page.locator('#ssh-route-editor fieldset').count() == 5
         saved = page.evaluate('() => window.terminalTest.getSshSessionState()')
         assert len(saved['nodes']) == 3
@@ -308,12 +326,15 @@ def test_cycle_repair_and_rejected_depth_leave_other_entries_intact(browser, url
         # Ordering a cyclic, truncated view must not silently erase its back edge.
         page.locator('#ssh-route-editor fieldset').last.get_by_role('button', name='Move up', exact=True).click()
         assert 'invalid link' in status.inner_text()
-        page.get_by_role('button', name='Save route', exact=True).click()
+        page.get_by_role('checkbox', name='Save route', exact=True).check()
+        page.get_by_role('button', name='Done', exact=True).click()
         assert 'cycle rejected' in status.inner_text()
         assert 'target u@b.test:22' in status.inner_text() and 'target u@c.test:22' in status.inner_text()
         status.get_by_role('button', name='Remove loop:', exact=False).click()
-        page.get_by_role('button', name='Save route', exact=True).click()
+        page.get_by_role('checkbox', name='Save route', exact=True).check()
+        page.get_by_role('button', name='Done', exact=True).click()
         page.wait_for_selector('#ssh-route-editor', state='detached')
+        page.evaluate('() => window.terminalTest.prepareSshConnectionForTest(true)')
         result = page.evaluate("""async () => {
             const state = await window.terminalTest.getSshSessionState();
             return state.profiles.map(entry => StandTermSshRoutes.checkedPath(state, entry).map(node => node.endpoint.host));
@@ -324,7 +345,7 @@ def test_cycle_repair_and_rejected_depth_leave_other_entries_intact(browser, url
 
 
 def test_v1_migration_preserves_old_record_and_private_key(browser, url):
-    context, page = fixture.new_page(browser, url)
+    context, page = new_page(browser, url)
     try:
         original = page.evaluate("""async () => {
             await window.terminalTest.setSshSessionState({profiles:[
@@ -349,7 +370,6 @@ def test_v1_migration_preserves_old_record_and_private_key(browser, url):
         page.reload(wait_until='domcontentloaded')
         page.wait_for_function('() => !!window.terminalTest')
         page.wait_for_function('() => window.terminalTest.getSocketState().connected === true')
-        page.wait_for_function('() => window.terminalTest.getActiveAgentState()?.connected === true')
         result = page.evaluate("""async () => {
             const state = await window.terminalTest.getSshSessionState();
             const key = await window.terminalTest.getBrowserSshKeyMetadataForTest('old-owner');
@@ -376,7 +396,7 @@ def test_v1_migration_preserves_old_record_and_private_key(browser, url):
 
 
 def test_trust_retry_matches_attempt_action_and_revision_without_logging_passwords(browser, url):
-    context, page = fixture.new_page(browser, url)
+    context, page = new_page(browser, url)
     try:
         page.evaluate("""async () => {
             await window.terminalTest.setSshSessionState({profiles:[
@@ -394,12 +414,12 @@ def test_trust_retry_matches_attempt_action_and_revision_without_logging_passwor
         page.wait_for_function("() => window.terminalTest.getEmitted().some(item => item.event === 'start_ssh')")
         start = page.evaluate("() => window.terminalTest.getEmitted().find(item => item.event === 'start_ssh').args[0]")
         attempt = start['attempt_id']
-        failure = {'terminal_id': 'main', 'message_type': 'connection_error', 'attempt_id': attempt,
+        failure = {'terminal_id': start['terminal_id'], 'message_type': 'connection_error', 'attempt_id': attempt,
                    'action_type': 'confirm_ssh_host_key', 'action_id': 'trust-one', 'message': 'Host key is unknown',
                    'action_message': 'Fingerprint fixture', 'action_question': 'Trust this key?'}
         page.evaluate('data => window.terminalTest.handleSshOutput(data)', failure)
         page.click('#actionYesBtn')
-        response = {'terminal_id': 'main', 'message_type': 'host_key_result', 'attempt_id': attempt,
+        response = {'terminal_id': start['terminal_id'], 'message_type': 'host_key_result', 'attempt_id': attempt,
                     'action_id': 'trust-one', 'operation': 'confirm', 'action_type': 'confirm_ssh_host_key', 'status': 'success'}
         for change in ({'action_id': 'other-action'}, {'action_type': 'forget_ssh_host_key'}, {'attempt_id': 'older-attempt'}):
             page.evaluate('data => window.terminalTest.handleSshOutput(data)', {**response, **change})
@@ -425,7 +445,13 @@ def test_trust_retry_matches_attempt_action_and_revision_without_logging_passwor
 
 
 def main():
-    proc, url = fixture.start_server()
+    original_popen = fixture.subprocess.Popen
+    def launch(args, **kwargs):
+        if len(args) > 1 and args[1] == 'app.py':
+            args = ['--default-connection' if value == '--force-connection' else value for value in args]
+        return original_popen(args, **kwargs)
+    with patch.object(fixture.subprocess, 'Popen', side_effect=launch):
+        proc, url = fixture.start_server()
     try:
         with fixture.load_playwright()[0]() as playwright:
             browser = playwright.chromium.launch(headless=True)

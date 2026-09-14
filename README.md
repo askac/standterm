@@ -317,7 +317,10 @@ STANDTERM_HOST=127.0.0.1 STANDTERM_PORT=5000 ./run.sh
 Quick Connect can load saved SSH profiles and the six most recent successful
 SSH targets. Use **Settings > SSH Sessions** to create, update, reorder, or
 delete profiles and to clear history. Profiles and history stay in the current
-browser and never store passwords.
+browser and never store passwords. In Direct connect, **Save session** saves the
+profile and its referenced browser key when **Connect** is pressed, before SSH
+starts. A failed connection does not undo that explicit save. History records
+only successful connections and does not implicitly save a profile or private key.
 
 For an unknown remote SSH host, its login card shows the SHA256 host-key
 fingerprint before authentication. Verify it independently and choose **Trust and continue**
@@ -344,7 +347,7 @@ port, username, optional password, and direct History & Profiles picker;
 **Saved routes** selects a saved path and shows its jump count and full endpoint
 sequence. Expanding one collapses the other. Each keeps its own selection and
 draft. The Connect button uses the expanded pane; an empty or invalid route
-cannot connect. Saving an edited route selects Saved routes without replacing
+cannot connect. Completing an edited route selects Saved routes without replacing
 the Direct connect fields.
 
 StandTerm supports up to **three jump hosts plus the final target**, equivalent
@@ -353,15 +356,28 @@ Target card. Existing routes show compact summaries; click a summary to edit one
 node at a time. **Add jump node** inserts and opens a card immediately before the
 Target. Cards connect from **Core** top to bottom; drag a card's handle or use the
 **↑** / **↓** buttons to change the order. All cards can move, and the last card always
-becomes the **Target**. Add and arrange cards before filling them in; **Save route**
+becomes the **Target**. Add and arrange cards before filling them in; **Done**
 checks the completed route for invalid fields, cycles and the jump limit, opening
 the card that needs correction. An Entry
 name is optional and defaults to the final username and host. Each node has
-**Password** or **Browser key** authentication. Choose an existing key bound to
-that exact host, port and username, or use **Create key** inside the node.
-New keys remain temporary until **Save & show public keys** saves both the route
-and keys together. Only then can their public keys be copied; the editor remains
-open for this step. Cancelling or a failed save does not install the new keys.
+an always-visible **Use key** checkbox, a single-line read-only public-key field,
+and a Copy button. Direct connect uses the same controls: selecting Use key dims
+and disables its password field. Turning it off dims the public-key field while
+keeping the public key available to copy.
+
+An exact saved key reference takes precedence; otherwise a single compatible key
+for the host, port and username is displayed automatically. Multiple candidates
+require a choice. Selecting **Use key** with no compatible key creates a temporary
+Ed25519 key. Its public key can be copied immediately to `authorized_keys`. A
+compatible saved key does not prove that the remote account has installed it;
+server fingerprints are still checked separately during SSH login.
+
+The editor ends with **Save route**, **Cancel**, and **Done**. Done retains only
+the connection draft. **Connect** saves the route and referenced temporary keys
+together only when Save route is selected; otherwise they remain temporary.
+Cancelling an editor discards changes made since opening it. Temporary private
+keys never enter IndexedDB and are lost when their browser context is discarded.
+The **Temporary key** label makes this visible before copying a public key.
 
 After **Connect**, the connection form becomes a per-site login view with a
 **Core → Node 1 → … → Target** progress line. Completed nodes turn green and
@@ -382,7 +398,7 @@ the editor lists affected Entries. Reordering or removing cards changes only the
 current Entry, even when node edits apply to all references.
 Removing a node from an Entry or deleting an Entry does not recursively delete
 shared nodes. Node credentials keep stable identities across copying and
-reordering. Switching a node to Password removes its key reference but retains
+reordering. Turning Use key off removes its authentication reference but retains
 the credential for reuse at the same endpoint. Older profile-owned keys remain
 supported: other routes must release their references before the owning profile
 can be deleted or its key rebound.
@@ -407,7 +423,11 @@ direct-profile record for older Core installations; subsequent route edits use
 independent version 2 records. Exports include the nodes reachable from saved
 Entries and recent history. Settings imports create fresh Entry/node IDs and
 leave imported browser-key authentication unresolved until a key is selected.
-Passwords and private keys are never saved or exported.
+Passwords are never saved. Private keys never enter portable route data or exports;
+saved non-extractable CryptoKeys live only in the separate browser key store.
+History retains temporary-key authentication as unresolved, without persisting
+the temporary key ID. History writes wait for pending SSH attempts to finish so
+they do not invalidate another tab's signing request.
 
 A saved profile can explicitly generate an Ed25519 key with **Use browser key
 authentication**. The private `CryptoKey` is non-extractable and stays in that

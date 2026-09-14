@@ -51,59 +51,59 @@ def key_metadata(page):
     })""")
 
 
+def finish_editor(page, save=False):
+    page.get_by_role('checkbox', name='Save route', exact=True).set_checked(save)
+    page.get_by_role('button', name='Done', exact=True).click()
+    page.wait_for_selector('#ssh-route-editor', state='detached')
+
+
+def generate_node_key(page, role):
+    if role != 'Direct':
+        routes_fixture.open_card(page, role)
+    page.get_by_role('checkbox', name=f'{role} Use key', exact=True).check()
+    field = page.get_by_role('textbox', name=f'{role} Public key', exact=True)
+    page.wait_for_function('(role) => document.querySelector(`[aria-label="${role} Public key"]`).value.startsWith("ssh-ed25519 ")', arg=role)
+    return field.input_value()
+
+
 def test_direct_and_saved_routes_keep_independent_drafts(browser, url, known_hosts):
     context, page = new_preparation_page(browser, url)
     try:
-        routes_fixture.show_ssh(page)
-        assert page.locator('#ssh-use-browser-key-label').is_hidden()
+        assert page.locator('#ssh-use-browser-key-label').is_visible()
         page.fill('#host', 'direct.test')
         page.fill('#username', 'direct-user')
         page.fill('#password', 'direct-password')
         page.click('#ssh-route-heading')
         assert page.locator('#connectBtn').is_disabled()
-        assert page.locator('#ssh-direct-body').is_hidden()
         seed_route(page)
         select_route(page)
-        route = page.evaluate('() => window.terminalTest.prepareSshConnectionForTest()')
-        assert [node['host'] for node in route['route']] == ['node-0.test', 'node-1.test']
-        assert all(not node['password'] for node in route['route'])
-        assert page.locator('#ssh-route-body input[type=password]').count() == 0
-        assert page.locator('#ssh-forget-host-key').count() == 0
-        page.click('#ssh-direct-heading')
-        direct = page.evaluate('() => window.terminalTest.prepareSshConnectionForTest()')
-        assert direct['host'] == 'direct.test' and direct['username'] == 'direct-user'
-        assert direct['password'] == 'direct-password' and 'route' not in direct
-        select_route(page)
+        before = page.evaluate('() => window.terminalTest.getSshSessionState()')
         page.click('#ssh-edit-route')
         routes_fixture.open_card(page, 'Target')
         page.get_by_role('textbox', name='Target Host', exact=True).fill('changed-target.test')
-        page.get_by_role('button', name='Save route', exact=True).click()
-        page.wait_for_selector('#ssh-route-editor', state='detached')
-        assert 'changed-target.test' in page.locator('#ssh-route-path').inner_text()
-        assert page.input_value('#host') == 'direct.test'
-        assert page.locator('#ssh-direct-body').is_hidden()
+        finish_editor(page)
+        assert page.evaluate('() => window.terminalTest.getSshSessionState()') == before
+        assert 'Temporary route' in page.locator('#ssh-route-path').inner_text()
         page.click('#ssh-edit-route')
         routes_fixture.open_card(page, 'Target')
         page.get_by_role('textbox', name='Target Host', exact=True).fill('cancelled.test')
         page.get_by_role('button', name='Cancel', exact=True).click()
-        assert 'changed-target.test' in page.locator('#ssh-route-path').inner_text()
-        page.add_style_tag(content='#policy-debug-panel { display: none !important; }')
-        page.locator('#controls').screenshot(path='/tmp/standterm-saved-routes.png')
+        route = page.evaluate('() => window.terminalTest.prepareSshConnectionForTest()')
+        assert [node['host'] for node in route['route']] == ['node-0.test', 'changed-target.test']
+        page.click('#ssh-direct-heading')
+        direct = page.evaluate('() => window.terminalTest.prepareSshConnectionForTest()')
+        assert direct['host'] == 'direct.test' and direct['password'] == 'direct-password'
+        page.click('#ssh-route-heading')
         page.click('#ssh-edit-route')
         page.locator('#ssh-route-editor fieldset').first.get_by_role('button', name='Remove', exact=True).click()
-        page.get_by_role('button', name='Save route', exact=True).click()
-        page.wait_for_selector('#ssh-route-editor', state='detached')
-        assert page.locator('#ssh-direct-body').is_hidden()
+        finish_editor(page, save=True)
         assert '0 jumps' in page.locator('#ssh-route-path').inner_text()
-        assert len(page.evaluate('() => window.terminalTest.prepareSshConnectionForTest()')['route']) == 1
-        page.evaluate("""async () => {
-            const state = await window.terminalTest.getSshSessionState();
-            state.profiles = [];
-            await window.terminalTest.setSshSessionState(state);
-        }""")
-        assert page.locator('#connectBtn').is_disabled()
-        error = page.evaluate("() => window.terminalTest.prepareSshConnectionForTest().then(() => '', error => error.message)")
-        assert 'Choose a saved route' in error
+        assert page.evaluate('() => window.terminalTest.getSshSessionState()') == before
+        page.evaluate('() => window.terminalTest.captureSshStartsForTest()')
+        page.click('#connectBtn')
+        page.wait_for_selector('.ssh-login-card')
+        state = page.evaluate('() => window.terminalTest.getSshSessionState()')
+        assert state['profiles'][0]['host'] == 'changed-target.test'
     finally:
         fixture.close_context(context)
 
@@ -111,35 +111,37 @@ def test_direct_and_saved_routes_keep_independent_drafts(browser, url, known_hos
 def test_new_keys_are_atomic_and_cancel_keeps_no_credentials(browser, url, known_hosts):
     context, page = new_preparation_page(browser, url)
     try:
-        routes_fixture.show_ssh(page)
         seed_route(page)
         select_route(page)
+        before = page.evaluate('() => window.terminalTest.getSshSessionState()')
         page.click('#ssh-edit-route')
-        routes_fixture.open_card(page, 'Jump 1')
-        card = page.locator('#ssh-route-editor fieldset').first
-        card.get_by_role('combobox', name='Jump 1 Authentication', exact=True).select_option('browser-key')
-        card.get_by_role('button', name='Create key', exact=True).click()
-        page.get_by_role('button', name='Save & show public keys', exact=True).wait_for()
-        assert card.locator('.ssh-node-public-key').is_hidden()
-        assert card.get_by_role('button', name='Copy public key', exact=True).is_hidden()
+        first = generate_node_key(page, 'Jump 1')
+        assert page.get_by_role('button', name='Copy public key', exact=True).first.is_enabled()
         assert key_metadata(page) == []
         page.get_by_role('button', name='Cancel', exact=True).click()
+        assert page.evaluate('() => window.terminalTest.getSshSessionState()') == before
+        page.click('#ssh-edit-route')
+        retained = generate_node_key(page, 'Jump 1')
+        assert retained != first
+        finish_editor(page, save=True)
         assert key_metadata(page) == []
         page.click('#ssh-edit-route')
         routes_fixture.open_card(page, 'Jump 1')
-        card.get_by_role('combobox', name='Jump 1 Authentication', exact=True).select_option('browser-key')
-        card.get_by_role('button', name='Create key', exact=True).click()
-        page.get_by_role('button', name='Save & show public keys', exact=True).wait_for()
+        assert page.get_by_role('textbox', name='Jump 1 Public key', exact=True).input_value() == retained
+        generate_node_key(page, 'Target')
+        page.get_by_role('button', name='Cancel', exact=True).click()
+        prepared = page.evaluate('() => window.terminalTest.prepareSshConnectionForTest()')
+        assert prepared['route'][0]['use_browser_key'] and not prepared['route'][1].get('use_browser_key')
         page.evaluate("""async () => {
             const state = await window.terminalTest.getSshSessionState();
-            state.profiles[0].name = 'Changed in another window';
+            state.profiles[0].name = 'Changed elsewhere';
             await window.terminalTest.setSshSessionState(state);
         }""")
-        page.get_by_role('button', name='Save & show public keys', exact=True).click()
-        page.locator('#ssh-route-editor > [role=status]').get_by_text('SSH settings changed in another window.', exact=False).wait_for()
+        page.evaluate('() => window.terminalTest.captureSshStartsForTest()')
+        page.click('#connectBtn')
+        page.get_by_text('SSH settings changed in another window. Reload before connecting.', exact=True).wait_for()
         assert key_metadata(page) == []
-        assert card.locator('.ssh-node-public-key').is_hidden()
-        page.get_by_role('button', name='Cancel', exact=True).click()
+        assert not page.evaluate('() => window.terminalTest.getEmitted().some(item => item.event === "start_ssh" && item.args[0].connection_type === "ssh")')
     finally:
         fixture.close_context(context)
 
@@ -149,46 +151,30 @@ def test_saved_node_keys_survive_reload_and_authenticate_each_hop(browser, url, 
         servers = [stack.enter_context(server()) for _ in range(3)]
         context, page = new_preparation_page(browser, url)
         try:
-            routes_fixture.show_ssh(page)
             seed_route(page, [item['port'] for item in servers], 'node-key-test')
             select_route(page)
             page.click('#ssh-edit-route')
-            for role in ['Jump 1', 'Jump 2', 'Target']:
-                routes_fixture.open_card(page, role)
-                card = page.locator(f'#ssh-route-editor fieldset[data-role="{role}"]')
-                card.get_by_role('combobox', name=f'{role} Authentication', exact=True).select_option('browser-key')
-                card.get_by_role('button', name='Create key', exact=True).click()
-                card.get_by_text('Save route to keep this key and show its public key.', exact=True).wait_for()
-                assert card.locator('.ssh-node-public-key').is_hidden()
-            assert key_metadata(page) == []
-            page.get_by_role('button', name='Save & show public keys', exact=True).click()
-            page.get_by_role('button', name='Close', exact=True).wait_for()
-            metadata = key_metadata(page)
-            assert len(metadata) == 3 and all(item['owner'] is None and not item['extractable'] for item in metadata)
-            state = page.evaluate('() => window.terminalTest.getSshSessionState()')
-            assert len(state['profiles']) == 1, 'Creating node keys created fake profiles'
-            for index, role in enumerate(['Jump 1', 'Jump 2', 'Target']):
-                routes_fixture.open_card(page, role)
-                public_key = page.get_by_role('textbox', name=f'{role} Public key', exact=True).input_value()
-                assert public_key.startswith('ssh-ed25519 ')
-                (servers[index]['root'] / 'authorized_keys').write_text(public_key + '\n')
-            page.get_by_role('button', name='Close', exact=True).click()
-            # Copies and reordering preserve key IDs; Password only unlinks a node.
-            page.click('#ssh-edit-route')
+            public_keys = [generate_node_key(page, role) for role in ['Jump 1', 'Jump 2', 'Target']]
+            for item, key in zip(servers, public_keys):
+                (item['root'] / 'authorized_keys').write_text(key + '\n')
+            # Reordering and toggling do not rotate the temporary credentials.
             page.locator('#ssh-route-editor fieldset').first.get_by_role('button', name='Move down', exact=True).click()
             page.locator('#ssh-route-editor fieldset').nth(1).get_by_role('button', name='Move up', exact=True).click()
             routes_fixture.open_card(page, 'Target')
-            page.get_by_role('combobox', name='Target Authentication', exact=True).select_option('password')
-            page.get_by_role('button', name='Save route', exact=True).click()
-            page.wait_for_selector('#ssh-route-editor', state='detached')
-            assert key_metadata(page) == metadata
-            page.click('#ssh-edit-route')
-            routes_fixture.open_card(page, 'Target')
-            page.get_by_role('combobox', name='Target Authentication', exact=True).select_option('browser-key')
-            target_key = page.evaluate('state => StandTermSshRoutes.checkedPath(state, state.profiles[0]).at(-1).authentication.keyRef.keyId', state)
-            page.get_by_role('combobox', name='Target Browser key', exact=True).select_option(target_key)
-            page.get_by_role('button', name='Save route', exact=True).click()
-            page.wait_for_selector('#ssh-route-editor', state='detached')
+            page.get_by_role('checkbox', name='Target Use key', exact=True).uncheck()
+            assert page.get_by_role('textbox', name='Target Public key', exact=True).input_value() == public_keys[-1]
+            page.get_by_role('checkbox', name='Target Use key', exact=True).check()
+            finish_editor(page, save=True)
+            assert key_metadata(page) == []
+            page.uncheck('#ssh-save-history')
+            page.click('#connectBtn')
+            page.locator('#ssh-login-panel').get_by_role('button', name='Trust and continue', exact=True).wait_for()
+            metadata = key_metadata(page)
+            assert len(metadata) == 3 and all(item['owner'] is None and not item['extractable'] for item in metadata)
+            for _ in servers:
+                page.locator('#ssh-login-panel').get_by_role('button', name='Trust and continue', exact=True).click()
+            page.wait_for_function('() => window.terminalTest.getActiveAgentState().connected === true')
+            assert len(page.evaluate('async () => (await window.terminalTest.getSshSessionState()).profiles')) == 1
             page.reload(wait_until='domcontentloaded')
             page.wait_for_function('() => window.terminalTest?.getSocketState().connected')
             page.wait_for_function('() => window.terminalTest.getActiveAgentState()?.connected === true')
@@ -197,14 +183,180 @@ def test_saved_node_keys_survive_reload_and_authenticate_each_hop(browser, url, 
             select_route(page)
             assert key_metadata(page) == metadata
             page.click('#connectBtn')
-            for _ in servers:
-                page.locator('#ssh-login-panel').get_by_role('button', name='Trust and continue', exact=True).click()
             page.wait_for_function('() => window.terminalTest.getActiveAgentState().connected === true')
             signatures = page.evaluate('() => window.terminalTest.getEmitted().filter(item => item.event === "ssh_browser_sign_response").map(item => item.args[0])')
             assert len(signatures) == 3 and all(item['status'] == 'ok' and item.get('credential_id') for item in signatures)
             assert len({item['credential_id'] for item in signatures}) == 3
         finally:
             fixture.close_context(context)
+
+
+def test_direct_keys_are_temporary_until_connect_saves_the_profile(browser, url, known_hosts):
+    with server() as remote:
+        context, page = new_preparation_page(browser, url)
+        try:
+            page.evaluate("""port => window.terminalTest.setSshSessionState({profiles:[{id:'direct-profile',name:'Direct profile',
+                host:'127.0.0.1',port:String(port),username:'aska'}],history:[]})""", remote['port'])
+            page.evaluate('''async () => {
+                const state = await window.terminalTest.getSshSessionState();
+                state.nodes[0].hostKeyAlias = 'direct-save-test';
+                await window.terminalTest.setSshSessionState(state);
+            }''')
+            routes_fixture.select(page, 'direct-profile', direct=True)
+            key = generate_node_key(page, 'Direct')
+            assert page.locator('#password').is_disabled()
+            page.uncheck('#ssh-use-browser-key')
+            assert page.locator('#password').is_enabled()
+            assert page.get_by_role('button', name='Copy public key', exact=True).is_enabled()
+            assert page.get_by_role('textbox', name='Direct Public key', exact=True).input_value() == key
+            context.grant_permissions(['clipboard-read', 'clipboard-write'])
+            page.get_by_role('button', name='Copy public key', exact=True).click()
+            assert page.evaluate('() => navigator.clipboard.readText()') == key
+            page.check('#ssh-use-browser-key')
+            assert key_metadata(page) == []
+            (remote['root'] / 'authorized_keys').write_text(key + '\n')
+            page.uncheck('#ssh-save-history')
+            page.check('#ssh-save-session')
+            page.locator('#controls').screenshot(path='/tmp/standterm-direct-key-row.png')
+            page.click('#connectBtn')
+            page.locator('#ssh-login-panel').get_by_role('button', name='Trust and continue', exact=True).wait_for()
+            assert len(key_metadata(page)) == 1
+            state = page.evaluate('() => window.terminalTest.getSshSessionState()')
+            assert len(state['profiles']) == 1 and state['profiles'][0]['id'] == 'direct-profile'
+            page.locator('#ssh-login-panel').get_by_role('button', name='Trust and continue', exact=True).click()
+            page.wait_for_function('() => window.terminalTest.getActiveAgentState().connected === true')
+            assert page.evaluate('() => window.terminalTest.getSshSessionState()') == state
+            page.click('#new-tab-btn')
+            routes_fixture.show_ssh(page)
+            routes_fixture.select(page, 'direct-profile', direct=True)
+            page.wait_for_function('() => document.getElementById("ssh-use-browser-key").checked')
+            assert page.get_by_role('textbox', name='Direct Public key', exact=True).input_value() == key
+        finally:
+            fixture.close_context(context)
+
+
+def test_temporary_key_signing_survives_other_tab_and_history_drops_refs(browser, url, known_hosts):
+    with server() as remote:
+        context, page = new_preparation_page(browser, url)
+        try:
+            page.fill('#port', str(remote['port']))
+            page.locator('#ssh-direct-identity summary').click()
+            page.fill('#ssh-direct-alias', 'temporary-key-test')
+            first_key = generate_node_key(page, 'Direct')
+            (remote['root'] / 'authorized_keys').write_text(first_key + '\n')
+            before = page.evaluate('() => window.terminalTest.getSshSessionState()')
+            first_tab = page.evaluate('() => window.terminalTest.getTerminalTabsState().activeTerminalId')
+            page.click('#connectBtn')
+            page.locator('#ssh-login-panel').get_by_role('button', name='Trust and continue', exact=True).wait_for()
+            assert page.evaluate('() => window.terminalTest.getSshSessionState()') == before
+            page.click('#new-tab-btn')
+            routes_fixture.show_ssh(page)
+            page.fill('#port', str(remote['port']))
+            second_key = generate_node_key(page, 'Direct')
+            assert first_key != second_key
+            page.evaluate('id => window.terminalTest.switchTerminalForTest(id)', first_tab)
+            page.locator('#ssh-login-panel').get_by_role('button', name='Trust and continue', exact=True).click()
+            page.wait_for_function('() => window.terminalTest.getActiveAgentState().connected === true')
+            page.wait_for_function('async () => (await window.terminalTest.getSshSessionState()).history.length === 1')
+            assert key_metadata(page) == []
+            state = page.evaluate('() => window.terminalTest.getSshSessionState()')
+            assert state['profiles'] == []
+            history = page.evaluate('state => StandTermSshRoutes.checkedPath(state,state.history[0])', state)
+            assert history[0]['authentication'] == {'method': 'browser-key', 'keyRef': None}
+            signatures = page.evaluate('() => window.terminalTest.getEmitted().filter(item => item.event === "ssh_browser_sign_response").map(item => item.args[0])')
+            assert len(signatures) == 1 and signatures[0]['status'] == 'ok'
+            assert not page.evaluate('() => window.terminalTest.hasPrivateSshWireDataForTest()')
+        finally:
+            fixture.close_context(context)
+
+
+def test_temporary_jump_keys_do_not_persist_through_history(browser, url, known_hosts):
+    with contextlib.ExitStack() as stack:
+        servers = [stack.enter_context(server()) for _ in range(2)]
+        context, page = new_preparation_page(browser, url)
+        try:
+            seed_route(page, [item['port'] for item in servers], 'temporary-route')
+            before = page.evaluate('() => window.terminalTest.getSshSessionState()')
+            select_route(page)
+            page.click('#ssh-edit-route')
+            for item, role in zip(servers, ['Jump 1', 'Target']):
+                (item['root'] / 'authorized_keys').write_text(generate_node_key(page, role) + '\n')
+            finish_editor(page)
+            prepared = page.evaluate('() => window.terminalTest.prepareSshConnectionForTest()')
+            ids = [item['keyId'] for item in prepared['_signers']]
+            page.click('#connectBtn')
+            for _ in servers:
+                page.locator('#ssh-login-panel').get_by_role('button', name='Trust and continue', exact=True).click()
+            page.wait_for_function('() => window.terminalTest.getActiveAgentState().connected === true')
+            page.wait_for_function('async () => (await window.terminalTest.getSshSessionState()).history.length === 1')
+            state = page.evaluate('() => window.terminalTest.getSshSessionState()')
+            assert state['profiles'] == before['profiles'] and key_metadata(page) == []
+            assert all(key_id not in str(state) for key_id in ids)
+            history = page.evaluate('state => StandTermSshRoutes.checkedPath(state, state.history[0])', state)
+            assert len(history) == 2 and all(node['authentication'] == {'method':'browser-key','keyRef':None} for node in history)
+            # This page's history-only save must not stale its retained route draft.
+            page.evaluate('() => window.terminalTest.prepareSshConnectionForTest()')
+            assert not page.evaluate('() => window.terminalTest.hasPrivateSshWireDataForTest()')
+        finally:
+            fixture.close_context(context)
+
+
+def test_history_waits_for_other_temporary_key_login(browser, url, known_hosts, fail_second=False):
+    with contextlib.ExitStack() as stack:
+        servers = [stack.enter_context(server()) for _ in range(2)]
+        store = SSHHostKeyStore(paramiko, known_hosts)
+        store.update(store.snapshot('parallel-key-0', servers[0]['port']), servers[0]['host_key'])
+        context, page = new_preparation_page(browser, url)
+        try:
+            page.evaluate('() => window.terminalTest.captureBrowserSshSignRequestsForTest()')
+            tabs, keys = [], []
+            for index, item in enumerate(servers):
+                if index:
+                    page.click('#new-tab-btn')
+                    routes_fixture.show_ssh(page)
+                page.fill('#port', str(item['port']))
+                identity = page.locator('#ssh-direct-identity')
+                if identity.get_attribute('open') is None:
+                    page.locator('#ssh-direct-identity summary').click()
+                page.fill('#ssh-direct-alias', f'parallel-key-{index}')
+                public_key = generate_node_key(page, 'Direct')
+                if not (index and fail_second):
+                    (item['root'] / 'authorized_keys').write_text(public_key + '\n')
+                tabs.append(page.evaluate('() => window.terminalTest.getTerminalTabsState().activeTerminalId'))
+                keys.append(page.evaluate('() => window.terminalTest.prepareSshConnectionForTest()')['key_id'])
+                page.click('#connectBtn')
+                if index:
+                    # Keep the second attempt at host trust while the first signs.
+                    # The server allows only one outstanding signer request per browser.
+                    page.locator('#ssh-login-panel').get_by_role('button', name='Trust and continue', exact=True).wait_for()
+                else:
+                    page.wait_for_function('() => window.terminalTest.getPendingBrowserSshSignRequestsForTest().length === 1')
+            for index, tab in enumerate(tabs):
+                page.evaluate('id => window.terminalTest.switchTerminalForTest(id)', tab)
+                if index:
+                    page.locator('#ssh-login-panel').get_by_role('button', name='Trust and continue', exact=True).click()
+                    page.wait_for_function('() => window.terminalTest.getPendingBrowserSshSignRequestsForTest().length === 1')
+                    if fail_second:
+                        page.evaluate('id => window.terminalTest.switchTerminalForTest(id)', tabs[0])
+                page.evaluate('id => window.terminalTest.releaseBrowserSshSignRequestForTest(id)', tab)
+                page.wait_for_function('() => window.terminalTest.getActiveAgentState().connected === true')
+                if not index:
+                    assert page.evaluate('async () => (await window.terminalTest.getSshSessionState()).history') == []
+            page.wait_for_function('async (count) => (await window.terminalTest.getSshSessionState()).history.length === count', arg=1 if fail_second else 2)
+            if fail_second:
+                page.evaluate('id => window.terminalTest.switchTerminalForTest(id)', tabs[1])
+                assert not page.evaluate('() => window.terminalTest.getActiveAgentState().connected')
+                assert 'Failed' in page.locator('#ssh-login-panel').inner_text()
+            replies = page.evaluate('() => window.terminalTest.getEmitted().filter(item => item.event === "ssh_browser_sign_response").map(item => item.args[0])')
+            assert {item['terminal_id']: item['key_id'] for item in replies if item['status'] == 'ok'} == dict(zip(tabs, keys))
+            assert key_metadata(page) == []
+            assert not page.evaluate('() => window.terminalTest.hasPrivateSshWireDataForTest()')
+        finally:
+            fixture.close_context(context)
+
+
+def test_history_flushes_when_background_key_login_fails(browser, url, known_hosts):
+    test_history_waits_for_other_temporary_key_login(browser, url, known_hosts, fail_second=True)
 
 
 def test_host_fingerprint_management_stays_inside_node_editor(browser, url, known_hosts):
@@ -282,7 +434,12 @@ runpy.run_path('app.py', run_name='__main__')
                     for test in [test_direct_and_saved_routes_keep_independent_drafts,
                                  test_new_keys_are_atomic_and_cancel_keeps_no_credentials,
                                  test_saved_node_keys_survive_reload_and_authenticate_each_hop,
-                                 test_host_fingerprint_management_stays_inside_node_editor]:
+                                 test_host_fingerprint_management_stays_inside_node_editor,
+                                 test_direct_keys_are_temporary_until_connect_saves_the_profile,
+                                 test_temporary_key_signing_survives_other_tab_and_history_drops_refs,
+                                 test_temporary_jump_keys_do_not_persist_through_history,
+                                 test_history_waits_for_other_temporary_key_login,
+                                 test_history_flushes_when_background_key_login_fails]:
                         test(browser, url, known_hosts)
                         print(test.__name__ + ': ok', flush=True)
                 finally:
