@@ -15,32 +15,35 @@ login cards. Direct connections and route nodes share browser-key controls;
 new keys stay temporary unless saving is selected when connecting. Existing
 SSH Agent Tunnel, current-tab Agent Info and host fingerprint controls remain available.
 IME input-line anchoring remains an [experimental PoC](docs/ime_anchor_poc.md).
-The published Desktop 0.4.3 evaluation below predates these Core features;
-newer Desktop installers are still local evaluation candidates.
+The Windows Desktop 0.5.1 evaluation below contains Core 2.13.0-dev with these
+features. The macOS Desktop 0.4.3 evaluation predates them.
 
 ![StandTerm Desktop with terminal rendering tests, local and SSH tabs, and a floating PowerShell terminal](standterm_desktop.png)
 
-*Desktop development preview. The controls shown are newer than the published
-Desktop 0.4.3 installers.*
+*Desktop preview. The controls shown are available in the Windows 0.5.1
+evaluation; the macOS 0.4.3 evaluation predates them.*
 
 ## Desktop Downloads (Evaluation)
 
-[StandTerm Desktop 0.4.3](https://github.com/askac/standterm/releases/tag/desktop-v0.4.3)
-is available as an evaluation pre-release, not a production-qualified release.
+[Windows Desktop 0.5.1 / Core 2.13.0-dev](https://github.com/askac/standterm/releases/tag/desktop-v0.5.1-2.13.0-dev)
+and [macOS Desktop 0.4.3](https://github.com/askac/standterm/releases/tag/desktop-v0.4.3)
+are evaluation pre-releases. The Windows package retains its tested development
+Core identity; it was built before the formal Core 2.13.0 source release.
 
 | Platform | Download | Required before installation |
 | --- | --- | --- |
-| Windows x64, including Windows + WSL | [Windows installer (.exe)](https://github.com/askac/standterm/releases/download/desktop-v0.4.3/StandTerm-Desktop-0.4.3-win32-x64-Setup.exe) | Python 3.10+ with venv/ensurepip in each selected environment; WSL mode also needs an existing WSL distribution. |
+| Windows x64, including Windows + WSL | [Desktop 0.5.1 / Core 2.13.0-dev (.exe)](https://github.com/askac/standterm/releases/download/desktop-v0.5.1-2.13.0-dev/StandTerm-Desktop-0.5.1-2.13.0-dev-win32-x64-Setup.exe) | Python 3.10+ with venv/ensurepip in each selected environment; WSL mode also needs an existing WSL distribution. |
 | macOS Apple Silicon | [macOS installer (.dmg)](https://github.com/askac/standterm/releases/download/desktop-v0.4.3/StandTerm-Desktop-0.4.3-mac-arm64.dmg) | Native arm64 Python 3.10+ with venv/ensurepip. Intel/Rosetta is not qualified. |
 
 Packages include Electron and Core. **Git, Node.js and npm are not required**;
 Python and its virtual environment are not bundled.
-Newer Desktop source adds an optional advanced Git Core source, which requires
-Git in the selected backend environment, plus bundled Core recovery without Git.
-Those controls are not included in the published 0.4.3 installers.
+Windows Desktop 0.5.1 includes an optional advanced Git Core source, which
+requires Git in the selected backend environment, plus bundled Core recovery
+without Git. Those controls are not included in the macOS 0.4.3 installer.
 
-1. Download the package for your platform and check the release's
-   [SHA256SUMS](https://github.com/askac/standterm/releases/download/desktop-v0.4.3/SHA256SUMS).
+1. Download the package for your platform and verify its checksum:
+   [Windows SHA256SUMS](https://github.com/askac/standterm/releases/download/desktop-v0.5.1-2.13.0-dev/SHA256SUMS)
+   or [macOS SHA256SUMS](https://github.com/askac/standterm/releases/download/desktop-v0.4.3/SHA256SUMS).
 2. On Windows, run the installer and choose **Windows only**, **Windows + WSL**
    or **WSL only**. Native Windows mode needs 64-bit Windows Python; installing
    Windows Python does not satisfy WSL mode. On macOS, copy the app to a

@@ -16,15 +16,17 @@ needed for a local build. Intel/Rosetta acceptance is not implied.
 
 New build filenames pair the independent Desktop and bundled Core versions.
 The local 0.5.0 / Core 2.12.1 candidates use that paired label. The published
-[Desktop 0.4.3 evaluation](https://github.com/askac/standterm/releases/tag/desktop-v0.4.3)
-retains its original filenames and does not include the later Core features.
+[macOS Desktop 0.4.3 evaluation](https://github.com/askac/standterm/releases/tag/desktop-v0.4.3)
+retains its original filename and does not include the later Core features.
 Core source releases and Desktop installer publication are separate.
 
-The local Windows **0.5.1 / Core 2.13.0-dev** candidate includes ordered SSH jump
-routes, per-site login cards, shared Direct/node key controls and opt-in
+The published [Windows **0.5.1 / Core 2.13.0-dev** evaluation](https://github.com/askac/standterm/releases/tag/desktop-v0.5.1-2.13.0-dev)
+includes ordered SSH jump routes, per-site login cards, shared Direct/node key
+controls and opt-in
 profile/route saving on Connect. It retains its original development identity.
 The current source declares Core **2.13.0**; matching installers require a fresh
-build and validation. Neither local candidate is a published Desktop release.
+build and validation. A new Mac installer remains separate; the 0.5.0 candidates
+remain local.
 
 Staging writes `release-identity.json` from the staged package/lock versions and
 the manifest-hashed `core_version.py`. The builder revalidates this identity and
