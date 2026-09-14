@@ -405,10 +405,9 @@
         #ssh-route-editor .ssh-route-add { display: block; margin: 16px 0 0 42px; border-style: dashed; color: #64a9ff; }
         #ssh-route-editor .primary { background: #0a84ff; border-color: #0a84ff; }
         .ssh-route-actions { position: sticky; bottom: -18px; background: #252526; padding: 12px 0; }
-        #ssh-jump-details { margin: 10px 0; font-size: 12px; }
-        #ssh-jump-summary { cursor: pointer; color: #64a9ff; }
-        #ssh-route-path { padding: 8px 0; overflow-wrap: anywhere; line-height: 1.5; }
-        #ssh-hop-passwords label { display: block; margin: 8px 0; color: #bbb; }
+        .ssh-node-key { grid-column: 1 / -1; }
+        .ssh-node-key p { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+        .ssh-node-public-key { width: 100%; box-sizing: border-box; font: 11px monospace; }
         @media (max-width: 640px) {
             .ssh-route-heading, .ssh-route-fields { grid-template-columns: 1fr; }
             #ssh-route-editor { box-sizing: border-box; width: 94vw; padding: 12px; }
@@ -443,6 +442,19 @@
         #controls input, #controls select { display: block; width: 100%; margin-bottom: 15px; padding: 10px; background: #333; border: 1px solid #555; color: white; border-radius: 4px; box-sizing: border-box; }
         #controls button { width: 100%; padding: 12px; background: #0a84ff; border: none; color: white; border-radius: 4px; cursor: pointer; font-weight: bold; }
         #controls button:hover { background: #007aff; }
+        .ssh-preparation-pane { border: 1px solid #444; border-radius: 5px; margin: 10px 0; }
+        #controls .ssh-preparation-heading { display: flex; align-items: center; gap: 8px; padding: 10px; background: #292929; text-align: left; }
+        #controls .ssh-preparation-heading[aria-expanded="true"] { background: #233146; }
+        .ssh-preparation-heading small { margin-left: auto; color: #aaa; font-weight: normal; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .ssh-preparation-body { padding: 12px; }
+        .ssh-preparation-body[hidden] { display: none; }
+        .ssh-host-identity { margin-top: 10px; color: #bbb; font-size: 12px; }
+        .ssh-host-identity summary { cursor: pointer; margin-bottom: 8px; }
+        .ssh-host-identity label { display: block; }
+        .ssh-host-identity-status, .ssh-host-identity-confirm p { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+        #controls .ssh-host-identity button { width: auto; padding: 7px 9px; background: #444; font-weight: normal; }
+        #ssh-route-path { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.6; margin: 10px 0; }
+        #controls #ssh-edit-route { padding: 8px; background: #444; }
         #controls.ssh-login-active { width: min(700px, calc(100vw - 24px)); max-height: 90vh; overflow: auto; padding: 20px; }
         #controls.ssh-login-active #connection-form { display: none !important; }
         .ssh-login-progress { color: #999; line-height: 1.8; margin-bottom: 14px; overflow-wrap: anywhere; }
@@ -481,6 +493,7 @@
         #ssh-profile-indicator { display: none; margin: -5px 0 10px; color: #64a9ff; font-size: 12px; overflow-wrap: anywhere; }
         .ssh-save-options { display: flex; align-items: center; gap: 18px; margin: -3px 0 12px; color: #bbb; font-size: 12px; }
         .ssh-save-options label { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+        .ssh-save-options label[hidden] { display: none; }
         #controls .ssh-save-options input { display: inline-block; width: auto; margin: 0; padding: 0; }
         .ssh-session-picker { position: relative; margin-bottom: 15px; }
         #controls #ssh-session-picker-toggle { width: 100%; padding: 9px 10px; background: #333; border: 1px solid #555; color: #ddd; border-radius: 4px; font-weight: normal; text-align: left; }
@@ -1156,30 +1169,43 @@
                 <label data-mode="uart"><input type="radio" name="connection_type" value="uart">UART</label>
             </div>
             <div id="ssh-fields">
-                <div id="ssh-profile-indicator"></div>
-                <div style="display: flex; gap: 10px;">
-                    <input type="text" id="host" placeholder="Host" value="127.0.0.1" style="flex: 3;">
-                    <input type="text" id="port" placeholder="Port" value="22" style="flex: 1;">
-                </div>
-                <input type="text" id="username" placeholder="Username" value="aska">
-                <input type="password" id="password" placeholder="Password (Optional)">
+                <section class="ssh-preparation-pane" id="ssh-direct-pane">
+                    <button type="button" id="ssh-direct-heading" class="ssh-preparation-heading" aria-expanded="true" aria-controls="ssh-direct-body"><span class="ssh-pane-selection">●</span>Direct connect<small id="ssh-direct-summary"></small></button>
+                    <div class="ssh-preparation-body" id="ssh-direct-body">
+                        <div id="ssh-profile-indicator"></div>
+                        <div style="display: flex; gap: 10px;">
+                            <input type="text" id="host" placeholder="Host" value="127.0.0.1" style="flex: 3;">
+                            <input type="text" id="port" placeholder="Port" value="22" style="flex: 1;">
+                        </div>
+                        <input type="text" id="username" placeholder="Username" value="aska">
+                        <input type="password" id="password" placeholder="Password (Optional)">
+                        <div class="ssh-save-options">
+                            <label id="ssh-use-browser-key-label" hidden><input type="checkbox" id="ssh-use-browser-key">Use key</label>
+                        </div>
+                        <div class="ssh-session-picker">
+                            <button type="button" id="ssh-session-picker-toggle" aria-expanded="false" aria-controls="ssh-session-picker-panel">History &amp; Profiles</button>
+                            <div id="ssh-session-picker-panel" role="listbox"></div>
+                        </div>
+                        <details class="ssh-host-identity" id="ssh-direct-identity">
+                            <summary>Host identity</summary>
+                            <label>Host key alias (optional)<input id="ssh-direct-alias" autocomplete="off"></label>
+                            <div id="ssh-direct-identity-body"></div>
+                        </details>
+                    </div>
+                </section>
+                <section class="ssh-preparation-pane" id="ssh-route-pane">
+                    <button type="button" id="ssh-route-heading" class="ssh-preparation-heading" aria-expanded="false" aria-controls="ssh-route-body"><span class="ssh-pane-selection">○</span>Saved routes<small id="ssh-route-summary"></small></button>
+                    <div class="ssh-preparation-body" id="ssh-route-body" hidden>
+                        <select id="ssh-route-picker" aria-label="Saved route"></select>
+                        <div id="ssh-route-path"></div>
+                        <button type="button" id="ssh-edit-route">Edit route...</button>
+                    </div>
+                </section>
                 <div class="ssh-save-options">
                     <label><input type="checkbox" id="ssh-save-history" checked>Save history</label>
                     <label><input type="checkbox" id="ssh-save-session">Save session</label>
-                    <label id="ssh-use-browser-key-label" hidden><input type="checkbox" id="ssh-use-browser-key">Use key</label>
                 </div>
-                <div class="ssh-session-picker">
-                    <button type="button" id="ssh-session-picker-toggle" aria-expanded="false" aria-controls="ssh-session-picker-panel">History &amp; Profiles</button>
-                    <div id="ssh-session-picker-panel" role="listbox"></div>
-                </div>
-                <details id="ssh-jump-details">
-                    <summary id="ssh-jump-summary">Jump hosts · Direct</summary>
-                    <div id="ssh-route-path"></div>
-                    <div id="ssh-hop-passwords"></div>
-                    <button type="button" id="ssh-edit-route">Edit route...</button>
-                </details>
                 <button type="button" id="ssh-cancel-start" hidden>Cancel connection</button>
-                <button type="button" id="ssh-forget-host-key">Forget host key...</button>
                 <div id="ssh-session-message" aria-live="polite"></div>
             </div>
             <div id="local-shell-fields">
@@ -1400,7 +1426,9 @@
     </div>
 
     <script src="{{ url_for('static', filename='js/standterm-ssh-routes.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/standterm-ssh-node-auth.js') }}"></script>
     <script src="{{ url_for('static', filename='js/standterm-ssh-route-editor.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/standterm-ssh-host-identity.js') }}"></script>
     <script src="{{ url_for('static', filename='js/standterm-ssh-login.js') }}"></script>
     <script>
         const SshRoutes = window.StandTermSshRoutes;
@@ -1719,6 +1747,7 @@
         const SSH_HISTORY_LIMIT = 6;
         const SSH_PROFILE_NAME_MAX_LENGTH = 64;
         const SSH_KEY_ALGORITHM = 'Ed25519';
+        const SSH_HOST_IDENTITY_TIMEOUT_MS = 10000;
 
         function createSshSessionId(prefix) {
             if (window.crypto && typeof crypto.randomUUID === 'function') {
@@ -1897,12 +1926,13 @@
             };
         }
 
-        async function validateBrowserSshKeyRecord(record, profile) {
+        async function validateBrowserSshKeyRecord(record, profile, credentialRef = null) {
             if (
-                !record || !profile
-                || record.keyId !== profile.keyId
-                || record.ownerProfileId !== profile.id
-                || record.targetKey !== getSshTargetKey(profile.keyTarget || profile)
+                !record || (credentialRef
+                    ? credentialRef.kind !== 'credential' || record.kind !== 'credential' || record.ownerProfileId !== null
+                        || record.keyId !== credentialRef.keyId || record.targetKey !== credentialRef.targetKey
+                    : !profile || record.keyId !== profile.keyId || record.ownerProfileId !== profile.id
+                        || record.targetKey !== getSshTargetKey(profile.keyTarget || profile))
             ) {
                 throw new Error('The browser SSH key is missing or is linked to another profile.');
             }
@@ -2227,6 +2257,8 @@
             let sshSessionReady = null;
             let sshSessionWriteQueue = Promise.resolve();
             let selectedSshPickerEntry = null;
+            let selectedSshRouteEntry = null;
+            let sshPreparationMode = 'direct';
             let editingSshProfileId = null;
             let editingSshKeyRecord = null;
             let quickConnectSshKeyRecord = null;
@@ -4282,6 +4314,12 @@
 
             function getConnectButtonText() {
                 const mode = getSelectedConnectionType();
+                if (mode === 'ssh') {
+                    const entry = currentSshRouteEntry();
+                    return sshPreparationMode === 'route'
+                        ? entry ? `Connect via ${entry.name || `${entry.username}@${entry.host}`}` : 'Select a route to connect'
+                        : 'Connect directly';
+                }
                 return `Connect to ${CONNECTION_LABELS[mode] || 'Terminal'}`;
             }
 
@@ -4328,45 +4366,49 @@
                     : null;
             }
 
+            function currentSshRouteEntry(state = sshSessionState) {
+                return [...state.profiles, ...state.history].find(entry => entry.id === selectedSshRouteEntry) || null;
+            }
+
+            function selectSshPreparationMode(mode) {
+                if (!['direct', 'route'].includes(mode)) return;
+                if (sshPreparationMode !== mode) invalidateSshRetry();
+                sshPreparationMode = mode;
+                closeSshSessionPicker();
+                renderSshPreparation();
+            }
+
+            function renderSshPreparation() {
+                for (const mode of ['direct', 'route']) {
+                    const active = mode === sshPreparationMode;
+                    const heading = document.getElementById(`ssh-${mode}-heading`);
+                    heading.setAttribute('aria-expanded', String(active));
+                    heading.querySelector('.ssh-pane-selection').textContent = active ? '●' : '○';
+                    document.getElementById(`ssh-${mode}-body`).hidden = !active;
+                }
+                const target = getCurrentSshTarget();
+                document.getElementById('ssh-direct-summary').textContent = target.host || '';
+                if (!getActiveTerminalState()?.connecting) resetConnectButton();
+            }
+
             function renderCurrentSshRoute() {
-                const entry = currentSshEntry();
+                const entry = currentSshRouteEntry();
                 const result = entry ? SshRoutes.resolve(sshSessionState, entry.startNodeId) : { path: [] };
                 const path = result.path;
-                document.getElementById('ssh-jump-summary').textContent = result.error
-                    ? 'Jump hosts · Invalid route' : `Jump hosts · ${path.length > 1 ? `${path.length - 1} hops` : 'Direct'}`;
+                const picker = document.getElementById('ssh-route-picker');
+                const entries = [...sshSessionState.profiles, ...sshSessionState.history];
+                picker.replaceChildren(new Option(entries.length ? 'Choose a saved route...' : 'No saved routes', ''));
+                for (const item of entries) {
+                    const resolved = SshRoutes.resolve(sshSessionState, item.startNodeId);
+                    const jumps = Math.max(0, resolved.path.length - 1);
+                    picker.add(new Option(`${item.name || `${item.username}@${item.host}`} · ${resolved.error ? 'Invalid route' : jumps ? `${jumps} ${jumps === 1 ? 'jump' : 'jumps'}` : 'Direct'}`, item.id));
+                }
+                picker.value = entry?.id || '';
+                document.getElementById('ssh-route-summary').textContent = entry?.name || (entry ? `${entry.username}@${entry.host}` : 'None selected');
                 document.getElementById('ssh-route-path').textContent = path.length
-                    ? `Core host → ${path.map(node => `${node.endpoint.username}@${node.endpoint.host}:${node.endpoint.port}`).join(' → ')}` : '';
-                const container = document.getElementById('ssh-hop-passwords');
-                const old = new Map([...container.querySelectorAll('input')].map(input => [input.dataset.nodeId, input.value]));
-                container.replaceChildren();
-                path.forEach((node, index) => {
-                    const last = index === path.length - 1;
-                    if (last && node.authentication.method !== 'browser-key') return;
-                    const label = document.createElement('label');
-                    label.textContent = `${last ? 'Target' : `Jump ${index + 1}`}: ${node.endpoint.username}@${node.endpoint.host}`;
-                    if (node.authentication.method === 'browser-key') {
-                        const owner = findSshProfile(node.authentication.keyRef?.ownerProfileId);
-                        label.append(document.createTextNode(` — Browser key from: ${owner?.name || 'unavailable; edit route'}`));
-                    } else {
-                        const input = document.createElement('input');
-                        input.type = 'password';
-                        input.autocomplete = 'off';
-                        input.placeholder = 'Jump host password';
-                        input.dataset.nodeId = node.id;
-                        input.value = old.get(node.id) || '';
-                        input.addEventListener('input', invalidateSshRetry);
-                        label.append(input);
-                    }
-                    const forget = document.createElement('button');
-                    forget.type = 'button';
-                    forget.textContent = 'Forget host key...';
-                    forget.onclick = () => socket.emit('ssh_host_key_action', {
-                        operation: 'forget', terminal_id: activeTerminalId,
-                        ...node.endpoint, host_key_alias: node.hostKeyAlias
-                    });
-                    label.append(forget);
-                    container.append(label);
-                });
+                    ? `Core → ${path.map(node => `${node.endpoint.username}@${node.endpoint.host}:${node.endpoint.port}`).join(' → ')}\n${result.error ? 'Invalid route — edit before connecting.' : `${path.length - 1} ${path.length === 2 ? 'jump' : 'jumps'}`}`
+                    : 'Select a saved route, or use Edit route to create one.';
+                renderSshPreparation();
             }
 
             function invalidateSshRetry() {
@@ -4444,14 +4486,17 @@
                 await sshSessionReady;
                 await sshSessionWriteQueue;
                 const snapshot = await SshRoutes.load(openSshSessionsDb, normalizeLegacySshSessionState, true);
-                const selected = currentSshEntry(snapshot.state);
-                if (selectedSshPickerEntry && !selected) throw new Error('The SSH entry was removed. Reload the settings.');
+                const fromRoute = sshPreparationMode === 'route';
+                const selected = fromRoute ? currentSshRouteEntry(snapshot.state) : currentSshEntry(snapshot.state);
+                if (fromRoute && !selected) throw new Error('Choose a saved route before connecting.');
+                if (!fromRoute && selectedSshPickerEntry && !selected) throw new Error('The SSH entry was removed. Reload the settings.');
                 if (snapshot.state.revision !== sshSessionState.revision) throw new Error('SSH settings changed in another window. Reload before connecting.');
                 if (!selected) {
                     if (!interactiveLogin) return formData;
                     const nodeId = SshRoutes.id();
                     const signers = formData.use_browser_key && quickConnectSshKeyRecord ? [{
-                        nodeId, profileId: formData.profile_id, keyId: formData.key_id,
+                        nodeId, profileId: formData.profile_id, credentialId: formData.credential_id, keyId: formData.key_id,
+                        targetKey: getSshTargetKey(formData),
                         publicKeyFingerprintHex: quickConnectSshKeyRecord.publicKeyFingerprintHex
                     }] : [];
                     return { ...formData, route: [{ ...formData, node_id: nodeId }],
@@ -4459,39 +4504,42 @@
                         _revision: snapshot.state.revision, _signers: signers };
                 }
                 const path = SshRoutes.clone(SshRoutes.checkedPath(snapshot.state, selected));
+                if (!fromRoute && path.length !== 1) throw new Error('Select Saved routes to use jump hosts.');
                 const target = path.at(-1);
-                if (getSshTargetKey(target.endpoint) !== getSshTargetKey(formData)) {
+                if (!fromRoute && getSshTargetKey(target.endpoint) !== getSshTargetKey(formData)) {
                     target.endpoint = SshRoutes.endpoint(formData);
                     target.authentication = { method: 'password' };
                     target.hostKeyAlias = '';
                 }
+                if (!fromRoute) target.hostKeyAlias = formData.host_key_alias || '';
                 const attemptId = createSshSessionId('attempt');
                 const signers = [];
                 const route = [];
                 for (const [index, node] of path.entries()) {
                     const last = index === path.length - 1;
                     const payload = { node_id: node.id, ...node.endpoint, host_key_alias: node.hostKeyAlias,
-                        password: last ? formData.password : document.querySelector(`#ssh-hop-passwords input[data-node-id="${node.id}"]`)?.value || '' };
-                    if (node.authentication.method === 'browser-key') {
+                        password: !fromRoute && last ? formData.password : '' };
+                    if (node.authentication.method === 'browser-key' && (fromRoute || sshUseBrowserKeyInput.checked)) {
                         const ref = node.authentication.keyRef;
                         const owner = snapshot.state.profiles.find(profile => profile.id === ref?.ownerProfileId);
-                        if (!ref || !owner || owner.keyId !== ref.keyId || ref.targetKey !== getSshTargetKey(node.endpoint)) {
+                        if (!ref || (ref.kind !== 'credential' && (!owner || owner.keyId !== ref.keyId))
+                                || ref.targetKey !== getSshTargetKey(node.endpoint)) {
                             throw new Error(`SSH node ${index + 1}: choose a browser key bound to this endpoint, or choose password authentication.`);
                         }
                         if (!isBrowserSshKeyAllowedByPolicy()) throw new Error('Browser SSH keys require localhost or authorized HTTPS.');
-                        const record = await validateBrowserSshKeyRecord(snapshot.keys.find(key => key.keyId === ref.keyId), owner);
+                        const record = await validateBrowserSshKeyRecord(snapshot.keys.find(key => key.keyId === ref.keyId), owner,
+                            ref.kind === 'credential' ? ref : null);
                         if (record.targetKey !== ref.targetKey) throw new Error('The referenced browser key has changed. Edit the SSH route.');
-                        // The direct target retains its existing optional Use key toggle.
-                        if (path.length > 1 || !owner.keyId || sshUseBrowserKeyInput.checked || owner.id !== selected.id) {
-                            Object.assign(payload, { password: '', use_browser_key: true, profile_id: owner.id,
-                                key_id: record.keyId, browser_public_key: record.publicKeyRawB64 });
-                            signers.push({ nodeId: node.id, profileId: owner.id, keyId: record.keyId,
-                                publicKeyFingerprintHex: record.publicKeyFingerprintHex });
-                        }
+                        const identity = ref.kind === 'credential' ? { credential_id: ref.keyId } : { profile_id: owner.id };
+                        Object.assign(payload, { password: '', use_browser_key: true, ...identity,
+                            key_id: record.keyId, browser_public_key: record.publicKeyRawB64 });
+                        signers.push({ nodeId: node.id, profileId: identity.profile_id, credentialId: identity.credential_id,
+                            keyId: record.keyId, targetKey: ref.targetKey,
+                            publicKeyFingerprintHex: record.publicKeyFingerprintHex });
                     }
                     route.push(payload);
                 }
-                return { ...formData, route, attempt_id: attemptId, interactive_login: interactiveLogin,
+                return { ...formData, ...target.endpoint, route, attempt_id: attemptId, interactive_login: interactiveLogin,
                     _routePath: path, _revision: snapshot.state.revision, _signers: signers };
             }
 
@@ -4553,14 +4601,8 @@
 
             function applyQuickConnectKeySelection() {
                 const useKey = !!(quickConnectSshKeyRecord && sshUseBrowserKeyInput.checked);
-                const entry = currentSshEntry();
-                const path = entry ? SshRoutes.resolve(sshSessionState, entry.startNodeId).path : [];
-                const target = path.at(-1);
-                const routeKey = target?.authentication.method === 'browser-key'
-                    && getSshTargetKey(target.endpoint) === getSshTargetKey(getCurrentSshTarget())
-                    && (path.length > 1 || target.authentication.keyRef?.ownerProfileId !== entry.id);
-                sshPasswordInput.disabled = useKey || routeKey;
-                if (useKey || routeKey) sshPasswordInput.value = '';
+                sshPasswordInput.disabled = useKey;
+                if (useKey) sshPasswordInput.value = '';
             }
 
             async function refreshQuickConnectSshKey(preferKey) {
@@ -4568,9 +4610,13 @@
                 const profile = selectedSshPickerEntry && selectedSshPickerEntry.type === 'profile'
                     ? findSshProfile(selectedSshPickerEntry.id)
                     : null;
-                const exactMatch = profile && getSshTargetKey(profile.keyTarget || profile) === getSshTargetKey(getCurrentSshTarget());
-                if (!isBrowserSshKeyAllowedByPolicy() || !exactMatch || !profile.keyId
-                        || SshRoutes.resolve(sshSessionState, profile.startNodeId).path.length > 1) {
+                const entry = currentSshEntry();
+                const path = entry ? SshRoutes.resolve(sshSessionState, entry.startNodeId).path : [];
+                const ref = path.length === 1 ? path[0].authentication.keyRef : null;
+                const owner = ref && ref.kind !== 'credential' ? findSshProfile(ref.ownerProfileId) : profile;
+                const exactMatch = ref ? ref.targetKey === getSshTargetKey(getCurrentSshTarget())
+                    : profile && getSshTargetKey(profile.keyTarget || profile) === getSshTargetKey(getCurrentSshTarget());
+                if (!isBrowserSshKeyAllowedByPolicy() || !exactMatch || !(ref?.keyId || profile?.keyId) || path.length > 1) {
                     quickConnectSshKeyRecord = null;
                     sshUseBrowserKeyInput.checked = false;
                     sshUseBrowserKeyLabel.hidden = true;
@@ -4578,7 +4624,8 @@
                     return;
                 }
                 try {
-                    const record = await validateBrowserSshKeyRecord(await loadSshKeyRecord(profile.keyId), profile);
+                    const record = await validateBrowserSshKeyRecord(await loadSshKeyRecord(ref?.keyId || profile.keyId), owner,
+                        ref?.kind === 'credential' ? ref : null);
                     if (version !== quickConnectKeyLoadVersion) return;
                     const changedKey = !quickConnectSshKeyRecord || quickConnectSshKeyRecord.keyId !== record.keyId;
                     quickConnectSshKeyRecord = record;
@@ -4598,13 +4645,22 @@
             function applySshPickerEntry(entryType, entryId) {
                 const entry = entryType === 'profile' ? findSshProfile(entryId) : findSshHistory(entryId);
                 if (!entry) return;
+                const path = SshRoutes.resolve(sshSessionState, entry.startNodeId).path;
+                if (path.length !== 1) {
+                    selectedSshRouteEntry = entry.id;
+                    selectSshPreparationMode('route');
+                    renderCurrentSshRoute();
+                    return;
+                }
                 invalidateSshRetry();
-                document.getElementById('ssh-hop-passwords').replaceChildren();
+                selectSshPreparationMode('direct');
                 selectedSshPickerEntry = { type: entryType, id: entry.id };
                 sshHostInput.value = entry.host;
                 sshPortInput.value = entry.port;
                 sshUsernameInput.value = entry.username;
                 sshPasswordInput.value = '';
+                document.getElementById('ssh-direct-alias').value = path[0].hostKeyAlias || '';
+                directHostIdentity.invalidate();
                 ['host', 'port', 'username'].forEach(fieldName => {
                     userEditedConnectionFields.add(getConnectionFieldKey('ssh', fieldName));
                 });
@@ -4641,9 +4697,13 @@
 
             function renderSshSessionPicker() {
                 sshSessionPickerPanel.replaceChildren();
-                appendSshPickerGroup('Saved Profiles', sshSessionState.profiles, 'profile');
-                appendSshPickerGroup('Recent History', sshSessionState.history, 'history');
-                if (!sshSessionState.profiles.length && !sshSessionState.history.length) {
+                const direct = entries => entries.filter(entry => {
+                    const route = SshRoutes.resolve(sshSessionState, entry.startNodeId);
+                    return !route.error && route.path.length === 1;
+                });
+                appendSshPickerGroup('Direct Profiles', direct(sshSessionState.profiles), 'profile');
+                appendSshPickerGroup('Direct History', direct(sshSessionState.history), 'history');
+                if (!sshSessionPickerPanel.children.length) {
                     const empty = document.createElement('div');
                     empty.className = 'ssh-session-picker-empty';
                     empty.innerText = 'No saved profiles or successful SSH connections yet.';
@@ -6950,7 +7010,7 @@
                 const responseBase = {
                     request_id: data && data.request_id,
                     terminal_id: data && data.terminal_id,
-                    profile_id: data && data.profile_id,
+                    ...(data?.credential_id ? { credential_id: data.credential_id } : { profile_id: data && data.profile_id }),
                     key_id: data && data.key_id,
                     challenge_sha256: data && data.challenge_sha256,
                     ...(data?.attempt_id ? { attempt_id: data.attempt_id, node_id: data.node_id } : {})
@@ -6966,8 +7026,11 @@
                 };
                 try {
                     if (!data || typeof data !== 'object') throw new Error('Invalid SSH signing request.');
+                    const credential = data.credential_id !== undefined;
+                    const ownerField = credential ? 'credential_id' : 'profile_id';
+                    if (credential && (data.profile_id !== undefined || data.credential_id !== data.key_id)) throw new Error('Invalid SSH credential owner.');
                     const stringFields = [
-                        'request_id', 'terminal_id', 'profile_id', 'key_id',
+                        'request_id', 'terminal_id', ownerField, 'key_id',
                         'public_key_fingerprint', 'algorithm', 'challenge', 'challenge_sha256'
                     ];
                     if (stringFields.some(field => typeof data[field] !== 'string' || !data[field])) {
@@ -6975,7 +7038,7 @@
                     }
                     if (
                         data.request_id.length > 128
-                        || data.profile_id.length > 128
+                        || data[ownerField].length > 128
                         || data.key_id.length > 128
                         || data.challenge.length > 8192
                         || !/^[0-9a-f]{64}$/.test(data.challenge_sha256)
@@ -6995,7 +7058,7 @@
                     const binding = data.attempt_id
                         ? draft?.signers?.find(item => draft.attemptId === data.attempt_id && item.nodeId === data.node_id)
                         : draft?.useKey ? draft : null;
-                    if (!binding || binding.profileId !== data.profile_id || binding.keyId !== data.key_id
+                    if (!binding || binding.profileId !== data.profile_id || binding.credentialId !== data.credential_id || binding.keyId !== data.key_id
                             || binding.publicKeyFingerprintHex !== data.public_key_fingerprint) {
                         throw new Error('SSH signing request does not match the active connection.');
                     }
@@ -7004,7 +7067,8 @@
                         throw new Error('SSH settings changed during authentication. Reconnect.');
                     }
                     const profile = snapshot.state.profiles.find(item => item.id === data.profile_id);
-                    const record = await validateBrowserSshKeyRecord(snapshot.keys.find(item => item.keyId === data.key_id), profile);
+                    const record = await validateBrowserSshKeyRecord(snapshot.keys.find(item => item.keyId === data.key_id), profile,
+                        credential ? { kind: 'credential', keyId: data.credential_id, targetKey: binding.targetKey } : null);
                     const challenge = base64ToUint8Array(data.challenge);
                     if (!challenge.byteLength || challenge.byteLength > 4096) throw new Error('Invalid SSH signing challenge.');
                     if ((await arrayBufferToHex(challenge)) !== data.challenge_sha256) {
@@ -7558,7 +7622,10 @@
             function resetConnectButton() {
                 document.getElementById('ssh-cancel-start').hidden = true;
                 connectBtn.innerText = getConnectButtonText();
-                connectBtn.disabled = serverConnectionState !== 'available';
+                const entry = currentSshRouteEntry();
+                const unavailableRoute = getSelectedConnectionType() === 'ssh' && sshPreparationMode === 'route'
+                    && (!entry || !!SshRoutes.resolve(sshSessionState, entry.startNodeId).error);
+                connectBtn.disabled = serverConnectionState !== 'available' || unavailableRoute;
                 updatePolicyDebugPanel('reset_connect_button');
             }
 
@@ -7569,10 +7636,17 @@
                     terminal_id: activeTerminalId
                 };
                 if (connectionType === 'ssh') {
+                    if (sshPreparationMode === 'route') {
+                        const entry = currentSshRouteEntry();
+                        if (!entry) throw new Error('Choose a saved route before connecting.');
+                        const target = SshRoutes.checkedPath(sshSessionState, entry).at(-1).endpoint;
+                        return { ...formData, ...target, password: '', profile_name: entry.name || '' };
+                    }
                     formData.host = sshHostInput.value;
                     formData.port = sshPortInput.value;
                     formData.username = sshUsernameInput.value;
                     formData.password = sshPasswordInput.value;
+                    formData.host_key_alias = document.getElementById('ssh-direct-alias').value.trim();
                     const matchingProfile = findSshProfileForTarget(formData);
                     if (matchingProfile) formData.profile_name = matchingProfile.name;
                     if (
@@ -7582,7 +7656,8 @@
                     ) {
                         formData.password = '';
                         formData.use_browser_key = true;
-                        formData.profile_id = quickConnectSshKeyRecord.ownerProfileId;
+                        if (quickConnectSshKeyRecord.kind === 'credential') formData.credential_id = quickConnectSshKeyRecord.keyId;
+                        else formData.profile_id = quickConnectSshKeyRecord.ownerProfileId;
                         formData.key_id = quickConnectSshKeyRecord.keyId;
                         formData.browser_public_key = quickConnectSshKeyRecord.publicKeyRawB64;
                     }
@@ -7608,6 +7683,11 @@
                 quickConnectSshKeyRecord = null;
                 applyQuickConnectKeySelection();
                 selectedSshPickerEntry = null;
+                selectedSshRouteEntry = null;
+                document.getElementById('ssh-direct-alias').value = '';
+                directHostIdentity.invalidate();
+                selectSshPreparationMode('direct');
+                renderCurrentSshRoute();
                 updateSshProfileIndicator();
                 setSshSessionMessage('');
             }
@@ -7653,7 +7733,6 @@
                 socket.emit('start_ssh', payload);
                 if (formData.interactive_login) {
                     sshPasswordInput.value = '';
-                    document.querySelectorAll('#ssh-hop-passwords input').forEach(input => { input.value = ''; });
                     // Login replies are sent once and never kept in retry/history state.
                     const draft = pendingSshConnectionDrafts.get(formData.terminal_id);
                     draft.payload = { ...draft.payload, password: '', route: draft.payload.route.map(node => ({ ...node, password: '' })) };
@@ -7686,35 +7765,63 @@
             };
             connectBtn.onclick = doConnect;
             document.getElementById('ssh-cancel-start').onclick = () => cancelSshConnection();
-            document.getElementById('ssh-edit-route').onclick = () => {
+            function requestSshHostIdentity(payload) {
+                return new Promise((resolve, reject) => {
+                    if (!socket?.connected) { reject(new Error('StandTerm is disconnected.')); return; }
+                    socket.timeout(SSH_HOST_IDENTITY_TIMEOUT_MS).emit('ssh_host_identity', payload, (error, result) => {
+                        if (error) reject(new Error('SSH host identity request timed out.'));
+                        else resolve(result);
+                    });
+                });
+            }
+            const directHostIdentity = StandTermSshHostIdentity({
+                parent: document.getElementById('ssh-direct-identity-body'), editorId: SshRoutes.id(), nodeId: 'direct',
+                read: () => ({ ...SshRoutes.endpoint(getCurrentSshTarget()), terminal_id: activeTerminalId,
+                    host_key_alias: document.getElementById('ssh-direct-alias').value.trim() }), request: requestSshHostIdentity
+            });
+            document.getElementById('ssh-direct-identity').ontoggle = event => {
+                if (event.target.open) directHostIdentity.inspect();
+            };
+            for (const mode of ['direct', 'route']) {
+                document.getElementById(`ssh-${mode}-heading`).onclick = () => selectSshPreparationMode(mode);
+            }
+            document.getElementById('ssh-route-picker').onchange = event => {
+                invalidateSshRetry();
+                selectedSshRouteEntry = event.target.value || null;
+                renderCurrentSshRoute();
+            };
+            document.getElementById('ssh-edit-route').onclick = async () => {
                 try {
                     invalidateSshRetry();
-                    SshRoutes.edit({ state: sshSessionState, entryId: currentSshEntry()?.id,
+                    await sshSessionWriteQueue;
+                    const snapshot = await SshRoutes.load(openSshSessionsDb, normalizeLegacySshSessionState, true);
+                    if (snapshot.state.revision !== sshSessionState.revision) throw new Error('SSH settings changed in another window. Reload before editing.');
+                    const terminalId = activeTerminalId;
+                    SshRoutes.edit({ state: snapshot.state, entryId: currentSshRouteEntry()?.id,
                         target: getCurrentSshTarget(),
-                        save: value => SshRoutes.save(openSshSessionsDb, value),
+                        keys: snapshot.keys, keyAllowed: isBrowserSshKeyAllowedByPolicy(),
+                        createKey: async endpoint => {
+                            if (!isBrowserSshKeyAllowedByPolicy()) throw new Error('Browser keys require localhost or an authorized HTTPS connection.');
+                            const record = await createBrowserSshKeyRecord(null);
+                            return { ...record, kind: 'credential', targetKey: SshRoutes.endpointKey(endpoint) };
+                        },
+                        copyPublicKey: value => copyToClipboard(value),
+                        hostIdentity: { request: requestSshHostIdentity, terminalId },
+                        save: (value, keyChanges) => SshRoutes.save(openSshSessionsDb, value, keyChanges),
                         onSaved: (state, entryId) => {
                             sshSessionState = state;
+                            selectedSshRouteEntry = entryId;
+                            selectSshPreparationMode('route');
                             renderSshSessionState();
-                            applySshPickerEntry(state.profiles.some(entry => entry.id === entryId) ? 'profile' : 'history', entryId);
-                            document.getElementById('ssh-jump-summary').parentElement.open = true;
                             setSshSessionMessage('SSH route saved. Connect to log in at each site.');
                         }
                     });
                 } catch (err) { setSshSessionMessage(err.message, true); }
             };
-            [sshHostInput, sshPortInput, sshUsernameInput, sshPasswordInput, sshUseBrowserKeyInput].forEach(input => {
+            [sshHostInput, sshPortInput, sshUsernameInput, sshPasswordInput, sshUseBrowserKeyInput, document.getElementById('ssh-direct-alias')].forEach(input => {
                 input.addEventListener('input', invalidateSshRetry);
+                input.addEventListener('input', () => { directHostIdentity.invalidate(); renderSshPreparation(); });
             });
-            document.getElementById('ssh-forget-host-key').onclick = () => {
-                if (!socket || !socket.connected || getActiveTerminalState()?.connecting) return;
-                hideActionPrompt();
-                socket.emit('ssh_host_key_action', {
-                    operation: 'forget', terminal_id: activeTerminalId,
-                    host: sshHostInput.value, port: sshPortInput.value,
-                    host_key_alias: currentSshEntry() && getSshTargetKey(currentSshEntry()) === getSshTargetKey(getCurrentSshTarget())
-                        ? SshRoutes.resolve(sshSessionState, currentSshEntry().startNodeId).path.at(-1)?.hostKeyAlias : ''
-                });
-            };
             sshSessionPickerToggle.onclick = () => {
                 const opening = !sshSessionPickerPanel.classList.contains('open');
                 sshSessionPickerPanel.classList.toggle('open', opening);

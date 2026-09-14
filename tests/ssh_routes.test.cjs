@@ -82,3 +82,25 @@ test('import remaps all identities, rejects invalid graphs and drops nested secr
     assert.ok(!exported.includes('key-A'));
     assert.throws(() => routes.importState(state, graph({ A: 'A' })), /cycle/);
 });
+
+test('standalone node credentials survive copying but never rebind or export', () => {
+    const state = graph({ A: 'B', B: null });
+    const node = state.nodes[0];
+    node.authentication = { method: 'browser-key', keyRef: {
+        kind: 'credential', keyId: 'stable-credential', targetKey: routes.endpointKey(node.endpoint)
+    } };
+    routes.validate(state);
+    const copied = routes.copyPath(state, routes.checkedPath(state, state.profiles[0]));
+    const copy = state.nodes.find(item => item.id === copied);
+    assert.notEqual(copy.id, node.id);
+    assert.deepEqual(copy.authentication, node.authentication);
+    assert.throws(() => routes.publicNode({ ...copy, endpoint: { ...copy.endpoint, host: 'another.test' } }), /key/);
+    assert.throws(() => routes.publicNode({ ...copy, authentication: { method: 'browser-key', keyRef: {
+        ...copy.authentication.keyRef, ownerProfileId: 'fake-owner'
+    } } }), /key/);
+    const exported = routes.exportState(state);
+    assert.ok(!JSON.stringify(exported).includes('stable-credential'));
+    const imported = routes.importState(state, exported);
+    const lastEntry = imported.profiles.at(-1);
+    assert.deepEqual(routes.checkedPath(imported, lastEntry)[0].authentication, { method: 'browser-key', keyRef: null });
+});

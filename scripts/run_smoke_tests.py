@@ -27,6 +27,7 @@ COMPILE_TARGETS = [
     'tests/terminal_read_smoke.py',
     'tests/ssh_start_smoke.py',
     'tests/ssh_login_smoke.py',
+    'tests/ssh_node_credentials_smoke.py',
     'tests/ime_anchor_browser_smoke.py',
 ]
 
@@ -35,6 +36,7 @@ HEADLESS_SMOKE_TESTS = [
     'tests/terminal_read_smoke.py',
     'tests/ssh_start_smoke.py',
     'tests/ssh_login_smoke.py',
+    'tests/ssh_node_credentials_smoke.py',
     'tests/server_startup_smoke.py',
     'tests/external_agent_boundary_smoke.py',
     'tests/agent_repl_smoke.py',

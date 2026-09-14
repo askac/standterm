@@ -2,8 +2,14 @@
     'use strict';
     const routes = window.StandTermSshRoutes;
 
-    routes.edit = function({ state, entryId, target, save, onSaved }) {
-        const original = routes.clone(state);
+    routes.edit = function({ state, entryId, target, save, onSaved, keys = [], keyAllowed = false,
+        createKey, copyPublicKey, hostIdentity }) {
+        let original = routes.clone(state);
+        const savedKeys = [...keys];
+        const newKeys = new Map();
+        const editorId = routes.id();
+        let pendingGenerations = 0;
+        let saving = false;
         let draft = routes.clone(state);
         let entry = [...draft.profiles, ...draft.history].find(item => item.id === entryId);
         if (!entry) {
@@ -53,6 +59,12 @@
         const labelPath = path => `Core host → ${path.map(node => `${node.endpoint.username}@${node.endpoint.host}:${node.endpoint.port}`).join(' → ')}`;
 
         function path() { return routes.resolve(draft, entry.startNodeId).path; }
+
+        function updateSaveState() {
+            const hasNewKeys = controls.some(control => newKeys.has(control.read().authentication.keyRef?.keyId));
+            saveButton.textContent = hasNewKeys ? 'Save & show public keys' : 'Save route';
+            saveButton.disabled = saving || pendingGenerations > 0;
+        }
 
         // Keep incomplete values inside the modal. Persistent nodes are validated on Save.
         function replaceDraftNode(index, replacement) {
@@ -282,38 +294,41 @@
                 const port = input('Port', node.endpoint.port);
                 const username = input('Username', node.endpoint.username);
                 port.inputMode = 'numeric';
-                const auth = document.createElement('select');
-                auth.setAttribute('aria-label', `${role} Authentication`);
-                auth.add(new Option('Password (entered when connecting)', 'password'));
-                const keyRefs = new Map();
-                draft.profiles.filter(owner => owner.keyId).forEach(owner => {
-                    keyRefs.set(owner.id, { ownerProfileId: owner.id, keyId: owner.keyId,
-                        targetKey: routes.endpointKey(owner.keyTarget || owner) });
-                    auth.add(new Option(`Browser key from: ${owner.name}`, owner.id));
+                const auth = StandTermSshNodeAuth({ parent: fields, role, authentication: node.authentication,
+                    endpoint: () => ({ host: host.value, port: port.value, username: username.value }),
+                    profiles: draft.profiles, savedKeys, newKeys, keyAllowed, createKey, copyPublicKey,
+                    onBusy: delta => { pendingGenerations += delta; updateSaveState(); },
+                    onChange: () => { updateSummary(); updateSaveState(); }
                 });
-                const keyRef = node.authentication.keyRef;
-                if (node.authentication.method === 'browser-key') {
-                    if (keyRef && JSON.stringify(keyRefs.get(keyRef.ownerProfileId)) === JSON.stringify(keyRef)) auth.value = keyRef.ownerProfileId;
-                    else { auth.add(new Option('Browser key unavailable — choose authentication', 'unresolved')); auth.value = 'unresolved'; }
-                }
-                const authLabel = document.createElement('label');
-                authLabel.textContent = 'Authentication';
-                authLabel.append(auth);
-                authLabel.className = 'ssh-route-auth';
-                fields.append(authLabel);
+                const identity = document.createElement('details');
+                identity.className = 'ssh-host-identity';
+                const identityTitle = document.createElement('summary');
+                identityTitle.textContent = 'Host identity';
+                identity.append(identityTitle);
+                body.append(identity);
+                const alias = input('Host key alias (optional)', node.hostKeyAlias, identity);
+                const identityBody = document.createElement('div');
+                identity.append(identityBody);
+                const identityControl = hostIdentity && StandTermSshHostIdentity({
+                    parent: identityBody, editorId, nodeId: node.id, request: hostIdentity.request,
+                    read: () => ({ ...routes.endpoint({ host: host.value, port: port.value, username: username.value }),
+                        host_key_alias: alias.value.trim(), terminal_id: hostIdentity.terminalId })
+                });
+                identity.ontoggle = () => { if (identity.open) identityControl?.inspect(); };
+                for (const field of [host, port, username, alias]) field.addEventListener('input', () => {
+                    auth.update(); identityControl?.invalidate();
+                });
                 const advanced = document.createElement('details');
                 const advancedTitle = document.createElement('summary');
                 advancedTitle.textContent = 'Advanced node settings';
                 advanced.append(advancedTitle);
                 body.append(advanced);
-                const alias = input('Host key alias (optional)', node.hostKeyAlias, advanced);
                 const affected = document.createElement('p');
                 affected.textContent = `Referenced by: ${routes.references(draft, node.id).map(item => item.name || 'This Entry').join(', ')}`;
                 advanced.append(affected);
                 controls.push({ card: fieldset, handle, host, advanced, body, toggle, read: () => ({
                     endpoint: { host: host.value, port: port.value, username: username.value },
-                    hostKeyAlias: alias.value.trim(), authentication: auth.value === 'password'
-                        ? { method: 'password' } : { method: 'browser-key', keyRef: keyRefs.get(auth.value) || null }
+                    hostKeyAlias: alias.value.trim(), authentication: auth.read()
                 }) });
                 const otherEntries = document.createElement('select');
                 otherEntries.setAttribute('aria-label', `${role} Next route`);
@@ -349,9 +364,9 @@
                 function updateSummary() {
                     const endpoint = `${username.value.trim() ? `${username.value.trim()}@` : ''}${host.value.trim() || 'Enter host'}:${port.value || '22'}`;
                     summary.textContent = `${endpoint}${alias.value.trim() ? ` · ${alias.value.trim()}` : ''}`;
-                    authSummary.textContent = auth.value === 'password' ? 'Password' : auth.value === 'unresolved' ? 'Key unavailable' : 'Key';
+                    authSummary.textContent = auth.read().method === 'password' ? 'Password' : auth.read().keyRef ? 'Key' : 'Key unavailable';
                     const aliasText = alias.value.trim() ? ` · Alias: ${alias.value.trim()}` : '';
-                    toggle.title = `${role}: ${endpoint} · ${auth.selectedOptions[0].text}${aliasText}`;
+                    toggle.title = `${role}: ${endpoint} · ${authSummary.textContent}${aliasText}`;
                 }
                 updateSummary();
                 fieldset.addEventListener('input', () => {
@@ -364,9 +379,11 @@
             });
             expandCard(expandedIndex < controls.length ? expandedIndex : -1);
             updateScopeNotice();
+            updateSaveState();
         }
 
         const saveButton = button('Save route', async () => {
+            if (saving || pendingGenerations) return;
             flush();
             if (offerRepair()) return;
             const current = routes.checkedPath(draft, entry);
@@ -376,6 +393,9 @@
                     routes.endpoint(node.endpoint);
                     validEndpoint = true;
                     routes.publicNode(node);
+                    if (node.authentication.method === 'browser-key' && !node.authentication.keyRef) {
+                        throw new Error('Choose or create a browser key for this node.');
+                    }
                 } catch (err) {
                     const control = controls[index];
                     control.card.classList.add('invalid');
@@ -391,12 +411,33 @@
             }
             discardUnusedDraftNodes();
             routes.validate(draft);
-            const result = await save(draft);
-            dialog.close();
-            onSaved(result, entry.id);
+            const used = new Set(draft.nodes.map(node => node.authentication.keyRef?.keyId));
+            const keyChanges = [...newKeys.values()].filter(record => used.has(record.keyId)).map(record => ({ type: 'put', record }));
+            saving = true;
+            dialog.inert = true;
+            updateSaveState();
+            cancelButton.disabled = true;
+            try {
+                const result = await save(draft, keyChanges);
+                onSaved(result, entry.id);
+                if (!keyChanges.length) { dialog.close(); return; }
+                savedKeys.push(...keyChanges.map(change => change.record));
+                newKeys.clear();
+                original = routes.clone(result);
+                draft = routes.clone(result);
+                entry = [...draft.profiles, ...draft.history].find(item => item.id === entry.id);
+                render();
+                status.textContent = 'Saved. Copy each public key to its remote account’s authorized_keys before connecting.';
+                cancelButton.textContent = 'Close';
+            } finally {
+                saving = false;
+                dialog.inert = false;
+                cancelButton.disabled = false;
+                updateSaveState();
+            }
         });
         saveButton.className = 'primary';
-        button('Cancel', () => dialog.close());
+        const cancelButton = button('Cancel', () => dialog.close());
         const heading = document.createElement('div');
         heading.className = 'ssh-route-heading';
         for (const [text, field] of [['Entry name (optional)', name]]) {
@@ -420,6 +461,7 @@
         help.textContent = `Connect from Core through the cards, top to bottom. The last card is the Target. Drag the handle or use ↑ / ↓. Up to ${routes.MAX_JUMPS} jumps. Save, then Connect to log in at each site.`;
         dialog.append(title, help, heading, advanced, scopeNotice, rows, preview, status, actions);
         dialog.addEventListener('close', () => dialog.remove());
+        dialog.addEventListener('cancel', event => { if (saving) event.preventDefault(); });
         document.body.append(dialog);
         render();
         dialog.showModal();

@@ -77,6 +77,7 @@ def test_background_and_stale_prompts_cannot_steal_focus(browser, url):
                   'node_id':start['route'][0]['node_id'], 'hop':1, 'total':1,
                   'kind':'password', 'phase':'password', 'request_id':'first-prompt'}
         page.click('#new-tab-btn')
+        routes_fixture.show_ssh(page)
         page.fill('#host', 'other-tab.test')
         page.evaluate('data => window.terminalTest.handleSshOutput(data)', prompt)
         assert page.locator('#host').evaluate('(field) => field === document.activeElement')

@@ -1837,9 +1837,12 @@ class SSHBackendPlugin(TerminalBackendPlugin):
                 }
             if password:
                 return None, 'Password must be empty when browser key authentication is selected.'
-            profile_id = data.get('profile_id')
+            owner_field = 'credential_id' if data.get('credential_id') is not None else 'profile_id'
+            if owner_field == 'credential_id' and data.get('profile_id') is not None:
+                return None, 'Choose either an SSH profile key or a browser credential.'
+            owner_id = data.get(owner_field)
             key_id = data.get('key_id')
-            for field_name, field_value in (('SSH profile id', profile_id), ('SSH key id', key_id)):
+            for field_name, field_value in (('SSH key owner id', owner_id), ('SSH key id', key_id)):
                 if (
                     not isinstance(field_value, str)
                     or not field_value
@@ -1847,6 +1850,8 @@ class SSHBackendPlugin(TerminalBackendPlugin):
                     or not SSH_BROWSER_KEY_ID_PATTERN.fullmatch(field_value)
                 ):
                     return None, f'{field_name} is invalid.'
+            if owner_field == 'credential_id' and owner_id != key_id:
+                return None, 'SSH credential id must match its key id.'
             public_key = data.get('browser_public_key')
             if not isinstance(public_key, str):
                 return None, 'Browser SSH public key must be a Base64 string.'
@@ -1857,7 +1862,7 @@ class SSHBackendPlugin(TerminalBackendPlugin):
             if len(public_key_bytes) != 32:
                 return None, 'Browser SSH public key must be 32 bytes.'
             browser_key = {
-                'profile_id': profile_id,
+                owner_field: owner_id,
                 'key_id': key_id,
                 'public_key': public_key,
                 'fingerprint': hashlib.sha256(public_key_bytes).hexdigest(),
@@ -1962,3 +1967,8 @@ class SSHBackendPlugin(TerminalBackendPlugin):
         action_id = self._token_urlsafe(16)
         self._backend_action_store.set(sid, action_id, action)
         return action_id, action
+
+    def inspect_host_key(self, payload):
+        store = SSHHostKeyStore(self._bridge_kwargs['get_paramiko'](), self._bridge_kwargs.get('known_hosts_path'))
+        snapshot = store.snapshot(payload.get('host_key_alias') or payload['host'], payload['port'])
+        return {'identity': snapshot['host_key_name'], 'fingerprints': [fingerprint(key) for key in snapshot['keys']]}

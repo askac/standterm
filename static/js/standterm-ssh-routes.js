@@ -42,11 +42,13 @@
         const authentication = { method: auth.method };
         if (auth.method === 'browser-key') {
             const ref = auth.keyRef;
-            if (ref && (!ID_PATTERN.test(ref.ownerProfileId || '') || !ID_PATTERN.test(ref.keyId || '')
+            if (ref && ((ref.kind === 'credential' ? ref.ownerProfileId !== undefined
+                    : ref.kind !== undefined || !ID_PATTERN.test(ref.ownerProfileId || '')) || !ID_PATTERN.test(ref.keyId || '')
                     || ref.targetKey !== endpointKey(endpoint(value.endpoint)))) {
                 throw new Error('Choose a browser key bound to this node endpoint, or choose password authentication.');
             }
-            authentication.keyRef = ref ? { ownerProfileId: ref.ownerProfileId, keyId: ref.keyId, targetKey: ref.targetKey } : null;
+            authentication.keyRef = ref ? { ...(ref.kind === 'credential' ? { kind: 'credential' }
+                : { ownerProfileId: ref.ownerProfileId }), keyId: ref.keyId, targetKey: ref.targetKey } : null;
         }
         return { id: value.id, endpoint: endpoint(value.endpoint), authentication,
             hostKeyAlias: alias, nextNodeId: value.nextNodeId };
@@ -149,6 +151,7 @@
             checkedPath(state, entry).forEach(node => {
                 const ref = node.authentication.keyRef;
                 if (!ref) return;
+                if (ref.kind === 'credential') return;
                 const owner = state.profiles.find(profile => profile.id === ref.ownerProfileId);
                 if (!owner || owner.keyId !== ref.keyId || endpointKey(owner.keyTarget || owner) !== ref.targetKey) {
                     throw new Error('An SSH route references an unavailable browser key. Edit its authentication before saving.');
@@ -289,27 +292,46 @@
                     tx.abort();
                     return;
                 }
-                // Validate and publish the graph and key changes in this transaction.
-                const entryIds = new Set([...state.profiles, ...state.history].map(entry => entry.id));
-                for (const key of [...(previous?.profiles || []), ...(previous?.history || [])]) {
-                    if (!entryIds.has(key)) store.delete(`${PREFIX}entry:${key}`);
-                }
-                state.revision += 1;
-                for (const item of [...state.profiles, ...state.history]) {
-                    const record = { ...item };
-                    delete record.host;
-                    delete record.port;
-                    delete record.username;
-                    store.put(record, `${PREFIX}entry:${item.id}`);
-                }
-                for (const item of state.nodes) store.put(item, `${PREFIX}node:${item.id}`);
-                store.put({ revision: state.revision, profiles: state.profiles.map(item => item.id),
-                    history: state.history.map(item => item.id), nodes: state.nodes.map(item => item.id) }, META);
                 const keyStore = tx.objectStore('keys');
-                keyChanges.forEach(change => {
-                    if (change.type === 'put') keyStore.put(change.record);
-                    if (change.type === 'delete') keyStore.delete(change.keyId);
-                });
+                const keyRequest = keyStore.getAll();
+                keyRequest.onsuccess = () => {
+                    const records = new Map(keyRequest.result.map(record => [record.keyId, record]));
+                    keyChanges.forEach(change => {
+                        if (change.type === 'put') records.set(change.record.keyId, change.record);
+                        if (change.type === 'delete') records.delete(change.keyId);
+                    });
+                    for (const node of state.nodes) {
+                        const ref = node.authentication.keyRef;
+                        if (ref?.kind !== 'credential') continue;
+                        const record = records.get(ref.keyId);
+                        if (!record || record.kind !== 'credential' || record.ownerProfileId !== null
+                                || record.targetKey !== ref.targetKey || record.privateKey?.extractable !== false) {
+                            failure = new Error('An SSH node references an unavailable browser credential.');
+                            tx.abort();
+                            return;
+                        }
+                    }
+                    // Publish the graph and key changes in this transaction.
+                    const entryIds = new Set([...state.profiles, ...state.history].map(entry => entry.id));
+                    for (const key of [...(previous?.profiles || []), ...(previous?.history || [])]) {
+                        if (!entryIds.has(key)) store.delete(`${PREFIX}entry:${key}`);
+                    }
+                    state.revision += 1;
+                    for (const item of [...state.profiles, ...state.history]) {
+                        const record = { ...item };
+                        delete record.host;
+                        delete record.port;
+                        delete record.username;
+                        store.put(record, `${PREFIX}entry:${item.id}`);
+                    }
+                    for (const item of state.nodes) store.put(item, `${PREFIX}node:${item.id}`);
+                    store.put({ revision: state.revision, profiles: state.profiles.map(item => item.id),
+                        history: state.history.map(item => item.id), nodes: state.nodes.map(item => item.id) }, META);
+                    keyChanges.forEach(change => {
+                        if (change.type === 'put') keyStore.put(change.record);
+                        if (change.type === 'delete') keyStore.delete(change.keyId);
+                    });
+                };
             };
             tx.oncomplete = () => { db.close(); resolvePromise(state); };
             tx.onabort = tx.onerror = () => { db.close(); reject(failure || tx.error || new Error('SSH route save was aborted.')); };

@@ -4076,12 +4076,13 @@ def test_ssh_host_key_prompts_default_to_cancel_and_bind_actions(browser, access
             window.terminalTest.clearEmitted();
             document.getElementById('host').value = '192.168.167.254';
             document.getElementById('port').value = '2222';
-            document.getElementById('ssh-forget-host-key').click();
+            document.getElementById('ssh-direct-identity-body').querySelector('button').click();
             return window.terminalTest.getEmitted();
         }""")
-        actions = [entry['args'][0] for entry in emitted if entry['event'] == 'ssh_host_key_action']
-        check(actions == [{'operation': 'forget', 'terminal_id': 'main', 'host': '192.168.167.254', 'port': '2222', 'host_key_alias': ''}],
-              'Forget did not use the selected host and port')
+        actions = [entry['args'][0] for entry in emitted if entry['event'] == 'ssh_host_identity']
+        check(len(actions) == 1 and all(actions[0].get(key) == value for key, value in {
+            'operation': 'inspect', 'terminal_id': 'main', 'host': '192.168.167.254', 'port': '2222', 'host_key_alias': ''
+        }.items()), 'Fingerprint inspection did not use the current direct host and port')
         page.evaluate("""() => window.terminalTest.handleSshOutput({
             terminal_id: 'main', message_type: 'host_key_prompt', action_type: 'forget_ssh_host_key',
             action_id: 'forget-key', action_message: 'Saved: SHA256:old', action_question: 'Forget this key?'

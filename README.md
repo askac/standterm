@@ -322,22 +322,33 @@ browser and never store passwords.
 For an unknown remote SSH host, its login card shows the SHA256 host-key
 fingerprint before authentication. Verify it independently and choose **Trust and continue**
 to continue on that connection. A changed key shows both saved and received fingerprints and
-requires explicit replacement; **Cancel** is the default. **Forget host key...**
-removes only the host and port currently entered after confirmation. Existing
+requires explicit replacement; **Cancel** is the default. Open **Host identity**
+in Direct connect or a route node to inspect its saved fingerprint. **Forget saved
+fingerprint…** removes that identity after an inline confirmation that defaults
+to **Keep fingerprint**. This takes effect immediately, even if route editing is
+later cancelled. Existing
 connections remain open. These actions edit the Core execution account's
 `~/.ssh/known_hosts`, shared with other SSH clients; they do not delete browser
 authentication keys. Special policy records and symlinked files require manual
 management. The existing localhost key setup behavior is unchanged.
 
-Use **Jump hosts > Edit route...** to assign an optional **Host key alias** when
+Use **Host identity** to assign an optional **Host key alias** when
 different locations use the same IP and port. Each alias has its own saved trust
 identity; it does not change the network address. A blank alias keeps the normal
 host/port identity. Saved profile names do not create separate trust identities.
 
 ### SSH Jump Routes
 
-Quick Connect supports up to **three jump hosts plus the final target**, equivalent
-to an ordered SSH `-J` route. Open **Jump hosts > Edit route...** to start with a
+Quick Connect has two exclusive panes: **Direct connect** keeps the usual host,
+port, username, optional password, and direct History & Profiles picker;
+**Saved routes** selects a saved path and shows its jump count and full endpoint
+sequence. Expanding one collapses the other. Each keeps its own selection and
+draft. The Connect button uses the expanded pane; an empty or invalid route
+cannot connect. Saving an edited route selects Saved routes without replacing
+the Direct connect fields.
+
+StandTerm supports up to **three jump hosts plus the final target**, equivalent
+to an ordered SSH `-J` route. Open **Saved routes > Edit route...** to start with a
 Target card. Existing routes show compact summaries; click a summary to edit one
 node at a time. **Add jump node** inserts and opens a card immediately before the
 Target. Cards connect from **Core** top to bottom; drag a card's handle or use the
@@ -345,14 +356,18 @@ Target. Cards connect from **Core** top to bottom; drag a card's handle or use t
 becomes the **Target**. Add and arrange cards before filling them in; **Save route**
 checks the completed route for invalid fields, cycles and the jump limit, opening
 the card that needs correction. An Entry
-name is optional and defaults to the final username and host. Choose password
-authentication or **Browser key from:** an existing key owner in the route editor.
+name is optional and defaults to the final username and host. Each node has
+**Password** or **Browser key** authentication. Choose an existing key bound to
+that exact host, port and username, or use **Create key** inside the node.
+New keys remain temporary until **Save & show public keys** saves both the route
+and keys together. Only then can their public keys be copied; the editor remains
+open for this step. Cancelling or a failed save does not install the new keys.
 
 After **Connect**, the connection form becomes a per-site login view with a
 **Core → Node 1 → … → Target** progress line. Completed nodes turn green and
 collapse; the current node expands when it needs a password or host-key confirmation,
-while later nodes stay collapsed. Passwords can be entered here or supplied in
-Quick Connect before starting. A rejected password can be retried at the same
+while later nodes stay collapsed. Route passwords are entered here; Direct
+connect also accepts an optional password before starting. A rejected password can be retried at the same
 node without reconnecting completed jump hosts. The Target shows **OK** only
 after its terminal opens. **Cancel connection** closes the entire pending route;
 switching tabs preserves its progress without moving focus to a background prompt.
@@ -366,8 +381,11 @@ references**, under **Advanced sharing**, deliberately changes shared nodes;
 the editor lists affected Entries. Reordering or removing cards changes only the
 current Entry, even when node edits apply to all references.
 Removing a node from an Entry or deleting an Entry does not recursively delete
-shared nodes. Browser key ownership is separate: a referenced key must be released
-by its other routes before its owner can be deleted or the key rebound.
+shared nodes. Node credentials keep stable identities across copying and
+reordering. Switching a node to Password removes its key reference but retains
+the credential for reuse at the same endpoint. Older profile-owned keys remain
+supported: other routes must release their references before the owning profile
+can be deleted or its key rebound.
 
 Cycles are rejected by node ID, including cycles beyond the supported hop count.
 Repeating an IP is allowed. For `A → B → C → B`, the editor offers `A → B` (remove
@@ -394,7 +412,7 @@ Passwords and private keys are never saved or exported.
 A saved profile can explicitly generate an Ed25519 key with **Use browser key
 authentication**. The private `CryptoKey` is non-extractable and stays in that
 browser's IndexedDB. Copy the displayed OpenSSH public key to the remote
-account's `~/.ssh/authorized_keys`, then select the exact saved profile in Quick
+account's `~/.ssh/authorized_keys`, then select the exact saved profile in Direct
 Connect. **Use key** remains optional for a direct target; jump routes select
 authentication separately for each node. Browser
 key authentication is allowed only from loopback or an authorized HTTPS browser.
@@ -402,8 +420,8 @@ key authentication is allowed only from loopback or an authorized HTTPS browser.
 During authentication, Python sends the SSH challenge to the initiating browser
 and receives only its Ed25519 signature; the private key is never sent to the
 StandTerm Python process. A changed host, port, or username disables the profile
-key binding. Deleting or unlinking a keyed profile permanently deletes that
-browser key. These keys are protected from export, but they are not hardware
+key binding. Deleting or unlinking a legacy keyed profile permanently deletes its
+profile-owned key; independently created node credentials are retained. These keys are protected from export, but they are not hardware
 keys: script running in the same browser origin could still request signatures.
 
 ### Why This SSH Architecture Matters
@@ -411,8 +429,8 @@ keys: script running in the same browser origin could still request signatures.
 | Design choice | Practical advantage |
 | --- | --- |
 | Non-extractable browser-owned private key | Private key bytes do not cross the browser boundary or enter Python memory, configuration files, settings exports, or terminal payloads. |
-| Explicit key creation and per-connection **Use key** control | A key exists only after the user opts in for a saved profile, and password or host-side authentication remains available when key use is off. |
-| Typed, short-lived signing requests | Each request is bound to the initiating browser connection, terminal, profile, key, public-key fingerprint, and challenge hash. Expired, replayed, stale, or mismatched responses fail closed. |
+| Explicit key creation and per-node authentication | Users create keys in a node or saved profile; each node chooses its authentication, while Direct connect keeps an optional **Use key** control. |
+| Typed, short-lived signing requests | Each request is bound to the initiating browser connection, terminal, attempt, node, credential or profile, key, public-key fingerprint, and challenge hash. Expired, replayed, stale, or mismatched responses fail closed. |
 | Exact host, port, and username binding | Editing a Quick Connect target cannot silently reuse a profile key for another SSH account or endpoint. |
 | Standard OpenSSH Ed25519 public key | The remote host only needs the copied key in `authorized_keys`; it does not need StandTerm, a browser component, or an agent. |
 | Separate settings and key stores | Profiles, history, and browser preferences remain portable while private keys and key identifiers stay local to the browser that created them. |
@@ -420,9 +438,9 @@ keys: script running in the same browser origin could still request signatures.
 The signing path keeps authentication authority narrow. Paramiko passes an SSH
 challenge to StandTerm's browser-key adapter. StandTerm emits a structured
 request only to the browser connection that started that terminal. The browser
-validates the active connection and exact profile binding before signing, then
+validates the active connection and exact credential or profile binding before signing, then
 returns a 64-byte Ed25519 signature. Python verifies that signature against the
-profile's public key before returning it to Paramiko. The browser uses a bounded
+key's public key before returning it to Paramiko. The browser uses a bounded
 relative signing window, while Python enforces the authoritative monotonic
 deadline, so Windows/WSL wall-clock skew cannot invalidate a fresh request. A
 browser disconnect, timeout, changed connection draft, or stale terminal start

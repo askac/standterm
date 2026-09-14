@@ -2069,7 +2069,7 @@ class BrowserSSHSignRequestStore:
             payload = {
                 'request_id': request_id,
                 'terminal_id': terminal_id,
-                'profile_id': browser_key['profile_id'],
+                **{field: browser_key[field] for field in ('profile_id', 'credential_id') if field in browser_key},
                 'key_id': browser_key['key_id'],
                 'public_key_fingerprint': browser_key['fingerprint'],
                 'algorithm': algorithm,
@@ -2109,7 +2109,11 @@ class BrowserSSHSignRequestStore:
             expected = entry['request']
             if entry.get('session_token') != session_token or entry.get('sid') != sid:
                 return 'ssh_browser_key_sign_stale'
-            for field_name in ('terminal_id', 'profile_id', 'key_id', 'challenge_sha256'):
+            owner_field = 'credential_id' if 'credential_id' in expected else 'profile_id'
+            other_owner = 'profile_id' if owner_field == 'credential_id' else 'credential_id'
+            if data.get(other_owner) is not None:
+                return 'ssh_browser_key_sign_stale'
+            for field_name in ('terminal_id', owner_field, 'key_id', 'challenge_sha256'):
                 actual_value = data.get(field_name)
                 expected_value = expected.get(field_name)
                 if (
@@ -11107,6 +11111,57 @@ def on_setup_localhost_key_access(data):
         room=request.sid,
     )
 
+@socketio.on('ssh_host_identity')
+def on_ssh_host_identity(data):
+    if not socket_session_tokens.get(request.sid) or not isinstance(data, dict):
+        return {'status': 'failed', 'message': 'SSH host identity request is invalid.'}
+    terminal_id = validate_terminal_id_payload(data)
+    operation = data.get('operation')
+    if not terminal_id or operation not in {'inspect', 'prepare_forget', 'confirm', 'cancel'}:
+        return {'status': 'failed', 'message': 'SSH host identity request is invalid.'}
+    for field in ('editor_id', 'node_id', 'request_id'):
+        value = data.get(field)
+        if not isinstance(value, str) or not SSH_BROWSER_KEY_ID_PATTERN.fullmatch(value) or len(value) > SSH_BROWSER_KEY_ID_MAX_LENGTH:
+            return {'status': 'failed', 'message': 'SSH host identity context is invalid.'}
+    payload, error = validate_start_ssh_payload({
+        'connection_type': CONNECTION_TYPE_SSH, 'terminal_id': terminal_id,
+        'host': data.get('host'), 'port': data.get('port'), 'host_key_alias': data.get('host_key_alias'),
+    }, socket_client_ips.get(request.sid, 'unknown'),
+        browser_authorized=socket_browser_authorized.get(request.sid, False))
+    reply = {field: data[field] for field in ('editor_id', 'node_id', 'request_id')}
+    if error:
+        return {**reply, 'status': 'failed', 'message': error.get('message') if isinstance(error, dict) else error}
+    context = {field: data[field] for field in ('editor_id', 'node_id')}
+    context.update(terminal_id=terminal_id, host=payload['host'], port=payload['port'], host_key_alias=payload['host_key_alias'])
+    plugin = TERMINAL_BACKEND_REGISTRY.get(CONNECTION_TYPE_SSH)
+    try:
+        if operation == 'inspect':
+            return {**reply, 'status': 'success', **plugin.inspect_host_key(payload)}
+        if operation == 'prepare_forget':
+            action_id, action = plugin.prepare_host_key_forget(request.sid, payload)
+            if not action:
+                return {**reply, 'status': 'success', **plugin.inspect_host_key(payload)}
+            action.metadata['editor_context'] = context
+            return {**reply, 'status': 'confirm', 'action_id': action_id, 'message': action.message,
+                    'question': 'Forget these saved fingerprints now? Cancelling route edits will not undo this change.'}
+        action_id = data.get('action_id')
+        if not isinstance(action_id, str):
+            return {**reply, 'status': 'failed', 'message': 'SSH fingerprint confirmation is stale.'}
+        action, _ = pending_backend_actions.get(request.sid, action_id, secrets.compare_digest)
+        if (not action or action.action_type != 'forget_ssh_host_key'
+                or action.metadata.get('editor_context') != context):
+            return {**reply, 'status': 'failed', 'message': 'SSH fingerprint confirmation is stale.'}
+        action, _ = pending_backend_actions.get(request.sid, action_id, secrets.compare_digest, consume=True)
+        if not action or action.metadata.get('editor_context') != context:
+            return {**reply, 'status': 'failed', 'message': 'SSH fingerprint confirmation is stale.'}
+        if operation == 'cancel':
+            return {**reply, 'status': 'cancelled'}
+        result = plugin.execute_backend_action(action)
+        return {**reply, **result, **(plugin.inspect_host_key(payload) if result['status'] == 'success' else {})}
+    except (OSError, ValueError) as exc:
+        return {**reply, 'status': 'failed', 'message': str(exc)}
+
+
 @socketio.on('ssh_host_key_action')
 def on_ssh_host_key_action(data):
     if not socket_session_tokens.get(request.sid):
@@ -11147,6 +11202,11 @@ def on_ssh_host_key_action(data):
             except (OSError, ValueError) as exc:
                 result['message'] = str(exc)
     elif data.get('operation') in {'confirm', 'cancel'}:
+        candidate, _ = pending_backend_actions.get(
+            request.sid, data.get('action_id') if isinstance(data.get('action_id'), str) else '', secrets.compare_digest,
+        )
+        if candidate and candidate.metadata.get('editor_context'):
+            return
         action, error = pending_backend_actions.get(
             request.sid, data.get('action_id') if isinstance(data.get('action_id'), str) else '',
             secrets.compare_digest, consume=True,
