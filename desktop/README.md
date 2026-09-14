@@ -14,24 +14,23 @@ The evaluation uses ad-hoc signing, without Developer ID or notarization; it is
 not a Gatekeeper-qualified public release. No signing account or private key is
 needed for a local build. Intel/Rosetta acceptance is not implied.
 
-New build filenames pair the independent Desktop and bundled Core versions:
-`StandTerm-Desktop-0.5.0-2.12.1-mac-arm64.dmg` and
-`StandTerm-Desktop-0.5.0-2.12.1-win32-x64-Setup.exe`.
-The [Desktop 0.5.0 evaluation release](https://github.com/askac/standterm/releases/tag/desktop-v0.5.0-2.12.1)
-contains paired packages, checksums and validation evidence. Core 2.12.1 remains
-a separate source release; older Desktop releases retain their original files.
+New build filenames pair the independent Desktop and bundled Core versions.
+The local 0.5.0 / Core 2.12.1 candidates use that paired label. The published
+[Desktop 0.4.3 evaluation](https://github.com/askac/standterm/releases/tag/desktop-v0.4.3)
+retains its original filenames and does not include the later Core features.
+Core source releases and Desktop installer publication are separate.
 
-The current development checkout builds Desktop **0.5.1 / Core 2.13.0-dev** for
-local evaluation. It includes ordered SSH jump routes, per-site login cards,
-shared Direct/node key controls and opt-in profile/route saving on Connect.
-Its new installer uses that development label and records the exact source
-commit and Core manifest separately from the published 0.5.0 packages above.
+The local Windows **0.5.1 / Core 2.13.0-dev** candidate includes ordered SSH jump
+routes, per-site login cards, shared Direct/node key controls and opt-in
+profile/route saving on Connect. It retains its original development identity.
+The current source declares Core **2.13.0**; matching installers require a fresh
+build and validation. Neither local candidate is a published Desktop release.
 
 Staging writes `release-identity.json` from the staged package/lock versions and
 the manifest-hashed `core_version.py`. The builder revalidates this identity and
 fails on missing or inconsistent inputs. Build from the printed stage, not the
 source Desktop directory. Package and lock versions remain Desktop-only SemVer
-(`0.5.0`), so the combined label cannot change installer upgrade ordering. The
+(`0.5.1`), so the combined label cannot change installer upgrade ordering. The
 Core qualifier is preserved, and About/Diagnostics continue to show separate
 versions. A label alone is not a source or Core bundle identity.
 
@@ -79,7 +78,7 @@ Build on an Apple Silicon Mac with Node 22.12+ and the checkout's macOS venv:
 ```sh
 cd desktop
 npm ci
-npm run stage:mac -- --core-ref v2.12.1
+npm run stage:mac -- --core-ref v2.13.0
 # Change to the absolute stage directory printed above, then:
 npm ci
 npm run make:mac
@@ -96,6 +95,8 @@ The Desktop package workflow builds on native `macos-15` arm64 and
 compares the complete staged Core payload to the formal tag, inspects the app
 and mounted DMG, and records native smoke results with the artifact. Automated
 checks do not replace Finder, Gatekeeper, IME or installer-upgrade acceptance.
+The workflow pins its own `CORE_REF` and `CORE_COMMIT`; update that pair before
+using it to package a newer Core release.
 
 For isolated verification, run `npm test`, `npm run smoke:capture`, the Python
 bootstrap/runtime/backend tests, and `test/browser-storage-smoke.cjs` with the
@@ -304,7 +305,7 @@ Permanent disposal of recovery files is a separate, explicit user action.
 Build tools need Windows Node.js 22.12+ and Git. From the repository:
 
 ```powershell
-node desktop/stage-windows.cjs --core-ref v2.12.1
+node desktop/stage-windows.cjs --core-ref v2.13.0
 # Change to the exact desktop/dist/windows-build-* path printed above.
 cd <printed-build-directory>
 npm ci
@@ -314,13 +315,13 @@ npm run make:win
 The staging script creates a new directory each time. `--core-ref` selects Core
 files and bytes from that Git revision; the Desktop shell comes from the current
 checkout. Verify a release stage with `node desktop/test/core-release-inspect.cjs
-<stage> v2.12.1`, then inspect the actual package with `test/package-inspect.cjs`.
+<stage> v2.13.0`, then inspect the actual package with `test/package-inspect.cjs`.
 Without `--core-ref`, staging uses tracked working-tree Core files for development
 snapshots; these are not a claim that changes are already a release. Build staging never copies
 the development venv or `node_modules`. The new directory gets Windows build
 dependencies; the source checkout's Linux/WSLg `node_modules` is untouched.
 
-The `StandTerm-Desktop-0.5.0-2.12.1-win32-x64-Setup.exe` is under `out/`; the unpacked
+The `StandTerm-Desktop-0.5.1-2.13.0-win32-x64-Setup.exe` is under `out/`; the unpacked
 application is under `out/win-unpacked/`. Packaging uses
 [electron-builder's assisted NSIS target](https://www.electron.build/nsis.html),
 with pinned build dependencies and scoped custom installer hooks. Squirrel
@@ -631,7 +632,7 @@ managed Core bundle SHA-256 identity when available. The same Core details are
 in Diagnostics. Core reports its version from `core_version.py`, independently
 of the Electron package version. Source checkouts have no managed build identity;
 older backends that omit version metadata show Unknown, never an inferred Git
-tag. The current source pairing is Desktop 0.5.0 / Core 2.12.1. The Core source
+tag. The current source pairing is Desktop 0.5.1 / Core 2.13.0. The Core source
 release does not publish or qualify Desktop installers. The Agent menu and
 expanded Core payload postdate the
 published 0.4.1 installer and the earlier macOS 0.4.2 candidate; they require a
