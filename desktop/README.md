@@ -21,6 +21,12 @@ The [Desktop 0.5.0 evaluation release](https://github.com/askac/standterm/releas
 contains paired packages, checksums and validation evidence. Core 2.12.1 remains
 a separate source release; older Desktop releases retain their original files.
 
+The current development checkout builds Desktop **0.5.1 / Core 2.13.0-dev** for
+local evaluation. It includes ordered SSH jump routes, per-site login cards,
+shared Direct/node key controls and opt-in profile/route saving on Connect.
+Its new installer uses that development label and records the exact source
+commit and Core manifest separately from the published 0.5.0 packages above.
+
 Staging writes `release-identity.json` from the staged package/lock versions and
 the manifest-hashed `core_version.py`. The builder revalidates this identity and
 fails on missing or inconsistent inputs. Build from the printed stage, not the
