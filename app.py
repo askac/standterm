@@ -6052,6 +6052,8 @@ def build_terminal_list(session_token, sid=None):
             'buffered_events': len(bridge.replay_buffer),
             'files_available': bool(bridge.files_available()),
         }
+        if isinstance(bridge, SSHBridge):
+            terminal_info['ssh_target'] = bridge.metadata().get('ssh_target')
         terminals.append(terminal_info)
     return terminals
 

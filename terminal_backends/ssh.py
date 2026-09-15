@@ -146,6 +146,12 @@ class SSHBridge(TerminalBridge):
         metadata = super().metadata(cols=cols, rows=rows)
         if self.auth_method:
             metadata['auth_method'] = self.auth_method
+        if self._sftp_endpoint:
+            metadata['ssh_target'] = {
+                'host': self._sftp_endpoint['host'],
+                'port': self._sftp_endpoint['port'],
+                'username': self._sftp_endpoint['user'],
+            }
         return metadata
 
     def sftp_endpoint(self):

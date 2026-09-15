@@ -272,7 +272,6 @@ def test_receiver_and_owner_renames_preserve_credentials(browser, url):
             await window.terminalTest.setSshSessionState(state);
         }""")
         page.click('#ssh-profile-list button[data-profile-id="owner"]')
-        page.wait_for_function("() => document.getElementById('ssh-profile-key-enabled').checked")
         page.fill('#ssh-profile-name', 'Owner renamed')
         page.click('#ssh-profile-save')
         page.wait_for_function("() => document.getElementById('ssh-profile-status').innerText === 'Saved Owner renamed.'")

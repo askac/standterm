@@ -32,6 +32,8 @@ COMPILE_TARGETS = [
     'tests/ssh_node_credentials_smoke.py',
     'tests/ssh_tunnels_smoke.py',
     'tests/ssh_tunnels_browser_smoke.py',
+    'tests/ssh_profile_context_browser_smoke.py',
+    'tests/browser_popout_smoke.py',
     'tests/ime_anchor_browser_smoke.py',
 ]
 

@@ -3,18 +3,20 @@
     const routes = window.StandTermSshRoutes;
 
     routes.edit = function({ state, entryId, target, onDone, keys = [], temporaryKeys = [], saveRoute = false, keyAllowed = false,
-        createKey, copyPublicKey, hostIdentity }) {
+        createKey, copyPublicKey, hostIdentity, mode = 'prepare', entryName = '' }) {
         const original = routes.clone(state);
         const savedKeys = [...keys];
         const newKeys = new Map(temporaryKeys.map(record => [record.keyId, record]));
         const editorId = routes.id();
         let pendingGenerations = 0;
+        let saving = false;
+        const managed = mode === 'manage';
         let draft = routes.clone(state);
         let entry = [...draft.profiles, ...draft.history].find(item => item.id === entryId);
         if (!entry) {
             const node = { id: routes.id(), endpoint: { host: target.host || '', port: target.port || '22', username: target.username || '' }, nextNodeId: null,
                 hostKeyAlias: '', authentication: { method: 'password' } };
-            entry = { id: routes.id(), name: '', startNodeId: node.id,
+            entry = { id: routes.id(), name: entryName, startNodeId: node.id,
                 sortOrder: draft.profiles.length, keyId: null, keyTarget: null };
             draft.nodes.push(node);
             draft.profiles.push(entry);
@@ -46,6 +48,7 @@
             element.type = 'button';
             element.textContent = label;
             element.onclick = () => {
+                if (saving) return;
                 try { Promise.resolve(callback()).catch(fail); } catch (err) { fail(err); }
             };
             parent.append(element);
@@ -60,7 +63,7 @@
         function path() { return routes.resolve(draft, entry.startNodeId).path; }
 
         function updateSaveState() {
-            doneButton.disabled = pendingGenerations > 0;
+            doneButton.disabled = saving || pendingGenerations > 0;
         }
 
         // Keep incomplete values inside the modal. Done validates the completed draft.
@@ -386,9 +389,9 @@
         saveRouteLabel.className = 'ssh-key-toggle';
         saveRouteLabel.append(saveRouteInput, document.createTextNode('Save route on Connect'));
         saveRouteInput.setAttribute('aria-label', 'Save route');
-        actions.append(saveRouteLabel);
+        if (!managed) actions.append(saveRouteLabel);
         button('Cancel', () => dialog.close());
-        const doneButton = button('Done', () => {
+        const doneButton = button(managed ? 'Save route' : 'Done', async () => {
             if (pendingGenerations) return;
             flush();
             if (offerRepair()) return;
@@ -418,8 +421,18 @@
             discardUnusedDraftNodes();
             routes.validate(draft);
             const used = new Set(draft.nodes.map(node => node.authentication.keyRef?.keyId));
-            onDone(draft, entry.id, [...newKeys.values()].filter(record => used.has(record.keyId)), saveRouteInput.checked);
-            dialog.close();
+            saving = true;
+            updateSaveState();
+            rows.inert = heading.inert = advanced.inert = true;
+            status.textContent = managed ? 'Saving route…' : '';
+            try {
+                await onDone(draft, entry.id, [...newKeys.values()].filter(record => used.has(record.keyId)), saveRouteInput.checked);
+                dialog.close();
+            } finally {
+                saving = false;
+                rows.inert = heading.inert = advanced.inert = false;
+                updateSaveState();
+            }
         });
         doneButton.className = 'primary';
         const heading = document.createElement('div');
@@ -442,8 +455,11 @@
         }
         scope.onchange = updateScopeNotice;
         const help = document.createElement('p');
-        help.textContent = `Connect from Core through the cards, top to bottom. The last card is the Target. Drag the handle or use ↑ / ↓. Up to ${routes.MAX_JUMPS} jumps. Done returns to connection settings. Connect saves only when Save route is selected.`;
+        help.textContent = `Connect from Core through the cards, top to bottom. The last card is the Target. Drag the handle or use ↑ / ↓. Up to ${routes.MAX_JUMPS} jumps. ${managed
+            ? 'Save route stores all nodes and selected keys. Changes apply to the next connection.'
+            : 'Done returns to connection settings. Connect saves only when Save route is selected.'}`;
         dialog.append(title, help, heading, advanced, scopeNotice, rows, preview, status, actions);
+        dialog.addEventListener('cancel', event => { if (saving) event.preventDefault(); });
         dialog.addEventListener('close', () => dialog.remove());
         document.body.append(dialog);
         render();

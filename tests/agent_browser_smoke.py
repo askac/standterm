@@ -4314,7 +4314,8 @@ def test_ssh_profile_picker_and_settings_save_semantics(browser, access_url):
                 });
                 window.terminalTest.handleSshOutput({
                     terminal_id: terminalId, message_type: 'ssh_connected',
-                    connection_type: 'ssh', terminal_label: 'SSH - Build Server'
+                    connection_type: 'ssh', terminal_label: 'SSH - Build Server',
+                    ssh_target: {host: 'build.example', port: '22', username: 'builder'}
                 });
             }"""
         )
@@ -4383,19 +4384,20 @@ def test_ssh_profile_picker_and_settings_save_semantics(browser, access_url):
         preloaded_editor = page.evaluate(
             """() => ({
                 name: document.getElementById('ssh-profile-name').value,
-                host: document.getElementById('ssh-profile-host').value,
+                summary: document.getElementById('ssh-profile-route-summary').textContent,
                 saveDisabled: document.getElementById('ssh-profile-save').disabled
             })"""
         )
         check(
-            preloaded_editor == {'name': 'recent@recent.example', 'host': 'recent.example', 'saveDisabled': True},
-            'SSH Settings did not preload Quick Connect as a create-only draft',
+            preloaded_editor == {'name': 'builder@build.example', 'summary': 'New direct session: builder@build.example:22', 'saveDisabled': True},
+            'SSH Settings did not preload the active SSH tab as a create-only draft',
         )
         page.click('#ssh-profile-list button[data-profile-id="profile-a"]')
-        page.fill('#ssh-profile-username', 'builder2')
-        page.click('#ssh-profile-save')
+        page.click('#ssh-profile-edit-route')
+        page.get_by_label('Target Username', exact=True).fill('builder2')
+        page.get_by_role('button', name='Save route', exact=True).click()
         page.wait_for_function(
-            """() => document.getElementById('ssh-profile-status').innerText === 'Saved Build Server.'""",
+            """() => document.getElementById('ssh-profile-status').innerText === 'Saved Build Server. Changes apply to the next connection.'""",
             timeout=5000,
         )
         updated = page.evaluate("() => window.terminalTest.getSshSessionState()")
@@ -4411,17 +4413,20 @@ def test_ssh_profile_picker_and_settings_save_semantics(browser, access_url):
         reordered = page.evaluate("() => window.terminalTest.getSshSessionState()")
         check([profile['id'] for profile in reordered['profiles']] == ['profile-b', 'profile-a'], 'profile move used list index as identity')
 
-        page.fill('#ssh-profile-name', 'Build Server Copy')
-        page.fill('#ssh-profile-port', '2222')
         page.click('#ssh-profile-create')
+        page.get_by_label('Entry name', exact=True).fill('Build Server Copy')
+        page.get_by_label('Target Host', exact=True).fill('build.example')
+        page.get_by_label('Target Username', exact=True).fill('builder')
+        page.get_by_label('Target Port', exact=True).fill('2222')
+        page.get_by_role('button', name='Save route', exact=True).click()
         page.wait_for_function(
             """async () => (await window.terminalTest.getSshSessionState()).profiles.length === 3""",
             timeout=5000,
         )
         created = page.evaluate("() => window.terminalTest.getSshSessionState()")
         check(created['profiles'][-1]['name'] == 'Build Server Copy', 'Create did not add a separate profile')
-        check(created['profiles'][-1]['host'] == 'build.example', 'Create did not copy the loaded profile draft')
-        check(created['profiles'][-1]['port'] == '2222', 'Create did not retain edits made after Load')
+        check(created['profiles'][-1]['host'] == 'build.example', 'New session did not save its edited target')
+        check(created['profiles'][-1]['port'] == '2222', 'New session did not retain its port')
         created_profile_id = created['profiles'][-1]['id']
         check(created_profile_id != 'profile-a', 'Create reused the loaded stable ID')
         original_profile = next(profile for profile in created['profiles'] if profile['id'] == 'profile-a')
@@ -4535,20 +4540,9 @@ def test_browser_ssh_key_lifecycle_and_settings_transfer(browser, access_url):
             "() => document.getElementById('ssh-profile-name').value === 'Primary'",
             timeout=5000,
         )
-        page.check('#ssh-profile-key-enabled')
-        page.wait_for_function(
-            "() => document.getElementById('ssh-profile-key-status').innerText.includes('SHA256:')",
-            timeout=10000,
-        )
-        check(
-            page.locator('#ssh-profile-key-public').input_value().startswith('ssh-ed25519 '),
-            'generated browser SSH key did not expose an OpenSSH public key',
-        )
-        page.click('#ssh-profile-save')
-        page.wait_for_function(
-            "() => document.getElementById('ssh-profile-status').innerText === 'Saved Primary.'",
-            timeout=5000,
-        )
+        # Keep coverage of credentials owned by legacy profiles. New node keys
+        # are exercised through the managed route editor in its dedicated suite.
+        page.evaluate("() => window.terminalTest.createBrowserSshKeyForProfileForTest('profile-primary')")
         metadata = page.evaluate(
             "() => window.terminalTest.getBrowserSshKeyMetadataForTest('profile-primary')"
         )
@@ -4713,9 +4707,11 @@ def test_browser_ssh_key_lifecycle_and_settings_transfer(browser, access_url):
         page.click('#quick-settings')
         page.click('.settings-nav-item[data-tab="ssh-sessions"]')
         page.click('#ssh-profile-list button[data-profile-id="profile-primary"]')
-        page.wait_for_function("() => document.getElementById('ssh-profile-key-enabled').checked", timeout=5000)
-        page.fill('#ssh-profile-name', 'Primary Copy')
         page.click('#ssh-profile-create')
+        page.get_by_label('Entry name', exact=True).fill('Primary Copy')
+        page.get_by_label('Target Host', exact=True).fill('copy.example')
+        page.get_by_label('Target Username', exact=True).fill('copy')
+        page.get_by_role('button', name='Save route', exact=True).click()
         page.wait_for_function(
             """async () => (await window.terminalTest.getSshSessionState()).profiles
                 .some(profile => profile.name === 'Primary Copy')""",
@@ -4726,7 +4722,6 @@ def test_browser_ssh_key_lifecycle_and_settings_transfer(browser, access_url):
         check(copied['keyId'] is None, 'Create copied a browser key from the loaded profile')
 
         page.click('#ssh-profile-list button[data-profile-id="profile-primary"]')
-        page.wait_for_function("() => document.getElementById('ssh-profile-key-enabled').checked", timeout=5000)
         page.once('dialog', lambda dialog: dialog.accept())
         page.click('#ssh-profile-delete')
         page.wait_for_function(

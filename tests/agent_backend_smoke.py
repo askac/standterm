@@ -4452,6 +4452,7 @@ def make_sftp_test_bridge(session_token, terminal_id=standterm.TERMINAL_ID_MAIN)
         'port': 22,
         'route': 'direct',
     }
+    bridge.auth_method = None
     bridge._sftp_lock = threading.Lock()
     bridge._sftp_file_refs_lock = threading.Lock()
     bridge._sftp_file_refs = {}
@@ -4459,6 +4460,22 @@ def make_sftp_test_bridge(session_token, terminal_id=standterm.TERMINAL_ID_MAIN)
     bridge.ssh = None
     bridge.close = lambda: None
     return bridge
+
+
+def test_ssh_target_metadata_is_structured_and_access_scoped():
+    session = 'target-metadata-test'
+    bridge = make_sftp_test_bridge(session)
+    bridge._sftp_endpoint.update(password='not-public', route='not-an-endpoint')
+    expected = {'host': 'host.example', 'port': 22, 'username': 'tester'}
+    assert bridge.metadata()['ssh_target'] == expected
+    standterm.bridges[session] = {bridge.terminal_id: bridge}
+    try:
+        with patch.object(standterm, 'is_terminal_bridge_allowed_for_sid', return_value=True):
+            assert standterm.build_terminal_list(session, sid='allowed')[0]['ssh_target'] == expected
+        with patch.object(standterm, 'is_terminal_bridge_allowed_for_sid', return_value=False):
+            assert standterm.build_terminal_list(session, sid='denied') == []
+    finally:
+        standterm.bridges.pop(session)
 
 
 def make_local_file_test_bridge(session_token, terminal_id):
@@ -8664,6 +8681,7 @@ def main():
         test_transcript_store_sanitizes_terminal_output,
         test_transcript_retains_batched_terminal_output_and_utf8_boundaries,
         test_terminal_bridge_tracks_shared_session_metadata,
+        test_ssh_target_metadata_is_structured_and_access_scoped,
         test_ssh_input_records_agent_metadata_after_validation,
         test_agent_input_metadata_bounds_and_sanitized_preview,
         test_privacy_state_blocks_agent_context_and_redacts_input_metadata,

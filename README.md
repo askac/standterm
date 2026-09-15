@@ -323,7 +323,14 @@ STANDTERM_HOST=127.0.0.1 STANDTERM_PORT=5000 ./run.sh
 
 Quick Connect can load saved SSH profiles and the six most recent successful
 SSH targets. Use **Settings > SSH Sessions** to create, update, reorder, or
-delete profiles and to clear history. Profiles and history stay in the current
+delete profiles and to clear history. The first level shows names, ordering, and
+full route summaries. **Save name** only renames the selected entry. **Edit
+connection…** opens every node in a separate editor, including host identity and
+**Use key**; Direct uses the same editor with one node. Its **Save route** button
+saves all nodes and referenced keys immediately for the next connection. **New
+session…** starts from the current SSH tab's target, or Quick Connect when no SSH
+tab is connected. Switching tabs or connections clears the previous edit selection.
+Profiles and history stay in the current
 browser and never store passwords. In Direct connect, **Save session** saves the
 profile and its referenced browser key when **Connect** is pressed, before SSH
 starts. A failed connection does not undo that explicit save. History records
@@ -379,7 +386,8 @@ Ed25519 key. Its public key can be copied immediately to `authorized_keys`. A
 compatible saved key does not prove that the remote account has installed it;
 server fingerprints are still checked separately during SSH login.
 
-The editor ends with **Save route**, **Cancel**, and **Done**. Done retains only
+The connection-preparation editor ends with a **Save route** checkbox, **Cancel**,
+and **Done**. Done retains only
 the connection draft. **Connect** saves the route and referenced temporary keys
 together only when Save route is selected; otherwise they remain temporary.
 Cancelling an editor discards changes made since opening it. Temporary private
@@ -479,9 +487,12 @@ returned with the connection failure.
 
 For a connected SSH or supported Local Shell tab, use the folder button in the
 status bar, the terminal context menu, or the folder button in Terminal
-Picture-in-Picture. StandTerm opens a compact Files window in
-Picture-in-Picture. When opened from a terminal PiP, the terminal first returns
-to its tab so the single Document PiP window can switch cleanly to Files.
+Picture-in-Picture. StandTerm uses Document Picture-in-Picture when available,
+or a separate browser popup for terminals and Files when it is unavailable
+(including Safari). Allow popups for StandTerm. The fallback action is labeled
+**Pop out terminal**; an ordinary browser popup is not guaranteed to stay on top.
+When opened from a floating terminal, the terminal returns to its tab before the
+window switches to Files. Closing the floating window restores the terminal.
 
 Files browses one directory at a time and supports manual path navigation,
 drag-and-drop upload, explicit download, rename, and permanent deletion.
