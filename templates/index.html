@@ -292,6 +292,12 @@
         .agent-connect-activity { white-space: pre-wrap; }
         .agent-connect-steps { padding-left: 24px; line-height: 1.5; }
         #agent-tunnel-message { white-space: pre-wrap; }
+        .agent-copy-warning {
+            position: sticky; top: 0; z-index: 1;
+            padding: 12px 14px; border: 2px solid #e3a632; border-radius: 6px;
+            background: #392b12; color: #ffe3a1; font-weight: 600; line-height: 1.5;
+        }
+        .agent-copy-warning::before { content: '\26A0\00A0'; }
         .agent-tunnel-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; margin-top: 12px; }
         #paste-review-modal {
             display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
@@ -2652,16 +2658,24 @@
                 }).join('\n') : 'No active grants. Enable Agent and authorize the intended tabs first.';
             }
 
+            function setAgentConnectionMessage(element, message, copyFailed = false) {
+                element.classList.toggle('agent-copy-warning', copyFailed);
+                element.setAttribute('role', copyFailed ? 'alert' : 'status');
+                element.textContent = message;
+            }
+
             async function copyAgentConnectionField(fieldId, messageElement) {
                 const field = document.getElementById(fieldId);
                 if (!field.value) return;
                 try {
                     await navigator.clipboard.writeText(field.value);
-                    messageElement.textContent = 'Copied. Paste this to the agent in the indicated environment.';
+                    setAgentConnectionMessage(messageElement, 'Copied. Paste this to the agent in the indicated environment.');
                 } catch (_error) {
                     field.focus();
                     field.select();
-                    messageElement.textContent = 'Clipboard unavailable. Text selected; copy it manually.';
+                    const shortcut = isApplePlatform() ? 'Command+C' : 'Ctrl+C';
+                    setAgentConnectionMessage(messageElement, `Not copied. Text selected; press ${shortcut} to copy it manually.`, true);
+                    messageElement.scrollIntoView({ block: 'nearest' });
                 }
             }
 
@@ -2675,10 +2689,10 @@
                 document.getElementById('agent-connect-copy').disabled = true;
                 document.getElementById('agent-connect-copy-url').disabled = true;
                 if (!socket.connected) {
-                    agentConnectMessage.textContent = 'Core is disconnected. Reconnect before copying connection info.';
+                    setAgentConnectionMessage(agentConnectMessage, 'Core is disconnected. Reconnect before copying connection info.');
                     return;
                 }
-                agentConnectMessage.textContent = 'Loading connection info…';
+                setAgentConnectionMessage(agentConnectMessage, 'Loading connection info…');
                 socket.emit('agent_connect_info', result => {
                     if (requestId !== agentConnectRequest || !agentConnectDialog.open) return;
                     const available = result && result.status === 'ok';
@@ -2689,9 +2703,9 @@
                     document.getElementById('agent-connect-copy-url').disabled = !available;
                     agentConnectActivity = available ? result.terminals || [] : [];
                     renderAgentConnectionActivity('agent-connect-activity', agentConnectActivity);
-                    agentConnectMessage.textContent = available
+                    setAgentConnectionMessage(agentConnectMessage, available
                         ? 'Copy Prompt to the agent running on the Core host. Its first authenticated request confirms access.'
-                        : result?.message || 'Connection info unavailable.';
+                        : result?.message || 'Connection info unavailable.');
                 });
             }
 
@@ -2759,7 +2773,7 @@
                 if (data.status === 'stopped') {
                     invalidateAgentTunnel(data.terminal_id, 'Tunnel stopped. Start it again before copying a remote prompt.');
                 } else if (data.status === 'sync_failed' && data.carrier_id === agentTunnelId) {
-                    agentTunnelMessage.textContent = data.message;
+                    setAgentConnectionMessage(agentTunnelMessage, data.message);
                 }
             }
 
@@ -2773,7 +2787,7 @@
                 document.getElementById('agent-tunnel-check').disabled = true;
                 document.getElementById('agent-tunnel-stop').disabled = true;
                 document.getElementById('agent-tunnel-copy').hidden = true;
-                agentTunnelMessage.textContent = message;
+                setAgentConnectionMessage(agentTunnelMessage, message);
             }
 
             function renderAgentTunnelTargets(selected) {
@@ -2799,10 +2813,10 @@
                     readyAgentTunnels.delete(agentTunnelCarrier);
                 }
                 updateAgentTunnelButtons();
-                agentTunnelMessage.textContent = ready ? 'Copy Prompt to the agent running on this SSH host. The URL below belongs to that remote host. Agent activity is shown separately.'
+                setAgentConnectionMessage(agentTunnelMessage, ready ? 'Copy Prompt to the agent running on this SSH host. The URL below belongs to that remote host. Agent activity is shown separately.'
                     : result && result.status === 'stopped'
                         ? (result.cleanup_pending ? 'Access revoked. Remote cleanup is pending.' : 'Tunnel stopped.')
-                    : (result && result.message) || 'Tunnel setup failed.';
+                    : (result && result.message) || 'Tunnel setup failed.');
                 agentTunnelInfo.value = ready ? result.connect_info : '';
                 agentTunnelInfo.hidden = !ready;
                 agentTunnelId = ready ? result.carrier_id : null;
@@ -2838,8 +2852,8 @@
                 const requestId = ++agentTunnelRequest;
                 const terminalId = agentTunnelCarrier;
                 const connection = agentTunnelConnection;
-                agentTunnelMessage.textContent = operation === 'apply' ? 'Preparing and verifying Agent access…'
-                    : operation === 'check' ? 'Checking the remote listener, helpers, and connection to Core…' : 'Updating tunnel status…';
+                setAgentConnectionMessage(agentTunnelMessage, operation === 'apply' ? 'Preparing and verifying Agent access…'
+                    : operation === 'check' ? 'Checking the remote listener, helpers, and connection to Core…' : 'Updating tunnel status…');
                 document.getElementById('agent-tunnel-apply').disabled = true;
                 document.getElementById('agent-tunnel-check').disabled = true;
                 if (operation === 'apply') document.getElementById('agent-tunnel-stop').disabled = false;
