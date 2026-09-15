@@ -12,6 +12,7 @@ import re
 import stat
 import struct
 from types import SimpleNamespace
+from unittest.mock import patch
 import zlib
 from pathlib import Path
 
@@ -249,6 +250,82 @@ def test_session_renew_rejects_missing_or_expired_session():
     assert session_token not in standterm.active_sessions
 
 
+def make_desktop_flask_client():
+    client = standterm.app.test_client()
+    client.set_cookie(standterm.SESSION_COOKIE_NAME, standterm.create_desktop_session())
+    return client
+
+
+def test_desktop_session_survives_idle_cleanup_and_renewal():
+    desktop_client = make_desktop_flask_client()
+    desktop_token = flask_session_cookie_value(desktop_client)
+    desktop_bridge = add_dummy_bridge(desktop_token)
+    browser_client = make_flask_client()
+    browser_token = flask_session_cookie_value(browser_client)
+    browser_bridge = add_dummy_bridge(browser_token)
+    future = standterm.time.time() + 30 * 24 * 60 * 60
+
+    with patch.object(standterm.time, 'time', return_value=future):
+        assert standterm.is_valid_session(desktop_token)
+        standterm.cleanup_expired_sessions()
+        assert standterm.get_bridge(desktop_token, standterm.TERMINAL_ID_MAIN) is desktop_bridge
+        assert not desktop_bridge.closing
+        assert browser_bridge.closing
+        assert browser_token not in standterm.active_sessions
+        assert browser_client.post('/session/renew').status_code == 403
+        for response in (desktop_client.get('/'), desktop_client.post('/session/renew')):
+            assert response.status_code == 200
+            cookie = response.headers['Set-Cookie']
+            assert 'Max-Age=' not in cookie and 'Expires=' not in cookie
+            assert 'HttpOnly' in cookie and 'SameSite=Strict' in cookie
+        payload = response.get_json()
+        assert payload['session_expires_at'] is None
+        assert payload['session_max_age_seconds'] is None
+        assert payload['renew_interval_seconds'] == standterm.SESSION_RENEW_INTERVAL_SECONDS
+        assert standterm.active_sessions[desktop_token] is None
+
+
+def test_desktop_session_still_requires_private_cookie_and_live_process():
+    client = make_desktop_flask_client()
+    token = flask_session_cookie_value(client)
+    unknown = standterm.app.test_client()
+    assert unknown.get('/?desktop=1').status_code == 401
+    assert unknown.post('/session/renew', headers={'X-StandTerm-Desktop': '1'}).status_code == 403
+    ordinary_login = unknown.post('/login', data={'token': standterm.ACCESS_TOKEN, 'desktop': '1'})
+    assert ordinary_login.status_code == 302
+    assert f'Max-Age={standterm.SESSION_COOKIE_MAX_AGE}' in ordinary_login.headers['Set-Cookie']
+    assert standterm.active_sessions[flask_session_cookie_value(unknown)] is not None
+
+    standterm.active_sessions.pop(token)
+    assert not standterm.is_valid_session(token)
+    assert client.post('/session/renew').status_code == 403
+    assert client.get('/').status_code == 401
+    assert token not in standterm.active_sessions
+
+
+def test_desktop_session_does_not_bypass_external_agent_mint_or_expiry():
+    flask_client = make_desktop_flask_client()
+    token = flask_session_cookie_value(flask_client)
+    client = make_socket_client(flask_client)
+    try:
+        add_dummy_bridge(token)
+        sid = current_sid_for_session(token)
+        external_token, _record, error = standterm.mint_external_agent_attach_token(
+            token, standterm.TERMINAL_ID_MAIN, sid)
+        assert error is not None and external_token is None
+        client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+        external_token, _record, error = standterm.mint_external_agent_attach_token(
+            token, standterm.TERMINAL_ID_MAIN, sid, idle_timeout_seconds=-1)
+        assert error is None
+        result = standterm.process_external_agent_command({
+            'op': 'state', 'token': external_token, 'terminal_id': standterm.TERMINAL_ID_MAIN,
+        })
+        assert result['error_code'] == standterm.AGENT_ERROR_EXTERNAL_AGENT_EXPIRED
+        assert standterm.is_valid_session(token)
+    finally:
+        client.disconnect()
+
+
 def test_session_recovery_context_requires_hostname_and_secure_origin():
     assert build_webauthn_context('http://localhost:5000/') == {
         'rp_id': 'localhost',
@@ -391,10 +468,7 @@ def test_session_recovery_unauthenticated_options_offer_only_armed_credentials()
 
 
 def test_session_recovery_complete_restores_bound_live_session_cookie():
-    owner_client = make_flask_client()
-    owner_session = flask_session_cookie_value(owner_client)
     service = standterm.session_recovery_service
-    service.bind('localhost', 'credential-id', owner_session)
     original_finish = service.finish_authentication
     service.finish_authentication = lambda *_args, **_kwargs: {
         'credential_id': 'credential-id',
@@ -402,15 +476,26 @@ def test_session_recovery_complete_restores_bound_live_session_cookie():
         'backed_up': False,
     }
     try:
-        recovery_client = standterm.app.test_client()
-        response = recovery_client.post(
-            '/session-recovery/authenticate/complete',
-            base_url='http://localhost',
-            json={'ceremony_id': 'test', 'credential': {}},
-        )
-        assert response.status_code == 200
-        assert response.get_json()['result'] == 'recovered'
-        assert flask_session_cookie_value(recovery_client) == owner_session
+        for owner_client in (make_flask_client(), make_desktop_flask_client()):
+            owner_session = flask_session_cookie_value(owner_client)
+            process_lifetime = standterm.active_sessions[owner_session] is None
+            service.bind('localhost', 'credential-id', owner_session)
+            recovery_client = standterm.app.test_client()
+            response = recovery_client.post(
+                '/session-recovery/authenticate/complete',
+                base_url='http://localhost',
+                json={'ceremony_id': 'test', 'credential': {}},
+            )
+            assert response.status_code == 200
+            assert response.get_json()['result'] == 'recovered'
+            assert flask_session_cookie_value(recovery_client) == owner_session
+            cookie = response.headers['Set-Cookie']
+            if process_lifetime:
+                assert standterm.active_sessions[owner_session] is None
+                assert 'Max-Age=' not in cookie and 'Expires=' not in cookie
+            else:
+                assert standterm.active_sessions[owner_session] > standterm.time.time()
+                assert f'Max-Age={standterm.SESSION_COOKIE_MAX_AGE}' in cookie
     finally:
         service.finish_authentication = original_finish
 
@@ -8307,6 +8392,9 @@ def main():
         test_access_required_page_rejects_invalid_login_token,
         test_session_renew_extends_existing_cookie_session,
         test_session_renew_rejects_missing_or_expired_session,
+        test_desktop_session_survives_idle_cleanup_and_renewal,
+        test_desktop_session_still_requires_private_cookie_and_live_process,
+        test_desktop_session_does_not_bypass_external_agent_mint_or_expiry,
         test_session_recovery_context_requires_hostname_and_secure_origin,
         test_native_loopback_access_host_uses_localhost_for_webauthn,
         test_session_recovery_registration_options_require_live_session_and_hostname,

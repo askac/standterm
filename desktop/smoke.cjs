@@ -98,6 +98,17 @@ async function run(win, origin, contents = win.webContents, browserAccess) {
   assert.equal(isolated.loginVisible, false);
   assert.equal(isolated.cookie, '');
   assert.equal(new URL(isolated.url).searchParams.has('token'), false);
+  const renewedSession = await contents.executeJavaScript(`fetch('/session/renew', { method: 'POST' })
+    .then(response => response.json())`);
+  assert.equal(renewedSession.status, 'ok');
+  assert.equal(renewedSession.session_expires_at, null);
+  assert.equal(renewedSession.session_max_age_seconds, null);
+  const loginCookies = await contents.session.cookies.get({ url: origin, name: 'standterm_session' });
+  assert.equal(loginCookies.length, 1);
+  assert.equal(loginCookies[0].session, true);
+  assert.equal(loginCookies[0].httpOnly, true);
+  assert.equal(loginCookies[0].sameSite, 'strict');
+  assert.equal(loginCookies[0].expirationDate, undefined);
   const prefs = contents.getLastWebPreferences();
   assert.equal(prefs.sandbox, true);
   assert.equal(prefs.contextIsolation, true);

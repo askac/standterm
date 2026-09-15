@@ -2518,6 +2518,8 @@ bridges = {}
 pending_terminal_starts = {}
 pending_terminal_bridges = {}
 pending_terminal_start_context = {}
+# Deadlines are epoch seconds; None is reserved for a private Desktop login
+# whose lifetime is the owned backend process, not a browser idle timeout.
 active_sessions = {}
 socket_session_tokens = {}
 socket_client_ips = {}
@@ -5551,7 +5553,9 @@ def is_valid_launcher_shutdown_token(token):
 def is_valid_session(session_token):
     if not isinstance(session_token, str):
         return False
-    expires_at = active_sessions.get(session_token)
+    expires_at = active_sessions.get(session_token, 0)
+    if expires_at is None:
+        return True
     if not expires_at:
         return False
     if time.time() > expires_at:
@@ -5567,7 +5571,7 @@ def cleanup_expired_sessions():
     expired_tokens = [
         session_token
         for session_token, expires_at in list(active_sessions.items())
-        if now > expires_at
+        if expires_at is not None and now > expires_at
     ]
     for session_token in expired_tokens:
         active_sessions.pop(session_token, None)
@@ -6211,11 +6215,26 @@ def parse_terminal_size(data):
         return None
     return cols, rows
 
+def create_desktop_session():
+    # Called only by the owned Desktop launcher, never by an HTTP login route.
+    # The private pipe conveys the cookie; process exit destroys the authority.
+    session_token = secrets.token_urlsafe(32)
+    active_sessions[session_token] = None
+    ensure_session_cleanup_task()
+    return session_token
+
+def session_cookie_max_age(session_token):
+    return None if active_sessions.get(session_token, 0) is None else SESSION_COOKIE_MAX_AGE
+
+def refresh_session_deadline(session_token):
+    if session_cookie_max_age(session_token) is not None:
+        active_sessions[session_token] = time.time() + SESSION_COOKIE_MAX_AGE
+
 def set_session_cookie(response, session_token):
     response.set_cookie(
         SESSION_COOKIE_NAME,
         session_token,
-        max_age=SESSION_COOKIE_MAX_AGE,
+        max_age=session_cookie_max_age(session_token),
         httponly=True,
         samesite='Strict',
         secure=HTTPS_ENABLED,
@@ -6246,16 +6265,16 @@ def build_session_redirect_response():
     return add_common_headers(response)
 
 def build_existing_session_response(session_token):
-    active_sessions[session_token] = time.time() + SESSION_COOKIE_MAX_AGE
+    refresh_session_deadline(session_token)
     response = set_session_cookie(build_index_response(), session_token)
     return add_common_headers(response)
 
 def renew_session_response(session_token):
-    active_sessions[session_token] = time.time() + SESSION_COOKIE_MAX_AGE
+    refresh_session_deadline(session_token)
     response = jsonify({
         'status': 'ok',
         'session_expires_at': active_sessions[session_token],
-        'session_max_age_seconds': SESSION_COOKIE_MAX_AGE,
+        'session_max_age_seconds': session_cookie_max_age(session_token),
         'renew_interval_seconds': SESSION_RENEW_INTERVAL_SECONDS,
     })
     set_session_cookie(response, session_token)
@@ -6437,7 +6456,7 @@ def session_recovery_authenticate_complete():
             'message': 'No live StandTerm session is available for this platform credential. Enter the current access token.',
         }, status_code=409)
 
-    active_sessions[recovered_session_token] = time.time() + SESSION_COOKIE_MAX_AGE
+    refresh_session_deadline(recovered_session_token)
     response = jsonify({
         'status': 'ok',
         'result': 'recovered',

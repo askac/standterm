@@ -75,9 +75,20 @@ def main():
                 assert response.status == 200
                 cookie_header = response.headers.get('Set-Cookie', '')
                 assert 'HttpOnly' in cookie_header and 'SameSite=Strict' in cookie_header
+                assert 'Max-Age=' not in cookie_header and 'Expires=' not in cookie_header, \
+                    'Owned Desktop login must not acquire a browser idle deadline'
                 html = response.read().decode('utf-8')
                 assert frame['session_token'] not in html
                 assert 'const useDesktopFloatingWindows = true;' in html
+            request = urllib.request.Request(origin + '/session/renew', data=b'', headers={
+                'Cookie': frame['cookie_name'] + '=' + frame['session_token'],
+            })
+            with opener.open(request, timeout=5) as response:
+                renewed = json.load(response)
+                assert renewed['session_expires_at'] is None
+                assert renewed['session_max_age_seconds'] is None
+                cookie_header = response.headers.get('Set-Cookie', '')
+                assert 'Max-Age=' not in cookie_header and 'Expires=' not in cookie_header
             proc.stdin.close()
             assert proc.wait(timeout=10) == 0
             address = urllib.parse.urlparse(origin)
@@ -116,6 +127,15 @@ def main():
                     raise AssertionError('Fixed-port desktop startup timed out') from None
             assert reused['type'] == 'standterm_desktop_ready'
             assert urllib.parse.urlparse(reused['origin']).port == busy_port
+            stale_request = urllib.request.Request(reused['origin'], headers={
+                'Cookie': frame['cookie_name'] + '=' + frame['session_token'],
+            })
+            try:
+                opener.open(stale_request, timeout=5)
+            except urllib.error.HTTPError as exc:
+                assert exc.code == 401
+            else:
+                raise AssertionError('A previous Desktop process cookie was accepted')
             proc.stdin.close()
             assert proc.wait(timeout=10) == 0
             print('Desktop backend smoke: private handoff, authentication and EOF cleanup passed.')

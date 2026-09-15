@@ -695,6 +695,15 @@ the credential-free Desktop startup URL. Other clients still need normal
 StandTerm authentication. External-agent discovery files retain their existing
 permission model and are separate from desktop-login credentials.
 
+The owned Desktop login lasts until its backend process exits; it does not use
+Core's 12-hour browser idle deadline or ask for a token after a long sleep.
+Page reloads and renewal keep its HttpOnly cookie session-only. Closing Desktop
+invalidates that process's login, and a new process rejects the old cookie.
+This does not disable authentication for other browsers, prolong External Agent
+tokens, bypass minting, or change human-input and per-copy approval gates.
+An older user-selected Git Core without this Desktop-session capability retains
+its original expiry behavior; select an updated Core to obtain this policy.
+
 The authenticated Core UI has Node integration disabled, context isolation, renderer sandboxing
 and web security enabled, and no preload or IPC bridge. Network requests are
 limited to the owned loopback HTTP/WebSocket origin and local data/blob images.
@@ -787,8 +796,11 @@ Generated capture samples are retained under ignored `desktop/dist/`; unit-test
 scratch files in the OS temporary directory are disposable and reproducible.
 
 `desktop/test/backend_smoke.py`, run through the selected project venv, separately
-checks the private handshake, unauthenticated HTTP rejection, HttpOnly cookie
-behavior, pipe-EOF exit, port closure and runtime artifact cleanup.
+checks the private handshake, unauthenticated HTTP rejection, process-lifetime
+HttpOnly cookies, renewal, stale-cookie rejection by a new process, pipe-EOF
+exit, port closure and runtime artifact cleanup. Core's backend smoke simulates
+30 days without renewal, checks ordinary browser expiry in the same process,
+and verifies that Desktop login does not bypass external-agent minting or expiry.
 
 `desktop/test/bootstrap_smoke.py` checks manifest tampering, traversal/link
 rejection, existing-data preservation and retry after dependency failure.
