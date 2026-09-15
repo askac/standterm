@@ -459,7 +459,18 @@ async function start() {
     notify: () => dialog.showMessageBox(win, { type: 'warning', message: 'Could not open the default browser.',
       detail: 'Check the default HTTP/HTTPS browser in your operating system settings.' }),
   });
-  installFloatingWindows(win, handoff.origin, openExternal, contents);
+  installFloatingWindows(win, handoff.origin, openExternal, contents, (result, owner) => {
+    const completed = result.state === 'completed' && !!result.path;
+    void dialog.showMessageBox(owner, {
+      type: completed ? 'info' : 'warning', title: 'Files download',
+      message: completed ? 'Download complete' : 'Download did not complete',
+      detail: completed ? `Saved to:\n${result.path}` : 'The connection was interrupted. Retry the download from Files.',
+      buttons: completed ? ['Close', 'Show in folder'] : ['Close'],
+      defaultId: 0, cancelId: 0, noLink: true,
+    }).then(answer => {
+      if (completed && answer.response === 1) shell.showItemInFolder(result.path);
+    }).catch(() => diagnostics.write('download_notice_failed'));
+  });
   contents.on('will-navigate', (event, url) => {
     if (!allowedNavigation(url, handoff.origin)) event.preventDefault();
   });

@@ -2,9 +2,31 @@
 
 const { allowedFloatingWindow, allowedFilesDownload, allowedNavigation } = require('./policy.cjs');
 
-function installFloatingWindows(opener, origin, openExternal = () => {}, contents = opener.webContents) {
+function installFloatingWindows(opener, origin, openExternal = () => {}, contents = opener.webContents,
+  downloadDone = () => {}) {
   const children = new Set();
   const closing = new WeakSet();
+  const downloads = new Map();
+  const downloadSession = contents.session;
+  const onDownload = (_event, item, source) => {
+    const child = [...children].find(candidate => candidate.webContents === source);
+    if (source !== contents && !child) return;
+    if (!allowedFilesDownload(item.getURL(), origin)) return;
+    const done = (_doneEvent, state) => {
+      downloads.delete(item);
+      if (state === 'completed' || state === 'interrupted') {
+        downloadDone({ state, path: item.getSavePath() }, child && !child.isDestroyed() ? child : opener);
+      }
+    };
+    downloads.set(item, done);
+    item.once('done', done);
+  };
+  downloadSession.on('will-download', onDownload);
+  opener.once('closed', () => {
+    downloadSession.removeListener('will-download', onDownload);
+    for (const [item, done] of downloads) item.removeListener('done', done);
+    downloads.clear();
+  });
   const download = (target, details) => {
     if (!details.postBody && allowedNavigation(contents.getURL(), origin)) {
       if (allowedFilesDownload(details.url, origin)) target.downloadURL(details.url);

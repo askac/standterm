@@ -149,6 +149,15 @@
         .sftp-destination-pane {
             animation: sftp-destination-slide 0.16s ease-out;
         }
+        .sftp-copy-details {
+            flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; overflow: auto;
+        }
+        .sftp-copy-details > :not(.sftp-directory-list) { flex-shrink: 0; }
+        .sftp-copy-feedback { flex-shrink: 0; display: flex; flex-direction: column; gap: 10px; }
+        .sftp-copy-feedback .sftp-transfer-status { color: #eee; font-weight: 600; }
+        .sftp-copy-feedback .sftp-transfer-status, .sftp-copy-feedback .sftp-conflict-text {
+            max-height: 4.2em; overflow: auto;
+        }
         @keyframes sftp-destination-slide {
             from { opacity: 0; transform: translateX(18px); }
             to { opacity: 1; transform: translateX(0); }
@@ -265,7 +274,7 @@
         .sftp-transfer-status { min-height: 18px; color: #aaa; overflow-wrap: anywhere; }
         .sftp-transfer-status.error { color: #ff6b61; }
         .sftp-transfer-status.success { color: #34c759; }
-        .sftp-progress { display: none; width: 100%; height: 6px; overflow: hidden; border-radius: 3px; background: #333; }
+        .sftp-progress { display: none; flex-shrink: 0; width: 100%; height: 6px; overflow: hidden; border-radius: 3px; background: #333; }
         .sftp-progress.visible { display: block; }
         .sftp-progress-bar { width: 0; height: 100%; background: #0a84ff; transition: width 0.1s linear; }
         .sftp-pip-actions, .sftp-conflict-actions { display: flex; justify-content: flex-end; gap: 7px; }
@@ -9635,13 +9644,13 @@
                         state,
                         data.status === 'committing'
                             ? 'Publishing copied file…'
-                            : `Copying ${formatSftpBytes(copied)} / ${formatSftpBytes(total)}…`,
+                            : `Copying ${Math.floor(percent)}% · ${formatSftpBytes(copied)} / ${formatSftpBytes(total)}…`,
                     );
                     state.elements.lifecycle.textContent = data.status === 'committing'
                         ? 'Publishing has started. It cannot be cancelled; wait for the result before closing Files.'
                         : (state.cancelPending
                             ? 'Cancelling before the destination is published…'
-                            : 'Use Cancel copy before closing Files. Closing the system window does not cancel the copy.');
+                            : 'Keep Files open until finished, or use Cancel copy.');
                     setSftpPipBusy(state, false);
                     return;
                 }
@@ -9696,6 +9705,7 @@
                 const pane = sourceState.window.document.createElement('div');
                 pane.className = 'sftp-destination-pane';
                 pane.innerHTML = `
+                    <div class="sftp-copy-details">
                     <div class="sftp-destination-header">
                         <div class="sftp-destination-title">Choose destination</div>
                     </div>
@@ -9721,6 +9731,8 @@
                         <label>File name</label>
                         <input class="sftp-copy-name-input" type="text" spellcheck="false" aria-label="Destination file name">
                     </div>
+                    </div>
+                    <div class="sftp-copy-feedback">
                     <div class="sftp-conflict-box">
                         <div class="sftp-conflict-text"></div>
                         <div class="sftp-conflict-actions">
@@ -9735,6 +9747,7 @@
                     <div class="sftp-pip-actions">
                         <button type="button" class="sftp-copy-cancel">Cancel</button>
                         <button type="button" class="sftp-copy-confirm primary">Copy</button>
+                    </div>
                     </div>
                 `;
                 const destinationState = {

@@ -5546,6 +5546,127 @@ def test_files_copy_request_runs_human_local_copy_without_agent_approval():
     client.disconnect()
 
 
+def test_files_copy_conflict_precedes_reads_and_progress_precedes_completion():
+    client = make_client()
+    session_token = current_session_token()
+    sid = current_sid_for_session(session_token)
+    source = make_local_file_test_bridge(session_token, 'copy-source')
+    destination = make_local_file_test_bridge(session_token, 'copy-destination')
+    for bridge in (source, destination):
+        bridge.attach(sid)
+        standterm.set_bridge(session_token, bridge.terminal_id, bridge)
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        (root / 'source').mkdir()
+        (root / 'destination').mkdir()
+        content = bytes(range(256)) * (16 * 1024)
+        (root / 'source' / 'large.bin').write_bytes(content)
+        existing = root / 'destination' / 'large.bin'
+        existing.write_bytes(b'original')
+        entry = source.browse_local_files(str(root / 'source'))['files'][0]
+        payload = {
+            'request_id': 'large-conflict', 'source_terminal_id': source.terminal_id,
+            'source_file_id': entry['file_id'], 'destination_terminal_id': destination.terminal_id,
+            'destination_directory': str(existing.parent), 'destination_filename': existing.name,
+            'conflict_mode': 'ask',
+        }
+        client.get_received()
+        with patch.object(source, 'download_local_chunks', side_effect=AssertionError('Read before conflict choice')) as read:
+            client.emit(standterm.FILES_COPY_REQUEST_EVENT, payload)
+            assert last_payload(client, standterm.FILES_COPY_RESULT_EVENT)['status'] == 'conflict'
+            read.assert_not_called()
+        assert not standterm.files_copy_jobs
+        assert existing.read_bytes() == b'original'
+        original_download = source.download_local_chunks
+        for mode in ('keep_both', 'replace'):
+            paused, resume = threading.Event(), threading.Event()
+
+            def paced_download(snapshot):
+                transferred = 0
+                for chunk in original_download(snapshot):
+                    yield chunk
+                    transferred += len(chunk)
+                    if transferred == len(content) // 2:
+                        paused.set()
+                        assert resume.wait(5), 'Copy test did not release the source stream'
+
+            request_id = f'large-{mode}'
+            client.get_received()
+            with patch.object(source, 'download_local_chunks', side_effect=paced_download):
+                try:
+                    client.emit(standterm.FILES_COPY_REQUEST_EVENT, {
+                        **payload, 'request_id': request_id, 'conflict_mode': mode,
+                    })
+                    assert paused.wait(5), 'Copy did not reach the transfer midpoint'
+                    events = [event['args'][0] for event in client.get_received()
+                              if event['name'] == standterm.FILES_COPY_RESULT_EVENT]
+                    assert any(event['status'] == 'running' and 0 < event['bytes_copied'] < len(content)
+                               for event in events), 'Progress was not delivered during transfer'
+                    assert not any(event['status'] in ('completed', 'conflict') for event in events)
+                    assert existing.read_bytes() == b'original'
+                finally:
+                    resume.set()
+                wait_until(lambda: any(job['request_id'] == request_id and job['status'] == 'completed'
+                                       for job in standterm.files_copy_jobs.values()), 'Large copy did not complete')
+            job = next(job for job in standterm.files_copy_jobs.values() if job['request_id'] == request_id)
+            assert Path(job['result']['destination_path']).read_bytes() == content
+            assert (job['result']['destination_path'] == str(existing)) == (mode == 'replace')
+    client.disconnect()
+
+
+def test_files_copy_conflict_does_not_wait_for_busy_ssh_source():
+    client = make_client()
+    session_token = current_session_token()
+    sid = current_sid_for_session(session_token)
+    source = make_sftp_test_bridge(session_token, 'busy-source')
+    destination = make_local_file_test_bridge(session_token, 'conflict-destination')
+    for bridge in (source, destination):
+        bridge.attach(sid)
+        standterm.set_bridge(session_token, bridge.terminal_id, bridge)
+    snapshot = {
+        'directory': '/source', 'filename': 'large.bin', 'path': '/source/large.bin',
+        'size': 4 * 1024 * 1024, 'mtime': 25, 'endpoint': source.sftp_endpoint(),
+    }
+    file_id = source._register_sftp_file_reference(snapshot)
+    source._open_sftp = lambda: SimpleNamespace(
+        normalize=lambda path: path,
+        stat=lambda path: SimpleNamespace(st_mode=stat.S_IFDIR | 0o755),
+        lstat=lambda path: SimpleNamespace(st_mode=stat.S_IFREG | 0o644, st_size=snapshot['size'], st_mtime=25),
+        close=lambda: None,
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        existing = Path(directory) / 'large.bin'
+        existing.write_bytes(b'original')
+        payload = {
+            'request_id': 'busy-source-conflict', 'source_terminal_id': source.terminal_id,
+            'source_file_id': file_id, 'destination_terminal_id': destination.terminal_id,
+            'destination_directory': directory, 'destination_filename': existing.name, 'conflict_mode': 'ask',
+        }
+        # An ongoing SSH download holds this same lock until its stream closes.
+        source._sftp_lock.acquire()
+        worker = threading.Thread(target=lambda: client.emit(standterm.FILES_COPY_REQUEST_EVENT, payload), daemon=True)
+        client.get_received()
+        worker.start()
+        try:
+            worker.join(1)
+            assert not worker.is_alive(), 'Conflict checking waited for the busy SSH source'
+            assert last_payload(client, standterm.FILES_COPY_RESULT_EVENT)['status'] == 'conflict'
+            assert not standterm.files_copy_jobs
+            assert existing.read_bytes() == b'original'
+        finally:
+            source._sftp_lock.release()
+            worker.join(5)
+        with patch.object(source, 'prepare_sftp_file', side_effect=standterm.SFTPTransferError(
+                'sftp_file_changed', 'Source changed while choosing a conflict action.')):
+            client.emit(standterm.FILES_COPY_REQUEST_EVENT, {
+                **payload, 'request_id': 'busy-source-replace', 'conflict_mode': 'replace',
+            })
+            assert last_payload(client, standterm.FILES_COPY_RESULT_EVENT)['error_code'] == 'sftp_file_changed'
+            assert existing.read_bytes() == b'original'
+            assert not standterm.files_copy_jobs
+    client.disconnect()
+
+
 def test_files_copy_request_rejects_same_ssh_endpoint_path():
     client = make_client()
     session_token = current_session_token()
@@ -8489,6 +8610,8 @@ def main():
         test_external_agent_file_copy_supports_local_shell_endpoints,
         test_local_shell_files_supports_browse_transfer_rename_and_delete,
         test_files_copy_request_runs_human_local_copy_without_agent_approval,
+        test_files_copy_conflict_precedes_reads_and_progress_precedes_completion,
+        test_files_copy_conflict_does_not_wait_for_busy_ssh_source,
         test_files_copy_request_rejects_same_ssh_endpoint_path,
         test_files_copy_start_failure_keeps_correlated_terminal_result,
         test_files_copy_cancel_request_stops_before_commit_barrier,

@@ -1183,6 +1183,28 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
         check(copy_payload['destination_directory'] == '/home/local', 'Files copy lost the canonical destination view')
         check(copy_payload['destination_filename'] == 'reference.txt', 'Files copy lost the destination filename')
         check('source_path' not in copy_payload, 'Files copy trusted the displayed source path as authority')
+        conflict_ui = page.evaluate(
+            """payload => {
+                const w = documentPictureInPicture.window;
+                w.document.documentElement.style.height = '480px';
+                w.document.documentElement.style.width = '620px';
+                window.terminalTest.handleFilesCopyResultForTest({
+                    request_id: payload.request_id, status: 'conflict',
+                    destination_path: '/home/' + 'nested/'.repeat(100) + 'reference.txt', existing_size: 9
+                });
+                const box = w.document.querySelector('.sftp-destination-pane .sftp-conflict-box');
+                const rect = box.getBoundingClientRect();
+                return { visible: w.getComputedStyle(box).display !== 'none',
+                    top: rect.top, bottom: rect.bottom };
+            }""", copy_payload,
+        )
+        check(conflict_ui['visible'] and 0 <= conflict_ui['top'] < conflict_ui['bottom'] <= 480,
+              'conflict choices were clipped in a short Files window')
+        check(len(get_emitted(page, 'files_copy_request')) == 1,
+              'conflict started another copy before the user chose an action')
+        page.evaluate("() => documentPictureInPicture.window.document.querySelector('.sftp-destination-pane .sftp-conflict-keep').click()")
+        copy_payload = get_emitted(page, 'files_copy_request')[-1]['args'][0]
+        check(copy_payload['conflict_mode'] == 'keep_both', 'Keep Both lost the explicit conflict choice')
         copy_result_ui = page.evaluate(
             """payload => {
                 window.terminalTest.handleFilesCopyResultForTest({
@@ -1191,7 +1213,7 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                     status: 'running',
                     revision: 0,
                     source_size: 9,
-                    bytes_copied: 0,
+                    bytes_copied: 4,
                     total_bytes: 9,
                     destination_path: '/home/local/reference.txt'
                 });
@@ -1204,6 +1226,10 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                 });
                 const statusAfterForeign = documentPictureInPicture.window.document
                     .querySelector('.sftp-destination-pane .sftp-transfer-status').innerText;
+                const feedback = documentPictureInPicture.window.document.querySelector('.sftp-copy-feedback');
+                const progress = feedback.querySelector('.sftp-progress');
+                const progressVisible = progress.getBoundingClientRect().height >= 6
+                    && feedback.getBoundingClientRect().top >= 0 && feedback.getBoundingClientRect().bottom <= 480;
                 window.terminalTest.handleFilesCopyResultForTest({
                     request_id: payload.request_id,
                     copy_id: 'filesc_test',
@@ -1246,6 +1272,7 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                 });
                 return {
                     statusAfterForeign,
+                    progressVisible,
                     publishing,
                     terminalButtonText: documentPictureInPicture.window.document
                         .querySelector('.sftp-copy-cancel').innerText,
@@ -1256,6 +1283,10 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
             copy_payload,
         )
         check(copy_result_ui['statusAfterForeign'].startswith('Copying '), 'Files copy accepted a foreign copy_id with the same request_id')
+        check('44%' in copy_result_ui['statusAfterForeign'] and '4 B / 9 B' in copy_result_ui['statusAfterForeign'],
+              'Files copy omitted the percentage or transferred bytes')
+        check(copy_result_ui['progressVisible'], 'Files copy progress or cancel controls were clipped')
+        page.evaluate("() => { const s = documentPictureInPicture.window.document.documentElement.style; s.height = ''; s.width = ''; }")
         check(copy_result_ui['publishing']['text'] == 'Publishing…', 'commit barrier did not replace the cancel action')
         check(copy_result_ui['publishing']['disabled'] is True, 'commit barrier still allowed cancellation')
         check('cannot be cancelled' in copy_result_ui['publishing']['lifecycle'], 'commit barrier did not explain its cancellation boundary')

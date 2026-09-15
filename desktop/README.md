@@ -720,6 +720,10 @@ The URL itself can contain private information, so review it before approval.
 Non-HTTP(S), credential-bearing URLs, loopback links and POST popups are rejected;
 pending confirmations are coalesced and owner lifetime is checked again after
 approval. Owned Files download tickets retain their existing download path.
+Completed Files downloads show the actual saved path in a native dialog with a
+**Show in folder** button. The folder belongs to the Desktop computer, including
+when Core runs in WSL or the source is an SSH host. Cancelled downloads do not
+show a completion notice; interrupted downloads offer a retry hint.
 An OS browser-launch failure displays an error. Normal Web preview/popup behavior
 is unchanged. This follows the restrictive handling required by
 [Electron's external-link security guidance](https://www.electronjs.org/docs/latest/tutorial/security#15-do-not-use-shellopenexternal-with-untrusted-content).
@@ -785,7 +789,8 @@ Floating-window regression also checks real child creation, private session and
 sandbox inheritance, rapid mixed clicks, denied navigation/nesting, close/restore,
 PiP-to-Files transition, reload cleanup and visible failure alerts. Where Local
 Files is supported, it browses a synthetic fixture and verifies downloaded binary
-bytes without opening a save dialog or another child window.
+bytes without opening a save dialog or another child window. Native dialog and
+folder-reveal spies verify the actual saved path without opening Explorer/Finder.
 
 Capture smoke additionally saves a PNG, checks clipboard image packaging without
 touching the user's clipboard, records and decodes WebM with a source-page pixel

@@ -10657,13 +10657,16 @@ def on_files_copy_request(data):
             source_bridge,
             source_file_id,
         )
-        source_file = prepare_current_bridge_file(source_bridge, source_file)
         upload = prepare_bridge_upload(
             destination_bridge,
             destination_directory,
             destination_filename,
             conflict_mode,
         )
+        # Ask about an existing destination before waiting for a busy source's
+        # transfer lock. Revalidate the source after the user chooses an action.
+        if upload.get('status') != 'conflict':
+            source_file = prepare_current_bridge_file(source_bridge, source_file)
         validate_distinct_file_copy_target(
             source_bridge,
             destination_bridge,
