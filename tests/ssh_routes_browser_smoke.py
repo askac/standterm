@@ -257,7 +257,7 @@ def test_receiver_and_owner_renames_preserve_credentials(browser, url):
         page.click('#ssh-profile-list button[data-profile-id="receiver"]')
         page.fill('#ssh-profile-name', 'Receiver renamed')
         page.click('#ssh-profile-save')
-        page.wait_for_function("() => document.getElementById('ssh-profile-status').innerText === 'Saved Receiver renamed.'")
+        page.wait_for_function("() => document.getElementById('ssh-profile-status').innerText === 'Saved Receiver renamed. Changes apply to the next connection.'")
         after = page.evaluate('() => window.terminalTest.getSshSessionState()')
         assert before['nodes'] == after['nodes'], 'Renaming the receiver modified route nodes'
         page.evaluate("""async () => {

@@ -19,6 +19,7 @@ def set_target(page, host, username, terminal_id='main'):
 def open_profiles(page):
     page.click('#quick-settings')
     page.click('.settings-nav-item[data-tab="ssh-sessions"]')
+    page.wait_for_function("() => !document.getElementById('ssh-profile-save').disabled")
 
 
 def editor(page):
@@ -36,9 +37,7 @@ def test_new_connection_replaces_previous_editor_context(browser, url):
         set_target(page, 'first.example', 'first')
         open_profiles(page)
         page.fill('#ssh-profile-name', 'First profile')
-        page.click('#ssh-profile-create')
-        page.get_by_role('button', name='Save route', exact=True).click()
-        page.locator('#ssh-route-editor').wait_for(state='detached')
+        page.click('#ssh-profile-save')
         page.wait_for_function("() => document.getElementById('ssh-profile-status').textContent === 'Saved First profile. Changes apply to the next connection.'")
         first = page.evaluate('() => window.terminalTest.getSshSessionState()')['profiles'][0]
         page.click('#settings-close')
@@ -46,15 +45,13 @@ def test_new_connection_replaces_previous_editor_context(browser, url):
         open_profiles(page)
         assert editor(page) == {'name': 'second@second.example',
                                 'summary': 'New direct session: second@second.example:2222',
-                                'saveDisabled': True}, editor(page)
+                                'saveDisabled': False}, editor(page)
         # Reopening the same context preserves an unfinished draft.
         page.fill('#ssh-profile-name', 'Second draft')
         page.click('#settings-close')
         open_profiles(page)
         assert editor(page)['name'] == 'Second draft'
-        page.click('#ssh-profile-create')
-        page.get_by_role('button', name='Save route', exact=True).click()
-        page.locator('#ssh-route-editor').wait_for(state='detached')
+        page.click('#ssh-profile-save')
         page.wait_for_function("() => document.getElementById('ssh-profile-status').textContent === 'Saved Second draft. Changes apply to the next connection.'")
         state = page.evaluate('() => window.terminalTest.getSshSessionState()')
         assert len(state['profiles']) == 2
@@ -71,7 +68,7 @@ def test_new_connection_replaces_previous_editor_context(browser, url):
         page.click('.terminal-tab[data-terminal-id="first-tab"]')
         open_profiles(page)
         assert 'first@first.example:2222' in editor(page)['summary'], editor(page)
-        assert editor(page)['saveDisabled'] is True
+        assert editor(page)['saveDisabled'] is False
         # Explicit profile selection remains an edit until the context changes.
         page.click(f'#ssh-profile-list [data-profile-id="{first["id"]}"]')
         page.fill('#ssh-profile-name', 'Unfinished explicit edit')
@@ -174,6 +171,8 @@ def test_route_management_preserves_full_path_and_failed_draft(browser, url):
 def test_connect_rejects_changed_form_during_storage_load(browser, url):
     context, page = fixture.new_page(browser, url)
     try:
+        page.click('#new-tab-btn')
+        page.evaluate('() => window.terminalTest.captureTerminalIoForTest()')
         show_ssh(page)
         page.fill('#host', 'first.test')
         page.fill('#username', 'first')
@@ -200,6 +199,157 @@ def test_connect_rejects_changed_form_during_storage_load(browser, url):
         fixture.close_context(context)
 
 
+def inline_fields(page):
+    return page.locator('#ssh-profile-node')
+
+
+def wait_saved(page):
+    page.wait_for_function("() => document.getElementById('ssh-profile-status').textContent.endsWith('Changes apply to the next connection.')")
+
+
+def test_inline_direct_save_preserves_shared_nodes_and_order(browser, url):
+    context, page = fixture.new_page(browser, url)
+    try:
+        show_ssh(page)
+        page.evaluate("""async () => {
+            await window.terminalTest.setSshSessionState({profiles: [
+                {id: 'direct', name: 'Direct', host: 'old.test', port: '22', username: 'u'}
+            ], history: []});
+            const state = await window.terminalTest.getSshSessionState();
+            const target = state.nodes[0];
+            state.nodes.push({...structuredClone(target), id: 'jump',
+                endpoint: {host: 'jump.test', port: '22', username: 'j'}, nextNodeId: target.id});
+            state.profiles.push({...state.profiles[0], id: 'shared', name: 'Shared route',
+                sortOrder: 1, startNodeId: 'jump'});
+            await window.terminalTest.setSshSessionState(state);
+        }""")
+        original = saved_state(page)
+        open_profiles(page)
+        page.click('#ssh-profile-list [data-profile-id="direct"]')
+        fields = inline_fields(page)
+        fields.get_by_label('Target Host', exact=True).fill('edited.test')
+        page.fill('#ssh-profile-name', 'Edited Direct')
+        fields.locator('summary').click()
+        fields.get_by_label('Target Host key alias (optional)', exact=True).fill('lab')
+        fields.get_by_label('Target Use key', exact=True).check()
+        page.wait_for_function("() => document.querySelector('#ssh-profile-node [aria-label=\"Target Public key\"]').value.startsWith('ssh-ed25519 ')")
+        public_key = fields.get_by_label('Target Public key', exact=True).input_value()
+        page.click('#ssh-profile-down')
+        page.wait_for_function("() => document.getElementById('ssh-profile-status').textContent === 'Profile order updated.'")
+        assert fields.get_by_label('Target Host', exact=True).input_value() == 'edited.test'
+        page.click('#ssh-profile-save')
+        wait_saved(page)
+        state = saved_state(page)
+        assert [item['id'] for item in state['profiles']] == ['shared', 'direct']
+        for old in original['nodes']:
+            assert next(node for node in state['nodes'] if node['id'] == old['id']) == old
+        path = page.evaluate("""async () => {
+            const state = await window.terminalTest.getSshSessionState();
+            return StandTermSshRoutes.checkedPath(state, state.profiles.find(p => p.id === 'direct'));
+        }""")
+        assert path[0]['endpoint']['host'] == 'edited.test' and path[0]['hostKeyAlias'] == 'lab'
+        assert path[0]['authentication']['keyRef']['kind'] == 'credential'
+        page.click('#settings-close')
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_function('() => !!window.terminalTest')
+        open_profiles(page)
+        page.click('#ssh-profile-list [data-profile-id="direct"]')
+        fields.get_by_label('Target Host', exact=True).wait_for()
+        assert fields.get_by_label('Target Use key', exact=True).is_checked()
+        assert fields.get_by_label('Target Public key', exact=True).input_value() == public_key
+    finally:
+        fixture.close_context(context)
+
+
+def test_inline_draft_promotes_to_route_without_saving_on_cancel(browser, url):
+    context, page = fixture.new_page(browser, url)
+    try:
+        show_ssh(page)
+        page.evaluate('() => window.terminalTest.setSshSessionState({profiles: [], history: []})')
+        open_profiles(page)
+        fields = inline_fields(page)
+        page.fill('#ssh-profile-name', 'New draft')
+        fields.get_by_label('Target Host', exact=True).fill('target.test')
+        fields.get_by_label('Target Username', exact=True).fill('user')
+        fields.get_by_label('Target Port', exact=True).fill('2222')
+        fields.get_by_label('Target Use key', exact=True).check()
+        page.wait_for_function("() => document.querySelector('#ssh-profile-node [aria-label=\"Target Public key\"]').value.startsWith('ssh-ed25519 ')")
+        public_key = fields.get_by_label('Target Public key', exact=True).input_value()
+        original = saved_state(page)
+        page.click('#ssh-profile-edit-route')
+        modal = page.locator('#ssh-route-editor')
+        assert modal.get_by_label('Entry name', exact=True).input_value() == 'New draft'
+        assert modal.get_by_label('Jump 1 Host', exact=True).input_value() == ''
+        open_card(page, 'Target')
+        assert modal.get_by_label('Target Port', exact=True).input_value() == '2222'
+        assert modal.get_by_label('Target Public key', exact=True).input_value() == public_key
+        modal.get_by_role('button', name='Cancel', exact=True).click()
+        assert saved_state(page) == original
+        assert fields.get_by_label('Target Public key', exact=True).input_value() == public_key
+        # Incomplete inline edits can be completed after opening the full editor.
+        fields.get_by_label('Target Host', exact=True).fill('')
+        page.click('#ssh-profile-edit-route')
+        modal.get_by_label('Jump 1 Host', exact=True).fill('jump.test')
+        modal.get_by_label('Jump 1 Username', exact=True).fill('jumper')
+        open_card(page, 'Target')
+        modal.get_by_label('Target Host', exact=True).fill('target.test')
+        assert modal.get_by_label('Target Public key', exact=True).input_value() == public_key
+        modal.get_by_role('button', name='Save route', exact=True).click()
+        modal.wait_for(state='detached')
+        wait_saved(page)
+        state = saved_state(page)
+        assert len(state['profiles']) == 1 and state['profiles'][0]['name'] == 'New draft'
+        assert len(state['nodes']) == 2, state
+        assert fields.is_hidden()
+        assert page.locator('#ssh-profile-save').inner_text() == 'Save name'
+        assert 'jump.test' in editor(page)['summary'] and 'target.test' in editor(page)['summary']
+    finally:
+        fixture.close_context(context)
+
+
+def test_inline_conflict_retains_fields_and_does_not_store_key(browser, url):
+    context, page = fixture.new_page(browser, url)
+    try:
+        show_ssh(page)
+        page.evaluate("() => window.terminalTest.setSshSessionState({profiles:[{id:'direct',name:'Direct',host:'host.test',port:'22',username:'u'}],history:[]})")
+        open_profiles(page)
+        page.click('#ssh-profile-list [data-profile-id="direct"]')
+        fields = inline_fields(page)
+        fields.get_by_label('Target Host', exact=True).fill('unsaved.test')
+        fields.get_by_label('Target Use key', exact=True).check()
+        page.wait_for_function("() => document.querySelector('#ssh-profile-node [aria-label=\"Target Public key\"]').value.startsWith('ssh-ed25519 ')")
+        other = context.new_page()
+        other.goto(fixture.debug_url(url), wait_until='domcontentloaded')
+        other.wait_for_function('() => !!window.terminalTest')
+        other.evaluate("""async () => {
+            const state = await window.terminalTest.getSshSessionState();
+            state.profiles[0].name = 'Other window';
+            await window.terminalTest.setSshSessionState(state);
+        }""")
+        concurrent = saved_state(other)
+        page.evaluate("""() => {
+            const save = StandTermSshRoutes.save;
+            StandTermSshRoutes.save = (...args) => {
+                StandTermSshRoutes.save = save;
+                window.failedKeyIds = args[2].map(change => change.record.keyId);
+                return save(...args);
+            };
+        }""")
+        page.click('#ssh-profile-save')
+        page.wait_for_function("() => document.getElementById('ssh-profile-status').textContent.includes('changed in another window')")
+        assert page.locator('#ssh-profile-save').is_enabled()
+        assert fields.get_by_label('Target Host', exact=True).input_value() == 'unsaved.test'
+        assert fields.get_by_label('Target Use key', exact=True).is_checked()
+        key_ids = page.evaluate('() => window.failedKeyIds')
+        assert len(key_ids) == 1
+        assert not page.evaluate('id => window.terminalTest.browserSshKeyRecordExistsForTest(id)', key_ids[0])
+        other.reload(wait_until='domcontentloaded')
+        other.wait_for_function('() => !!window.terminalTest')
+        assert saved_state(other) == concurrent
+    finally:
+        fixture.close_context(context)
+
+
 if __name__ == '__main__':
     server, url = fixture.start_server()
     try:
@@ -212,6 +362,12 @@ if __name__ == '__main__':
                 print('SSH route management: PASS', flush=True)
                 test_connect_rejects_changed_form_during_storage_load(browser, url)
                 print('SSH preparation context: PASS', flush=True)
+                test_inline_direct_save_preserves_shared_nodes_and_order(browser, url)
+                print('Inline Direct save and references: PASS', flush=True)
+                test_inline_draft_promotes_to_route_without_saving_on_cancel(browser, url)
+                print('Inline Direct route promotion: PASS', flush=True)
+                test_inline_conflict_retains_fields_and_does_not_store_key(browser, url)
+                print('Inline Direct save conflict: PASS', flush=True)
             finally:
                 browser.close()
     finally:

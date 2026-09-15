@@ -4381,6 +4381,7 @@ def test_ssh_profile_picker_and_settings_save_semantics(browser, access_url):
 
         page.click('#quick-settings')
         page.click('.settings-nav-item[data-tab="ssh-sessions"]')
+        page.wait_for_function("() => !document.getElementById('ssh-profile-save').disabled")
         preloaded_editor = page.evaluate(
             """() => ({
                 name: document.getElementById('ssh-profile-name').value,
@@ -4389,13 +4390,12 @@ def test_ssh_profile_picker_and_settings_save_semantics(browser, access_url):
             })"""
         )
         check(
-            preloaded_editor == {'name': 'builder@build.example', 'summary': 'New direct session: builder@build.example:22', 'saveDisabled': True},
+            preloaded_editor == {'name': 'builder@build.example', 'summary': 'New direct session: builder@build.example:22', 'saveDisabled': False},
             'SSH Settings did not preload the active SSH tab as a create-only draft',
         )
         page.click('#ssh-profile-list button[data-profile-id="profile-a"]')
-        page.click('#ssh-profile-edit-route')
         page.get_by_label('Target Username', exact=True).fill('builder2')
-        page.get_by_role('button', name='Save route', exact=True).click()
+        page.click('#ssh-profile-save')
         page.wait_for_function(
             """() => document.getElementById('ssh-profile-status').innerText === 'Saved Build Server. Changes apply to the next connection.'""",
             timeout=5000,
@@ -4414,11 +4414,11 @@ def test_ssh_profile_picker_and_settings_save_semantics(browser, access_url):
         check([profile['id'] for profile in reordered['profiles']] == ['profile-b', 'profile-a'], 'profile move used list index as identity')
 
         page.click('#ssh-profile-create')
-        page.get_by_label('Entry name', exact=True).fill('Build Server Copy')
+        page.fill('#ssh-profile-name', 'Build Server Copy')
         page.get_by_label('Target Host', exact=True).fill('build.example')
         page.get_by_label('Target Username', exact=True).fill('builder')
         page.get_by_label('Target Port', exact=True).fill('2222')
-        page.get_by_role('button', name='Save route', exact=True).click()
+        page.click('#ssh-profile-save')
         page.wait_for_function(
             """async () => (await window.terminalTest.getSshSessionState()).profiles.length === 3""",
             timeout=5000,
@@ -4708,10 +4708,10 @@ def test_browser_ssh_key_lifecycle_and_settings_transfer(browser, access_url):
         page.click('.settings-nav-item[data-tab="ssh-sessions"]')
         page.click('#ssh-profile-list button[data-profile-id="profile-primary"]')
         page.click('#ssh-profile-create')
-        page.get_by_label('Entry name', exact=True).fill('Primary Copy')
+        page.fill('#ssh-profile-name', 'Primary Copy')
         page.get_by_label('Target Host', exact=True).fill('copy.example')
         page.get_by_label('Target Username', exact=True).fill('copy')
-        page.get_by_role('button', name='Save route', exact=True).click()
+        page.click('#ssh-profile-save')
         page.wait_for_function(
             """async () => (await window.terminalTest.getSshSessionState()).profiles
                 .some(profile => profile.name === 'Primary Copy')""",

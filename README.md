@@ -323,13 +323,19 @@ STANDTERM_HOST=127.0.0.1 STANDTERM_PORT=5000 ./run.sh
 
 Quick Connect can load saved SSH profiles and the six most recent successful
 SSH targets. Use **Settings > SSH Sessions** to create, update, reorder, or
-delete profiles and to clear history. The first level shows names, ordering, and
-full route summaries. **Save name** only renames the selected entry. **Edit
-connection…** opens every node in a separate editor, including host identity and
-**Use key**; Direct uses the same editor with one node. Its **Save route** button
-saves all nodes and referenced keys immediately for the next connection. **New
-session…** starts from the current SSH tab's target, or Quick Connect when no SSH
-tab is connected. Switching tabs or connections clears the previous edit selection.
+delete profiles and to clear history. Direct entries expose their single node
+in the first level: host, port, username, **Use key**, public key copy and host
+identity. **Save** stores the name, node and referenced key together. **Add jump
+node…** carries unsaved fields and temporary keys into the full route editor;
+cancelling returns to the unchanged Direct draft. Shared nodes in other entries
+remain unchanged by default.
+
+Multi-node entries show names, ordering and full route summaries in the first
+level. **Save name** only renames the selected entry. **Edit connection…** opens
+all nodes in a separate editor; **Save route** stores all node and referenced
+key changes for the next connection. **New session** starts an inline draft from
+the current SSH tab's target, or Quick Connect when no SSH tab is connected.
+Switching tabs or connections clears the previous edit selection.
 Profiles and history stay in the current
 browser and never store passwords. In Direct connect, **Save session** saves the
 profile and its referenced browser key when **Connect** is pressed, before SSH

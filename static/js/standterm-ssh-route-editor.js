@@ -2,9 +2,56 @@
     'use strict';
     const routes = window.StandTermSshRoutes;
 
+    routes.nodeFields = function({ parent, role, node, profiles, savedKeys, newKeys, keyAllowed,
+        createKey, copyPublicKey, hostIdentity, editorId, onBusy, onChange }) {
+        const fields = document.createElement('div');
+        fields.className = 'ssh-route-fields';
+        parent.append(fields);
+        const input = (label, value, parent = fields) => {
+            const wrapper = document.createElement('label');
+            wrapper.textContent = label;
+            const field = document.createElement('input');
+            field.value = value;
+            field.setAttribute('aria-label', `${role} ${label}`);
+            wrapper.append(field);
+            parent.append(wrapper);
+            return field;
+        };
+        const host = input('Host', node.endpoint.host);
+        const port = input('Port', node.endpoint.port);
+        const username = input('Username', node.endpoint.username);
+        port.inputMode = 'numeric';
+        const auth = StandTermSshNodeAuth({ parent: fields, role, authentication: node.authentication,
+            endpoint: () => ({ host: host.value, port: port.value, username: username.value }),
+            profiles, savedKeys, newKeys, keyAllowed, createKey, copyPublicKey, onBusy, onChange
+        });
+        const identity = document.createElement('details');
+        identity.className = 'ssh-host-identity';
+        const identityTitle = document.createElement('summary');
+        identityTitle.textContent = 'Host identity';
+        identity.append(identityTitle);
+        parent.append(identity);
+        const alias = input('Host key alias (optional)', node.hostKeyAlias, identity);
+        const identityBody = document.createElement('div');
+        identity.append(identityBody);
+        const identityControl = hostIdentity && StandTermSshHostIdentity({
+            parent: identityBody, editorId, nodeId: node.id, request: hostIdentity.request,
+            read: () => ({ ...routes.endpoint({ host: host.value, port: port.value, username: username.value }),
+                host_key_alias: alias.value.trim(), terminal_id: hostIdentity.terminalId })
+        });
+        identity.ontoggle = () => { if (identity.open) identityControl?.inspect(); };
+        for (const field of [host, port, username, alias]) field.addEventListener('input', () => {
+            auth.update(); identityControl?.invalidate();
+        });
+        return { host, port, username, alias, auth, read: () => ({
+            endpoint: { host: host.value, port: port.value, username: username.value },
+            hostKeyAlias: alias.value.trim(), authentication: auth.read()
+        }) };
+    };
+
     routes.edit = function({ state, entryId, target, onDone, keys = [], temporaryKeys = [], saveRoute = false, keyAllowed = false,
-        createKey, copyPublicKey, hostIdentity, mode = 'prepare', entryName = '' }) {
-        const original = routes.clone(state);
+        createKey, copyPublicKey, hostIdentity, mode = 'prepare', entryName = '', baseState = state }) {
+        const original = routes.clone(baseState);
         const savedKeys = [...keys];
         const newKeys = new Map(temporaryKeys.map(record => [record.keyId, record]));
         const editorId = routes.id();
@@ -169,6 +216,17 @@
             return true;
         }
 
+        function addJumpNode() {
+            canChangeOrder();
+            flush();
+            const current = path();
+            current.splice(current.length - 1, 0, { id: routes.id(),
+                endpoint: { host: '', port: '22', username: target.username || '' },
+                hostKeyAlias: '', nextNodeId: null, authentication: { method: 'password' } });
+            replacePath(current, current.length - 2);
+            controls[current.length - 2].host.focus();
+        }
+
         function render() {
             controls = [];
             rows.replaceChildren();
@@ -180,16 +238,7 @@
             preview.textContent = labelPath(result.path);
             result.path.forEach((node, index) => {
                 if (index === result.path.length - 1) {
-                    const add = button('Add jump node', () => {
-                        canChangeOrder();
-                        flush();
-                        const current = path();
-                        current.splice(current.length - 1, 0, { id: routes.id(),
-                            endpoint: { host: '', port: '22', username: target.username || '' },
-                            hostKeyAlias: '', nextNodeId: null, authentication: { method: 'password' } });
-                        replacePath(current, current.length - 2);
-                        controls[current.length - 2].host.focus();
-                    }, rows);
+                    const add = button('Add jump node', addJumpNode, rows);
                     add.className = 'ssh-route-add';
                 }
                 const fieldset = document.createElement('fieldset');
@@ -277,47 +326,12 @@
                 body.id = `ssh-route-card-body-${index}`;
                 toggle.setAttribute('aria-controls', body.id);
                 fieldset.append(body);
-                const fields = document.createElement('div');
-                fields.className = 'ssh-route-fields';
-                body.append(fields);
-                const input = (label, value, parent = fields) => {
-                    const wrapper = document.createElement('label');
-                    wrapper.textContent = label;
-                    const field = document.createElement('input');
-                    field.value = value;
-                    field.setAttribute('aria-label', `${role} ${label}`);
-                    wrapper.append(field);
-                    parent.append(wrapper);
-                    return field;
-                };
-                const host = input('Host', node.endpoint.host);
-                const port = input('Port', node.endpoint.port);
-                const username = input('Username', node.endpoint.username);
-                port.inputMode = 'numeric';
-                const auth = StandTermSshNodeAuth({ parent: fields, role, authentication: node.authentication,
-                    endpoint: () => ({ host: host.value, port: port.value, username: username.value }),
-                    profiles: draft.profiles, savedKeys, newKeys, keyAllowed, createKey, copyPublicKey,
+                const nodeFields = routes.nodeFields({ parent: body, role, node, profiles: draft.profiles,
+                    savedKeys, newKeys, keyAllowed, createKey, copyPublicKey, hostIdentity, editorId,
                     onBusy: delta => { pendingGenerations += delta; updateSaveState(); },
                     onChange: () => { updateSummary(); updateSaveState(); }
                 });
-                const identity = document.createElement('details');
-                identity.className = 'ssh-host-identity';
-                const identityTitle = document.createElement('summary');
-                identityTitle.textContent = 'Host identity';
-                identity.append(identityTitle);
-                body.append(identity);
-                const alias = input('Host key alias (optional)', node.hostKeyAlias, identity);
-                const identityBody = document.createElement('div');
-                identity.append(identityBody);
-                const identityControl = hostIdentity && StandTermSshHostIdentity({
-                    parent: identityBody, editorId, nodeId: node.id, request: hostIdentity.request,
-                    read: () => ({ ...routes.endpoint({ host: host.value, port: port.value, username: username.value }),
-                        host_key_alias: alias.value.trim(), terminal_id: hostIdentity.terminalId })
-                });
-                identity.ontoggle = () => { if (identity.open) identityControl?.inspect(); };
-                for (const field of [host, port, username, alias]) field.addEventListener('input', () => {
-                    auth.update(); identityControl?.invalidate();
-                });
+                const { host, port, username, alias, auth } = nodeFields;
                 const advanced = document.createElement('details');
                 const advancedTitle = document.createElement('summary');
                 advancedTitle.textContent = 'Advanced node settings';
@@ -326,10 +340,7 @@
                 const affected = document.createElement('p');
                 affected.textContent = `Referenced by: ${routes.references(draft, node.id).map(item => item.name || 'This Entry').join(', ')}`;
                 advanced.append(affected);
-                controls.push({ card: fieldset, handle, host, advanced, body, toggle, read: () => ({
-                    endpoint: { host: host.value, port: port.value, username: username.value },
-                    hostKeyAlias: alias.value.trim(), authentication: auth.read()
-                }) });
+                controls.push({ card: fieldset, handle, host, advanced, body, toggle, read: nodeFields.read });
                 const otherEntries = document.createElement('select');
                 otherEntries.setAttribute('aria-label', `${role} Next route`);
                 otherEntries.add(new Option('Choose the next route...', ''));
@@ -464,5 +475,6 @@
         document.body.append(dialog);
         render();
         dialog.showModal();
+        return { addJump: addJumpNode };
     };
 })();
