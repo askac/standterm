@@ -31,7 +31,7 @@ paramiko = standterm.get_paramiko()
 
 
 @contextlib.contextmanager
-def ssh_server(gateway_ports='no'):
+def ssh_server(gateway_ports='no', forwarding='remote'):
     executable = shutil.which('sshd') or '/usr/sbin/sshd'
     if not Path(executable).is_file():
         raise unittest.SkipTest('OpenSSH server is required for transport integration.')
@@ -51,7 +51,7 @@ def ssh_server(gateway_ports='no'):
             'PidFile ' + str(root / 'pid'),
             'StrictModes no', 'UsePAM no', 'PasswordAuthentication no',
             'KbdInteractiveAuthentication no', 'PermitRootLogin prohibit-password',
-            'AllowTcpForwarding remote', 'GatewayPorts ' + gateway_ports,
+            'AllowTcpForwarding ' + forwarding, 'GatewayPorts ' + gateway_ports,
             'Subsystem sftp internal-sftp', 'LogLevel ERROR',
         ])
         (root / 'sshd_config').write_text(config + '\n')

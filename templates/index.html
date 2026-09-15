@@ -301,6 +301,24 @@
         .agent-connect-activity { white-space: pre-wrap; }
         .agent-connect-steps { padding-left: 24px; line-height: 1.5; }
         #agent-tunnel-message { white-space: pre-wrap; }
+        #ssh-tunnels-dialog { width: min(720px, calc(100vw - 32px)); box-sizing: border-box;
+            max-height: 85vh; overflow: auto; background: #222; color: #ddd; border: 1px solid #555; border-radius: 8px; }
+        #ssh-tunnels-dialog::backdrop { background: rgba(0,0,0,0.75); }
+        #ssh-tunnel-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+        #ssh-tunnel-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+        #ssh-tunnel-form input, #ssh-tunnel-form select { box-sizing: border-box; width: 100%; margin: 0; min-width: 0;
+            padding: 8px; color: #eee; background: #333; border: 1px solid #555; border-radius: 4px; font: inherit; }
+        #ssh-tunnels-dialog button { padding: 8px 14px; color: #fff; background: #087fe7;
+            border: 0; border-radius: 4px; cursor: pointer; }
+        #ssh-tunnels-dialog button:disabled { opacity: 0.5; cursor: default; }
+        #ssh-tunnel-start { align-self: end; }
+        #ssh-tunnels-list { display: grid; gap: 8px; max-height: 35vh; overflow: auto; }
+        .ssh-tunnel-item { padding: 10px; border: 1px solid #555; border-radius: 5px; }
+        .ssh-tunnel-route, .ssh-tunnel-error { overflow-wrap: anywhere; }
+        .ssh-tunnel-details { color: #aaa; font-size: 12px; }
+        .ssh-tunnel-error, #ssh-tunnels-message.error { color: #ff8a83; }
+        .ssh-tunnel-item button { margin-bottom: 0; }
+        #ssh-tunnel-policy { color: #aaa; font-size: 12px; }
         .agent-copy-warning {
             position: sticky; top: 0; z-index: 1;
             padding: 12px 14px; border: 2px solid #e3a632; border-radius: 6px;
@@ -1277,6 +1295,7 @@
             <button id="agent-connect-btn" class="status-action" type="button" title="Copy the agent prompt for the current tab's environment">Agent Info for Current Tab</button>
             <button id="agent-toggle-btn" class="status-action" type="button" title="Show Agent panel">Show Agent Panel</button>
             <button id="agent-tunnel-btn" class="status-action" type="button" title="Set up remote Agent access through this SSH connection" hidden>Agent Tunnel</button>
+            <button id="ssh-tunnels-btn" class="status-action" type="button" title="Manage TCP port forwarding through this SSH connection" hidden>Tunnels</button>
             <button id="sftp-status-btn" class="status-action status-sftp" type="button" title="Open Files" aria-label="Open Files" hidden>&#x1F4C1;</button>
             <button id="quick-settings" class="status-action" type="button" title="Settings" aria-label="Settings">&#x2699;&#xFE0F;</button>
             <details id="tab-more">
@@ -1340,6 +1359,32 @@
             <button id="agent-tunnel-stop" type="button">Stop Tunnel</button>
             <button id="agent-tunnel-apply" type="button">Start / Renew Access</button>
             <button id="agent-tunnel-close" type="button">Close</button>
+        </div>
+    </dialog>
+    <dialog id="ssh-tunnels-dialog" aria-labelledby="ssh-tunnels-title">
+        <h3 id="ssh-tunnels-title">Tunnels for Current SSH Tab</h3>
+        <p id="ssh-tunnels-carrier"></p>
+        <p id="ssh-tunnel-policy">TCP only. Core host means the computer running Core, including WSL when Core runs there.
+            These temporary tunnels stop when this SSH connection closes or this page disconnects, including a reload.</p>
+        <div id="ssh-tunnels-list"></div>
+        <p id="ssh-tunnels-empty">No user tunnels on this tab.</p>
+        <h4>Add tunnel</h4>
+        <form id="ssh-tunnel-form">
+            <label>Name (optional)<input id="ssh-tunnel-name" maxlength="80" autocomplete="off"></label>
+            <label>Direction<select id="ssh-tunnel-direction">
+                <option value="local">Core host → SSH remote (-L)</option>
+                <option value="remote">SSH remote → Core host (-R)</option>
+            </select></label>
+            <label id="ssh-tunnel-listen-label">Core listening port (0 = automatic)<input id="ssh-tunnel-listen" type="number" min="0" max="65535" value="0" required></label>
+            <label id="ssh-tunnel-target-host-label">Target host, reached from SSH remote<input id="ssh-tunnel-target-host" value="127.0.0.1" maxlength="253" spellcheck="false" required></label>
+            <label>Target port<input id="ssh-tunnel-target-port" type="number" min="1" max="65535" value="80" required></label>
+            <button id="ssh-tunnel-start" type="submit">Start tunnel</button>
+        </form>
+        <p id="ssh-tunnel-bind-hint">Listens on Core's 127.0.0.1.</p>
+        <p id="ssh-tunnels-message" role="status" aria-live="polite"></p>
+        <div class="agent-tunnel-actions">
+            <button id="ssh-tunnels-refresh" type="button">Refresh status</button>
+            <button id="ssh-tunnels-close" type="button">Close</button>
         </div>
     </dialog>
     <div id="terminal"></div>
@@ -2753,9 +2798,168 @@
                 }
                 const state = getActiveTerminalState();
                 document.getElementById('agent-tunnel-btn').hidden = !state || !state.connected || state.connectionType !== 'ssh';
+                document.getElementById('ssh-tunnels-btn').hidden = !state || !state.connected || state.connectionType !== 'ssh';
                 document.getElementById('agent-connect-btn').hidden = !state
                     || (state.connectionType === 'ssh' && !readyAgentTunnels.has(state.id));
             }
+
+            const sshTunnelsDialog = document.getElementById('ssh-tunnels-dialog');
+            const sshTunnelsMessage = document.getElementById('ssh-tunnels-message');
+            let sshTunnelView = null;
+            let sshTunnelTimer = null;
+            let sshTunnelRequest = 0;
+            let sshTunnelPending = false;
+
+            function setSshTunnelMessage(message, error = false) {
+                sshTunnelsMessage.textContent = message;
+                sshTunnelsMessage.classList.toggle('error', error);
+            }
+
+            function invalidateSshTunnelView() {
+                if (!sshTunnelView) return;
+                sshTunnelView.invalid = true;
+                clearInterval(sshTunnelTimer);
+                setSshTunnelMessage('The SSH connection or viewer changed. Reopen Tunnels after reconnecting.', true);
+                document.getElementById('ssh-tunnel-start').disabled = true;
+                for (const entry of sshTunnelView.entries.values()) {
+                    entry.element.querySelector('.ssh-tunnel-details').textContent = 'Status unavailable for this viewer.';
+                    entry.element.querySelector('button').disabled = true;
+                }
+            }
+
+            function renderSshTunnel(snapshot) {
+                const view = sshTunnelView;
+                if (!view || view.invalid || !snapshot || typeof snapshot.tunnel_id !== 'string') return;
+                let entry = view.entries.get(snapshot.tunnel_id);
+                if (entry && snapshot.revision < entry.snapshot.revision) return;
+                if (!entry) {
+                    const element = document.createElement('div');
+                    element.className = 'ssh-tunnel-item';
+                    element.dataset.tunnelId = snapshot.tunnel_id;
+                    element.innerHTML = '<strong class="ssh-tunnel-name"></strong><div class="ssh-tunnel-route"></div>'
+                        + '<div class="ssh-tunnel-details"></div><div class="ssh-tunnel-error"></div><button type="button">Stop</button>';
+                    entry = { element, snapshot };
+                    view.entries.set(snapshot.tunnel_id, entry);
+                    element.querySelector('button').addEventListener('click', () => requestSshTunnel('stop', { tunnel_id: snapshot.tunnel_id }));
+                    document.getElementById('ssh-tunnels-list').appendChild(element);
+                }
+                entry.snapshot = snapshot;
+                const remote = snapshot.direction === 'remote';
+                const port = snapshot.bound_port || snapshot.listen_port || 'automatic';
+                const target = snapshot.target_host.includes(':') ? `[${snapshot.target_host}]` : snapshot.target_host;
+                entry.element.querySelector('.ssh-tunnel-name').textContent = snapshot.name || (remote ? 'Remote tunnel (-R)' : 'Local tunnel (-L)');
+                entry.element.querySelector('.ssh-tunnel-route').textContent = `${remote ? 'SSH remote' : 'Core host'} 127.0.0.1:${port}`
+                    + ` → ${remote ? 'Core host' : 'SSH remote'} → ${target}:${snapshot.target_port}`;
+                const statuses = { starting: 'Starting', listening: 'Listening', stopped: 'Stopped', failed: 'Failed' };
+                entry.element.querySelector('.ssh-tunnel-details').textContent = `${statuses[snapshot.status] || 'Unknown'} · ${snapshot.connections} connection(s)`
+                    + ` · Sent ${formatSftpBytes(snapshot.bytes_sent)} · Received ${formatSftpBytes(snapshot.bytes_received)}`
+                    + (snapshot.cleanup_pending ? ' · Cleanup pending' : '');
+                entry.element.querySelector('.ssh-tunnel-error').textContent = snapshot.error || '';
+                entry.element.querySelector('button').disabled = !['starting', 'listening'].includes(snapshot.status);
+                document.getElementById('ssh-tunnels-empty').hidden = true;
+            }
+
+            function requestSshTunnel(operation, fields = {}) {
+                const view = sshTunnelView;
+                if (!view || view.invalid || !sshTunnelsDialog.open || sshTunnelPending) return;
+                if (!isCurrentAgentTunnelConnection(view.connection)) {
+                    invalidateSshTunnelView();
+                    return;
+                }
+                sshTunnelPending = true;
+                const requestId = ++sshTunnelRequest;
+                document.getElementById('ssh-tunnel-start').disabled = true;
+                const timer = setTimeout(() => {
+                    if (requestId !== sshTunnelRequest) return;
+                    sshTunnelPending = false;
+                    ++sshTunnelRequest;
+                    setSshTunnelMessage('Tunnel status request timed out. Refresh status before retrying.', true);
+                    document.getElementById('ssh-tunnel-start').disabled = false;
+                }, 15000);
+                socket.emit('ssh_tunnel', { terminal_id: view.connection.state.id, operation, ...fields }, result => {
+                    clearTimeout(timer);
+                    if (requestId !== sshTunnelRequest || view !== sshTunnelView || !sshTunnelsDialog.open) return;
+                    sshTunnelPending = false;
+                    if (!isCurrentAgentTunnelConnection(view.connection)) {
+                        invalidateSshTunnelView();
+                        return;
+                    }
+                    document.getElementById('ssh-tunnel-start').disabled = false;
+                    if (!result || result.status !== 'ok') {
+                        setSshTunnelMessage(result?.message || 'Tunnel request failed.', true);
+                        return;
+                    }
+                    if (operation === 'status') {
+                        if (view.connectionId && view.connectionId !== result.connection_id) {
+                            invalidateSshTunnelView();
+                            return;
+                        }
+                        setSshTunnelMessage('');
+                        view.connectionId = result.connection_id;
+                        const current = new Set(result.tunnels.map(item => item.tunnel_id));
+                        for (const [id, entry] of view.entries) {
+                            if (!current.has(id) && ['stopped', 'failed'].includes(entry.snapshot.status)) {
+                                entry.element.remove();
+                                view.entries.delete(id);
+                            }
+                        }
+                        result.tunnels.forEach(renderSshTunnel);
+                        document.getElementById('ssh-tunnels-empty').hidden = view.entries.size > 0;
+                    } else {
+                        renderSshTunnel(result.tunnel);
+                        setSshTunnelMessage(operation === 'start' ? 'Tunnel requested. Watch the tunnel status.' : 'Tunnel stopped.');
+                    }
+                });
+            }
+
+            function applySshTunnelState(data) {
+                const view = sshTunnelView;
+                if (view && isCurrentAgentTunnelConnection(view.connection) && data?.terminal_id === view.connection.state.id
+                        && view.connectionId && data.connection_id === view.connectionId) renderSshTunnel(data.tunnel);
+            }
+
+            document.getElementById('ssh-tunnels-btn').addEventListener('click', () => {
+                const state = getActiveTerminalState();
+                if (!state || !state.connected || state.connectionType !== 'ssh') return;
+                sshTunnelView = { connection: { state, connectedAt: state.connectedAt }, connectionId: null, entries: new Map() };
+                ++sshTunnelRequest;
+                sshTunnelPending = false;
+                document.getElementById('ssh-tunnels-carrier').textContent = `SSH tab: ${state.title} (${state.id}). Tunnels use this route's final SSH connection.`;
+                document.getElementById('ssh-tunnels-list').replaceChildren();
+                document.getElementById('ssh-tunnels-empty').hidden = false;
+                setSshTunnelMessage('');
+                sshTunnelsDialog.showModal();
+                requestSshTunnel('status');
+                clearInterval(sshTunnelTimer);
+                sshTunnelTimer = setInterval(() => requestSshTunnel('status'), 2000);
+            });
+            document.getElementById('ssh-tunnels-close').addEventListener('click', () => sshTunnelsDialog.close());
+            sshTunnelsDialog.addEventListener('close', () => {
+                if (sshTunnelsDialog.open) return;
+                clearInterval(sshTunnelTimer);
+                sshTunnelView = null;
+                sshTunnelPending = false;
+                ++sshTunnelRequest;
+            });
+            document.getElementById('ssh-tunnels-refresh').addEventListener('click', () => requestSshTunnel('status'));
+            document.getElementById('ssh-tunnel-direction').addEventListener('change', event => {
+                const remote = event.target.value === 'remote';
+                document.getElementById('ssh-tunnel-listen-label').firstChild.textContent = `${remote ? 'Remote' : 'Core'} listening port (0 = automatic)`;
+                document.getElementById('ssh-tunnel-target-host-label').firstChild.textContent = `Target host, reached from ${remote ? 'Core host' : 'SSH remote'}`;
+                document.getElementById('ssh-tunnel-bind-hint').textContent = remote
+                    ? 'Requests remote 127.0.0.1; non-loopback clients are rejected. The SSH server controls its actual listening interfaces.'
+                    : "Listens on Core's 127.0.0.1.";
+            });
+            document.getElementById('ssh-tunnel-form').addEventListener('submit', event => {
+                event.preventDefault();
+                requestSshTunnel('start', { spec: {
+                    name: document.getElementById('ssh-tunnel-name').value,
+                    direction: document.getElementById('ssh-tunnel-direction').value,
+                    listen_port: document.getElementById('ssh-tunnel-listen').valueAsNumber,
+                    target_host: document.getElementById('ssh-tunnel-target-host').value.trim(),
+                    target_port: document.getElementById('ssh-tunnel-target-port').valueAsNumber,
+                } });
+            });
 
             function setAgentTunnelInfoView(infoView) {
                 document.getElementById('agent-tunnel-title').textContent = infoView ? 'Agent Info for Current Tab' : 'Agent Tunnel';
@@ -6485,6 +6689,7 @@
                     return Object.entries(value).some(([key, item]) => key === 'privateKey' || key === 'temporaryKeys' || containsPrivateSshData(item));
                 }
                 let pendingAgentTunnelAcks = null;
+                let pendingSshTunnelAcks = null;
                 const originalEmit = socket.emit.bind(socket);
                 socket.emit = (eventName, ...args) => {
                     if (['start_ssh', 'ssh_browser_sign_response'].includes(eventName)) privateSshWireData ||= args.some(containsPrivateSshData);
@@ -6502,6 +6707,10 @@
                     if (captureSshStarts && eventName === 'start_ssh') return socket;
                     if (pendingAgentTunnelAcks && eventName === 'agent_tunnel') {
                         pendingAgentTunnelAcks.push(args[1]);
+                        return socket;
+                    }
+                    if (pendingSshTunnelAcks && eventName === 'ssh_tunnel') {
+                        pendingSshTunnelAcks.push(args[1]);
                         return socket;
                     }
                     return originalEmit(eventName, ...args);
@@ -6577,6 +6786,17 @@
                     },
                     applyAgentTunnelStateForTest(payload) {
                         applyAgentTunnelState(cloneForTest(payload));
+                    },
+                    holdSshTunnelRequestsForTest() {
+                        pendingSshTunnelAcks = [];
+                    },
+                    completeSshTunnelRequestForTest(index, payload) {
+                        const acknowledge = pendingSshTunnelAcks[index];
+                        pendingSshTunnelAcks[index] = null;
+                        acknowledge(cloneForTest(payload));
+                    },
+                    applySshTunnelStateForTest(payload) {
+                        applySshTunnelState(cloneForTest(payload));
                     },
                     applyAgentConnectionActivityForTest(payload) {
                         applyAgentConnectionActivity(cloneForTest(payload));
@@ -7240,6 +7460,7 @@
                 applyAgentStatePayload(data);
             });
             socket.on('agent_tunnel_state', applyAgentTunnelState);
+            socket.on('ssh_tunnel_state', applySshTunnelState);
             socket.on('agent_connection_activity', applyAgentConnectionActivity);
             socket.on('agent_action_request', data => {
                 applyAgentActionPayload(data);
@@ -10319,7 +10540,7 @@
                 return !!request && request.state === getActiveTerminalState()
                     && isCurrentTerminalState(request.state) && !request.state.inPip && request.state.connected && socket.connected
                     && document.activeElement === request.focus
-                    && !document.querySelector('#settings-modal.open, #paste-review-modal.open, #session-recovery-modal.open, #browser-auth-help-modal.open, #agent-tunnel-dialog[open], #agent-connect-dialog[open]');
+                    && !document.querySelector('#settings-modal.open, #paste-review-modal.open, #session-recovery-modal.open, #browser-auth-help-modal.open, #agent-tunnel-dialog[open], #agent-connect-dialog[open], #ssh-tunnels-dialog[open]');
             }
             document.addEventListener('focusin', () => {
                 if (pendingContextPaste && document.activeElement !== pendingContextPaste.focus) pendingContextPaste = null;

@@ -622,6 +622,51 @@ Python environment.
 UART access follows the same local-client/browser-authorization gate as Local
 Shell unless `STANDTERM_ALLOW_REMOTE_UART=1` is set.
 
+## User SSH Tunnels
+
+After connecting an SSH tab, open **Tunnels** to create temporary TCP forwards
+without reconnecting. Choose a direction, listening port, target host and target
+port; listening port `0` lets the operating system choose an available port.
+Each tunnel shows its assigned port, state, active connections and byte counts.
+**Stop** closes that tunnel's listener and connections while keeping SSH, Files
+and other tunnels available. **Listening** confirms the forward is ready to
+accept connections; target-service failures appear when a client connects.
+
+| Direction | Listener | Target is reached from |
+| --- | --- | --- |
+| Local (`-L`) | Core host's `127.0.0.1` | Final SSH host |
+| Remote (`-R`) | Requested on final SSH host's `127.0.0.1` | Core host |
+
+For example, local port `8080` to target `127.0.0.1:80` makes the SSH host's web
+service available at `http://127.0.0.1:8080` on the Core host. A remote forward
+with those ports makes the Core host's port `80` available from the SSH host's
+port `8080`. Here, **Core host** means where the Core process runs: WSL when
+started by `run_wsl.bat`, even if the Desktop window runs on Windows. Target
+hostnames are resolved on the side shown in the table. Jump routes use the final
+SSH connection, including routes with three jump hosts.
+
+These controls require an authenticated browser viewer. External-agent commands,
+helpers and skills cannot create, inspect or stop user tunnels. Tunnels stop when
+SSH closes or their creating viewer disconnects, including page reload or loss
+of its Core connection. Closing only the Tunnels dialog keeps them running.
+They are not saved or restored automatically. A tab allows up to eight user
+tunnels, with eight simultaneous connections per tunnel and 32 shared with Agent
+Tunnel on its SSH transport.
+
+User tunnels require SSH TCP forwarding support but no remote StandTerm helper,
+Python or listener-inspection tool. Local listeners bind only to `127.0.0.1`.
+Remote forwards request that address and reject peers with non-loopback source
+addresses; the SSH server controls the actual listening interfaces. A server
+configured with `GatewayPorts yes` can bind more broadly than requested. Use
+`GatewayPorts no` or `clientspecified` when the listener itself must stay on
+loopback. Generic tunnels do not inspect or change server configuration.
+
+The target may be Core or an Agent HTTP endpoint. TCP forwarding grants no API
+access by itself: the endpoint's authentication and tab permissions still apply.
+**Agent Tunnel** remains the managed preset that prepares helpers, grants and
+Agent Info, and verifies the remote listener. Its low privilege comes from its
+scoped HTTP API and grants; generic TCP forwarding does not reproduce that setup.
+
 ## SSH Agent Tunnel
 
 On a connected SSH tab, **Agent Tunnel** can provision remote Agent access

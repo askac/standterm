@@ -23,6 +23,7 @@ from collections import deque
 from pathlib import Path, PurePosixPath
 from functools import partial
 from agent_tunnel import AgentTunnel, tunnel_ingress
+from ssh_tunnels import UserTunnel, parse_tunnel_spec, USER_TUNNEL_MAX_ACTIVE, USER_TUNNEL_MAX_RECORDS
 from core_version import CORE_VERSION
 from flask import Flask, Response, render_template, request, abort, make_response, redirect, send_file, jsonify, stream_with_context
 from flask_socketio import SocketIO, ConnectionRefusedError
@@ -3636,6 +3637,8 @@ class ExternalAgentAttachStore:
 
 external_agent_attach_store = ExternalAgentAttachStore()
 agent_tunnels = {}
+user_ssh_tunnels = {}
+user_ssh_tunnels_lock = threading.RLock()
 
 def get_agent_session_id(session_token):
     if not session_token:
@@ -5852,6 +5855,10 @@ def close_bridge(bridge):
     if not bridge:
         return
     bridge.closing = True
+    with user_ssh_tunnels_lock:
+        user_tunnels = [record['tunnel'] for record in user_ssh_tunnels.values() if record['bridge'] is bridge]
+    for user_tunnel in user_tunnels:
+        user_tunnel.stop()
     tunnel = getattr(bridge, 'agent_tunnel', None)
     if tunnel:
         tunnel.close()
@@ -7661,6 +7668,89 @@ def agent_tunnel_status(tunnel):
         'connect_info': build_agent_connect_info(
             info, list(info['terminal_handoffs']), runtime_label='SSH host ' + json.dumps(ssh_context)),
     }
+
+
+def user_ssh_tunnel_authorized(record):
+    bridge = record['bridge']
+    return (socket_session_tokens.get(record['sid']) == record['session_token']
+            and get_bridge(record['session_token'], record['terminal_id']) is bridge
+            and not bridge.closing and bridge.ssh is not None
+            and bridge.ssh.get_transport() is record['transport']
+            and is_terminal_bridge_allowed_for_sid(bridge, record['sid']))
+
+
+def emit_user_ssh_tunnel(record):
+    if not user_ssh_tunnel_authorized(record):
+        return
+    with user_ssh_tunnels_lock:
+        if user_ssh_tunnels.get(record['tunnel'].id) is not record:
+            return
+    socketio.emit('ssh_tunnel_state', {
+        'terminal_id': record['terminal_id'], 'connection_id': record['tunnel'].forwarding.id,
+        'tunnel': record['tunnel'].snapshot(),
+    }, room=record['sid'])
+
+
+@socketio.on('ssh_tunnel')
+def on_user_ssh_tunnel(data):
+    # This adapter requires browser-session authentication. Do not register it
+    # in the external-agent command table without a separate authorization flow.
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    if not session_token or not terminal_id:
+        return {'status': 'failed', 'message': 'Invalid SSH terminal.'}
+    bridge = get_allowed_bridge(session_token, terminal_id, request.sid)
+    transport = bridge.ssh.get_transport() if isinstance(bridge, SSHBridge) and bridge.ssh else None
+    if not transport or not transport.is_authenticated() or bridge.closing:
+        return {'status': 'failed', 'message': 'Tunnels require a connected SSH terminal.'}
+    operation = data.get('operation')
+    if operation == 'status':
+        with user_ssh_tunnels_lock:
+            records = [record for record in user_ssh_tunnels.values()
+                       if record['bridge'] is bridge and record['sid'] == request.sid and record['transport'] is transport]
+        return {'status': 'ok', 'terminal_id': terminal_id,
+                'tunnels': [record['tunnel'].snapshot() for record in records],
+                'connection_id': UserTunnel.connection_id(transport),
+                'ssh_endpoint': bridge.sftp_endpoint()}
+    if operation == 'stop':
+        tunnel_id = data.get('tunnel_id')
+        if not isinstance(tunnel_id, str) or len(tunnel_id) > 128:
+            return {'status': 'failed', 'message': 'Invalid tunnel.'}
+        with user_ssh_tunnels_lock:
+            record = user_ssh_tunnels.get(tunnel_id)
+            if not record or record['bridge'] is not bridge or record['sid'] != request.sid or record['transport'] is not transport:
+                return {'status': 'failed', 'message': 'This tunnel is unavailable to this viewer.'}
+        record['tunnel'].stop()
+        return {'status': 'ok', 'tunnel': record['tunnel'].snapshot()}
+    if operation != 'start':
+        return {'status': 'failed', 'message': 'Invalid tunnel operation.'}
+    try:
+        spec = parse_tunnel_spec(data.get('spec'))
+    except ValueError as exc:
+        return {'status': 'failed', 'message': str(exc)}
+    record = {'session_token': session_token, 'sid': request.sid, 'terminal_id': terminal_id,
+              'bridge': bridge, 'transport': transport}
+    tunnel = UserTunnel(transport, spec, authorized=lambda: user_ssh_tunnel_authorized(record),
+                        changed=lambda: emit_user_ssh_tunnel(record))
+    record['tunnel'] = tunnel
+    with user_ssh_tunnels_lock:
+        if not user_ssh_tunnel_authorized(record):
+            return {'status': 'failed', 'message': 'The SSH connection or viewer changed during setup.'}
+        active = [item for item in user_ssh_tunnels.values() if not item['tunnel'].closed.is_set()]
+        if len(active) >= USER_TUNNEL_MAX_RECORDS or sum(item['bridge'] is bridge for item in active) >= USER_TUNNEL_MAX_ACTIVE:
+            return {'status': 'failed', 'message': 'The active tunnel limit was reached. Stop an unused tunnel first.'}
+        finished = sorted((item for item in user_ssh_tunnels.values() if item['tunnel'].closed.is_set()),
+                          key=lambda item: item['tunnel'].created_at)
+        while len(user_ssh_tunnels) >= USER_TUNNEL_MAX_RECORDS and finished:
+            user_ssh_tunnels.pop(finished.pop(0)['tunnel'].id, None)
+        # Reserve the pending owner before any network I/O or background work.
+        user_ssh_tunnels[tunnel.id] = record
+    try:
+        socketio.start_background_task(tunnel.start)
+    except Exception:
+        tunnel.setup_done.set()
+        tunnel.stop('The tunnel worker could not be started.')
+    return {'status': 'ok', 'tunnel': tunnel.snapshot()}
 
 
 @socketio.on('agent_tunnel')
@@ -11374,6 +11464,10 @@ def on_disconnect(reason=None):
     agent_viewer_ids.pop(request.sid, None)
     if session_token:
         cancel_terminal_starts(session_token, sid=request.sid)
+        with user_ssh_tunnels_lock:
+            user_tunnels = [record['tunnel'] for record in user_ssh_tunnels.values() if record['sid'] == request.sid]
+        for user_tunnel in user_tunnels:
+            user_tunnel.stop()
         for tunnel in list(agent_tunnels.values()):
             if tunnel.sid == request.sid:
                 tunnel.close()

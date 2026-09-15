@@ -10,6 +10,8 @@ COMPILE_TARGETS = [
     'app.py',
     'session_recovery.py',
     'server_startup.py',
+    'ssh_forwarding.py',
+    'ssh_tunnels.py',
     'scripts/access_window.py',
     'tests/access_window_smoke.py',
     'tests/server_startup_smoke.py',
@@ -28,6 +30,8 @@ COMPILE_TARGETS = [
     'tests/ssh_start_smoke.py',
     'tests/ssh_login_smoke.py',
     'tests/ssh_node_credentials_smoke.py',
+    'tests/ssh_tunnels_smoke.py',
+    'tests/ssh_tunnels_browser_smoke.py',
     'tests/ime_anchor_browser_smoke.py',
 ]
 

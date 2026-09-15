@@ -3,7 +3,6 @@ import json
 import base64
 import hashlib
 import secrets
-import select
 import re
 import shlex
 import socket
@@ -14,6 +13,7 @@ from pathlib import Path, PurePosixPath
 
 from flask import Flask, jsonify, request
 from werkzeug.serving import WSGIRequestHandler, make_server
+from ssh_forwarding import forwarding_for, relay_tcp
 
 
 TUNNEL_IO_TIMEOUT = 30
@@ -21,7 +21,6 @@ TUNNEL_COMMAND_TIMEOUT = 45
 TUNNEL_MAX_CHANNELS = 16
 TUNNEL_MAX_REQUEST_BYTES = 1024 * 1024
 TUNNEL_MONITOR_INTERVAL = 1
-TUNNEL_FORWARD_POLL_SECONDS = 1
 TUNNEL_REMOTE_PYTHON = 'python3'
 TUNNEL_HELPERS = ('cli', 'input', 'jsonl', 'repl', 'scp', 'shcmd', 'type', 'rsfile', 'mcp', 'tunnel_runtime')
 TUNNEL_SKILLS = ('standterm-external-agent-skill', 'standterm-file-transfer', 'standterm-privileged-hitl')
@@ -46,6 +45,7 @@ class AgentTunnel:
         self.revoke = revoke
         self.id = 'tun_' + secrets.token_urlsafe(18)
         self.transport = bridge.ssh.get_transport()
+        self.forwarding = forwarding_for(self.transport) if self.transport else None
         self.runtime = None
         self.port = None
         self.active = False
@@ -228,27 +228,24 @@ class AgentTunnel:
     def _accept(self, channel, origin, destination):
         with self.lock:
             if (not self.active or destination != ('127.0.0.1', self.port)
-                    or len(self._channels) >= TUNNEL_MAX_CHANNELS):
+                    or len(self._channels) >= TUNNEL_MAX_CHANNELS
+                    or not self.forwarding.connections.acquire(blocking=False)):
                 channel.close()
                 return
             self._channels.add(channel)
-        threading.Thread(target=self._forward, args=(channel,), daemon=True).start()
+        try:
+            threading.Thread(target=self._forward, args=(channel,), daemon=True).start()
+        except Exception:
+            with self.lock:
+                self._channels.discard(channel)
+            self.forwarding.connections.release()
+            channel.close()
 
     def _forward(self, channel):
         local = None
         try:
             local = socket.create_connection(('127.0.0.1', self._server.server_port), TUNNEL_IO_TIMEOUT)
-            local.settimeout(TUNNEL_IO_TIMEOUT)
-            channel.settimeout(TUNNEL_IO_TIMEOUT)
-            while self.active:
-                readable, _, _ = select.select([channel, local], [], [], TUNNEL_FORWARD_POLL_SECONDS)
-                if not readable:
-                    continue
-                for source in readable:
-                    data = source.recv(65536)
-                    if not data:
-                        return
-                    (local if source is channel else channel).sendall(data)
+            relay_tcp(channel, local, lambda: not self.active)
         except (OSError, EOFError):
             pass
         finally:
@@ -257,6 +254,7 @@ class AgentTunnel:
                 local.close()
             with self.lock:
                 self._channels.discard(channel)
+            self.forwarding.connections.release()
 
     def start(self):
         with self.setup_lock:
@@ -312,9 +310,8 @@ class AgentTunnel:
                 return
 
     def _cancel_forward(self):
-        if self.port and self.transport.is_active():
-            # A cancel acknowledgement is not needed to fence access locally.
-            self.transport.global_request('cancel-tcpip-forward', ('127.0.0.1', self.port), wait=False)
+        if self.port:
+            self.forwarding.cancel_remote(self.port, self)
 
     def _request_forward(self):
         completed = threading.Event()
@@ -323,7 +320,7 @@ class AgentTunnel:
 
         def run():
             try:
-                self.port = self.transport.request_port_forward('127.0.0.1', 0, handler=self._accept)
+                self.port = self.forwarding.request_remote(0, self, self._accept, self._closed.is_set)
                 if self._closed.is_set():
                     self._cancel_forward()
             except Exception as exc:
