@@ -25,6 +25,7 @@ from functools import partial
 from agent_tunnel import AgentTunnel, tunnel_ingress
 from ssh_tunnels import UserTunnel, parse_tunnel_spec, USER_TUNNEL_MAX_ACTIVE, USER_TUNNEL_MAX_RECORDS
 from core_version import CORE_VERSION
+from terminal_capabilities import build_capability_response
 from flask import Flask, Response, render_template, request, abort, make_response, redirect, send_file, jsonify, stream_with_context
 from flask_socketio import SocketIO, ConnectionRefusedError
 from external_agent_dispatch import ExternalAgentCommandDispatcher
@@ -11371,6 +11372,23 @@ def on_ssh_login_response(data):
                 or not isinstance(bridge, SSHBridge)):
             return
         bridge.resolve_login_input(request.sid, data)
+
+@socketio.on('terminal_capability_query')
+def on_terminal_capability_query(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    if not session_token or not terminal_id:
+        return
+    bridge = get_allowed_bridge(session_token, terminal_id, request.sid)
+    if not bridge or request.sid not in bridge.attached_sids:
+        return
+    response = build_capability_response(data.get('kind'), data.get('names'))
+    if response:
+        query_identity = (data.get('kind'), data.get('names') if data.get('kind') == 'terminfo' else None)
+        bridge.write_capability_response(data.get('capability_epoch'), data.get('output_seq'),
+                                         data.get('query_index'), response,
+                                         query_identity=query_identity)
+
 
 @socketio.on('ssh_input')
 def on_ssh_input(data):

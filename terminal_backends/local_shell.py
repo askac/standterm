@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from .base import BackendSettingSchema, BackendStartFieldSchema, TerminalBackendPlugin, TerminalBridge
+from .terminfo import add_local_rgb_terminfo
 from runtime_logging import log_message
 
 try:
@@ -701,6 +702,7 @@ class LocalShellBridge(TerminalBridge):
         env['TERM'] = self._ssh_term
         env['COLORTERM'] = 'truecolor'
         env['TERM_PROGRAM'] = 'StandTerm'
+        add_local_rgb_terminfo(env)
         return env
 
     def _connect_windows(self, cols, rows):

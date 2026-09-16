@@ -1,9 +1,12 @@
 import re
+import secrets
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Any, Optional
+
+from terminal_capabilities import CAPABILITY_RESPONSE_WINDOW, MAX_CAPABILITY_QUERIES_PER_OUTPUT
 
 
 @dataclass(frozen=True)
@@ -199,6 +202,8 @@ class TerminalBridge:
         self.cols = 80
         self.rows = 24
         self.output_seq = 0
+        self.capability_epoch = secrets.token_urlsafe(12)
+        self.capability_responses = {}
         self.last_output_at = None
         self.replay_buffer = deque()
         self.replay_buffer_bytes = 0
@@ -262,6 +267,7 @@ class TerminalBridge:
                 self.output_seq += 1
                 self.last_output_at = time.time()
                 payload.setdefault('output_seq', self.output_seq)
+                payload['capability_epoch'] = self.capability_epoch
                 self._remember_terminal_payload(payload)
                 self.runtime.append_transcript(
                     self.owner_session,
@@ -297,7 +303,26 @@ class TerminalBridge:
 
     def replay_to(self, sid):
         for payload in list(self.replay_buffer):
-            self.runtime.emit_socket('ssh_output', payload, room=sid)
+            self.runtime.emit_socket('ssh_output', dict(payload, replay=True), room=sid)
+
+    def write_capability_response(self, epoch, output_seq, query_index, response, *, query_identity=None):
+        with self.input_lock:
+            earliest = max(1, self.output_seq - CAPABILITY_RESPONSE_WINDOW + 1)
+            if (epoch != self.capability_epoch or type(output_seq) is not int
+                    or not earliest <= output_seq <= self.output_seq
+                    or type(query_index) is not int
+                    or not 0 <= query_index < MAX_CAPABILITY_QUERIES_PER_OUTPUT
+                    or self.closing):
+                return
+            self.capability_responses = {seq: indices for seq, indices in self.capability_responses.items()
+                                         if seq >= earliest}
+            indices = self.capability_responses.setdefault(output_seq, set())
+            # Include the reply identity: a viewer may have joined after a split query's prefix.
+            key = (query_identity if query_identity is not None else response, query_index)
+            if key in indices or len(indices) >= MAX_CAPABILITY_QUERIES_PER_OUTPUT:
+                return
+            indices.add(key)
+            self.write(response)
 
     def read_loop(self):
         raise NotImplementedError

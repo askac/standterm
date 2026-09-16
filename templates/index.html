@@ -1501,6 +1501,7 @@
         </div>
     </div>
 
+    <script src="{{ url_for('static', filename='js/standterm-capabilities.js') }}"></script>
     <script src="{{ url_for('static', filename='js/standterm-ssh-routes.js') }}"></script>
     <script src="{{ url_for('static', filename='js/standterm-ssh-node-auth.js') }}"></script>
     <script src="{{ url_for('static', filename='js/standterm-ssh-route-editor.js') }}"></script>
@@ -6514,6 +6515,11 @@
                 };
                 enableWebglRenderer(state);
                 terminals.set(terminalId, state);
+                state.capabilityAddon = new window.StandTermCapabilities(query => {
+                    if (!isCurrentTerminalState(state) || !socket.connected || !state.connected) return;
+                    socket.emit('terminal_capability_query', { terminal_id: state.id, ...query });
+                });
+                term.loadAddon(state.capabilityAddon);
                 term.onTitleChange(value => {
                     if (!isCurrentTerminalState(state)) return;
                     const title = normalizeTerminalApplicationTitle(value);
@@ -6760,8 +6766,10 @@
                         captureTerminalIo = true;
                         socket.off('ssh_output', handleSshOutputPayload);
                         const state = getActiveTerminalState();
-                        await Promise.all([state?.term, state?.agentTerminalMirror].filter(Boolean)
-                            .map(term => new Promise(resolve => term.write('', resolve))));
+                        await Promise.all([
+                            state && new Promise(resolve => state.capabilityAddon.write('', null, resolve)),
+                            state?.agentTerminalMirror && new Promise(resolve => state.agentTerminalMirror.write('', resolve))
+                        ].filter(Boolean));
                     },
                     clearEmitted() {
                         emitted.length = 0;
@@ -6870,7 +6878,7 @@
                         if (state.agentTerminalMirror) state.agentTerminalMirror.options.fontSize = Number(fontSize);
                         return true;
                     },
-                    getActiveTerminalBufferCellsForTest(row, useMirror = false) {
+                    getActiveTerminalBufferCellsForTest(row, useMirror = false, includeColors = false) {
                         const state = getActiveTerminalState();
                         const term = state && useMirror ? state.agentTerminalMirror : (state && state.term);
                         const activeBuffer = term && term.buffer && term.buffer.active;
@@ -6881,7 +6889,8 @@
                         const cells = [];
                         for (let column = 0; column < term.cols; column += 1) {
                             const cell = line.getCell(column);
-                            cells.push(cell ? { chars: cell.getChars(), width: cell.getWidth() } : null);
+                            cells.push(cell ? { chars: cell.getChars(), width: cell.getWidth(),
+                                ...(includeColors ? { fg: cell.getFgColor(), fgRgb: !!cell.isFgRGB() } : {}) } : null);
                         }
                         return cloneForTest(cells);
                     },
@@ -8641,10 +8650,10 @@
                 hideActionPrompt();
                 resetConnectButton();
             };
-            function writeTerminalOutput(state, data, outputSeq) {
+            function writeTerminalOutput(state, data, outputSeq, context = null) {
                 if (typeof data !== 'string') return;
                 const scheduleAfterMirror = writeAgentTerminalMirror(state, data, outputSeq, () => scheduleAgentViewportSnapshot(state));
-                state.term.write(data, scheduleAfterMirror ? undefined : () => scheduleAgentViewportSnapshot(state));
+                state.capabilityAddon.write(data, context, scheduleAfterMirror ? undefined : () => scheduleAgentViewportSnapshot(state));
             }
             function handleSshOutputPayload(data) {
                 if (!data || typeof data !== 'object') return;
@@ -8809,7 +8818,7 @@
                             state.lastOutputSeq = data.output_seq;
                         }
                         if (typeof data.data === 'string') {
-                            writeTerminalOutput(state, data.data, data.output_seq);
+                            writeTerminalOutput(state, data.data, data.output_seq, data);
                         }
                         break;
                     default:

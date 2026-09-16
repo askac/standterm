@@ -8212,6 +8212,35 @@ def test_terminal_bridge_tracks_shared_session_metadata():
     assert metadata['terminal_quiet_ms'] >= 0
 
 
+def test_capability_queries_are_authorized_and_not_human_input():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+    bridge.attach(sid)
+    bridge.emit_output({'message_type': 'terminal', 'data': '\x1b[>q'})
+    query = {'terminal_id': standterm.TERMINAL_ID_MAIN, 'kind': 'version',
+             'capability_epoch': bridge.capability_epoch, 'output_seq': 1, 'query_index': 0}
+    with patch.object(standterm, 'note_agent_human_input_for_terminal') as human_input:
+        client.emit('terminal_capability_query', query)
+        client.emit('terminal_capability_query', query)
+        human_input.assert_not_called()
+    assert len(bridge.writes) == 1
+    assert 'StandTerm(' in bridge.writes[0]
+    assert not standterm.agent_user_input_metadata_store.get_recent(session_token, standterm.TERMINAL_ID_MAIN)
+    client.emit('terminal_capability_query', dict(query, kind='input', names='whoami\n', query_index=1))
+    client.emit('terminal_capability_query', dict(query, capability_epoch='old-bridge', query_index=1))
+    with patch.object(standterm, 'is_terminal_bridge_allowed_for_sid', return_value=False):
+        client.emit('terminal_capability_query', dict(query, query_index=1))
+    bridge.detach(sid)
+    client.emit('terminal_capability_query', dict(query, query_index=1))
+    assert len(bridge.writes) == 1
+    client.emit('ssh_input', {'terminal_id': standterm.TERMINAL_ID_MAIN, 'data': 'real input'})
+    assert bridge.writes[-1] == 'real input'
+    assert len(standterm.agent_user_input_metadata_store.get_recent(session_token, standterm.TERMINAL_ID_MAIN)) == 1
+    client.disconnect()
+
+
 def test_ssh_input_records_agent_metadata_after_validation():
     client = make_client()
     session_token = current_session_token()
@@ -8683,6 +8712,7 @@ def main():
         test_terminal_bridge_tracks_shared_session_metadata,
         test_ssh_target_metadata_is_structured_and_access_scoped,
         test_ssh_input_records_agent_metadata_after_validation,
+        test_capability_queries_are_authorized_and_not_human_input,
         test_agent_input_metadata_bounds_and_sanitized_preview,
         test_privacy_state_blocks_agent_context_and_redacts_input_metadata,
         test_ssh_input_does_not_record_invalid_or_oversized_metadata,

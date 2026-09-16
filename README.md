@@ -277,6 +277,26 @@ xterm.js 24-bit color support without requiring a less widely installed terminfo
 entry. SSH sessions continue to request the compatible `xterm-256color` PTY;
 remote environment-variable propagation remains controlled by the SSH server.
 
+On POSIX hosts with `infocmp` and `tic`, Local Shell adds RGB flags to a private
+copy of the effective `xterm-256color` terminfo entry. This lets ordinary `tmux`
+clients detect truecolor without changing your tmux configuration or installed
+terminfo database. Explicit `TERMINFO` / `TERMINFO_DIRS` overrides are preserved;
+missing tools or compilation errors retain the normal shell environment. The
+private entry remains in temporary storage for detached processes to use.
+Native Windows shells do not use this overlay.
+
+StandTerm also answers XTVERSION as `StandTerm(<core version>)` and XTGETTCAP
+queries for `TN` / `name`, `Co` / `colors` (256 indexed colors), `RGB` (8 bits
+per component), and `Tc`. These replies do not advertise unsupported clipboard,
+extended-keyboard, or margin capabilities.
+
+Remote tmux 3.4 does not discover RGB from these queries. On such hosts, use
+`tmux -T RGB` (or `tmux -T RGB attach` for an existing session). For tmux 3.2+
+you can instead opt into `set -as terminal-features ',xterm-256color:RGB'` in
+your own tmux configuration and reattach. That setting applies to every client
+using that TERM, including other terminal applications. StandTerm does not
+modify remote configuration or install remote terminfo automatically.
+
 Windows Local Shell uses pywinpty 3.0.5 to avoid the fixed per-read delay in
 the older 2.x backend. The launchers refresh dependencies when `requirements.txt`
 changes; an existing running server must be restarted to use the new dependency.
