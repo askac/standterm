@@ -368,6 +368,10 @@
         .settings-row:last-child { border-bottom: none; }
         .settings-row label { flex: 1; color: #ddd; cursor: pointer; }
         .settings-row input, .settings-row select { background: #2c2c2e; border: 1px solid #555; color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px; outline: none; }
+        .settings-theme-preview { margin: 8px 0; padding: 12px; border: 1px solid #555; border-radius: 5px; font: 12px/1.6 Consolas, "Courier New", monospace; overflow-wrap: anywhere; }
+        .settings-theme-cursor { display: inline-block; width: 0.6em; height: 1.1em; vertical-align: text-bottom; }
+        .settings-theme-palette { display: grid; grid-template-columns: 42px repeat(8, minmax(0, 1fr)); gap: 4px; align-items: center; margin-top: 8px; font-size: 10px; }
+        .settings-theme-swatch { height: 14px; border: 1px solid currentColor; border-radius: 2px; }
         .settings-value { color: #f2f2f2; text-align: right; overflow-wrap: anywhere; max-width: 58%; }
         .settings-status { color: #aaa; font-size: 12px; line-height: 1.4; margin-bottom: 10px; overflow-wrap: anywhere; }
         .settings-list { display: grid; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; color: #ddd; }
@@ -1032,6 +1036,14 @@
                                     </optgroup>
                                 </select>
                             </div>
+                            <div class="settings-theme-preview" id="settings-theme-preview" role="group" aria-label="Color scheme preview">
+                                <div><span data-theme-color="green">user@host</span>:<span data-theme-color="blue">~</span>$ ls</div>
+                                <div>README.md&nbsp; <span data-theme-color="cyan">logs/</span>&nbsp; <span data-theme-color="magenta">config.json</span></div>
+                                <div><span data-theme-color="green">Ready</span>&nbsp; <span data-theme-color="yellow">Warning</span>&nbsp; <span data-theme-color="red">Error</span></div>
+                                <div>$ <span class="settings-theme-cursor" aria-label="Cursor"></span></div>
+                                <div class="settings-theme-palette"></div>
+                            </div>
+                            <div class="settings-status">Preview only. Save Changes applies this theme.</div>
                             <div class="settings-row"><label for="pref-fontFace">Font face</label><input type="text" id="pref-fontFace"></div>
                             <div class="settings-row"><label for="pref-powerlineSymbols" title="Use the bundled Powerline symbols font as a fallback for prompt glyphs such as the branch symbol.">Enable Powerline symbol fallback</label><input type="checkbox" id="pref-powerlineSymbols"></div>
                             <div class="settings-row"><label for="pref-fontSize">Font size</label><input type="number" id="pref-fontSize" min="8" max="32"></div>
@@ -11271,6 +11283,35 @@
             }
 
             const settingsModal = document.getElementById('settings-modal');
+            function renderColorSchemePreview() {
+                const theme = SCHEMES[document.getElementById('pref-colorScheme').value] || SCHEMES.vintage;
+                const preview = document.getElementById('settings-theme-preview');
+                preview.style.backgroundColor = theme.background;
+                preview.style.color = theme.foreground;
+                preview.style.fontFamily = getTerminalFontFace();
+                preview.querySelectorAll('[data-theme-color]').forEach(element => {
+                    element.style.color = theme[element.dataset.themeColor];
+                });
+                preview.querySelector('.settings-theme-cursor').style.backgroundColor = theme.cursor;
+                const palette = preview.querySelector('.settings-theme-palette');
+                palette.replaceChildren();
+                for (const bright of [false, true]) {
+                    const label = document.createElement('span');
+                    label.textContent = bright ? 'Bright' : 'Normal';
+                    palette.appendChild(label);
+                    for (const color of ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white']) {
+                        const key = bright ? `bright${color[0].toUpperCase()}${color.slice(1)}` : color;
+                        const swatch = document.createElement('span');
+                        swatch.className = 'settings-theme-swatch';
+                        swatch.style.backgroundColor = theme[key];
+                        swatch.title = `${bright ? 'Bright ' : ''}${color}: ${theme[key]}`;
+                        swatch.setAttribute('role', 'img');
+                        swatch.setAttribute('aria-label', swatch.title);
+                        palette.appendChild(swatch);
+                    }
+                }
+            }
+            document.getElementById('pref-colorScheme').onchange = renderColorSchemePreview;
             const openSettings = () => {
                 document.getElementById('pref-useCustomMenu').checked = prefs.useCustomMenu;
                 document.getElementById('pref-copyOnSelect').checked = prefs.copyOnSelect;
@@ -11280,6 +11321,7 @@
                 document.getElementById('pref-cjkWideAmbiguous').checked = prefs.cjkWideAmbiguous;
                 document.getElementById('pref-urlClickAction').value = prefs.urlClickAction;
                 document.getElementById('pref-colorScheme').value = prefs.colorScheme;
+                renderColorSchemePreview();
                 document.getElementById('pref-fontFace').value = prefs.fontFace;
                 document.getElementById('pref-powerlineSymbols').checked = prefs.powerlineSymbols;
                 document.getElementById('pref-fontSize').value = prefs.fontSize;
