@@ -316,8 +316,12 @@ states the token status; tab labels include remaining idle seconds, for example
 does not mean an agent is currently executing.
 Revocation, invalidation, or disabling access removes the tint, and connection
 warnings take priority. Background tabs update without opening the Agent panel.
-The tab-row Mint and Mint 3× buttons sit beside Pause Agent when the Agent panel
-is hidden, and always target the active terminal.
+The **🤖 Agent Mint** action is the leftmost action in the right-side tab tools.
+It applies the permission selected in **Settings > General > Agent Access** to
+the active terminal, waits for Core to confirm it, and mints a standard token.
+The default is **Full + Mint**. The tab-row Mint and Mint 3× buttons remain
+beside Pause Agent when the Agent panel is hidden, and always target the active
+terminal; compact windows keep those actions in the Agent panel.
 
 This development build also enables an **experimental IME positioning PoC**:
 the composition overlay follows its starting input line during terminal redraws.
@@ -768,8 +772,9 @@ Typical local flow:
 
 1. Launch StandTerm and open the browser.
 2. Connect a terminal.
-3. Open the Agent panel for that terminal.
-4. Mint a standard or 3x-idle external-agent token from the browser Agent UI.
+3. Choose **🤖 Agent Mint** to apply the saved permission and mint a standard
+   token for that terminal in one action. The default is **Full + Mint**.
+4. For another permission or a 3x-idle token, use the browser Agent panel.
    When the Agent panel is hidden, the same actions are available in the status
    bar for the active terminal.
 5. On a local tab, open **Agent Info for Current Tab** in the toolbar. **Copy URL** provides the

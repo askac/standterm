@@ -1970,6 +1970,20 @@ def test_external_agent_observe_cannot_send():
     assert result['error_code'] == standterm.AGENT_ERROR_MODE_NOT_WRITABLE
     assert bridge.writes == []
 
+    started_at = time.monotonic()
+    captured_result = standterm.process_external_agent_command({
+        'op': 'send-wait',
+        'token': token,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'kind': 'text',
+        'text': 'blocked\n',
+        'wait_ms': standterm.AGENT_EXTERNAL_TAIL_MAX_WAIT_MS,
+    })
+    assert captured_result['status'] == standterm.AGENT_STATUS_FAILED
+    assert captured_result['error_code'] == standterm.AGENT_ERROR_MODE_NOT_WRITABLE
+    assert time.monotonic() - started_at < 0.5
+    assert bridge.writes == []
+
     client.disconnect()
 
 

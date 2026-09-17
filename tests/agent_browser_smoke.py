@@ -601,6 +601,71 @@ def test_toolbar_pause_targets_main_tab_not_panel_override(browser, access_url):
         close_context(context)
 
 
+def test_agent_mint_quick_action_applies_saved_permission(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        placement = page.evaluate(
+            """() => ({
+                firstTool: document.querySelector('#terminal-tools > :first-child')?.id,
+                text: document.getElementById('agent-access-mint-btn').innerText,
+                disabled: document.getElementById('agent-access-mint-btn').disabled,
+                panelVisible: document.getElementById('agent-panel').classList.contains('visible')
+            })"""
+        )
+        check(placement == {
+            'firstTool': 'agent-access-mint-btn',
+            'text': '🤖 Agent Mint',
+            'disabled': False,
+            'panelVisible': False,
+        }, 'Agent Mint was not the ready leftmost right-side action')
+
+        page.click('#quick-settings')
+        check(page.locator('#pref-agentAccessMintMode').input_value() == 'direct_active',
+              'Agent Mint permission did not default to Full + Mint')
+        page.click('#settings-close')
+
+        clear_emitted(page)
+        page.click('#agent-access-mint-btn')
+        page.wait_for_function(
+            """() => {
+                const state = window.terminalTest.getActiveAgentState();
+                return state?.mode === 'direct_active' && state?.external_token?.status === 'active';
+            }""",
+            timeout=10000,
+        )
+        minted = active_agent_state(page)
+        check(minted['mode'] == 'direct_active', 'one-click Agent Mint did not apply Full permission')
+        check(minted['external_token']['idleTimeoutMultiplier'] == 1,
+              'one-click Agent Mint did not mint the standard token lifetime')
+        check(page.locator('#agent-access-mint-btn').inner_text() == '🤖 Agent Mint',
+              'Agent Mint action did not return to its ready label')
+        mode_events = [
+            entry['args'][0] for entry in get_emitted(page, 'agent_mode_set')
+            if entry['args'] and entry['args'][0].get('terminal_id') == TERMINAL_ID
+        ]
+        check(mode_events == [{'terminal_id': TERMINAL_ID, 'mode': 'direct_active'}],
+              'Agent Mint did not make one structured Full permission request')
+
+        emit_socket(page, 'agent_mode_set', {'terminal_id': TERMINAL_ID, 'mode': 'disabled'})
+        wait_for_agent(page, "state.mode === 'disabled'")
+        page.click('#quick-settings')
+        page.select_option('#pref-agentAccessMintMode', 'approval_pending')
+        page.click('#settings-save')
+        clear_emitted(page)
+        page.click('#agent-access-mint-btn')
+        page.wait_for_function(
+            """() => {
+                const state = window.terminalTest.getActiveAgentState();
+                return state?.mode === 'approval_pending' && state?.external_token?.status === 'active';
+            }""",
+            timeout=10000,
+        )
+        check('Grant Approval access' in page.locator('#agent-access-mint-btn').get_attribute('title'),
+              'Agent Mint title did not reflect the saved permission')
+    finally:
+        close_context(context)
+
+
 def test_agent_panel_can_be_dragged(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
@@ -2033,12 +2098,16 @@ def test_external_token_tab_indicator_tracks_background_lifecycle(browser, acces
         page.evaluate('id => window.terminalTest.switchTerminalForTest(id)', TERMINAL_ID)
         set_agent_mode(page, 'direct', 'direct_active')
         page.set_viewport_size({'width': 640, 'height': 600})
-        for selector in ['#new-tab-btn', '#agent-pause-btn', '#agent-status-mint-btn',
-                         '#agent-status-mint-3x-btn', '#agent-toggle-btn', '#quick-settings']:
+        for selector in ['#new-tab-btn', '#agent-pause-btn', '#agent-access-mint-btn',
+                         '#agent-toggle-btn', '#quick-settings']:
             bounds = page.locator(selector).bounding_box()
             check(bounds is not None and bounds['x'] >= 0 and bounds['x'] + bounds['width'] <= 640,
                   f'{selector} is clipped beside the compact tab row')
-        page.click('#agent-status-mint-btn')
+        check(page.locator('#agent-status-mint-btn').is_hidden(),
+              'compact tab row did not hide the redundant standard Mint action')
+        check(page.locator('#agent-status-mint-3x-btn').is_hidden(),
+              'compact tab row did not move the 3x Mint action into the Agent panel')
+        page.click('#agent-access-mint-btn')
         page.wait_for_selector(main_tab + '.agent-token-active', state='attached')
         page.click('#agent-pause-btn')
         wait_for_agent(page, "state.mode === 'paused'")
@@ -4748,6 +4817,7 @@ def main():
         test_platform_passkey_recovers_live_session_without_access_token,
         test_agent_panel_can_be_dragged,
         test_toolbar_pause_targets_main_tab_not_panel_override,
+        test_agent_mint_quick_action_applies_saved_permission,
         test_terminal_pip_hides_selected_tab_and_keeps_background_tab,
         test_sftp_status_actions_and_terminal_pip_transition,
         test_sftp_send_context_action_is_limited_to_connected_ssh_tabs,
