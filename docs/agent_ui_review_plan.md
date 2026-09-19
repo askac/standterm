@@ -43,7 +43,7 @@ do not consolidate them merely to shorten labels.
 | 3 | Review English UI copy and terminology | Core terms agreed; initial English sources reviewed | Review each proposed change for target, permissions, consequences, and next action; check related tooltips, Desktop help, and tests before applying it. |
 | 4 | Finalize the translation exchange table | Initial exchange validated with an independent translator | Stable keys, approved English source, context, and placeholder constraints are sufficient for an independent translator. |
 | 5 | Pilot Agent access and local connection information | Implemented; validation below | Cover static and dynamic text, titles, and accessible names; preserve connected sessions and authorization; support English fallback. |
-| 6 | Translate and integrate approved rows | Agent pilot, browser access/recovery, Agent approvals/transfers, connection/login controls, SSH route/profile editors, settings transfer/preference actions and user SSH tunnels integrated | AI edits only target-language cells; validate keys and placeholders; review authorization and destructive-action wording. |
+| 6 | Translate and integrate approved rows | Agent pilot, browser access/recovery, Agent approvals/transfers, connection/login controls, SSH route/profile editors, settings transfer/preference actions, user SSH tunnels and Agent Tunnel integrated | AI edits only target-language cells; validate keys and placeholders; review authorization and destructive-action wording. |
 | 7 | Expand Core and Desktop coverage | Deferred | Verify secondary windows, native menus, setup, diagnostics, packaging, and representative layouts. |
 
 ## Validation of the reliability changes
@@ -66,7 +66,7 @@ validated separately below.
 
 ## Deferred UI work
 
-Agent diagnostics, Agent Tunnel setup, secondary windows,
+Agent diagnostics, remaining settings panels, secondary windows,
 and Desktop localization remain outside the completed workflows. Translation
 starts only after the English source for the selected workflow is reviewed.
 Extra screen diffing, render hints, key aliases, and byte-limit options remain optional optimizations.
@@ -472,3 +472,59 @@ Validation uses WSL Chromium and local SSH servers. Native Desktop and a physica
 remote host were not part of this phase. Agent Tunnel authorization/renewal and
 remote verification copy are the next separate review candidate; general TCP
 forwarding does not replace that workflow or grant API access.
+
+## Agent Tunnel access and verification
+
+Twenty-nine reviewed messages now cover Agent Tunnel setup, target permissions,
+verification and lifecycle feedback. The table contains 474 rows: 473 referenced
+bilingual messages and the existing removal. Existing connection/copy labels
+are reused. The remote prompt, URL, SSH context fields and backend diagnostics
+remain unchanged data; only their surrounding display text is localized.
+
+On a new tunnel, Start installs helpers and skills in a private temporary SSH
+directory and verifies the remote path. On an existing active tunnel, apply
+updates grants without repeating those checks. Valid tokens keep their expiry;
+invalid grants can be replaced. The UI therefore says Preparing Agent access
+and labels verified_at as the last verification, using the selected UI locale.
+
+Check verifies the loopback-only remote listener, helper bundle and expected
+Core instance. Failure stops this tunnel and revokes its grants. This consequence
+is visible beside the controls and attached to Check as an accessible
+description. Readiness does not prove an authenticated Agent request: activity
+and zero-grant states remain separate. Stop revokes this tunnel's access before
+asynchronous cleanup; it does not revoke local agents or guarantee deletion of
+all remote files. Close leaves the tunnel running.
+
+| Finding | Severity | Evidence | Critic remedy | Main response | Resolution | Validation |
+| --- | --- | --- | --- | --- | --- | --- |
+| Apply does not always verify or extend token expiry | Medium | on_agent_tunnel and update_agent_tunnel_targets | Remove verification promise; explain renewal scope | Accept | Preparing message and valid-token expiry hint; retain Start / Renew Access label | Actual apply preserves valid tokens, expiry and verified_at; replaces only expired grant without executing verification commands |
+| Check failure has a revocation consequence | Medium | Runtime verify and handler exception cleanup | State failure stops/revokes and timestamp is historical | Accept | Visible Check hint and localized last-verification label | Existing missing-listener and activity tests; bilingual failed-check controls and timestamps |
+| Stop and remote cleanup have different guarantees | Medium | AgentTunnel.close and best-effort cleanup | Scope revocation to this tunnel; avoid complete-deletion claims | Accept | Scoped cleanup message and lifecycle hint; retain Close behavior | Slow cleanup revokes immediately; browser stopped/pending states and Close without Stop |
+| Target list is a status snapshot and ready can have no grants | Low | renderAgentTunnelTargets and backend panel-target synchronization | Explain refresh and separate readiness from Agent activity | Accept | Localized known permissions, raw unknown mode fallback, remote-access inclusion label | Bilingual mode display preserves actual permissions, zero-grant readiness and raw data; existing enrollment/ownership tests |
+| Copy prompt terminology | Editorial | Previously agreed glossary and shared connection labels | Alternative translation for prompt | Modify | Reuse the established connection-instructions wording | Existing raw prompt and clipboard checks in both locales |
+
+Protocol values, request/connection/carrier guards, public discovery scope,
+authorization defaults and backend behavior remain unchanged. Separate local
+token creation is not required. Later enabled tabs still follow the same
+viewer's Agent Panel permissions, and Refresh does not silently renew access.
+
+Two bounded independent review passes found no remaining material issue. The
+review changed the apply/verification wording and added explicit Check-failure
+and Stop consequences. It also verified literal interpolation, English fallback
+and all 29 new key references in memory. Keeping backend diagnostics raw and
+the target list as a refreshed snapshot is a deliberate scope decision; no
+automatic retry, broader discovery or continuous synchronization was added.
+
+| Check | Result |
+| --- | --- |
+| Existing Agent Tunnel backend suite | All 26 tests passed, including real SSH, grant ownership/enrollment, target publication, loopback verification, failed checks, revocation and slow cleanup. |
+| Renewal boundary regression | One additional real-SSH case passed: valid tokens/expiry and verification time persist across apply; only the expired grant is replaced. |
+| Bilingual browser suite | Three cases in each language passed, retaining focus/clipboard checks and late-carrier/disconnect protection, and adding permission display, zero grants, raw data, stopped/cleanup and Close boundaries. |
+| Layout | Both languages fit the 480x600 dialog without horizontal overflow; displayed controls remain inside it. |
+| Catalog and static checks | Six exporter and six lookup tests passed; all 473 keys are referenced, the generated catalog is current, Python syntax and diff checks passed. |
+
+Validation uses WSL Chromium and local SSH fixtures; native Desktop and a
+physical remote host were not exercised. Typed backend error localization and
+continuous remote health monitoring remain outside scope. The next candidate
+is a compact review of remaining General/Appearance settings labels before
+considering broader Server, Diagnostics or Desktop coverage.

@@ -4474,8 +4474,15 @@ def test_core_agent_connect_info_can_be_copied_and_confirmed(browser, access_url
         close_context(context)
 
 
-def test_agent_tunnel_uses_panel_permissions_and_keeps_focus(browser, access_url):
-    context, page = new_page(browser, access_url)
+def test_agent_tunnel_uses_panel_permissions_and_keeps_focus(browser, access_url, ui_language='en'):
+    context, page = new_page(browser, access_url, ui_language=ui_language)
+    def ui_text(key, params=None):
+        return page.evaluate("""({key,params}) =>
+            StandTermI18n.create(StandTermMessages, document.documentElement.lang).t(key, params)
+        """, {'key':key,'params':params or {}})
+    token_requests = []
+    page.on('request', lambda request: token_requests.append(request.url)
+            if '/agent/external/token' in request.url else None)
     try:
         attach_agent(page)
         page.evaluate('() => window.terminalTest.captureTerminalIoForTest()')
@@ -4497,8 +4504,10 @@ def test_agent_tunnel_uses_panel_permissions_and_keeps_focus(browser, access_url
         requests = page.evaluate("() => window.terminalTest.getEmitted().filter(e => e.event === 'agent_tunnel')")
         check(len(requests) == 1, 'Apply sent duplicate tunnel operations')
         request = requests[0]['args'][0]
-        check(request['terminal_id'] == 'main' and request['operation'] == 'apply', 'carrier scope is wrong')
+        check(request == {'terminal_id':'main','operation':'apply'}, 'carrier scope is wrong')
         check('targets' not in request, 'Browser supplied a second authorization list')
+        check(not any(event['event'] in {'agent_attach','agent_detach','agent_mode_set','agent_pause'}
+                      for event in get_emitted(page)), 'Tunnel setup changed Agent Panel permissions')
         page.focus('#agent-tunnel-close')
         page.evaluate("() => { window.dispatchEvent(new Event('blur')); window.dispatchEvent(new Event('focus')); }")
         page.wait_for_timeout(150)
@@ -4507,31 +4516,42 @@ def test_agent_tunnel_uses_panel_permissions_and_keeps_focus(browser, access_url
         check(page.locator('#agent-tunnel-info').is_hidden(), 'failed setup advertised usable Connect Info')
         # Backend integration tests cover real SSH; this fixture exercises the ready-state controls.
         remote_url = 'http://127.0.0.1:43210/agentinfo'
+        remote_prompt = 'Run the agent on this SSH host. AgentInfoURL: ' + remote_url
+        verified_at = 1700000000
         page.evaluate('payload => window.terminalTest.applyAgentTunnelStatusForTest(payload)', {
             'status': 'ready', 'carrier_id': 'test-tunnel', 'agentinfo_url': remote_url,
-            'verified_at': time.time(), 'connect_info': 'Run the agent on this SSH host. AgentInfoURL: ' + remote_url,
+            'verified_at': verified_at, 'connect_info': remote_prompt,
             'ssh_context': {'host': '<img src=x>', 'ssh_tab': 'main'},
             'terminal_ids': ['main'], 'terminals': [{'terminal_id': 'main', 'last_request_at': None}],
         })
         check(page.input_value('#agent-tunnel-url') == remote_url, 'Tunnel showed the local Core URL')
         check(page.locator('#agent-connect-btn').is_visible(), 'Ready tunnel did not reveal remote info')
         check(page.locator('#agent-tunnel-carrier img').count() == 0, 'SSH host context was rendered as HTML')
-        check('verified:' in page.inner_text('#agent-tunnel-verification'), 'Tunnel verification time is missing')
-        check('waiting for agent' in page.inner_text('#agent-tunnel-activity'), 'Ready falsely confirmed agent access')
+        verified_time = page.evaluate('({stamp,locale}) => new Date(stamp * 1000).toLocaleString(locale)',
+                                      {'stamp':verified_at,'locale':ui_language})
+        check(page.inner_text('#agent-tunnel-verification') == ui_text('agent.tunnel.verified_at', {'time':verified_time}),
+              'Tunnel verification time was not localized')
+        check(page.inner_text('#agent-tunnel-activity') == 'main: ' + ui_text('agent.connection.waiting'),
+              'Ready falsely confirmed agent access')
         page.evaluate('''() => Object.defineProperty(navigator, 'clipboard', {
             configurable: true, value: {writeText: async text => {window.copiedAgentText = text;}}
         })''')
         page.click('#agent-tunnel-copy-url')
         page.wait_for_function('url => window.copiedAgentText === url', arg=remote_url)
         prompt = page.input_value('#agent-tunnel-info')
+        check(prompt == remote_prompt, 'Display localization changed the remote prompt')
         page.click('#agent-tunnel-copy')
         page.wait_for_function('text => window.copiedAgentText === text', arg=prompt)
         for carrier in ('unrelated-tunnel', 'test-tunnel'):
+            activity_at = 1700000300
             page.evaluate('payload => window.terminalTest.applyAgentConnectionActivityForTest(payload)', {
-                'terminal_id': 'main', 'carrier_id': carrier, 'last_request_at': time.time(),
+                'terminal_id': 'main', 'carrier_id': carrier, 'last_request_at': activity_at,
             })
-            expected = 'waiting for agent' if carrier == 'unrelated-tunnel' else 'last authenticated request'
-            check(expected in page.inner_text('#agent-tunnel-activity'), 'Activity did not match the current SSH tunnel')
+            activity_time = page.evaluate('({stamp,locale}) => new Date(stamp * 1000).toLocaleString(locale)',
+                                          {'stamp':activity_at,'locale':ui_language})
+            expected = ui_text('agent.connection.waiting') if carrier == 'unrelated-tunnel' else ui_text(
+                'agent.connection.request_at', {'time':activity_time})
+            check(page.inner_text('#agent-tunnel-activity') == 'main: ' + expected, 'Activity did not match the current SSH tunnel')
         page.evaluate('() => window.terminalTest.clearEmitted()')
         page.click('#agent-tunnel-check')
         page.wait_for_selector('#agent-tunnel-apply:not([disabled])')
@@ -4541,12 +4561,13 @@ def test_agent_tunnel_uses_panel_permissions_and_keeps_focus(browser, access_url
         check(page.locator('#agent-connect-btn').is_hidden(), 'Failed check retained remote info shortcut')
         page.click('#agent-tunnel-close')
         check(not page.locator('#agent-tunnel-dialog').is_visible(), 'Close did not dismiss tunnel dialog')
+        check(not token_requests, 'Agent Tunnel minted a local Agent token')
     finally:
         close_context(context)
 
 
-def test_remote_agent_info_tracks_ssh_carrier_and_rejects_late_replies(browser, access_url):
-    context, page = new_page(browser, access_url)
+def test_remote_agent_info_tracks_ssh_carrier_and_rejects_late_replies(browser, access_url, ui_language='en'):
+    context, page = new_page(browser, access_url, ui_language=ui_language)
     try:
         page.evaluate('''() => {
             window.terminalTest.holdAgentTunnelRequestsForTest();
@@ -4569,11 +4590,13 @@ def test_remote_agent_info_tracks_ssh_carrier_and_rejects_late_replies(browser, 
         page.click('#agent-tunnel-btn')
         page.evaluate('payload => window.terminalTest.completeAgentTunnelRequestForTest(0, payload)', first)
         prompt = page.input_value('#agent-tunnel-info')
+        check(prompt == first['connect_info'], 'Display localization changed the remote prompt')
         page.click('#agent-tunnel-copy')
         page.wait_for_function('text => window.copiedAgentText === text', arg=prompt)
         page.click('#agent-tunnel-close')
         page.click('#agent-connect-btn')
-        check(page.inner_text('#agent-tunnel-title') == 'Agent connection', 'Remote shortcut opened the wrong view')
+        title = page.evaluate("() => StandTermI18n.create(StandTermMessages, document.documentElement.lang).t('agent.connection.title')")
+        check(page.inner_text('#agent-tunnel-title') == title, 'Remote shortcut opened the wrong view')
         check(page.locator('#agent-tunnel-setup').is_hidden(), 'Remote info repeated setup controls')
         check(page.locator('#agent-tunnel-copy').is_hidden(), 'Remote shortcut offered a stale cached prompt')
         page.evaluate('payload => window.terminalTest.completeAgentTunnelRequestForTest(1, payload)', first)

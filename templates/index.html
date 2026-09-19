@@ -1458,7 +1458,7 @@
             <button id="agent-access-mint-btn" class="status-action" type="button" title="Authorize Direct input access and create a standard token for the current tab" data-i18n="agent.access.grant">Authorize agent</button>
             <button id="agent-connect-btn" class="status-action" type="button" title="Copy the agent prompt for the current tab's environment" data-i18n="agent.connection.title" data-i18n-title="agent.connection.tooltip">Agent connection</button>
             <button id="agent-toggle-btn" class="status-action" type="button" title="Show Agent panel">Show Agent Panel</button>
-            <button id="agent-tunnel-btn" class="status-action" type="button" title="Set up remote Agent access through this SSH connection" hidden>Agent Tunnel</button>
+            <button id="agent-tunnel-btn" class="status-action" type="button" title="Set up Agent access from this SSH host" data-i18n-title="agent.tunnel.tooltip" data-i18n="agent.tunnel.title" hidden>Agent Tunnel</button>
             <button id="ssh-tunnels-btn" class="status-action" type="button" title="Manage TCP forwarding for this SSH tab" data-i18n-title="ssh.tunnels.tooltip" data-i18n="ssh.tunnels.action" hidden>Tunnels</button>
             <button id="sftp-status-btn" class="status-action status-sftp" type="button" title="Open Files" aria-label="Open Files" hidden>&#x1F4C1;</button>
             <button id="transfer-queue-btn" class="status-action" type="button" title="Transfer Queue" aria-label="Transfer Queue" data-i18n-title="agent.transfer.queue" data-i18n-aria-label="agent.transfer.queue" hidden><span aria-hidden="true">&#x21C4;</span> <span id="transfer-queue-count">0</span></button>
@@ -1501,37 +1501,40 @@
         </div>
     </dialog>
     <dialog id="agent-tunnel-dialog" aria-labelledby="agent-tunnel-title">
-        <h3 id="agent-tunnel-title">Agent Tunnel</h3>
+        <h3 id="agent-tunnel-title" data-i18n="agent.tunnel.title">Agent Tunnel</h3>
         <p id="agent-tunnel-carrier"></p>
         <div id="agent-tunnel-setup">
         <ol class="agent-connect-steps">
-            <li>Use each tab's <strong>Agent Panel</strong> to enable access and choose its permission. This tunnel follows those permissions, including tabs enabled later.</li>
-            <li>Click <strong>Start / Renew Access</strong>. Local Mint is not required. You can enable tabs after starting the tunnel.</li>
-            <li>After setup succeeds, click <strong>Copy Prompt</strong> and paste it to the agent on this SSH host.</li>
+            <li data-i18n="agent.tunnel.step_permissions">In each intended tab’s Agent panel, enable access and choose its permission.</li>
+            <li data-i18n="agent.tunnel.step_start">Click Start / Renew Access to start or update this tunnel’s access. Valid tokens keep their expiry; separate local tokens are not required.</li>
+            <li data-i18n="agent.tunnel.step_copy">Once ready, click Copy Prompt and paste it to the agent on this SSH host.</li>
         </ol>
-        <p>Start provisions the current helpers and skills in a private directory on this SSH host. Python 3.9+, SFTP, remote forwarding, and listener inspection are required (Linux, FreeBSD, and macOS checks are available).</p>
+        <p data-i18n="agent.tunnel.requirements">A new tunnel copies the current helpers and skills to a private temporary directory on this SSH host. Requires Python 3.9+, SFTP, remote forwarding and listener inspection; checks support Linux, FreeBSD and macOS.</p>
+        <p id="agent-tunnel-targets-hint" data-i18n="agent.tunnel.targets_hint">Refresh Status updates this list; it does not check the tunnel.</p>
         <div id="agent-tunnel-targets"></div>
         </div>
+        <p id="agent-tunnel-lifecycle-hint" data-i18n="agent.tunnel.lifecycle_hint">This tunnel follows this page’s tab permissions, including tabs enabled later. Close keeps it running. Stop revokes this tunnel’s access. It stops when its SSH connection closes or this page disconnects, including a reload.</p>
+        <p id="agent-tunnel-check-hint" data-i18n="agent.tunnel.check_hint">Check Tunnel verifies the remote loopback listener, helpers, and connection to this Core instance. Failure stops this tunnel and revokes its access.</p>
         <p id="agent-tunnel-message" role="status"></p>
         <div id="agent-tunnel-connection" hidden>
-            <h4>Agent Info</h4>
+            <h4 data-i18n="agent.connection.title">Agent connection</h4>
             <div class="agent-connect-url">
-                <label for="agent-tunnel-url">Agent Info URL</label>
-                <input id="agent-tunnel-url" readonly aria-label="Agent Info URL">
-                <button id="agent-tunnel-copy-url" type="button">Copy URL</button>
+                <label for="agent-tunnel-url" data-i18n="agent.connection.url">Agent Info URL</label>
+                <input id="agent-tunnel-url" readonly aria-label="Agent Info URL" data-i18n-aria-label="agent.connection.url">
+                <button id="agent-tunnel-copy-url" type="button" data-i18n="common.copy_url">Copy URL</button>
             </div>
             <p id="agent-tunnel-verification"></p>
             <p id="agent-tunnel-activity" class="agent-connect-activity" aria-live="polite"></p>
         </div>
-        <textarea id="agent-tunnel-info" readonly aria-label="Remote agent prompt" hidden></textarea>
+        <textarea id="agent-tunnel-info" readonly aria-label="Agent connection prompt" data-i18n-aria-label="agent.connection.prompt" hidden></textarea>
         <div class="agent-tunnel-actions">
-            <button id="agent-tunnel-copy" type="button" hidden>Copy Prompt</button>
-            <button id="agent-tunnel-manage" type="button" hidden>Manage Tunnel</button>
-            <button id="agent-tunnel-refresh" type="button">Refresh Status</button>
-            <button id="agent-tunnel-check" type="button" disabled>Check Tunnel</button>
-            <button id="agent-tunnel-stop" type="button">Stop Tunnel</button>
-            <button id="agent-tunnel-apply" type="button">Start / Renew Access</button>
-            <button id="agent-tunnel-close" type="button">Close</button>
+            <button id="agent-tunnel-copy" type="button" data-i18n="agent.connection.copy" hidden>Copy Prompt</button>
+            <button id="agent-tunnel-manage" type="button" data-i18n="agent.tunnel.manage" hidden>Manage Tunnel</button>
+            <button id="agent-tunnel-refresh" type="button" data-i18n="common.refresh">Refresh Status</button>
+            <button id="agent-tunnel-check" type="button" data-i18n="agent.tunnel.check" aria-describedby="agent-tunnel-check-hint" disabled>Check Tunnel</button>
+            <button id="agent-tunnel-stop" type="button" data-i18n="agent.tunnel.stop" aria-describedby="agent-tunnel-lifecycle-hint">Stop Tunnel</button>
+            <button id="agent-tunnel-apply" type="button" data-i18n="agent.tunnel.apply">Start / Renew Access</button>
+            <button id="agent-tunnel-close" type="button" data-i18n="common.close">Close</button>
         </div>
     </dialog>
     <dialog id="ssh-tunnels-dialog" aria-labelledby="ssh-tunnels-title">
@@ -3167,7 +3170,7 @@
             });
 
             function setAgentTunnelInfoView(infoView) {
-                document.getElementById('agent-tunnel-title').textContent = infoView ? t('agent.connection.title') : 'Agent Tunnel';
+                document.getElementById('agent-tunnel-title').textContent = t(infoView ? 'agent.connection.title' : 'agent.tunnel.title');
                 document.getElementById('agent-tunnel-setup').hidden = infoView;
                 document.getElementById('agent-tunnel-apply').hidden = infoView;
                 document.getElementById('agent-tunnel-stop').hidden = infoView;
@@ -3189,7 +3192,7 @@
                 const entry = readyAgentTunnels.get(data.terminal_id);
                 if (entry && data.carrier_id !== entry.carrierId) return;
                 if (data.status === 'stopped') {
-                    invalidateAgentTunnel(data.terminal_id, 'Tunnel stopped. Start it again before copying a remote prompt.');
+                    invalidateAgentTunnel(data.terminal_id, t('agent.tunnel.stopped_restart'));
                 } else if (data.status === 'sync_failed' && data.carrier_id === agentTunnelId) {
                     setAgentConnectionMessage(agentTunnelMessage, data.message);
                 }
@@ -3214,10 +3217,13 @@
                 terminals.forEach(state => {
                     if (!state.connected || !state.agent.attached || state.agent.mode === AGENT_MODE_DISABLED) return;
                     const label = document.createElement('div');
-                    label.textContent = `${state.title} (${state.id}) · ${state.agent.mode}${selected.includes(state.id) ? ' · remote access ready' : ''}`;
+                    const permission = [AGENT_MODE_OBSERVE, AGENT_MODE_APPROVAL_PENDING, AGENT_MODE_DIRECT_ACTIVE, AGENT_MODE_PAUSED, AGENT_MODE_DISABLED].includes(state.agent.mode)
+                        ? formatAgentModeLabel(state.agent.mode) : state.agent.mode;
+                    label.textContent = t('agent.tunnel.target_row', { title: state.title, id: state.id, permission })
+                        + (selected.includes(state.id) ? ` · ${t('agent.tunnel.remote_access_ready')}` : '');
                     list.append(label);
                 });
-                if (!list.childElementCount) list.textContent = 'No tabs enabled. Enable access in a tab\'s Agent Panel when needed.';
+                if (!list.childElementCount) list.textContent = t('agent.tunnel.targets_empty');
             }
 
             function applyAgentTunnelStatus(result) {
@@ -3225,16 +3231,16 @@
                 if (ready) {
                     readyAgentTunnels.set(agentTunnelCarrier, {connection: agentTunnelConnection, carrierId: result.carrier_id});
                     if (result.ssh_context) {
-                        document.getElementById('agent-tunnel-carrier').textContent = 'Agent runs on SSH host: ' + JSON.stringify(result.ssh_context);
+                        document.getElementById('agent-tunnel-carrier').textContent = t('agent.tunnel.carrier_context', { context: JSON.stringify(result.ssh_context) });
                     }
                 } else {
                     readyAgentTunnels.delete(agentTunnelCarrier);
                 }
                 updateAgentTunnelButtons();
-                setAgentConnectionMessage(agentTunnelMessage, ready ? 'Copy Prompt to the agent running on this SSH host. The URL below belongs to that remote host. Agent activity is shown separately.'
+                setAgentConnectionMessage(agentTunnelMessage, ready ? t('agent.tunnel.ready')
                     : result && result.status === 'stopped'
-                        ? (result.cleanup_pending ? 'Access revoked. Remote cleanup is pending.' : 'Tunnel stopped.')
-                    : (result && result.message) || 'Tunnel setup failed.');
+                        ? t(result.cleanup_pending ? 'agent.tunnel.cleanup_pending' : 'agent.tunnel.stopped')
+                    : (result && result.message) || t('agent.tunnel.setup_failed'));
                 agentTunnelInfo.value = ready ? result.connect_info : '';
                 agentTunnelInfo.hidden = !ready;
                 agentTunnelId = ready ? result.carrier_id : null;
@@ -3243,7 +3249,7 @@
                 document.getElementById('agent-tunnel-url').value = ready ? result.agentinfo_url : '';
                 document.getElementById('agent-tunnel-check').disabled = !ready;
                 document.getElementById('agent-tunnel-verification').textContent = ready
-                    ? `Remote loopback and helpers verified: ${new Date(result.verified_at * 1000).toLocaleString()}` : '';
+                    ? t('agent.tunnel.verified_at', { time: new Date(result.verified_at * 1000).toLocaleString(uiText.locale) }) : '';
                 renderAgentConnectionActivity('agent-tunnel-activity', agentTunnelActivity);
                 document.getElementById('agent-tunnel-copy').hidden = !ready;
                 document.getElementById('agent-tunnel-stop').disabled = !ready;
@@ -3270,8 +3276,8 @@
                 const requestId = ++agentTunnelRequest;
                 const terminalId = agentTunnelCarrier;
                 const connection = agentTunnelConnection;
-                setAgentConnectionMessage(agentTunnelMessage, operation === 'apply' ? 'Preparing and verifying Agent access…'
-                    : operation === 'check' ? 'Checking the remote listener, helpers, and connection to Core…' : 'Updating tunnel status…');
+                setAgentConnectionMessage(agentTunnelMessage, t(operation === 'apply' ? 'agent.tunnel.preparing'
+                    : operation === 'check' ? 'agent.tunnel.checking' : 'agent.tunnel.updating'));
                 document.getElementById('agent-tunnel-apply').disabled = true;
                 document.getElementById('agent-tunnel-check').disabled = true;
                 if (operation === 'apply') document.getElementById('agent-tunnel-stop').disabled = false;
@@ -3290,8 +3296,8 @@
                 agentTunnelCarrier = state.id;
                 agentTunnelConnection = {state, connectedAt: state.connectedAt};
                 setAgentTunnelInfoView(infoView);
-                document.getElementById('agent-tunnel-carrier').textContent = `Agent runs on SSH host: ${state.title} (tab ${state.id})`;
-                clearAgentTunnelInfo('Loading tunnel status…');
+                document.getElementById('agent-tunnel-carrier').textContent = t('agent.tunnel.carrier_tab', { title: state.title, id: state.id });
+                clearAgentTunnelInfo(t('agent.tunnel.loading'));
                 renderAgentTunnelTargets([]);
                 agentTunnelDialog.showModal();
                 requestAgentTunnel('status');
@@ -6586,7 +6592,7 @@
                 if (agentConnectDialog.open && (!state || state.connectionType === 'ssh')) agentConnectDialog.close();
                 if (agentTunnelDialog.open && agentTunnelCarrier !== activeTerminalId) agentTunnelDialog.close();
                 if (agentTunnelConnection && !isCurrentAgentTunnelConnection(agentTunnelConnection)) {
-                    invalidateAgentTunnel(agentTunnelCarrier, 'SSH connection unavailable. Start a new tunnel after reconnecting.');
+                    invalidateAgentTunnel(agentTunnelCarrier, t('agent.tunnel.connection_unavailable'));
                     agentTunnelConnection = null;
                 }
                 if (agentConnectDialog.open && !socket.connected) requestAgentConnectInfo();

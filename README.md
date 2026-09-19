@@ -328,7 +328,7 @@ Chinese (Taiwan) for browser access and recovery, Agent permissions, input and
 file-copy approvals, transfer results, local connection information, connection
 forms, SSH login, SSH profile/route editors (including browser-key and
 host-fingerprint controls), settings import/export, settings navigation and
-preference actions, and user SSH tunnel controls. The choice
+preference actions, user SSH tunnel controls, and Agent Tunnel setup/status. The choice
 applies the next time the page opens; saving it does not reload the current
 page or change its connections and grants. Other areas remain in English.
 **Save preferences** stores the General and Appearance preference fields.
@@ -764,11 +764,16 @@ command and asks the agent to run `hello` for each intended tab. Local token
 minting is not required: Start creates separate grants for Agent-enabled tabs.
 
 **Check Tunnel** checks the remote listener, helper bundle, and connection to
-this Core instance again. The verification timestamp confirms that path works;
+this Core instance again. A failed check stops the tunnel and revokes its grants.
+The verification timestamp records the last successful check;
 each tab separately shows **waiting for agent** until Core receives an
 authenticated request through this tunnel. **Last authenticated request** is a
 historical timestamp, not a continuous connection indicator. **Refresh Status**
 reloads the current grants and activity without renewing their tokens.
+On an active tunnel, **Start / Renew Access** updates grants without repeating
+those checks or reinstalling helpers. It replaces invalid grants; valid tokens
+keep their existing expiry. Use **Check Tunnel** to verify the path
+again. Closing the dialog keeps the tunnel running.
 
 The SSH host needs Python 3.9+, SFTP, remote forwarding, and a way to inspect
 its listener bindings. Core supports Linux `/proc/net`, FreeBSD `netstat` JSON,
