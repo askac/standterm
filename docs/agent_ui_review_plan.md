@@ -43,7 +43,7 @@ do not consolidate them merely to shorten labels.
 | 3 | Review English UI copy and terminology | Core terms agreed; initial English sources reviewed | Review each proposed change for target, permissions, consequences, and next action; check related tooltips, Desktop help, and tests before applying it. |
 | 4 | Finalize the translation exchange table | Initial exchange validated with an independent translator | Stable keys, approved English source, context, and placeholder constraints are sufficient for an independent translator. |
 | 5 | Pilot Agent access and local connection information | Implemented; validation below | Cover static and dynamic text, titles, and accessible names; preserve connected sessions and authorization; support English fallback. |
-| 6 | Translate and integrate approved rows | Agent pilot, browser access/recovery, Agent approvals/transfers, connection/login controls, SSH route/profile editors, General/Appearance settings, settings transfer, user SSH tunnels and Agent Tunnel integrated | AI edits only target-language cells; validate keys and placeholders; review authorization and destructive-action wording. |
+| 6 | Translate and integrate approved rows | Agent pilot, browser access/recovery, Agent approvals/transfers, connection/login controls, SSH route/profile editors, General/Appearance settings, settings transfer, user SSH tunnels, Agent Tunnel and Server runtime settings integrated | AI edits only target-language cells; validate keys and placeholders; review authorization and destructive-action wording. |
 | 7 | Expand Core and Desktop coverage | Deferred | Verify secondary windows, native menus, setup, diagnostics, packaging, and representative layouts. |
 
 ## Validation of the reliability changes
@@ -66,7 +66,7 @@ validated separately below.
 
 ## Deferred UI work
 
-Agent diagnostics, Server/Diagnostics settings, secondary windows,
+Agent diagnostics, Server access recovery, Diagnostics settings, secondary windows,
 and Desktop localization remain outside the completed workflows. Translation
 starts only after the English source for the selected workflow is reviewed.
 Extra screen diffing, render hints, key aliases, and byte-limit options remain optional optimizations.
@@ -577,3 +577,41 @@ remain existing coverage gaps, not reasons to change those handlers here.
 Validation uses WSL Chromium. Native Desktop was not qualified; external image
 preview restrictions there remain unchanged. The next candidate is a separate
 review of Server settings actions and their scope before translating them.
+
+## Server runtime settings
+
+Forty reviewed messages cover the runtime snapshot, individual Apply controls,
+schema traits, permissions and connection-type availability. The table contains
+561 rows: 560 referenced bilingual messages and the existing removal. Server
+access-URL and platform-passkey recovery controls remain a separate workflow.
+
+Runtime updates change shared Core process memory, without disk persistence.
+The visible Apply hint states their scope and lifetime, and that connection
+defaults do not alter existing connections. It does not promise that other open
+pages refresh automatically or that explicit connection inputs use the defaults.
+Each Apply button references this hint as its accessible description. The common
+Save preferences button keeps its existing General/Appearance scope.
+
+| Finding | Severity | Evidence | Critic remedy | Main response | Resolution | Validation |
+| --- | --- | --- | --- | --- | --- | --- |
+| Saved implies durable storage | Medium | apply_runtime_setting_update writes runtime_settings in memory | State Core lifetime and shared scope | Accept | Applying / Applied and fixed scope hint | Existing versioned update tests; bilingual individual Apply and footer Save checks |
+| Writable and mutable can imply broader authority | Medium | Snapshot read_only derives from low-risk capability; schema mutable and lock checks remain separate | Distinguish low-risk permission from schema traits | Accept | Low-risk updates allowed and Runtime-mutable labels | Read-only, locked and denied-handler cases emit no updates |
+| Translation can change schema interpretation or raw plugin data | Medium, integration guard | Typed schema rendering and applyServerSettingUpdate | Translate only known traits; retain raw labels and values | Modify | Local own-property maps for known risk/scope; backend labels and diagnostics remain literal | Exact enum/boolean/integer values, grant, version and digest; unknown labels/traits and error fallback |
+| Version can mean application release | Low | Snapshot settings_version is the mutation revision | Name the settings revision and Core environment | Accept | Two precise labels | Actual backend updates bind the displayed revision and wait for its increment |
+
+Two bounded independent review passes found no remaining material issue. The
+review changed persistence and permission wording without changing backend
+policy, storage, grants or update flow. Translating backend/plugin labels would
+require a separate typed metadata contract; retaining them is intentional.
+
+| Check | Result |
+| --- | --- |
+| Existing backend checks | Eight passed: separate capabilities, typed snapshot, unsafe schema rejection, versioned/audited updates, SSH plugin validation, restart/high-risk exclusion, remote-browser authorization boundary and scoped/revocable grants. |
+| Bilingual browser suite | Three cases in each language passed: actual backend Local Shell/UART updates plus schema/permission fixtures and precise individual update payloads. |
+| Layout and raw data | Both languages fit mutable rows at 480x600 without overlap or horizontal overflow; raw plugin labels, enum values and backend diagnostics remain text. No access URL was requested by these settings actions. |
+| Catalog and static checks | Six exporter and six lookup tests passed; all 560 keys are referenced, both locales have matching keys, the catalog is current, and Python syntax and diff checks passed. |
+
+Validation uses WSL Chromium and local backend fixtures; native Desktop was not
+qualified. The next executable step is a separate review of Server access-URL
+and passkey-recovery actions, including clipboard success and removal wording,
+before translating that workflow. No policy choice remains unresolved here.

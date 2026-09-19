@@ -4006,14 +4006,17 @@ def test_osc_title_updates_fixed_status_column(browser, access_url):
         close_context(context)
 
 
-def test_settings_server_tab_loads_readonly_snapshot(browser, access_url):
-    context, page = new_page(browser, access_url)
+def test_settings_server_tab_loads_readonly_snapshot(browser, access_url, ui_language='en'):
+    context, page = new_page(browser, access_url, ui_language)
     try:
+        def text(key):
+            return page.evaluate("key => StandTermI18n.create(StandTermMessages, document.documentElement.lang).t(key)", key)
+
         page.click('#quick-settings')
         page.wait_for_selector('#settings-modal.open', timeout=5000)
         page.click('.settings-nav-item[data-tab="server"]')
         page.wait_for_function(
-            "() => ['Read-only', 'Writable'].includes(document.getElementById('server-settings-status')?.textContent)",
+            "() => document.querySelector('#server-settings-mutable-controls .server-setting-input') !== null",
             timeout=5000,
         )
         state = page.evaluate(
@@ -4039,10 +4042,11 @@ def test_settings_server_tab_loads_readonly_snapshot(browser, access_url):
                 connectionCount: document.querySelectorAll('#server-settings-connections li').length
             })"""
         )
-        check(state['version'] == '1', 'settings server tab did not show settings version')
-        check(state['view'] == 'Allowed', 'settings server tab did not show view capability')
-        check(state['low'] == 'Allowed', 'settings server tab did not expose local low-risk writes')
-        check(state['high'] == 'Denied', 'settings server tab exposed high-risk writes')
+        check(state['version'].isdigit() and int(state['version']) >= 1, 'settings server tab did not show settings version')
+        check(page.inner_text('#server-settings-status') == text('settings.server.writable'), 'settings server tab did not localize write capability')
+        check(state['view'] == text('settings.server.allowed'), 'settings server tab did not show view capability')
+        check(state['low'] == text('settings.server.allowed'), 'settings server tab did not expose local low-risk writes')
+        check(state['high'] == text('settings.server.denied'), 'settings server tab exposed high-risk writes')
         check(state['selectedDefault'], 'settings server tab did not populate default connection control')
         check('default_connection_type' in state['mutableKeys'], 'settings server tab did not render core mutable control')
         check('uart.default_baud_rate' in state['mutableKeys'], 'settings server tab did not render UART mutable control')
@@ -4078,16 +4082,19 @@ def test_settings_server_tab_loads_readonly_snapshot(browser, access_url):
         local_shell_payload = get_emitted(page, 'settings_update_request')[-1]['args'][0]
         check(local_shell_payload['setting_key'] == 'local_shell.default_kind', 'Local Shell update did not use typed setting_key')
         check(local_shell_payload['value'] == selected_shell_kind, 'Local Shell update did not send selected shell kind')
+        check(local_shell_payload['expected_version'] == int(state['version']), 'Local Shell update did not bind displayed settings version')
         check(local_shell_payload.get('expected_schema_digest'), 'Local Shell update did not include expected schema digest')
         page.wait_for_function(
-            """target => document.querySelector(
+            """({target, version}) => document.querySelector(
                     '#server-settings-mutable-controls .server-setting-input[data-setting-key="local_shell.default_kind"]'
                 )?.value === target
-                && document.getElementById('local-shell-kind')?.value === target""",
-            arg=selected_shell_kind,
+                && document.getElementById('local-shell-kind')?.value === target
+                && Number(document.getElementById('server-settings-version').textContent) > version""",
+            arg={'target': selected_shell_kind, 'version': int(state['version'])},
             timeout=10000,
         )
         clear_emitted(page)
+        uart_version = int(page.inner_text('#server-settings-version'))
         selected_baud = page.evaluate(
             """() => {
                 const input = document.querySelector(
@@ -4113,6 +4120,7 @@ def test_settings_server_tab_loads_readonly_snapshot(browser, access_url):
         update_payload = get_emitted(page, 'settings_update_request')[-1]['args'][0]
         check(update_payload['setting_key'] == 'uart.default_baud_rate', 'UART update did not use typed setting_key')
         check(int(update_payload['value']) == int(selected_baud), 'UART update did not send selected baud value')
+        check(update_payload['expected_version'] == uart_version, 'UART update did not bind displayed settings version')
         check(update_payload.get('expected_schema_digest'), 'UART update did not include expected schema digest')
     finally:
         close_context(context)

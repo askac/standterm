@@ -1248,14 +1248,14 @@
                         </fieldset>
                     </div>
                     <div class="settings-tab" id="tab-server">
-                        <div class="settings-status" id="server-settings-status">Loading...</div>
+                        <div class="settings-status" id="server-settings-status" data-i18n="settings.server.loading">Loading server settings…</div>
                         <fieldset class="settings-fieldset">
-                            <legend>Runtime</legend>
-                            <div class="settings-row"><label>Version</label><span class="settings-value" id="server-settings-version">--</span></div>
-                            <div class="settings-row"><label>Runtime</label><span class="settings-value" id="server-settings-runtime">--</span></div>
-                            <div class="settings-row"><label>Default connection</label><span class="settings-value" id="server-settings-default-connection">--</span></div>
-                            <div class="settings-row"><label>Forced connection</label><span class="settings-value" id="server-settings-forced-connection">--</span></div>
-                            <div class="settings-row"><label>HTTPS</label><span class="settings-value" id="server-settings-https">--</span></div>
+                            <legend data-i18n="settings.server.runtime">Core environment</legend>
+                            <div class="settings-row"><label data-i18n="settings.server.version">Settings revision</label><span class="settings-value" id="server-settings-version">--</span></div>
+                            <div class="settings-row"><label data-i18n="settings.server.runtime">Core environment</label><span class="settings-value" id="server-settings-runtime">--</span></div>
+                            <div class="settings-row"><label data-i18n="settings.server.default_connection">Default connection</label><span class="settings-value" id="server-settings-default-connection">--</span></div>
+                            <div class="settings-row"><label data-i18n="settings.server.forced_connection">Forced connection</label><span class="settings-value" id="server-settings-forced-connection">--</span></div>
+                            <div class="settings-row"><label data-i18n="settings.server.https">HTTPS</label><span class="settings-value" id="server-settings-https">--</span></div>
                         </fieldset>
                         <fieldset class="settings-fieldset">
                             <legend>Access recovery</legend>
@@ -1280,22 +1280,23 @@
                             <div class="settings-status">Windows Hello, Touch ID, or another platform passkey can restore only a session that remains live in this StandTerm process. No access or session token is stored.</div>
                         </fieldset>
                         <fieldset class="settings-fieldset">
-                            <legend>Low-risk runtime settings</legend>
+                            <legend data-i18n="settings.server.mutable_settings">Low-risk runtime settings</legend>
+                            <div class="settings-status" id="server-settings-apply-hint" data-i18n="settings.server.apply_hint">Use each Apply button. Changes are shared across this Core instance and last until Core restarts. Connection defaults do not alter existing connections.</div>
                             <div id="server-settings-mutable-controls"></div>
                         </fieldset>
                         <fieldset class="settings-fieldset">
-                            <legend>Settings schema</legend>
+                            <legend data-i18n="settings.server.schema">Settings schema</legend>
                             <ul class="settings-list" id="server-settings-schema"></ul>
                         </fieldset>
                         <fieldset class="settings-fieldset">
-                            <legend>Capabilities</legend>
-                            <div class="settings-row"><label>View settings</label><span class="settings-value" id="server-cap-settings-view">--</span></div>
-                            <div class="settings-row"><label>Update low risk</label><span class="settings-value" id="server-cap-settings-update-low">--</span></div>
-                            <div class="settings-row"><label>Update high risk</label><span class="settings-value" id="server-cap-settings-update-high">--</span></div>
-                            <div class="settings-row"><label>Manage settings grants</label><span class="settings-value" id="server-cap-settings-auth-manage">--</span></div>
+                            <legend data-i18n="settings.server.capabilities">Permissions</legend>
+                            <div class="settings-row"><label data-i18n="settings.server.cap_view">View settings</label><span class="settings-value" id="server-cap-settings-view">--</span></div>
+                            <div class="settings-row"><label data-i18n="settings.server.cap_update_low">Update low-risk settings</label><span class="settings-value" id="server-cap-settings-update-low">--</span></div>
+                            <div class="settings-row"><label data-i18n="settings.server.cap_update_high">Update high-risk settings</label><span class="settings-value" id="server-cap-settings-update-high">--</span></div>
+                            <div class="settings-row"><label data-i18n="settings.server.cap_manage_grants">Manage settings grants</label><span class="settings-value" id="server-cap-settings-auth-manage">--</span></div>
                         </fieldset>
                         <fieldset class="settings-fieldset">
-                            <legend>Connections</legend>
+                            <legend data-i18n="settings.server.connections">Connections</legend>
                             <ul class="settings-list" id="server-settings-connections"></ul>
                         </fieldset>
                     </div>
@@ -11438,7 +11439,7 @@
             pipOption.addEventListener('click', moveActiveTerminalToPip);
 
             function formatSettingsFlag(value) {
-                return value ? 'Allowed' : 'Denied';
+                return t(value ? 'settings.server.allowed' : 'settings.server.denied');
             }
 
             function setSettingsText(id, value) {
@@ -11565,7 +11566,8 @@
                     control.className = 'settings-control';
                     applyBtn.className = 'settings-inline-action';
                     applyBtn.type = 'button';
-                    applyBtn.textContent = 'Apply';
+                    applyBtn.textContent = t('settings.server.apply');
+                    applyBtn.setAttribute('aria-describedby', 'server-settings-apply-hint');
                     applyBtn.dataset.settingKey = settingKey;
                     input.disabled = !canUpdate || locked;
                     applyBtn.disabled = input.disabled;
@@ -11578,7 +11580,7 @@
                 if (!rendered) {
                     const row = document.createElement('div');
                     row.className = 'settings-row';
-                    row.textContent = 'No low-risk mutable settings are available.';
+                    row.textContent = t('settings.server.no_mutable_settings');
                     container.appendChild(row);
                 }
             }
@@ -11588,14 +11590,16 @@
                 if (!schemaEl) return;
                 schemaEl.replaceChildren();
                 if (!data || data.status !== 'ok') return;
+                const risks = { low: 'settings.server.risk_low', medium: 'settings.server.risk_medium', high: 'settings.server.risk_high' };
+                const scopes = { live: 'settings.server.scope_live', next_connection: 'settings.server.scope_next_connection', restart: 'settings.server.scope_restart' };
                 buildServerSettingSchemaItems(data).forEach(schemaItem => {
                     const item = document.createElement('li');
                     const label = document.createElement('span');
                     const badge = document.createElement('span');
                     const traits = [
-                        schemaItem.risk_level || 'unknown',
-                        schemaItem.apply_scope || 'unknown',
-                        schemaItem.mutable ? 'mutable' : 'read-only'
+                        Object.hasOwn(risks, schemaItem.risk_level) ? t(risks[schemaItem.risk_level]) : schemaItem.risk_level || t('settings.server.unknown'),
+                        Object.hasOwn(scopes, schemaItem.apply_scope) ? t(scopes[schemaItem.apply_scope]) : schemaItem.apply_scope || t('settings.server.unknown'),
+                        t(schemaItem.mutable ? 'settings.server.mutable' : 'settings.server.schema_read_only')
                     ];
                     label.textContent = `${getServerSettingLabel(schemaItem)} (${schemaItem.setting_key})`;
                     badge.className = 'settings-badge';
@@ -11606,7 +11610,7 @@
                 });
                 if (!schemaEl.children.length) {
                     const item = document.createElement('li');
-                    item.textContent = 'None';
+                    item.textContent = t('settings.server.none');
                     schemaEl.appendChild(item);
                 }
             }
@@ -11633,7 +11637,7 @@
                 connectionsEl.replaceChildren();
                 serverSettingsSnapshot = data && data.status === 'ok' ? data : null;
                 if (!data || data.status !== 'ok') {
-                    statusEl.textContent = data && data.message ? data.message : 'Settings unavailable.';
+                    statusEl.textContent = data && data.message ? data.message : t('settings.server.unavailable');
                     setSettingsText('server-settings-version', '--');
                     setSettingsText('server-settings-runtime', '--');
                     setSettingsText('server-settings-default-connection', '--');
@@ -11648,12 +11652,12 @@
                 }
                 const settings = data.effective_settings || {};
                 const capabilities = data.capabilities || {};
-                statusEl.textContent = data.read_only ? 'Read-only' : 'Writable';
+                statusEl.textContent = t(data.read_only ? 'settings.server.read_only' : 'settings.server.writable');
                 setSettingsText('server-settings-version', data.settings_version);
                 setSettingsText('server-settings-runtime', settings.runtime_name);
                 setSettingsText('server-settings-default-connection', settings.default_connection_type);
-                setSettingsText('server-settings-forced-connection', settings.force_connection_type || 'None');
-                setSettingsText('server-settings-https', settings.https_enabled ? 'Enabled' : 'Disabled');
+                setSettingsText('server-settings-forced-connection', settings.force_connection_type || t('settings.server.none'));
+                setSettingsText('server-settings-https', t(settings.https_enabled ? 'settings.server.enabled' : 'settings.server.disabled'));
                 setSettingsText('server-cap-settings-view', formatSettingsFlag(capabilities.settings_view && capabilities.settings_view.allowed));
                 setSettingsText('server-cap-settings-update-low', formatSettingsFlag(capabilities.settings_update_low_risk && capabilities.settings_update_low_risk.allowed));
                 setSettingsText('server-cap-settings-update-high', formatSettingsFlag(capabilities.settings_update_high_risk && capabilities.settings_update_high_risk.allowed));
@@ -11664,15 +11668,15 @@
                     const item = document.createElement('li');
                     const label = document.createElement('span');
                     const badge = document.createElement('span');
-                    label.textContent = connection.label || connection.connection_type || 'unknown';
+                    label.textContent = connection.label || connection.connection_type || t('settings.server.unknown');
                     badge.className = 'settings-badge';
-                    badge.textContent = connection.allowed ? 'Allowed' : connection.authorization_available ? 'Authorization available' : 'Denied';
+                    badge.textContent = t(connection.allowed ? 'settings.server.allowed' : connection.authorization_available ? 'settings.server.authorization_available' : 'settings.server.denied');
                     item.append(label, badge);
                     connectionsEl.appendChild(item);
                 });
                 if (!connectionTypes.length) {
                     const item = document.createElement('li');
-                    item.textContent = 'None';
+                    item.textContent = t('settings.server.none');
                     connectionsEl.appendChild(item);
                 }
             }
@@ -11681,10 +11685,10 @@
                 const statusEl = document.getElementById('server-settings-status');
                 if (!statusEl || !data) return;
                 if (data.status === 'ok') {
-                    statusEl.textContent = 'Saved';
+                    statusEl.textContent = t('settings.server.applied');
                     return;
                 }
-                statusEl.textContent = data.message || data.error_code || 'Settings update failed.';
+                statusEl.textContent = data.message || data.error_code || t('settings.server.update_failed');
             }
 
             function handleServerSettingsAdminGrant(data) {
@@ -11731,11 +11735,11 @@
                 if (!schemaItem || !input) return;
                 const canUpdate = canUpdateServerSetting(schemaItem, serverSettingsSnapshot);
                 if (!canUpdate) {
-                    if (statusEl) statusEl.textContent = 'Low-risk settings update is denied.';
+                    if (statusEl) statusEl.textContent = t('settings.server.update_denied');
                     return;
                 }
                 const grant = await requestSettingsAdminGrant();
-                if (statusEl) statusEl.textContent = 'Saving...';
+                if (statusEl) statusEl.textContent = t('settings.server.applying');
                 socket.emit('settings_update_request', {
                     request_id: `settings-${Date.now()}`,
                     setting_key: settingKey,
@@ -11748,11 +11752,11 @@
 
             function requestServerSettingsSnapshot() {
                 const statusEl = document.getElementById('server-settings-status');
-                if (statusEl) statusEl.textContent = 'Loading...';
+                if (statusEl) statusEl.textContent = t('settings.server.loading');
                 if (!socket || !socket.connected) {
                     renderServerSettingsSnapshot({
                         status: 'failed',
-                        message: 'Socket is disconnected.'
+                        message: t('settings.server.disconnected')
                     });
                     return;
                 }
