@@ -5,6 +5,14 @@
 Complete reliability fixes before changing UI copy or introducing localization.
 The traverse brief is review input, not a requirement to expand public discovery.
 
+The current completion target is the browser interface, including Files and
+terminal popup/PiP windows, followed by bilingual acceptance. Native Desktop
+menus, setup and windows are a separate phase. Backend/plugin diagnostics,
+terminal content, exported diagnostic records and protocol identifiers remain
+literal data; their English text does not prevent browser-interface acceptance.
+Remaining work proceeds through Server recovery, diagnostic and paste controls,
+Files and secondary-window copy, then an inventory and regression pass.
+
 | Decision | Resolution |
 | --- | --- |
 | Tokenless agentinfo | Keep the limited bootstrap and handoff index. Do not expose all ungranted terminals or add localization metadata. |
@@ -43,8 +51,8 @@ do not consolidate them merely to shorten labels.
 | 3 | Review English UI copy and terminology | Core terms agreed; initial English sources reviewed | Review each proposed change for target, permissions, consequences, and next action; check related tooltips, Desktop help, and tests before applying it. |
 | 4 | Finalize the translation exchange table | Initial exchange validated with an independent translator | Stable keys, approved English source, context, and placeholder constraints are sufficient for an independent translator. |
 | 5 | Pilot Agent access and local connection information | Implemented; validation below | Cover static and dynamic text, titles, and accessible names; preserve connected sessions and authorization; support English fallback. |
-| 6 | Translate and integrate approved rows | Agent pilot, browser access/recovery, Agent approvals/transfers, connection/login controls, SSH route/profile editors, General/Appearance settings, settings transfer, user SSH tunnels, Agent Tunnel and Server runtime settings integrated | AI edits only target-language cells; validate keys and placeholders; review authorization and destructive-action wording. |
-| 7 | Expand Core and Desktop coverage | Deferred | Verify secondary windows, native menus, setup, diagnostics, packaging, and representative layouts. |
+| 6 | Translate and integrate approved rows | Browser workflows integrated; acceptance record below | AI edits only target-language cells; validate keys and placeholders; review authorization and destructive-action wording. |
+| 7 | Expand native Desktop coverage | Separate phase | Verify native menus, setup, diagnostics, packaging, and representative layouts. |
 
 ## Validation of the reliability changes
 
@@ -66,9 +74,9 @@ validated separately below.
 
 ## Deferred UI work
 
-Agent diagnostics, Server access recovery, Diagnostics settings, secondary windows,
-and Desktop localization remain outside the completed workflows. Translation
-starts only after the English source for the selected workflow is reviewed.
+Native Desktop localization and translation of raw technical diagnostics remain
+outside the completed browser workflows. Translation starts only after the
+English source for the selected workflow is reviewed.
 Extra screen diffing, render hints, key aliases, and byte-limit options remain optional optimizations.
 Unverified UART end-to-end coverage is a qualification gap, not evidence that
 UART is broken.
@@ -615,3 +623,48 @@ Validation uses WSL Chromium and local backend fixtures; native Desktop was not
 qualified. The next executable step is a separate review of Server access-URL
 and passkey-recovery actions, including clipboard success and removal wording,
 before translating that workflow. No policy choice remains unresolved here.
+
+## Browser completion and acceptance
+
+The operator selected browser completion as this phase's endpoint. Another 236
+reviewed messages cover Server access/device recovery, diagnostics controls,
+paste, remaining chrome and Agent diagnostic headings, Files and terminal
+popup/PiP windows. The catalog has 796 bilingual messages and one removal row.
+The [acceptance record](browser_ui_acceptance.md) defines coverage, raw-data
+exclusions and reproducible entry points. Desktop remains a separate phase.
+
+| Finding | Severity | Evidence | Critic remedy | Main response | Resolution | Validation |
+| --- | --- | --- | --- | --- | --- | --- |
+| Clipboard failure still reports success | Medium | copyToClipboard and Access URL/diagnostic callers | Say requested, or await a result | Modify | Helper returns a success boolean; callers await the existing native/fallback paths | Pending, success, rejected native API, fallback success/failure and no automatic reveal in both languages |
+| Paste string length is mislabeled bytes | Medium | startPasteReview uses text.length | Name the actual units or omit the size | Modify | Show target and line count; preserve review and encoding rules | Literal multilingual payload, cancel/approve and original focus/target anti-mismatch cases |
+| Passkey removal wording overstates OS deletion | Medium | session_recovery RP-scoped registration removal | Distinguish registration, live-session enablement and revocation | Accept | Scoped confirmation and revoking registrations; clarify no token persistence | Exact ceremony/binary fields, typed status, cancel/no request and hostname scope in the browser fixture |
+| Passkey status refresh overwrites an operation error | Medium | Register/arm/remove finally refresh | Preserve feedback while refreshing controls | Accept | Status refresh accepts display feedback only; capability checks remain typed | Registration/removal errors remain visible after refresh; unavailable status still disables controls |
+| Files unknown outcome conflicts with generic retry advice | Medium | handleFilesCopyResult and file_copy_publish_outcome_unknown | Use the existing error enum in lifecycle guidance | Accept | Both messages require destination inspection; no replay | Existing copy-result cases in both languages; commit barrier and cancellation guards remain intact |
+| Translation can affect rename validity or replace child markup | Medium, integration guard | getSftpRenameValidation and child HTML creation | Keep validation typed and apply text safely | Accept | Stable key/null validation; declarative attributes plus uiText.apply on child subtrees | Rename/copy/delete and changed-label tests preserve exact IDs, values and actions |
+| Download dispatch does not prove completion | Low | startPreparedSftpDownload | Describe download start | Accept | Download started label | Existing download ticket and one-use browser dispatch checks |
+| Duplicate translation attributes and token-storage overstatement | Low | Final independent pass | Remove duplicate attributes; say persist | Accept | Four duplicates removed; live memory binding distinguished from persistence | Static attribute inspection, catalog checks and retained WebAuthn flow |
+
+Two bounded independent decision-review passes found no remaining blocking
+correctness issue. A separate eight-check inventory covered fixed labels,
+titles, accessibility names and child documents; three small fallbacks were
+added. English model/key/signing diagnostics remain explicit raw-data exclusions,
+along with backend/plugin messages, logs, commands, paths and identifiers.
+Public discovery, grants, defaults, schema, backend behavior and typed payloads
+were not changed. No new policy choice or approval step was introduced.
+
+| Check | Result |
+| --- | --- |
+| New completion suite | Four focused cases plus three existing guard cases in each language: 14 passed. |
+| Files and terminal PiP | Three existing operation cases in each language: six passed, including narrow child-window controls, rename, two-step deletion, conflict/copy state and target binding. |
+| Existing bilingual workflows | All eight suites passed: connections, SSH editors, settings transfer, preferences, appearance, Server runtime, SSH tunnels and Agent Tunnel. |
+| Browser popup integration | Chromium input, Files transition, close/reload/navigation restoration and blocked-popup retry passed; zero navigation-close gaps. |
+| Backend regression | All 169 passed on the full rerun. The first run had a headless-screen quiet-wait timing failure; that case passed in isolation before the full rerun. |
+| Complete browser regression | All 56 cases passed across runs: 43 in the full invocation, then the remaining 13 after fixing the Server test's snapshot-ready wait. Localized Session ID and observation assertions now compare complete labels plus raw IDs/counts. This is complete case coverage, not a claim that the first full invocation exited successfully. |
+| Catalog and source checks | Six exporter and six lookup tests passed. All 796 message keys are referenced and both locales have matching keys; generated-catalog freshness, inline JavaScript/Python syntax and diff checks passed. |
+
+Validation uses WSL Chromium and local fixtures, including a virtual WebAuthn
+authenticator. Physical Windows Hello/Touch ID devices, other browser engines,
+native Desktop and packaged releases are not qualified by these results. The
+endpoint is browser-interface acceptance within the documented data boundary;
+further Desktop or typed diagnostic localization requires a separately selected
+scope.

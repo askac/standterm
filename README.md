@@ -324,13 +324,12 @@ token 3× buttons remain beside Pause Agent when the Agent panel is hidden, and 
 terminal; compact windows keep those actions in the Agent panel.
 
 **Settings > General > Language (preview)** selects English or Traditional
-Chinese (Taiwan) for browser access and recovery, Agent permissions, input and
-file-copy approvals, transfer results, local connection information, connection
-forms, SSH login, SSH profile/route editors (including browser-key and
-host-fingerprint controls), settings navigation, General/Appearance preferences,
-settings import/export, user SSH tunnel controls, Agent Tunnel setup/status, and
-Server runtime settings. Server access-URL and passkey-management controls,
-plugin labels and backend diagnostics remain in their original language. The choice
+Chinese (Taiwan) for the browser interface, including access and device recovery,
+Agent permissions and approvals, connection/profile/route editors, settings,
+tunnels, Files, and terminal popup/PiP controls. Terminal content, copyable
+commands, plugin labels, technical validation errors and raw diagnostics retain
+their original text. Native Desktop menus and windows are outside this coverage.
+The choice
 applies the next time the page opens; saving it does not reload the current
 page or change its connections and grants. Other areas remain in English.
 **Save preferences** stores the General and Appearance preference fields.
@@ -342,7 +341,9 @@ Server runtime settings use individual **Apply** buttons. Their changes are shar
 across the Core instance and last until Core restarts. Connection defaults do not
 alter existing connections.
 The [copy and translation table](docs/ui_copy_review.tsv) and
-[localization plan](docs/agent_ui_review_plan.md) describe the review workflow.
+[localization plan](docs/agent_ui_review_plan.md) describe the review workflow;
+the [browser acceptance record](docs/browser_ui_acceptance.md) defines the
+tested scope and retained raw data.
 
 This development build also enables an **experimental IME positioning PoC**:
 the composition overlay follows its starting input line during terminal redraws.

@@ -1074,30 +1074,30 @@
     <div id="loader-screen">
         <div class="spinner"></div>
         <div class="progress-container"><div id="progress-bar"></div></div>
-        <div id="loader-text" style="margin-bottom: 5px;">Initializing StandTerm...</div>
+        <div id="loader-text" style="margin-bottom: 5px;" data-i18n="browser.chrome.loading">Initializing StandTerm...</div>
         <div id="loader-timer">0.0s</div>
     </div>
 
     <div id="context-menu">
-        <div class="menu-item" id="paste-option">&#x1F4CB; Paste</div>
+        <div class="menu-item" id="paste-option" data-i18n="browser.chrome.paste_menu">&#x1F4CB; Paste</div>
         <div class="menu-separator"></div>
-        <div class="menu-item hidden" id="open-overlay-option">&#x1F517; Open in Overlay</div>
-        <div class="menu-item hidden" id="search-google-option">&#x1F50D; Search Google</div>
+        <div class="menu-item hidden" id="open-overlay-option" data-i18n="browser.chrome.overlay_menu">&#x1F517; Open in Overlay</div>
+        <div class="menu-item hidden" id="search-google-option" data-i18n="browser.chrome.search_google">&#x1F50D; Search Google</div>
         <div class="menu-separator" id="menu-sep-sel" style="display:none"></div>
-        <div class="menu-item" id="pip-option">&#x29C9; Terminal to PiP</div>
-        <div class="menu-item hidden" id="sftp-send-option">&#x1F4C1; Files&hellip;</div>
-        <div class="menu-item" id="settings-option">&#x2699;&#xFE0F; Settings</div>
+        <div class="menu-item" id="pip-option" data-i18n="browser.chrome.pip_menu">&#x29C9; Terminal to PiP</div>
+        <div class="menu-item hidden" id="sftp-send-option" data-i18n="browser.chrome.files_menu">&#x1F4C1; Files&hellip;</div>
+        <div class="menu-item" id="settings-option" data-i18n="browser.chrome.settings_menu">&#x2699;&#xFE0F; Settings</div>
         <div class="menu-separator"></div>
-        <div class="menu-item" id="native-menu-option">&#x1F6AA; Use browser context menu</div>
+        <div class="menu-item" id="native-menu-option" data-i18n="browser.chrome.native_menu">&#x1F6AA; Use browser context menu</div>
     </div>
 
     <div id="url-overlay">
         <div id="overlay-shield"></div>
         <div id="overlay-header">
-            <span id="overlay-title">Side Browser</span>
+            <span id="overlay-title" data-i18n="browser.chrome.overlay_title">Side Browser</span>
             <div id="header-right">
-                <button id="external-link" class="header-btn" title="Open in New Tab">&#x2197;</button>
-                <button id="close-overlay" class="header-btn" title="Close Overlay">&times;</button>
+                <button id="external-link" class="header-btn" title="Open in New Tab" data-i18n-title="browser.chrome.new_tab">&#x2197;</button>
+                <button id="close-overlay" class="header-btn" title="Close Overlay" data-i18n-title="browser.chrome.close_overlay">&times;</button>
             </div>
         </div>
         <div style="flex-grow: 1; display: flex; align-items: center; justify-content: center; background: #333; overflow: hidden; position: relative;">
@@ -1105,11 +1105,11 @@
             <img id="overlay-img" style="max-width: 100%; max-height: 100%; object-fit: contain; display: none;" referrerpolicy="no-referrer" />
             <div id="overlay-fallback" style="display:none; position:absolute; top:0; left:0; right:0; bottom:0; background:#1a1a1a; flex-direction:column; align-items:center; justify-content:center; gap:16px; padding:20px; text-align:center; color:#ddd;">
                 <div style="font-size:36px;">&#x26A0;</div>
-                <div id="overlay-fallback-message" style="font-size:14px; color:#aaa;">Site blocked embedding or refused to connect.</div>
+                <div id="overlay-fallback-message" style="font-size:14px; color:#aaa;" data-i18n="browser.chrome.overlay_unavailable">Site blocked embedding or refused to connect.</div>
                 <div id="overlay-fallback-url" style="font-size:11px; color:#555; word-break:break-all; max-width:90%;"></div>
                 <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:center;">
-                    <button id="overlay-fallback-popup" style="background:#0a84ff; color:white; border:none; border-radius:6px; padding:10px 24px; cursor:pointer; font-size:13px; font-weight:bold;">Open as Popup &#x29C9;</button>
-                    <button id="overlay-fallback-open" style="background:#444; color:white; border:none; border-radius:6px; padding:10px 24px; cursor:pointer; font-size:13px; font-weight:bold;">Open in New Tab &#x2197;</button>
+                    <button id="overlay-fallback-popup" style="background:#0a84ff; color:white; border:none; border-radius:6px; padding:10px 24px; cursor:pointer; font-size:13px; font-weight:bold;" data-i18n="browser.chrome.popup_link">Open as Popup &#x29C9;</button>
+                    <button id="overlay-fallback-open" style="background:#444; color:white; border:none; border-radius:6px; padding:10px 24px; cursor:pointer; font-size:13px; font-weight:bold;" data-i18n="browser.chrome.new_tab_link">Open in New Tab &#x2197;</button>
                 </div>
             </div>
         </div>
@@ -1258,26 +1258,26 @@
                             <div class="settings-row"><label data-i18n="settings.server.https">HTTPS</label><span class="settings-value" id="server-settings-https">--</span></div>
                         </fieldset>
                         <fieldset class="settings-fieldset">
-                            <legend>Access recovery</legend>
+                            <legend data-i18n="browser.server_access.title">Access recovery</legend>
                             <div class="settings-row">
-                                <label>Access URL</label>
+                                <label data-i18n="browser.server_access.url">Access URL</label>
                                 <span class="settings-secret-actions">
-                                    <button type="button" id="server-access-copy-btn">Copy URL</button>
-                                    <button type="button" id="server-access-show-btn">Show URL</button>
+                                    <button type="button" id="server-access-copy-btn" data-i18n="common.copy_url">Copy URL</button>
+                                    <button type="button" id="server-access-show-btn" data-i18n="browser.server_access.show">Show URL</button>
                                 </span>
                             </div>
-                            <div class="settings-status" id="server-access-status">Access URL is fetched only when requested.</div>
+                            <div class="settings-status" id="server-access-status" data-i18n="browser.server_access.hint">Access URL is fetched only when requested.</div>
                             <div class="settings-secret-value" id="server-access-url"></div>
                         </fieldset>
                         <fieldset class="settings-fieldset">
-                            <legend>Platform session recovery</legend>
-                            <div class="settings-status" id="platform-recovery-status">Loading platform recovery status...</div>
+                            <legend data-i18n="browser.platform.title">Device session recovery</legend>
+                            <div class="settings-status" id="platform-recovery-status" data-i18n="browser.platform.loading">Loading device recovery status…</div>
                             <div class="settings-transfer-actions">
-                                <button type="button" id="platform-recovery-register">Register platform passkey</button>
-                                <button type="button" id="platform-recovery-arm">Arm existing passkey</button>
-                                <button type="button" class="danger" id="platform-recovery-remove">Revoke recovery</button>
+                                <button type="button" id="platform-recovery-register" data-i18n="browser.platform.register">Register device passkey</button>
+                                <button type="button" id="platform-recovery-arm" data-i18n="browser.platform.arm">Enable recovery with existing passkey</button>
+                                <button type="button" class="danger" id="platform-recovery-remove" data-i18n="browser.platform.revoke">Revoke recovery</button>
                             </div>
-                            <div class="settings-status">Windows Hello, Touch ID, or another platform passkey can restore only a session that remains live in this StandTerm process. No access or session token is stored.</div>
+                            <div class="settings-status" data-i18n="browser.platform.hint">Windows Hello, Touch ID, or another device passkey can restore a session only while it remains live in this StandTerm process. Recovery does not persist access or session tokens.</div>
                         </fieldset>
                         <fieldset class="settings-fieldset">
                             <legend data-i18n="settings.server.mutable_settings">Low-risk runtime settings</legend>
@@ -1301,12 +1301,12 @@
                         </fieldset>
                     </div>
                     <div class="settings-tab" id="tab-diagnostics">
-                        <div class="settings-status" id="connection-diagnostics-status">No connection events.</div>
+                        <div class="settings-status" id="connection-diagnostics-status" data-i18n="browser.diagnostics.empty">No connection events.</div>
                         <div class="diagnostics-actions">
-                            <button type="button" id="connection-diagnostics-clear">Clear</button>
-                            <button type="button" id="connection-diagnostics-copy">Copy Log</button>
+                            <button type="button" id="connection-diagnostics-clear" data-i18n="browser.diagnostics.clear">Clear</button>
+                            <button type="button" id="connection-diagnostics-copy" data-i18n="browser.diagnostics.copy">Copy log</button>
                         </div>
-                        <textarea id="connection-diagnostics-log" readonly spellcheck="false" aria-label="Connection diagnostics log"></textarea>
+                        <textarea id="connection-diagnostics-log" readonly spellcheck="false" aria-label="Connection diagnostics log" data-i18n-aria-label="browser.diagnostics.log"></textarea>
                     </div>
                 </div>
             </div>
@@ -1324,15 +1324,15 @@
     <div id="paste-review-modal">
         <div class="paste-review-box">
             <div class="settings-header">
-                <h3>Review Paste</h3>
+                <h3 data-i18n="browser.paste.title">Review paste</h3>
             </div>
             <div class="paste-review-body">
                 <div id="paste-review-meta"></div>
-                <textarea id="paste-review-preview" readonly spellcheck="false"></textarea>
+                <textarea id="paste-review-preview" aria-label="Paste preview" data-i18n-aria-label="browser.paste.preview" readonly spellcheck="false"></textarea>
             </div>
             <div class="paste-review-actions">
-                <button type="button" id="paste-review-cancel">Cancel</button>
-                <button type="button" id="paste-review-approve">Paste</button>
+                <button type="button" id="paste-review-cancel" data-i18n="common.cancel">Cancel</button>
+                <button type="button" id="paste-review-approve" data-i18n="browser.chrome.paste">Paste</button>
             </div>
         </div>
     </div>
@@ -1352,8 +1352,8 @@
             <div id="actionMessage"></div>
             <div id="actionQuestion" class="action-question"></div>
             <div class="action-buttons">
-                <button id="actionYesBtn" class="action-secondary">Yes</button>
-                <button id="actionNoBtn" class="action-primary">No</button>
+                <button id="actionYesBtn" data-i18n="common.yes" class="action-secondary">Yes</button>
+                <button id="actionNoBtn" data-i18n="common.no" class="action-primary">No</button>
             </div>
         </div>
         <div id="browser-auth-box">
@@ -1450,7 +1450,7 @@
     <div id="terminal-tabs">
         <div id="tab-strip">
             <div id="tabs-list"></div>
-            <button id="new-tab-btn" class="status-action" type="button" title="New terminal tab" aria-label="New terminal tab">+</button>
+            <button id="new-tab-btn" class="status-action" type="button" title="New terminal tab" aria-label="New terminal tab" data-i18n-aria-label="browser.chrome.new_terminal" data-i18n-title="browser.chrome.new_terminal">+</button>
         </div>
         <button id="agent-pause-btn" class="status-action" type="button" title="Pause Agent access" data-i18n="agent.pause.action">Pause Agent</button>
         <button id="agent-status-mint-btn" class="status-action agent-status-mint" title="Create a standard token for the active terminal">Create token</button>
@@ -1463,10 +1463,10 @@
             <button id="ssh-tunnels-btn" class="status-action" type="button" title="Manage TCP forwarding for this SSH tab" data-i18n-title="ssh.tunnels.tooltip" data-i18n="ssh.tunnels.action" hidden>Tunnels</button>
             <button id="sftp-status-btn" class="status-action status-sftp" type="button" title="Open Files" aria-label="Open Files" hidden>&#x1F4C1;</button>
             <button id="transfer-queue-btn" class="status-action" type="button" title="Transfer Queue" aria-label="Transfer Queue" data-i18n-title="agent.transfer.queue" data-i18n-aria-label="agent.transfer.queue" hidden><span aria-hidden="true">&#x21C4;</span> <span id="transfer-queue-count">0</span></button>
-            <button id="quick-settings" class="status-action" type="button" title="Settings" aria-label="Settings">&#x2699;&#xFE0F;</button>
+            <button id="quick-settings" data-i18n-title="settings.title" data-i18n-aria-label="settings.title" class="status-action" type="button" title="Settings" aria-label="Settings">&#x2699;&#xFE0F;</button>
             <details id="tab-more">
-                <summary class="status-action" title="More terminal actions" aria-label="More terminal actions">&#x22EF;</summary>
-                <div id="tab-more-actions"><button id="close-tabs-btn" class="status-action" type="button">Close all terminal tabs&hellip;</button></div>
+                <summary class="status-action" title="More terminal actions" aria-label="More terminal actions" data-i18n-title="browser.chrome.more_actions" data-i18n-aria-label="browser.chrome.more_actions">&#x22EF;</summary>
+                <div id="tab-more-actions"><button id="close-tabs-btn" class="status-action" type="button" data-i18n="browser.chrome.close_tabs">Close all terminal tabs&hellip;</button></div>
             </details>
         </div>
     </div>
@@ -1565,16 +1565,16 @@
     </dialog>
     <div id="terminal"></div>
     <div id="status-bar">
-        <span class="sb-item">Socket:&nbsp;<span id="socketStatus">Disconnected</span></span>
+        <span class="sb-item"><span data-i18n="browser.chrome.socket">Socket</span>:&nbsp;<span id="socketStatus">Disconnected</span></span>
         <span class="sb-sep">|</span>
-        <span class="sb-item">Session:&nbsp;<span id="sshStatus">Disconnected</span></span>
+        <span class="sb-item"><span data-i18n="browser.chrome.session">Session</span>:&nbsp;<span id="sshStatus">Disconnected</span></span>
         <span class="sb-sep" id="terminal-title-separator" hidden>|</span>
         <span class="sb-item" id="terminal-title-item" hidden><span id="terminal-title"></span></span>
         <span class="sb-sep">|</span>
-        <span class="sb-item">size:&nbsp;<span id="terminal-size">--x--</span></span>
+        <span class="sb-item"><span data-i18n="browser.chrome.size">size</span>:&nbsp;<span id="terminal-size">--x--</span></span>
         <span class="sb-sep">|</span>
         <span class="sb-item" id="clock-display"></span>
-        <span id="uptime-section" class="sb-item" style="display:none"><span class="sb-sep">|</span>connected:&nbsp;<span id="uptime-display"></span></span>
+        <span id="uptime-section" class="sb-item" style="display:none"><span class="sb-sep">|</span><span data-i18n="browser.chrome.uptime">connected</span>:&nbsp;<span id="uptime-display"></span></span>
     </div>
     <div id="policy-debug-panel"></div>
     <div id="debug-hud"></div>
@@ -1617,17 +1617,17 @@
                 </details>
             </div>
             <details id="agent-advanced-tools">
-                <summary>Advanced tools</summary>
+                <summary data-i18n="browser.chrome.advanced">Advanced tools</summary>
                 <div id="operator-observation-row">
-                    <button type="button" id="operator-observation-start-btn">Observe User</button>
-                    <button type="button" id="operator-observation-stop-btn">Stop</button>
-                    <button type="button" id="operator-observation-mark-btn">Mark</button>
+                    <button type="button" id="operator-observation-start-btn" data-i18n="browser.chrome.observe">Observe User</button>
+                    <button type="button" id="operator-observation-stop-btn" data-i18n="browser.chrome.stop_observing">Stop</button>
+                    <button type="button" id="operator-observation-mark-btn" data-i18n="browser.chrome.mark_observation">Mark</button>
                     <span id="operator-observation-state">Off</span>
                 </div>
                 <div id="agent-mock-row">
                     <input type="text" id="agent-mock-input" autocomplete="off" spellcheck="false" value="whoami\n">
-                    <button type="button" id="agent-mock-send-btn">Send</button>
-                    <button type="button" id="agent-provider-run-btn">Run</button>
+                    <button type="button" id="agent-mock-send-btn" data-i18n="browser.chrome.mock_send">Send</button>
+                    <button type="button" id="agent-provider-run-btn" data-i18n="browser.chrome.provider_run">Run</button>
                 </div>
             </details>
         </div>
@@ -1832,6 +1832,7 @@
         const uiText = window.StandTermI18n.create(window.StandTermMessages, prefs.uiLanguage);
         const t = uiText.t;
         uiText.apply(document);
+        document.getElementById('launcher-session-id').textContent = t('browser.chrome.session_id', { id: LAUNCHER_INSTANCE_ID });
         document.getElementById('settings-theme-group-custom').label = t('settings.appearance.group_custom');
         document.getElementById('settings-theme-group-windows-terminal').label = t('settings.appearance.group_windows_terminal');
         document.documentElement.lang = uiText.locale;
@@ -1945,18 +1946,23 @@
         }
 
         // --- Clipboard Helper ---
-        function copyToClipboard(text) {
-            if (!text) return;
+        async function copyToClipboard(text) {
+            if (!text) return false;
             if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
-            } else { fallbackCopy(text); }
+                try {
+                    await navigator.clipboard.writeText(text);
+                    return true;
+                } catch (e) {}
+            }
+            return fallbackCopy(text);
         }
         function fallbackCopy(text) {
             const ta = document.createElement("textarea");
             ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
             document.body.appendChild(ta); ta.select();
-            try { document.execCommand('copy'); } catch (e) {}
-            document.body.removeChild(ta);
+            try { return document.execCommand('copy'); }
+            catch (e) { return false; }
+            finally { document.body.removeChild(ta); }
         }
 
         const BROWSER_AUTH_DB = 'browser-auth-v1';
@@ -2271,8 +2277,8 @@
             if (!window.crypto || !crypto.subtle || !window.indexedDB) {
                 const origin = window.location.origin;
                 const localhostUrl = INITIAL_TERMINAL_POLICY.localhost_access_url || '';
-                const urlHint = localhostUrl ? ` Open ${localhostUrl} or the HTTPS Access URL printed by the launcher.` : ' Open the HTTPS Access URL printed by the launcher.';
-                throw new Error(`Browser authorization requires WebCrypto and IndexedDB. Current origin ${origin} is not a secure browser context.${urlHint}`);
+                const urlHint = localhostUrl ? t('browser.chrome.secure_url', { url: localhostUrl }) : t('browser.chrome.secure_https');
+                throw new Error(t('browser.chrome.secure_required', { origin, hint: urlHint }));
             }
 
             const record = await browserAuthDbGet(BROWSER_AUTH_KEY);
@@ -2304,7 +2310,7 @@
                 const script = document.createElement('script');
                 script.src = localUrl;
                 script.onload = () => resolve(true);
-                script.onerror = () => reject(new Error(`Failed to load ${localUrl}`));
+                script.onerror = () => reject(new Error(t('browser.chrome.script_failed', { url: localUrl })));
                 document.head.appendChild(script);
             });
         }
@@ -3430,11 +3436,11 @@
                 operatorObservationStopBtn.disabled = !active;
                 operatorObservationMarkBtn.disabled = !active;
                 if (!enabled) {
-                    operatorObservationState.innerText = 'Unavailable';
+                    operatorObservationState.innerText = t('browser.chrome.unavailable');
                 } else if (active) {
-                    operatorObservationState.innerText = `OBSERVING · ${observation.eventCount || 0}`;
+                    operatorObservationState.innerText = t('browser.chrome.observing', { count: observation.eventCount || 0 });
                 } else {
-                    operatorObservationState.innerText = 'Off';
+                    operatorObservationState.innerText = t('browser.chrome.off');
                 }
             }
 
@@ -3635,17 +3641,17 @@
                 const agent = state ? state.agent : null;
                 const privacy = agent ? formatAgentPanelValue(agent.privacyState) : '--';
                 const privacyBlocking = !!(agent && AGENT_SNAPSHOT_BLOCKED_PRIVACY_STATES.has(agent.privacyState));
-                setAgentChip(agentGatePrivacy, `privacy: ${privacy}`, privacy !== 'normal' && privacy !== '--', privacyBlocking);
+                setAgentChip(agentGatePrivacy, t('browser.chrome.privacy', { value: privacy }), privacy !== 'normal' && privacy !== '--', privacyBlocking);
 
                 const leaseActive = !!(agent && agent.humanInputLeaseActive);
                 const secondsRemaining = leaseActive ? getAgentLeaseSecondsRemaining(agent) : null;
                 const humanText = leaseActive && secondsRemaining !== null
-                    ? `human input: locked ${secondsRemaining}s`
-                    : leaseActive ? 'human input: locked' : 'human input: idle';
+                    ? t('browser.chrome.human_seconds', { seconds: secondsRemaining })
+                    : leaseActive ? t('browser.chrome.human_locked') : t('browser.chrome.human_idle');
                 setAgentChip(agentGateHuman, humanText, leaseActive, leaseActive);
 
                 const paused = !!(agent && (agent.paused || agent.mode === AGENT_MODE_PAUSED));
-                setAgentChip(agentGatePause, paused ? 'pause: on' : 'pause: off', paused, paused);
+                setAgentChip(agentGatePause, paused ? t('browser.chrome.pause_on') : t('browser.chrome.pause_off'), paused, paused);
             }
 
             function isAgentActionError(action) {
@@ -3663,29 +3669,29 @@
                 agentStatusBox.classList.toggle('error', hasError);
                 agentStatusDetail.classList.toggle('outcome-unknown', !!(action && action.errorCode === 'file_copy_publish_outcome_unknown'));
                 if (!action) {
-                    agentStatusMain.innerText = 'last: none';
-                    agentStatusDetail.innerText = 'error: none';
+                    agentStatusMain.innerText = t('browser.chrome.last_none');
+                    agentStatusDetail.innerText = t('browser.chrome.error_none');
                     return;
                 }
                 const actionId = action.actionId ? action.actionId.slice(0, 8) : '--';
                 const status = formatAgentPanelValue(action.status);
                 const type = formatAgentPanelValue(action.actionType);
-                agentStatusMain.innerText = `last: ${status} · ${type} · ${actionId}`;
+                agentStatusMain.innerText = t('browser.chrome.last_action', { status, type, id: actionId });
                 const parts = [];
-                if (action.errorCode) parts.push(`error: ${action.errorCode}`);
-                else parts.push('error: none');
+                if (action.errorCode) parts.push(t('browser.chrome.error', { code: action.errorCode }));
+                else parts.push(t('browser.chrome.error_none'));
                 if (action.errorCode === 'file_copy_publish_outcome_unknown') {
                     parts.push(t('agent.copy.result_unknown'));
                 }
                 if (action.bytesWritten !== null && Number.isFinite(Number(action.bytesWritten))) {
-                    parts.push(`written: ${action.bytesWritten}`);
+                    parts.push(t('browser.chrome.written', { bytes: action.bytesWritten }));
                 } else if (action.bytesCopied !== null && Number.isFinite(Number(action.bytesCopied))) {
                     const total = action.totalBytes !== null && Number.isFinite(Number(action.totalBytes))
                         ? `/${action.totalBytes}`
                         : '';
-                    parts.push(`copied: ${action.bytesCopied}${total}`);
+                    parts.push(t('browser.chrome.copied', { bytes: action.bytesCopied, total }));
                 } else if (action.byteLength !== null && Number.isFinite(Number(action.byteLength))) {
-                    parts.push(`bytes: ${action.byteLength}`);
+                    parts.push(t('browser.chrome.bytes', { bytes: action.byteLength }));
                 }
                 agentStatusDetail.innerText = parts.join(' · ');
             }
@@ -4661,7 +4667,7 @@
                     text, clipboardPaste
                 };
                 emitAgentPrivacyState(state, 'paste_review');
-                pasteReviewMeta.innerText = `${state.label || state.id} · ${text.length} bytes · ${countPasteLines(text)} lines`;
+                pasteReviewMeta.innerText = t('browser.paste.metadata', { target: state.label || state.id, lines: countPasteLines(text) });
                 pasteReviewPreview.value = text;
                 pasteReviewModal.classList.add('open');
                 pasteReviewApproveBtn.focus();
@@ -4970,7 +4976,7 @@
                     const current = await loadSshSessionState();
                     if (current.revision !== draft.revision) {
                         if (pendingSshConnectionDrafts.get(terminalId) === draft) pendingSshConnectionDrafts.delete(terminalId);
-                        throw new Error('SSH settings changed while confirming the host. Reload before connecting.');
+                        throw new Error(t('browser.chrome.ssh_changed_confirm'));
                     }
                 }
                 if (pendingSshConnectionDrafts.get(terminalId) === draft) submitConnection(draft.payload);
@@ -4987,7 +4993,7 @@
                 const assertCurrent = () => {
                     if (formRevision !== sshConnectionFormRevision || terminal !== getActiveTerminalState()
                             || (!fromRoute && saveSession !== sshSaveSessionInput.checked)) {
-                        throw new Error('SSH connection settings changed. Review them and connect again.');
+                        throw new Error(t('browser.chrome.ssh_changed'));
                     }
                 };
                 await sshSessionReady;
@@ -4996,10 +5002,10 @@
                 assertCurrent();
                 const source = routeDraft?.state || snapshot.state;
                 const selected = [...source.profiles, ...source.history].find(entry => entry.id === selectedId);
-                if (fromRoute && !selected) throw new Error('Choose a saved route before connecting.');
-                if (!fromRoute && selectedId && !selected) throw new Error('The SSH entry was removed. Reload the settings.');
+                if (fromRoute && !selected) throw new Error(t('browser.chrome.choose_route'));
+                if (!fromRoute && selectedId && !selected) throw new Error(t('browser.chrome.entry_removed'));
                 if (snapshot.state.revision !== sshSessionState.revision || source.revision !== snapshot.state.revision) {
-                    throw new Error('SSH settings changed in another window. Reload before connecting.');
+                    throw new Error(t('browser.chrome.ssh_other_window'));
                 }
                 const records = [...snapshot.keys, ...temporaryKeys];
                 const path = fromRoute ? SshRoutes.clone(SshRoutes.checkedPath(source, selected)) : [{
@@ -5022,9 +5028,9 @@
                         const owner = source.profiles.find(profile => profile.id === ref?.ownerProfileId);
                         if (!ref || (ref.kind !== 'credential' && (!owner || owner.keyId !== ref.keyId))
                                 || ref.targetKey !== getSshTargetKey(node.endpoint)) {
-                            throw new Error(`SSH node ${index + 1}: choose a browser key bound to this endpoint, or turn Use key off.`);
+                            throw new Error(t('browser.chrome.key_endpoint', { index: index + 1 }));
                         }
-                        if (!isBrowserSshKeyAllowedByPolicy()) throw new Error('Browser SSH keys require localhost or authorized HTTPS.');
+                        if (!isBrowserSshKeyAllowedByPolicy()) throw new Error(t('browser.chrome.key_policy'));
                         const record = await validateBrowserSshKeyRecord(records.find(key => key.keyId === ref.keyId), owner,
                             ref.kind === 'credential' ? ref : null);
                         assertCurrent();
@@ -5161,12 +5167,12 @@
                     applyQuickConnectKeySelection();
                 } catch (err) {
                     if (version !== quickConnectKeyLoadVersion) return;
-                    setSshSessionMessage(err.message || 'The browser SSH key is unavailable.', true);
+                    setSshSessionMessage(err.message || t('browser.chrome.key_unavailable'), true);
                 }
             }
 
             async function createTemporarySshKey(endpoint) {
-                if (!isBrowserSshKeyAllowedByPolicy()) throw new Error('Browser keys require localhost or an authorized HTTPS connection.');
+                if (!isBrowserSshKeyAllowedByPolicy()) throw new Error(t('browser.chrome.key_policy_connection'));
                 const record = await createBrowserSshKeyRecord(null);
                 return { ...record, kind: 'credential', targetKey: SshRoutes.endpointKey(endpoint) };
             }
@@ -5923,7 +5929,7 @@
                 if (!connectionDiagnosticsLog || !connectionDiagnosticsStatus) return;
                 connectionDiagnosticsLog.value = buildConnectionDiagnosticsText();
                 const count = connectionDiagnostics.length;
-                connectionDiagnosticsStatus.textContent = count === 1 ? '1 connection event.' : `${count} connection events.`;
+                connectionDiagnosticsStatus.textContent = t('browser.diagnostics.count', { count });
             }
 
             function recordConnectionDiagnostic(event, details = {}) {
@@ -6430,7 +6436,7 @@
                 const label = state && (state.title || state.label);
                 const isSshLabel = typeof label === 'string' && (label === 'SSH' || label.startsWith('SSH - '));
                 if (state && !prefs.showDetailedSshLabels && (state.connectionType === 'ssh' || isSshLabel)) return 'SSH';
-                return label || (state && state.id) || 'Terminal';
+                return label || (state && state.id) || t('browser.chrome.terminal');
             }
 
             function normalizeTerminalApplicationTitle(value) {
@@ -6576,7 +6582,7 @@
                     unavailableMark.innerText = '\u00D7';
                     button.appendChild(unavailableMark);
                 }
-                button.title = available ? 'Open Files' : 'Files not available';
+                button.title = available ? t('browser.chrome.files_open') : t('browser.chrome.files_unavailable');
                 button.setAttribute('aria-label', button.title);
             }
 
@@ -6691,7 +6697,7 @@
                 const closeBtn = document.createElement('button');
                 closeBtn.type = 'button';
                 closeBtn.className = 'tab-close';
-                closeBtn.title = 'Close terminal tab';
+                closeBtn.title = t('browser.chrome.close_terminal');
                 closeBtn.innerText = '×';
                 tabEl.append(stateEl, titleEl, agentCountdownEl, closeBtn);
                 tabsList.appendChild(tabEl);
@@ -6909,7 +6915,7 @@
                     state.sftpAvailable = typeof item.files_available === 'boolean'
                         ? item.files_available
                         : (state.connectionType === 'ssh' ? null : false);
-                    state.label = item.terminal_label || CONNECTION_LABELS[state.connectionType] || 'Terminal';
+                    state.label = item.terminal_label || CONNECTION_LABELS[state.connectionType] || t('browser.chrome.terminal');
                     state.title = state.label;
                     state.termName = item.term || state.termName;
                     if (state.connected && !state.connectedAt) state.connectedAt = new Date();
@@ -7983,7 +7989,7 @@
 
             async function registerPlatformRecoveryCredential() {
                 if (!platformRecoverySupported()) {
-                    throw new Error('Platform passkeys are unavailable in this browser context.');
+                    throw new Error(t('browser.platform.unsupported'));
                 }
                 const optionsResponse = await fetch('/session-recovery/register/options', {
                     method: 'POST',
@@ -8010,7 +8016,7 @@
 
             async function authenticatePlatformRecoveryCredential() {
                 if (!platformRecoverySupported()) {
-                    throw new Error('Platform passkeys are unavailable in this browser context.');
+                    throw new Error(t('browser.platform.unsupported'));
                 }
                 const optionsResponse = await fetch('/session-recovery/authenticate/options', {
                     method: 'POST',
@@ -8040,16 +8046,16 @@
                 reconnectAfterSessionRecovery();
             }
 
-            async function requestPlatformRecoveryStatus() {
+            async function requestPlatformRecoveryStatus(feedback = '') {
                 if (!platformRecoveryStatus) return;
                 if (!platformRecoverySupported()) {
-                    platformRecoveryStatus.textContent = 'Platform passkeys are unavailable in this browser context.';
+                    platformRecoveryStatus.textContent = t('browser.platform.unsupported');
                     if (platformRecoveryRegisterBtn) platformRecoveryRegisterBtn.disabled = true;
                     if (platformRecoveryArmBtn) platformRecoveryArmBtn.disabled = true;
                     if (platformRecoveryRemoveBtn) platformRecoveryRemoveBtn.disabled = true;
                     return;
                 }
-                platformRecoveryStatus.textContent = 'Loading platform recovery status...';
+                if (!feedback) platformRecoveryStatus.textContent = t('browser.platform.loading');
                 try {
                     const response = await fetch('/session-recovery/status', {
                         headers: { 'Accept': 'application/json' },
@@ -8058,14 +8064,14 @@
                     const available = payload.available === true;
                     const configured = Number(payload.configured_credentials) || 0;
                     const armed = Number(payload.armed_credentials) || 0;
-                    platformRecoveryStatus.textContent = available
-                        ? `${configured} registered, ${armed} armed for this live session. RP ID: ${payload.rp_id}`
-                        : (payload.message || 'Platform recovery is unavailable for this origin.');
+                    platformRecoveryStatus.textContent = feedback || (available
+                        ? t('browser.platform.status', { configured, armed, rp_id: payload.rp_id })
+                        : (payload.message || t('browser.platform.origin_unavailable')));
                     if (platformRecoveryRegisterBtn) platformRecoveryRegisterBtn.disabled = !available;
                     if (platformRecoveryArmBtn) platformRecoveryArmBtn.disabled = !available || configured === 0;
                     if (platformRecoveryRemoveBtn) platformRecoveryRemoveBtn.disabled = !available || configured === 0;
                 } catch (error) {
-                    platformRecoveryStatus.textContent = formatPlatformRecoveryError(error);
+                    platformRecoveryStatus.textContent = feedback || formatPlatformRecoveryError(error);
                     if (platformRecoveryRegisterBtn) platformRecoveryRegisterBtn.disabled = true;
                     if (platformRecoveryArmBtn) platformRecoveryArmBtn.disabled = true;
                     if (platformRecoveryRemoveBtn) platformRecoveryRemoveBtn.disabled = true;
@@ -8181,11 +8187,11 @@
                 });
                 if (!response.ok) {
                     showSessionRecovery(t('browser.recovery.expired'));
-                    throw new Error('Session expired.');
+                    throw new Error(t('browser.server_access.expired'));
                 }
                 const result = await response.json();
                 if (!result || result.status !== 'ok' || typeof result.access_url !== 'string') {
-                    throw new Error('Access URL is unavailable.');
+                    throw new Error(t('browser.server_access.unavailable'));
                 }
                 return result;
             }
@@ -8202,7 +8208,7 @@
             }
 
             async function showAccessUrl() {
-                if (serverAccessStatus) serverAccessStatus.textContent = 'Fetching access URL...';
+                if (serverAccessStatus) serverAccessStatus.textContent = t('browser.server_access.fetching');
                 const result = await fetchAccessUrl();
                 if (serverAccessUrl) {
                     const lines = [result.access_url];
@@ -8210,16 +8216,17 @@
                     serverAccessUrl.textContent = lines.join('\n');
                     serverAccessUrl.style.display = 'block';
                 }
-                if (serverAccessStatus) serverAccessStatus.textContent = 'Access URL shown for 30 seconds.';
+                if (serverAccessStatus) serverAccessStatus.textContent = t('browser.server_access.shown');
                 hideAccessUrlValueLater();
                 return result;
             }
 
             async function copyAccessUrl() {
-                if (serverAccessStatus) serverAccessStatus.textContent = 'Fetching access URL...';
+                if (serverAccessStatus) serverAccessStatus.textContent = t('browser.server_access.fetching');
                 const result = await fetchAccessUrl();
-                copyToClipboard(result.access_url);
-                if (serverAccessStatus) serverAccessStatus.textContent = 'Access URL copied.';
+                if (serverAccessStatus) serverAccessStatus.textContent = t('browser.diagnostics.copying');
+                const copied = await copyToClipboard(result.access_url);
+                if (serverAccessStatus) serverAccessStatus.textContent = t(copied ? 'browser.server_access.copied' : 'browser.server_access.copy_failed');
                 return result;
             }
 
@@ -8264,7 +8271,7 @@
                 if (connectionType === 'ssh') {
                     if (sshPreparationMode === 'route') {
                         const entry = currentSshRouteEntry();
-                        if (!entry) throw new Error('Choose a saved route before connecting.');
+                        if (!entry) throw new Error(t('browser.chrome.choose_route'));
                         const target = SshRoutes.checkedPath(sshRouteDraft?.state || sshSessionState, entry).at(-1).endpoint;
                         return { ...formData, ...target, password: '', profile_name: entry.name || '' };
                     }
@@ -8273,7 +8280,7 @@
                     formData.username = sshUsernameInput.value;
                     formData.password = sshPasswordInput.value;
                     formData.host_key_alias = document.getElementById('ssh-direct-alias').value.trim();
-                    if (sshUseBrowserKeyInput.checked && (!quickConnectSshKeyRecord || !isBrowserSshKeyAllowedByPolicy())) throw new Error('Choose a key or wait for key creation before connecting.');
+                    if (sshUseBrowserKeyInput.checked && (!quickConnectSshKeyRecord || !isBrowserSshKeyAllowedByPolicy())) throw new Error(t('browser.chrome.key_not_ready'));
                     const matchingProfile = findSshProfileForTarget(formData);
                     if (matchingProfile) formData.profile_name = matchingProfile.name;
                     if (
@@ -8333,7 +8340,7 @@
                 state.sshTarget = state.connectionType === 'ssh' ? normalizeSshTarget(formData) : null;
                 state.label = formData.connection_type === 'ssh' && formData.profile_name
                     ? getSshProfileTabLabel(formData.profile_name)
-                    : (CONNECTION_LABELS[state.connectionType] || 'Terminal');
+                    : (CONNECTION_LABELS[state.connectionType] || t('browser.chrome.terminal'));
                 state.title = state.label;
                 state.applicationTitle = '';
                 state.connectedAt = null;
@@ -8402,9 +8409,9 @@
             document.getElementById('ssh-cancel-start').onclick = () => cancelSshConnection();
             function requestSshHostIdentity(payload) {
                 return new Promise((resolve, reject) => {
-                    if (!socket?.connected) { reject(new Error('StandTerm is disconnected.')); return; }
+                    if (!socket?.connected) { reject(new Error(t('browser.chrome.core_disconnected'))); return; }
                     socket.timeout(SSH_HOST_IDENTITY_TIMEOUT_MS).emit('ssh_host_identity', payload, (error, result) => {
-                        if (error) reject(new Error('SSH host identity request timed out.'));
+                        if (error) reject(new Error(t('browser.chrome.identity_timeout')));
                         else resolve(result);
                     });
                 });
@@ -8589,7 +8596,7 @@
                     const deadline = Date.now() + timeoutMs;
                     const check = () => {
                         if (!canUseAgentPanel(state)) {
-                            reject(new Error('Agent access is unavailable for this terminal.'));
+                            reject(new Error(t('browser.chrome.agent_unavailable')));
                             return;
                         }
                         if (
@@ -8601,7 +8608,7 @@
                             return;
                         }
                         if (Date.now() >= deadline) {
-                            reject(new Error('Timed out while applying Agent access permission.'));
+                            reject(new Error(t('browser.chrome.agent_timeout')));
                             return;
                         }
                         setTimeout(check, 25);
@@ -8898,7 +8905,7 @@
                 document.getElementById('tab-more').open = false;
                 const hasCloseableTerminal = [...terminals.values()].some(state => state.connected || state.connecting) || terminals.size > 1;
                 if (!socket || !socket.connected || !hasCloseableTerminal) return;
-                if (!window.confirm('Close all terminal tabs?')) return;
+                if (!window.confirm(t('browser.chrome.confirm_close_tabs'))) return;
                 if (socket && socket.connected) socket.emit('close_all_terminals');
                 resetTerminalWorkspace();
             }
@@ -9053,7 +9060,7 @@
                         }
                         if (state.id === activeTerminalId) {
                             hideActionPrompt();
-                            showError(data.message || 'SSH host key action completed.');
+                            showError(data.message || t('browser.chrome.host_key_done'));
                             resetConnectButton();
                         }
                         break;
@@ -9066,11 +9073,11 @@
                         if (state.id === activeTerminalId) {
                             hideActionPrompt();
                             if (data.setup_status === 'success') {
-                                showError(data.message || 'Localhost key setup completed. Reconnecting...');
+                                showError(data.message || t('browser.chrome.local_key_reconnect'));
                                 submitConnection({ ...setupRetry.payload,
                                     ...(setupRetry.payload.interactive_login ? { attempt_id: createSshSessionId('attempt') } : {}) }, sshPreparedKeys.get(setupRetry.payload));
                             } else {
-                                showError(data.message || 'Localhost key setup completed.');
+                                showError(data.message || t('browser.chrome.local_key_done'));
                                 resetConnectButton();
                                 updateActiveTerminalUi();
                             }
@@ -9093,7 +9100,7 @@
                         state.sftpEndpoint = null;
                         state.label = successfulSshDraft && successfulSshDraft.profileName
                             ? getSshProfileTabLabel(successfulSshDraft.profileName)
-                            : (data.terminal_label || CONNECTION_LABELS[state.connectionType] || 'Terminal');
+                            : (data.terminal_label || CONNECTION_LABELS[state.connectionType] || t('browser.chrome.terminal'));
                         state.title = state.label;
                         state.lastNotifiedSize = { cols: null, rows: null };
                         state.termName = data.term || state.termName;
@@ -9126,7 +9133,7 @@
                         resetAgentClientState(state);
                         if (state.id === activeTerminalId) {
                             updateActiveTerminalUi();
-                            showError(data.message || 'Terminal session closed.');
+                            showError(data.message || t('browser.chrome.terminal_closed'));
                         } else {
                             updateTabState(state);
                         }
@@ -9150,7 +9157,7 @@
             socket.on('ssh_output', handleSshOutputPayload);
 
             function formatSftpEndpoint(endpoint) {
-                if (!endpoint || typeof endpoint !== 'object') return 'Direct endpoint';
+                if (!endpoint || typeof endpoint !== 'object') return t('browser.files.direct_endpoint');
                 if (endpoint.route === 'local') {
                     const command = typeof endpoint.command === 'string' && endpoint.command
                         ? endpoint.command
@@ -9184,7 +9191,7 @@
             function agentTransferFilename(action) {
                 const path = typeof action.destination_path === 'string' ? action.destination_path : '';
                 const parts = path.split(/[\\/]/).filter(Boolean);
-                return parts.at(-1) || 'File transfer';
+                return parts.at(-1) || t('browser.chrome.file_transfer');
             }
 
             function agentTransferStatusText(action) {
@@ -9328,7 +9335,7 @@
 
             function formatSftpDetailedBytes(value) {
                 const bytes = Math.max(0, Math.trunc(Number(value) || 0));
-                return `${formatSftpBytes(bytes)} (${bytes} bytes)`;
+                return t('browser.files.detailed_bytes', { size: formatSftpBytes(bytes), bytes });
             }
 
             function formatSftpModified(value) {
@@ -9336,18 +9343,14 @@
                 if (!Number.isFinite(seconds) || seconds < 0) return '';
                 const date = new Date(seconds * 1000);
                 if (Number.isNaN(date.getTime())) return '';
-                const parts = new Intl.DateTimeFormat('en-US', {
+                return new Intl.DateTimeFormat(uiText.locale, {
                     year: 'numeric',
                     month: 'short',
                     day: '2-digit',
                     hour: '2-digit',
                     minute: '2-digit',
                     hour12: false,
-                }).formatToParts(date).reduce((result, part) => {
-                    result[part.type] = part.value;
-                    return result;
-                }, {});
-                return `${parts.hour}:${parts.minute} ${parts.month} ${parts.day} ${parts.year}`;
+                }).format(date);
             }
 
             function nextSftpRequestId(prefix) {
@@ -9383,8 +9386,8 @@
                     || !ready
                 );
                 state.elements.fileDownload.textContent = state.downloadPreparing
-                    ? 'Preparing…'
-                    : (state.downloadConsumed ? 'Downloaded' : 'Download');
+                    ? t('browser.files.preparing')
+                    : (state.downloadConsumed ? t('browser.files.download_started') : t('browser.files.download'));
             }
 
             function setSftpPipBusy(state, busy) {
@@ -9404,12 +9407,12 @@
                     state.elements.filename.disabled = busy || transferring;
                     state.elements.copy.disabled = busy || transferring || !state.currentPath || !state.elements.filename.value;
                     state.elements.cancel.textContent = uploading
-                        ? 'Cancel upload'
+                        ? t('browser.files.cancel_upload')
                         : (state.cancelPending
-                        ? 'Cancelling…'
+                        ? t('browser.files.cancelling')
                         : (copyPhase === 'committing'
-                            ? 'Publishing…'
-                            : (copying ? 'Cancel copy' : (state.finished ? 'Close' : 'Cancel'))));
+                            ? t('browser.files.publishing')
+                            : (copying ? t('browser.files.cancel_copy') : (state.finished ? t('common.close') : t('common.cancel')))));
                     state.elements.cancel.disabled = uploading
                         ? false
                         : (copying
@@ -9466,20 +9469,20 @@
                 const selected = files && files.length ? files[0] : null;
                 if (!selected) return;
                 if (files.length > 1) {
-                    setSftpPipStatus(state, 'Select one file at a time.', 'error');
+                    setSftpPipStatus(state, t('browser.files.one_file'), 'error');
                     return;
                 }
                 if (state.maxUploadBytes && selected.size > state.maxUploadBytes) {
                     setSftpPipStatus(
                         state,
-                        `The file exceeds the ${formatSftpBytes(state.maxUploadBytes)} upload limit.`,
+                        t('browser.files.upload_limit', { limit: formatSftpBytes(state.maxUploadBytes) }),
                         'error',
                     );
                     return;
                 }
                 state.file = selected;
                 state.elements.conflict.classList.remove('visible');
-                setSftpPipStatus(state, 'Ready to upload.');
+                setSftpPipStatus(state, t('browser.files.ready_upload'));
                 updateSftpSelectedFile(state);
                 state.elements.selectedFile.scrollIntoView({ block: 'nearest' });
             }
@@ -9558,22 +9561,22 @@
             }
 
             function getSftpRenameValidation(state) {
-                if (!state || !state.selectedRemoteFile || !state.elements) return 'Select a file.';
+                if (!state || !state.selectedRemoteFile || !state.elements) return 'browser.files.select_file';
                 const value = state.elements.renameInput.value;
-                if (!value) return 'Enter a file name.';
+                if (!value) return 'browser.files.filename_required';
                 if (value === '.' || value === '..' || value.includes('/') || value.includes('\\') || /[\u0000-\u001f\u007f]/.test(value)) {
-                    return 'Enter a file name without a path.';
+                    return 'browser.files.filename_no_path';
                 }
-                if (new TextEncoder().encode(value).length > 255) return 'The file name is too long.';
-                if (state.currentEntryNames.has(value)) return 'A file or directory with this name already exists.';
-                return '';
+                if (new TextEncoder().encode(value).length > 255) return 'browser.files.filename_too_long';
+                if (state.currentEntryNames.has(value)) return 'browser.files.filename_exists';
+                return null;
             }
 
             function updateSftpRenameAvailability(state) {
                 if (!state || !state.elements || !state.elements.renameConfirm) return;
-                const message = getSftpRenameValidation(state);
-                state.elements.renameHint.textContent = message;
-                state.elements.renameConfirm.disabled = !!message || state.busy || state.uploading;
+                const validationKey = getSftpRenameValidation(state);
+                state.elements.renameHint.textContent = validationKey ? t(validationKey) : '';
+                state.elements.renameConfirm.disabled = !!validationKey || state.busy || state.uploading;
             }
 
             function showSftpRename(state) {
@@ -9708,13 +9711,13 @@
 
                 const header = state.window.document.createElement('div');
                 header.className = 'sftp-list-header';
-                [['name', 'Name'], ['size', 'Size'], ['date', 'Date']].forEach(([column, label]) => {
+                [['name', t('browser.files.name')], ['size', t('browser.files.size')], ['date', t('browser.files.date')]].forEach(([column, label]) => {
                     const button = state.window.document.createElement('button');
                     button.type = 'button';
                     button.className = `sftp-sort-button${state.sortColumn === column ? ' active' : ''}`;
                     button.dataset.sortColumn = column;
                     button.textContent = `${label}${state.sortColumn === column ? (state.sortDirection === 'asc' ? ' ▲' : ' ▼') : ''}`;
-                    button.setAttribute('aria-label', `Sort by ${label}`);
+                    button.setAttribute('aria-label', t('browser.files.sort', { column: label }));
                     button.setAttribute('aria-pressed', state.sortColumn === column ? 'true' : 'false');
                     button.addEventListener('click', () => sortSftpEntries(state, column));
                     header.appendChild(button);
@@ -9730,7 +9733,7 @@
                 if (directoriesToRender.length === 0 && filesToRender.length === 0) {
                     const empty = state.window.document.createElement('div');
                     empty.className = 'sftp-directory-empty';
-                    empty.textContent = 'No subdirectories or files.';
+                    empty.textContent = t('browser.files.empty');
                     list.appendChild(empty);
                 } else {
                     directoriesToRender.forEach(entry => {
@@ -9739,7 +9742,7 @@
                         button.className = 'sftp-directory-entry';
                         button.dataset.entryName = entry.name;
                         button.title = entry.name;
-                        button.setAttribute('aria-label', `Folder ${entry.name}${entry.mtime === null ? '' : `, modified ${formatSftpModified(entry.mtime)}`}.`);
+                        button.setAttribute('aria-label', t(entry.mtime === null ? 'browser.files.folder_label' : 'browser.files.folder_modified', { name: entry.name, time: formatSftpModified(entry.mtime) }));
                         button.append(
                             createSftpEntryCell(state, 'sftp-file-entry-name', `📁 ${entry.name}`),
                             createSftpEntryCell(state, 'sftp-file-entry-size', ''),
@@ -9758,7 +9761,7 @@
                         button.dataset.fileEntry = 'true';
                         button.dataset.entryName = file.name;
                         button.title = getSftpRemoteFilePath(state, file);
-                        button.setAttribute('aria-label', `File ${file.name}, ${formatSftpBytes(file.size)}, modified ${formatSftpModified(file.mtime)}. Open file actions.`);
+                        button.setAttribute('aria-label', t('browser.files.file_label', { name: file.name, size: formatSftpBytes(file.size), time: formatSftpModified(file.mtime) }));
                         button.setAttribute('aria-pressed', 'false');
                         button.append(
                             createSftpEntryCell(state, 'sftp-file-entry-name', `📄 ${file.name}`),
@@ -9767,7 +9770,7 @@
                         );
                         if (state.mode === 'destination') {
                             button.disabled = true;
-                            button.setAttribute('aria-label', `Existing file ${file.name}, ${formatSftpBytes(file.size)}, modified ${formatSftpModified(file.mtime)}.`);
+                            button.setAttribute('aria-label', t('browser.files.existing_file', { name: file.name, size: formatSftpBytes(file.size), time: formatSftpModified(file.mtime) }));
                         } else {
                             button.addEventListener('click', () => showSftpFileOperation(state, file, button));
                             if (file.fileId === selectedFileId) {
@@ -9780,7 +9783,7 @@
                         list.appendChild(button);
                     });
                 }
-                if (truncated) setSftpPipStatus(state, 'Directory list was truncated.', 'error');
+                if (truncated) setSftpPipStatus(state, t('browser.files.truncated'), 'error');
             }
 
             function requestSftpBrowse(state, options = {}) {
@@ -9789,7 +9792,7 @@
                 state.pendingBrowseRequestId = requestId;
                 state.pendingBrowseStatus = options.successMessage || null;
                 setSftpPipBusy(state, true);
-                setSftpPipStatus(state, 'Opening directory…');
+                setSftpPipStatus(state, t('browser.files.opening_directory'));
                 socket.emit('sftp_browse_request', {
                     request_id: requestId,
                     terminal_id: state.terminalId,
@@ -9822,7 +9825,7 @@
                     }
                     updateActiveTerminalUi();
                     setSftpPipBusy(state, false);
-                    setSftpPipStatus(state, data.message || 'Remote directory could not be opened.', 'error');
+                    setSftpPipStatus(state, data.message || t('browser.files.open_failed'), 'error');
                     return;
                 }
                 if (terminalState) {
@@ -9844,8 +9847,8 @@
                     setSftpPipStatus(
                         state,
                         state.mode === 'destination'
-                            ? 'Choose this folder or browse to another destination.'
-                            : 'Choose a file action or drop a file to upload.',
+                            ? t('browser.files.choose_folder')
+                            : t('browser.files.choose_action'),
                     );
                 }
             }
@@ -9870,14 +9873,14 @@
                     || /[\u0000-\u001f\u007f]/.test(filename)
                     || new TextEncoder().encode(filename).length > 255
                 ) {
-                    setSftpPipStatus(state, 'Enter a valid destination file name.', 'error');
+                    setSftpPipStatus(state, t('browser.files.destination_filename_invalid'), 'error');
                     return;
                 }
                 const requestId = nextSftpRequestId('sftp-upload');
                 state.pendingTicketRequestId = requestId;
                 setSftpPipBusy(state, true);
                 state.elements.conflict.classList.remove('visible');
-                setSftpPipStatus(state, 'Checking upload destination…');
+                setSftpPipStatus(state, t('browser.files.checking_upload'));
                 socket.emit('sftp_upload_ticket_request', {
                     request_id: requestId,
                     terminal_id: state.terminalId,
@@ -9898,9 +9901,9 @@
                 state.elements.progress.classList.add('visible');
                 state.elements.progressBar.style.width = file.size === 0 ? '100%' : '0%';
                 setSftpPipBusy(state, false);
-                setSftpPipStatus(state, `Sending to ${data.destination_path}…`);
+                setSftpPipStatus(state, t('browser.files.sending_to', { path: data.destination_path }));
                 if (state.mode === 'destination') {
-                    state.elements.lifecycle.textContent = 'Uploading through the browser. Use Cancel upload to stop the request.';
+                    state.elements.lifecycle.textContent = t('browser.files.upload_lifecycle');
                 }
 
                 const xhr = new XMLHttpRequest();
@@ -9913,7 +9916,7 @@
                     state.elements.progressBar.style.width = `${percent}%`;
                     setSftpPipStatus(
                         state,
-                        `Sending ${formatSftpBytes(event.loaded)} / ${formatSftpBytes(event.total)}…`,
+                        t('browser.files.sending_progress', { sent: formatSftpBytes(event.loaded), total: formatSftpBytes(event.total) }),
                     );
                 };
                 xhr.onload = () => {
@@ -9928,22 +9931,22 @@
                     if (xhr.status >= 200 && xhr.status < 300 && result && result.status === 'completed') {
                         if (state.mode === 'destination') {
                             state.finished = true;
-                            state.elements.lifecycle.textContent = 'Upload finished. Close returns to the previous pane.';
+                            state.elements.lifecycle.textContent = t('browser.files.upload_finished');
                         } else {
                             state.file = null;
                             updateSftpSelectedFile(state);
                         }
-                        setSftpPipStatus(state, `Uploaded to ${result.destination_path}.`, 'success');
+                        setSftpPipStatus(state, t('browser.files.uploaded', { path: result.destination_path }), 'success');
                     } else {
                         if (state.mode === 'destination') {
                             state.finished = true;
-                            state.elements.lifecycle.textContent = 'Upload stopped. Check the destination before retrying.';
+                            state.elements.lifecycle.textContent = t('browser.files.upload_stopped');
                         }
-                        setSftpPipStatus(state, (result && result.message) || 'File upload failed.', 'error');
+                        setSftpPipStatus(state, (result && result.message) || t('browser.files.upload_failed'), 'error');
                     }
                     setSftpPipBusy(state, false);
                     if (!state.window || state.window.closed) {
-                        if (xhr.status >= 200 && xhr.status < 300) alert(`SFTP upload completed: ${result.destination_path}`);
+                        if (xhr.status >= 200 && xhr.status < 300) alert(t('browser.files.uploaded', { path: result.destination_path }));
                         if (sftpPipState === state) sftpPipState = null;
                     }
                 };
@@ -9952,12 +9955,12 @@
                     state.xhr = null;
                     if (state.mode === 'destination') {
                         state.finished = true;
-                        state.elements.lifecycle.textContent = 'Upload stopped. Check the destination before retrying.';
+                        state.elements.lifecycle.textContent = t('browser.files.upload_stopped');
                     }
-                    setSftpPipStatus(state, 'File upload failed because the connection was interrupted.', 'error');
+                    setSftpPipStatus(state, t('browser.files.upload_interrupted'), 'error');
                     setSftpPipBusy(state, false);
                     if (!state.window || state.window.closed) {
-                        alert('SFTP upload failed because the connection was interrupted.');
+                        alert(t('browser.files.upload_interrupted'));
                         if (sftpPipState === state) sftpPipState = null;
                     }
                 };
@@ -9969,10 +9972,10 @@
                         state.elements.progress.classList.remove('visible');
                         state.elements.progressBar.style.width = '0%';
                         if (state.mode === 'destination') {
-                            state.elements.lifecycle.textContent = 'Upload request stopped. Check the destination before retrying.';
+                            state.elements.lifecycle.textContent = t('browser.files.upload_request_stopped');
                         }
                     }
-                    setSftpPipStatus(state, 'Upload request cancelled. Check the destination before retrying.');
+                    setSftpPipStatus(state, t('browser.files.upload_request_cancelled'));
                     setSftpPipBusy(state, false);
                 };
                 xhr.send(file);
@@ -9995,13 +9998,13 @@
                 state.pendingTicketRequestId = null;
                 setSftpPipBusy(state, false);
                 if (data.status === 'conflict') {
-                    state.elements.conflictText.textContent = `${data.destination_path} already exists (${formatSftpBytes(data.existing_size)}).`;
+                    state.elements.conflictText.textContent = t('browser.files.conflict', { path: data.destination_path, size: formatSftpBytes(data.existing_size) });
                     state.elements.conflict.classList.add('visible');
-                    setSftpPipStatus(state, 'Choose how to handle the existing file.');
+                    setSftpPipStatus(state, t('browser.files.choose_conflict'));
                     return;
                 }
                 if (data.status !== 'ready') {
-                    setSftpPipStatus(state, data.message || 'Upload could not be prepared.', 'error');
+                    setSftpPipStatus(state, data.message || t('browser.files.upload_prepare_failed'), 'error');
                     return;
                 }
                 startSftpUpload(state, data);
@@ -10021,7 +10024,7 @@
                 state.downloadPreparing = true;
                 state.preparedDownload = null;
                 updateSftpDownloadAvailability(state);
-                setSftpPipStatus(state, `Preparing download for ${file.name}…`);
+                setSftpPipStatus(state, t('browser.files.preparing_download', { name: file.name }));
                 logSftpBrowserDownload('ticket requested', {
                     request_id: requestId,
                     terminal: state.terminalId,
@@ -10107,13 +10110,13 @@
                     ticket_remaining_ms: Math.max(0, prepared.expiresAt - Date.now()),
                 });
                 if (!startSftpBrowserDownload(prepared, state.window.document)) {
-                    setSftpPipStatus(state, 'Download URL was invalid.', 'error');
+                    setSftpPipStatus(state, t('browser.files.download_url_invalid'), 'error');
                     return;
                 }
                 state.preparedDownload = null;
                 state.downloadConsumed = true;
                 updateSftpDownloadAvailability(state);
-                setSftpPipStatus(state, `Download started: ${prepared.filename}.`, 'success');
+                setSftpPipStatus(state, t('browser.files.download_requested', { name: prepared.filename }), 'success');
             }
 
             function handleSftpDownloadTicketResult(data) {
@@ -10145,7 +10148,7 @@
                         status: data.status || null,
                     }, 'warn');
                     updateSftpDownloadAvailability(state);
-                    setSftpPipStatus(state, data.message || 'Download could not be prepared.', 'error');
+                    setSftpPipStatus(state, data.message || t('browser.files.download_prepare_failed'), 'error');
                     return;
                 }
                 const lifetimeSeconds = Number(data.expires_in_seconds);
@@ -10162,7 +10165,7 @@
                     expires_in_seconds: lifetimeSeconds,
                 });
                 updateSftpDownloadAvailability(state);
-                setSftpPipStatus(state, `Selected ${data.filename}. Click Download to save it.`);
+                setSftpPipStatus(state, t('browser.files.download_ready', { name: data.filename }));
             }
 
             function requestSftpFileAction(state, action) {
@@ -10188,7 +10191,7 @@
                     return;
                 }
                 setSftpPipBusy(state, true);
-                setSftpPipStatus(state, action === 'rename' ? 'Renaming remote file…' : 'Permanently deleting remote file…');
+                setSftpPipStatus(state, action === 'rename' ? t('browser.files.renaming') : t('browser.files.deleting'));
                 socket.emit('sftp_file_action_request', payload);
             }
 
@@ -10206,12 +10209,12 @@
                 setSftpPipBusy(state, false);
                 if (data.status !== 'completed') {
                     if (state.elements.deleteConfirmation.classList.contains('visible')) cancelSftpDelete(state);
-                    setSftpPipStatus(state, data.message || `Remote file ${action} failed.`, 'error');
+                    setSftpPipStatus(state, data.message || t(action === 'rename' ? 'browser.files.rename_failed' : 'browser.files.delete_failed'), 'error');
                     return;
                 }
                 const completedMessage = action === 'rename'
-                    ? `Renamed to ${data.filename}.`
-                    : `Permanently deleted ${data.filename}.`;
+                    ? t('browser.files.renamed', { name: data.filename })
+                    : t('browser.files.deleted', { name: data.filename });
                 closeSftpFileOperation(state, false);
                 requestSftpBrowse(state, { path: state.currentPath, successMessage: completedMessage });
             }
@@ -10228,12 +10231,12 @@
                 const destinationState = sourceState.copyDestinationState;
                 if (destinationState.copying || destinationState.uploading) {
                     destinationState.elements.lifecycle.textContent = destinationState.cancelPending
-                        ? 'Cancellation requested. Wait for backend confirmation before closing Files.'
+                        ? t('browser.files.cancel_wait')
                         : (destinationState.uploading
-                            ? 'Cancel the upload before returning to the previous pane.'
+                            ? t('browser.files.cancel_upload_first')
                         : (destinationState.copyPhase === 'committing'
-                            ? 'Publishing cannot be cancelled. Wait for the result before closing Files.'
-                            : 'Cancel the copy first. Closing Files does not cancel it.'));
+                            ? t('browser.files.publishing_wait')
+                            : t('browser.files.cancel_copy_first')));
                     return;
                 }
                 if (destinationState.elements && destinationState.elements.pane.isConnected) {
@@ -10258,7 +10261,7 @@
                     !canUseSftpFileManager(terminalState)
                     || (state.sourceKind !== 'browser' && terminalId === state.sourceState.terminalId)
                 ) {
-                    setSftpPipStatus(state, 'Choose another connected Files session.', 'error');
+                    setSftpPipStatus(state, t('browser.files.choose_session'), 'error');
                     return;
                 }
                 state.terminalId = terminalId;
@@ -10291,7 +10294,7 @@
                     || /[\u0000-\u001f\u007f]/.test(filename)
                     || new TextEncoder().encode(filename).length > 255
                 ) {
-                    setSftpPipStatus(state, 'Enter a valid destination file name.', 'error');
+                    setSftpPipStatus(state, t('browser.files.destination_filename_invalid'), 'error');
                     return;
                 }
                 const requestId = nextSftpRequestId('files-copy');
@@ -10302,9 +10305,9 @@
                 state.cancelPending = false;
                 state.finished = false;
                 state.elements.conflict.classList.remove('visible');
-                state.elements.lifecycle.textContent = 'Preparing the copy. Keep Files open.';
+                state.elements.lifecycle.textContent = t('browser.files.preparing_copy');
                 setSftpPipBusy(state, true);
-                setSftpPipStatus(state, 'Checking copy destination…');
+                setSftpPipStatus(state, t('browser.files.checking_copy'));
                 socket.emit('files_copy_request', {
                     request_id: requestId,
                     source_terminal_id: sourceState.terminalId,
@@ -10327,7 +10330,7 @@
                     || !socket.connected
                 ) return;
                 state.cancelPending = true;
-                state.elements.lifecycle.textContent = 'Cancelling before the destination is published…';
+                state.elements.lifecycle.textContent = t('browser.files.cancelling_copy');
                 setSftpPipBusy(state, false);
                 socket.emit('files_copy_cancel_request', {
                     request_id: nextSftpRequestId('files-copy-cancel'),
@@ -10350,19 +10353,19 @@
                     state.copyPhase = 'preparing';
                     state.cancelPending = false;
                     state.finished = false;
-                    state.elements.lifecycle.textContent = 'Preparing the copy. Keep Files open.';
+                    state.elements.lifecycle.textContent = t('browser.files.preparing_copy');
                     setSftpPipBusy(state, true);
-                    setSftpPipStatus(state, 'Checking copy destination…');
+                    setSftpPipStatus(state, t('browser.files.checking_copy'));
                     return;
                 }
                 if (data.status === 'conflict') {
                     state.copyPhase = 'conflict';
                     state.cancelPending = false;
                     state.finished = false;
-                    state.elements.lifecycle.textContent = 'Choose a conflict action, or cancel this destination pane.';
-                    state.elements.conflictText.textContent = `${data.destination_path} already exists (${formatSftpBytes(data.existing_size)}).`;
+                    state.elements.lifecycle.textContent = t('browser.files.conflict_lifecycle');
+                    state.elements.conflictText.textContent = t('browser.files.conflict', { path: data.destination_path, size: formatSftpBytes(data.existing_size) });
                     state.elements.conflict.classList.add('visible');
-                    setSftpPipStatus(state, 'Choose how to handle the existing file.');
+                    setSftpPipStatus(state, t('browser.files.choose_conflict'));
                     return;
                 }
                 if (data.status === 'running' || data.status === 'committing') {
@@ -10380,14 +10383,14 @@
                     setSftpPipStatus(
                         state,
                         data.status === 'committing'
-                            ? 'Publishing copied file…'
-                            : `Copying ${Math.floor(percent)}% · ${formatSftpBytes(copied)} / ${formatSftpBytes(total)}…`,
+                            ? t('browser.files.publishing_file')
+                            : t('browser.files.copy_progress', { percent: Math.floor(percent), copied: formatSftpBytes(copied), total: formatSftpBytes(total) }),
                     );
                     state.elements.lifecycle.textContent = data.status === 'committing'
-                        ? 'Publishing has started. It cannot be cancelled; wait for the result before closing Files.'
+                        ? t('browser.files.publishing_started')
                         : (state.cancelPending
-                            ? 'Cancelling before the destination is published…'
-                            : 'Keep Files open until finished, or use Cancel copy.');
+                            ? t('browser.files.cancelling_copy')
+                            : t('browser.files.copy_running'));
                     setSftpPipBusy(state, false);
                     return;
                 }
@@ -10400,23 +10403,24 @@
                 setSftpPipBusy(state, false);
                 if (data.status === 'completed') {
                     state.elements.conflict.classList.remove('visible');
-                    state.elements.lifecycle.textContent = 'Copy finished. You can close Files or start another copy.';
-                    setSftpPipStatus(state, `Copied to ${data.destination_path}.`, 'success');
+                    state.elements.lifecycle.textContent = t('browser.files.copy_finished');
+                    setSftpPipStatus(state, t('browser.files.copied', { path: data.destination_path }), 'success');
                     requestSftpBrowse(state, {
                         path: state.currentPath,
-                        successMessage: `Copied to ${data.destination_path}.`,
+                        successMessage: t('browser.files.copied', { path: data.destination_path }),
                     });
                     return;
                 }
                 if (data.status === 'cancelled') {
-                    state.elements.lifecycle.textContent = 'Cancelled before publishing. You can close Files.';
-                    setSftpPipStatus(state, data.message || 'File copy cancelled before publishing.');
+                    state.elements.lifecycle.textContent = t('browser.files.copy_cancelled_lifecycle');
+                    setSftpPipStatus(state, data.message || t('browser.files.copy_cancelled'));
                     return;
                 }
-                state.elements.lifecycle.textContent = 'Copy stopped. You can close Files or retry.';
+                state.elements.lifecycle.textContent = t(data.error_code === 'file_copy_publish_outcome_unknown'
+                    ? 'browser.files.copy_unknown' : 'browser.files.copy_stopped');
                 const failureMessage = data.error_code === 'file_copy_publish_outcome_unknown'
-                    ? `${data.message || 'The SSH server did not confirm the publish result.'} Inspect the destination before retrying.`
-                    : (data.message || 'File copy failed.');
+                    ? (data.message ? t('browser.files.copy_unknown_detail', { detail: data.message }) : t('browser.files.copy_unknown'))
+                    : (data.message || t('browser.files.copy_failed'));
                 setSftpPipStatus(state, failureMessage, 'error');
             }
 
@@ -10433,8 +10437,8 @@
                     setSftpPipStatus(
                         sourceState,
                         sourceKind === 'browser'
-                            ? 'No connected Files destination is available.'
-                            : 'Open another SSH or Local Shell tab to copy this file.',
+                            ? t('browser.files.no_destination')
+                            : t('browser.files.another_tab'),
                         'error',
                     );
                     return;
@@ -10444,49 +10448,50 @@
                 pane.innerHTML = `
                     <div class="sftp-copy-details">
                     <div class="sftp-destination-header">
-                        <div class="sftp-destination-title">Choose destination</div>
+                        <div class="sftp-destination-title" data-i18n="browser.files.destination_title">Choose destination</div>
                     </div>
                     <div class="sftp-source-file-card">
-                        <div class="sftp-source-file-label">Source file</div>
+                        <div class="sftp-source-file-label" data-i18n="browser.files.source_file">Source file</div>
                         <div class="sftp-file-detail-path sftp-copy-source-path"></div>
                         <div class="sftp-file-detail-meta sftp-copy-source-meta"></div>
                     </div>
-                    <select class="sftp-session-select" aria-label="Destination session"></select>
+                    <select class="sftp-session-select" aria-label="Destination tab" data-i18n-aria-label="browser.files.destination_session"></select>
                     <div class="sftp-endpoint-card">
-                        <div class="sftp-endpoint-value">Direct endpoint</div>
-                        <div class="sftp-direct-hint">Direct SSH or Local Shell endpoint. Nested SSH sessions inside the terminal are not used.</div>
+                        <div class="sftp-endpoint-value" data-i18n="browser.files.direct_endpoint">Connected endpoint</div>
+                        <div class="sftp-direct-hint" data-i18n="browser.files.endpoint_hint">Uses this tab’s SSH or Local Shell endpoint. SSH sessions started inside the terminal are not used.</div>
                     </div>
                     <div class="sftp-path-controls">
-                        <button type="button" class="sftp-home sftp-icon-button" title="Home directory" aria-label="Home directory">⌂</button>
-                        <button type="button" class="sftp-up sftp-icon-button" title="Parent directory" aria-label="Parent directory">↑</button>
-                        <button type="button" class="sftp-refresh sftp-icon-button" title="Refresh files list" aria-label="Refresh files list">↻</button>
-                        <input class="sftp-path-input" type="text" spellcheck="false" aria-label="Destination folder">
-                        <button type="button" class="sftp-go">Go</button>
+                        <button type="button" class="sftp-home sftp-icon-button" title="Home folder" data-i18n-title="browser.files.home" aria-label="Home folder" data-i18n-aria-label="browser.files.home">⌂</button>
+                        <button type="button" class="sftp-up sftp-icon-button" title="Parent folder" data-i18n-title="browser.files.parent" aria-label="Parent folder" data-i18n-aria-label="browser.files.parent">↑</button>
+                        <button type="button" class="sftp-refresh sftp-icon-button" title="Refresh file list" data-i18n-title="browser.files.refresh" aria-label="Refresh file list" data-i18n-aria-label="browser.files.refresh">↻</button>
+                        <input class="sftp-path-input" type="text" spellcheck="false" aria-label="Destination folder" data-i18n-aria-label="browser.files.destination_folder">
+                        <button type="button" class="sftp-go" data-i18n="browser.files.go">Go</button>
                     </div>
-                    <div class="sftp-directory-list" tabindex="0" aria-label="Destination directories and files"></div>
+                    <div class="sftp-directory-list" tabindex="0" aria-label="Destination folders and files" data-i18n-aria-label="browser.files.destination_listing"></div>
                     <div class="sftp-copy-name-row">
-                        <label>File name</label>
-                        <input class="sftp-copy-name-input" type="text" spellcheck="false" aria-label="Destination file name">
+                        <label data-i18n="browser.files.filename">File name</label>
+                        <input class="sftp-copy-name-input" type="text" spellcheck="false" aria-label="Destination file name" data-i18n-aria-label="browser.files.destination_filename">
                     </div>
                     </div>
                     <div class="sftp-copy-feedback">
                     <div class="sftp-conflict-box">
                         <div class="sftp-conflict-text"></div>
                         <div class="sftp-conflict-actions">
-                            <button type="button" class="sftp-conflict-cancel">Cancel</button>
-                            <button type="button" class="sftp-conflict-keep">Keep Both</button>
-                            <button type="button" class="sftp-conflict-replace replace">Replace</button>
+                            <button type="button" class="sftp-conflict-cancel" data-i18n="common.cancel">Cancel</button>
+                            <button type="button" class="sftp-conflict-keep" data-i18n="browser.files.keep_both">Keep both</button>
+                            <button type="button" class="sftp-conflict-replace replace" data-i18n="browser.files.replace">Replace</button>
                         </div>
                     </div>
                     <div class="sftp-progress"><div class="sftp-progress-bar"></div></div>
-                    <div class="sftp-transfer-status" role="status" aria-live="polite">Choose a destination.</div>
-                    <div class="sftp-copy-lifecycle-hint">Cancel returns to the previous pane before copying.</div>
+                    <div class="sftp-transfer-status" role="status" aria-live="polite" data-i18n="browser.files.choose_destination">Choose a destination.</div>
+                    <div class="sftp-copy-lifecycle-hint" data-i18n="browser.files.cancel_before_copy">Before copying starts, Cancel returns to the previous pane.</div>
                     <div class="sftp-pip-actions">
-                        <button type="button" class="sftp-copy-cancel">Cancel</button>
-                        <button type="button" class="sftp-copy-confirm primary">Copy</button>
+                        <button type="button" class="sftp-copy-cancel" data-i18n="common.cancel">Cancel</button>
+                        <button type="button" class="sftp-copy-confirm primary" data-i18n="browser.files.copy">Copy</button>
                     </div>
                     </div>
                 `;
+                uiText.apply(pane);
                 const destinationState = {
                     mode: 'destination',
                     window: sourceState.window,
@@ -10593,7 +10598,7 @@
                 });
                 destinationState.elements.conflictCancel.addEventListener('click', () => {
                     destinationState.elements.conflict.classList.remove('visible');
-                    setSftpPipStatus(destinationState, 'Copy cancelled.');
+                    setSftpPipStatus(destinationState, t('browser.files.copy_cancelled_idle'));
                 });
                 destinationState.elements.conflictKeep.addEventListener('click', () => {
                     if (destinationState.sourceKind === 'browser') requestSftpUploadTicket(destinationState, 'keep_both');
@@ -10609,84 +10614,86 @@
 
             function createSftpPipShell(state) {
                 const pipDocument = state.window.document;
-                pipDocument.title = 'StandTerm - Files';
+                pipDocument.documentElement.lang = uiText.locale;
+                pipDocument.title = t('browser.files.title');
                 const shell = pipDocument.createElement('div');
                 shell.className = 'sftp-pip-shell';
                 shell.innerHTML = `
                     <div class="sftp-pip-header">
-                        <div class="sftp-pip-title">StandTerm - Files</div>
+                        <div class="sftp-pip-title" data-i18n="browser.files.title">StandTerm - Files</div>
                     </div>
                     <div class="sftp-files-workspace">
                     <div class="sftp-source-pane">
                     <div class="sftp-endpoint-card">
-                        <div class="sftp-endpoint-value">Direct endpoint</div>
-                        <div class="sftp-direct-hint">Direct SSH or Local Shell endpoint. Nested SSH sessions inside the terminal are not used.</div>
+                        <div class="sftp-endpoint-value" data-i18n="browser.files.direct_endpoint">Connected endpoint</div>
+                        <div class="sftp-direct-hint" data-i18n="browser.files.endpoint_hint">Uses this tab’s SSH or Local Shell endpoint. SSH sessions started inside the terminal are not used.</div>
                     </div>
                     <div class="sftp-path-controls">
-                        <button type="button" class="sftp-home sftp-icon-button" title="Home directory" aria-label="Home directory">⌂</button>
-                        <button type="button" class="sftp-up sftp-icon-button" title="Parent directory" aria-label="Parent directory">↑</button>
-                        <button type="button" class="sftp-refresh sftp-icon-button" title="Refresh files list" aria-label="Refresh files list">↻</button>
-                        <input class="sftp-path-input" type="text" spellcheck="false" aria-label="Remote destination folder">
-                        <button type="button" class="sftp-go">Go</button>
+                        <button type="button" class="sftp-home sftp-icon-button" title="Home folder" data-i18n-title="browser.files.home" aria-label="Home folder" data-i18n-aria-label="browser.files.home">⌂</button>
+                        <button type="button" class="sftp-up sftp-icon-button" title="Parent folder" data-i18n-title="browser.files.parent" aria-label="Parent folder" data-i18n-aria-label="browser.files.parent">↑</button>
+                        <button type="button" class="sftp-refresh sftp-icon-button" title="Refresh file list" data-i18n-title="browser.files.refresh" aria-label="Refresh file list" data-i18n-aria-label="browser.files.refresh">↻</button>
+                        <input class="sftp-path-input" type="text" spellcheck="false" aria-label="Folder path" data-i18n-aria-label="browser.files.folder">
+                        <button type="button" class="sftp-go" data-i18n="browser.files.go">Go</button>
                     </div>
-                    <div class="sftp-directory-list" tabindex="0" aria-label="Remote directories and files"></div>
-                    <div class="sftp-file-operation-box" role="dialog" aria-label="Remote file actions">
+                    <div class="sftp-directory-list" tabindex="0" aria-label="Folders and files" data-i18n-aria-label="browser.files.listing"></div>
+                    <div class="sftp-file-operation-box" role="dialog" aria-label="File actions" data-i18n-aria-label="browser.files.actions">
                         <div class="sftp-file-operation-path sftp-file-detail-path"></div>
                         <div class="sftp-file-operation-meta sftp-file-detail-meta"></div>
                         <div class="sftp-file-operation-actions">
-                            <button type="button" class="sftp-file-download">Download</button>
-                            <button type="button" class="sftp-file-copy">Copy to&hellip;</button>
-                            <button type="button" class="sftp-file-rename">Rename&hellip;</button>
-                            <button type="button" class="sftp-file-delete danger">Delete&hellip;</button>
+                            <button type="button" class="sftp-file-download" data-i18n="browser.files.download">Download</button>
+                            <button type="button" class="sftp-file-copy" data-i18n="browser.files.copy_to">Copy to…</button>
+                            <button type="button" class="sftp-file-rename" data-i18n="browser.files.rename_action">Rename…</button>
+                            <button type="button" class="sftp-file-delete danger" data-i18n="browser.files.delete_action">Delete…</button>
                         </div>
                         <div class="sftp-rename-controls">
-                            <input class="sftp-rename-input" type="text" spellcheck="false" aria-label="New remote file name" aria-describedby="sftp-rename-hint">
-                            <button type="button" class="sftp-rename-confirm">Rename</button>
-                            <button type="button" class="sftp-rename-cancel">Cancel</button>
+                            <input class="sftp-rename-input" type="text" spellcheck="false" aria-label="New file name" data-i18n-aria-label="browser.files.new_filename" aria-describedby="sftp-rename-hint">
+                            <button type="button" class="sftp-rename-confirm" data-i18n="browser.files.rename">Rename</button>
+                            <button type="button" class="sftp-rename-cancel" data-i18n="common.cancel">Cancel</button>
                         </div>
                         <div class="sftp-rename-hint" id="sftp-rename-hint" aria-live="polite"></div>
                     </div>
-                    <div class="sftp-delete-confirmation" role="dialog" aria-modal="false" aria-label="Permanent file deletion">
+                    <div class="sftp-delete-confirmation" role="dialog" aria-modal="false" aria-label="Permanent file deletion" data-i18n-aria-label="browser.files.delete_title">
                         <div class="sftp-delete-phase-one">
-                            <div class="sftp-delete-question">Do you want to delete this file?</div>
+                            <div class="sftp-delete-question" data-i18n="browser.files.delete_question">Delete this file?</div>
                         </div>
                         <div class="sftp-delete-phase-two" hidden>
-                            <div class="sftp-delete-question">File will be permanently deleted and cannot be recovered. Are you sure?</div>
+                            <div class="sftp-delete-question" data-i18n="browser.files.delete_final">This permanently deletes the file. StandTerm cannot undo it. Continue?</div>
                         </div>
                         <div class="sftp-file-operation-path sftp-delete-path"></div>
                         <div class="sftp-delete-actions phase-one sftp-delete-phase-one">
-                            <button type="button" class="sftp-delete-yes danger">Yes</button>
-                            <button type="button" class="sftp-delete-no">No</button>
+                            <button type="button" class="sftp-delete-yes danger" data-i18n="common.yes">Yes</button>
+                            <button type="button" class="sftp-delete-no" data-i18n="common.no">No</button>
                         </div>
                         <div class="sftp-delete-actions phase-two sftp-delete-phase-two" hidden>
-                            <button type="button" class="sftp-delete-sure danger">I am sure</button>
-                            <button type="button" class="sftp-delete-dont">Don't delete</button>
+                            <button type="button" class="sftp-delete-sure danger" data-i18n="browser.files.delete_confirm">Permanently delete</button>
+                            <button type="button" class="sftp-delete-dont" data-i18n="browser.files.dont_delete">Don't delete</button>
                         </div>
                     </div>
-                    <div class="sftp-drop-zone" tabindex="0">Drop one file here or click to choose</div>
+                    <div class="sftp-drop-zone" tabindex="0" data-i18n="browser.files.drop">Drop one file here or click to choose</div>
                     <input class="sftp-file-input" type="file" hidden>
                     <div class="sftp-selected-file">
                         <div class="sftp-file-detail-path sftp-selected-file-path"></div>
                         <div class="sftp-file-detail-meta sftp-selected-file-meta"></div>
                         <div class="sftp-file-operation-actions">
-                            <button type="button" class="sftp-send primary" disabled>Send</button>
-                            <button type="button" class="sftp-local-copy" disabled>Copy to&hellip;</button>
+                            <button type="button" class="sftp-send primary" disabled data-i18n="browser.files.send">Upload</button>
+                            <button type="button" class="sftp-local-copy" disabled data-i18n="browser.files.copy_to">Copy to…</button>
                         </div>
                     </div>
                     <div class="sftp-conflict-box">
                         <div class="sftp-conflict-text"></div>
                         <div class="sftp-conflict-actions">
-                            <button type="button" class="sftp-conflict-cancel">Cancel</button>
-                            <button type="button" class="sftp-conflict-keep">Keep Both</button>
-                            <button type="button" class="sftp-conflict-replace replace">Replace</button>
+                            <button type="button" class="sftp-conflict-cancel" data-i18n="common.cancel">Cancel</button>
+                            <button type="button" class="sftp-conflict-keep" data-i18n="browser.files.keep_both">Keep both</button>
+                            <button type="button" class="sftp-conflict-replace replace" data-i18n="browser.files.replace">Replace</button>
                         </div>
                     </div>
                     <div class="sftp-progress"><div class="sftp-progress-bar"></div></div>
-                    <div class="sftp-transfer-status" role="status" aria-live="polite">Opening Files…</div>
+                    <div class="sftp-transfer-status" role="status" aria-live="polite" data-i18n="browser.files.opening">Opening Files…</div>
                     </div>
                     </div>
                 `;
                 pipDocument.body.replaceChildren(shell);
+                uiText.apply(shell);
                 state.elements = {
                     shell,
                     workspace: shell.querySelector('.sftp-files-workspace'),
@@ -10784,7 +10791,7 @@
                 state.elements.localCopy.addEventListener('click', () => openSftpCopyDestination(state, 'browser'));
                 state.elements.conflictCancel.addEventListener('click', () => {
                     state.elements.conflict.classList.remove('visible');
-                    setSftpPipStatus(state, 'Upload cancelled.');
+                    setSftpPipStatus(state, t('browser.files.upload_cancelled_idle'));
                 });
                 state.elements.conflictKeep.addEventListener('click', () => requestSftpUploadTicket(state, 'keep_both'));
                 state.elements.conflictReplace.addEventListener('click', () => requestSftpUploadTicket(state, 'replace'));
@@ -10825,7 +10832,7 @@
             function floatingWindowError() {
                 alert(useDesktopFloatingWindows
                     ? 'Could not open the floating window. Please retry or update StandTerm Desktop.'
-                    : 'Could not open the floating window. Allow pop-up windows for this site, then click the control again.');
+                    : t('browser.chrome.popup_failed'));
             }
 
             window.addEventListener('pagehide', () => {
@@ -10839,12 +10846,12 @@
                 try {
                     if (useDesktopFloatingWindows) {
                         const child = window.open('about:blank', 'standterm-floating', `popup,width=${width},height=${height}`);
-                        if (!child) throw new Error('Floating window was blocked.');
+                        if (!child) throw new Error(t('browser.chrome.popup_blocked'));
                         return await Promise.resolve(child);
                     }
                     if (usesBrowserPopup()) {
                         const child = window.open('about:blank', '_blank', `popup,width=${width},height=${height}`);
-                        if (!child) throw new Error('Floating window was blocked.');
+                        if (!child) throw new Error(t('browser.chrome.popup_blocked'));
                         child.opener = null;
                         browserPopupWindows.add(child);
                         child.addEventListener('pagehide', () => {
@@ -10865,7 +10872,7 @@
 
             async function openSftpPip(state, existingWindow = null) {
                 if (!canUseSftpFileManager(state)) return;
-                if (pipTerminalState) return alert('Restore the terminal from its floating window before opening Files.');
+                if (pipTerminalState) return alert(t('browser.chrome.restore_before_files'));
                 if (sftpPipState) {
                     if (sftpPipState.window && !sftpPipState.window.closed) sftpPipState.window.focus();
                     return;
@@ -10965,8 +10972,8 @@
             const OVERLAY_MIN_HEIGHT = 150;
             const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp'];
             function showContextMenu(x, y, target = null) {
-                pipOption.textContent = usesBrowserPopup() ? '\u29C9 Pop out terminal' : '\u29C9 Terminal to PiP';
-                pipOption.title = usesBrowserPopup() ? 'Open a separate browser window; it may not stay on top.' : '';
+                pipOption.textContent = usesBrowserPopup() ? t('browser.chrome.popout_menu') : t('browser.chrome.pip_menu');
+                pipOption.title = usesBrowserPopup() ? t('browser.chrome.pip_hint') : '';
                 const activeTerm = getActiveTerm();
                 const targetTab = target && target.closest ? target.closest('.terminal-tab') : null;
                 contextMenuTerminalId = targetTab ? targetTab.dataset.terminalId : activeTerminalId;
@@ -10991,7 +10998,7 @@
                     sftpSendOption.appendChild(unavailableMark);
                 }
                 sftpSendOption.appendChild(document.createTextNode(
-                    enableSftp ? ' Files\u2026' : ' Files not available'
+                    ' ' + t(enableSftp ? 'browser.chrome.files_open' : 'browser.chrome.files_unavailable')
                 ));
                 if (hasSel) { openOption.dataset.url = sel; searchOption.dataset.query = sel; }
                 contextMenu.style.left = `${x}px`; contextMenu.style.top = `${y}px`; contextMenu.style.display = 'block';
@@ -11019,7 +11026,7 @@
                 contextMenu.style.display = 'none';
                 prefs.useCustomMenu = false;
                 savePrefs(prefs);
-                alert("Custom menu disabled. To restore, use the ⚙️ icon or Press Shift + Right-Click.");
+                alert(t('browser.chrome.native_disabled'));
             };
             sftpSendOption.onclick = (event) => {
                 event.stopPropagation();
@@ -11104,10 +11111,10 @@
                 const request = { id: crypto.getRandomValues(new Uint32Array(4)).join('-'), state, focus: document.activeElement };
                 pendingContextPaste = request;
                 try {
-                    const text = navigator.clipboard?.readText ? await navigator.clipboard.readText() : prompt('Paste text here:');
+                    const text = navigator.clipboard?.readText ? await navigator.clipboard.readText() : prompt(t('browser.paste.clipboard_prompt'));
                     if (pendingContextPaste === request && validContextPasteRequest() && text) startPasteReview(state, text, true);
                 } catch {
-                    if (!useDesktopFloatingWindows) showError('Clipboard access was denied. Use your terminal paste shortcut (Ctrl+Shift+V or Cmd+V).');
+                    if (!useDesktopFloatingWindows) showError(t('browser.chrome.clipboard_denied'));
                 } finally {
                     if (pendingContextPaste === request) pendingContextPaste = null;
                 }
@@ -11225,8 +11232,8 @@
                 );
                 if (state.pipAgentBtn) {
                     state.pipAgentBtn.disabled = !usable;
-                    state.pipAgentBtn.innerText = showing ? 'Hide Agent Panel' : 'Show Agent Panel';
-                    state.pipAgentBtn.title = usable ? state.pipAgentBtn.innerText : 'Connect this terminal before using Agent panel';
+                    state.pipAgentBtn.innerText = t(showing ? 'agent.panel.hide' : 'agent.panel.show');
+                    state.pipAgentBtn.title = usable ? state.pipAgentBtn.innerText : t('browser.chrome.agent_connect');
                 }
                 const agent = state.agent;
                 const mode = agent ? agent.mode : AGENT_MODE_DISABLED;
@@ -11245,18 +11252,18 @@
                     button.disabled = !mintAvailable || minting;
                 });
                 if (state.pipAgentMintBtn) {
-                    state.pipAgentMintBtn.innerText = minting ? 'Minting…' : 'Mint';
-                    state.pipAgentMintBtn.title = `Mint a standard external-agent token for ${label}`;
+                    state.pipAgentMintBtn.innerText = t(minting ? 'agent.token.creating' : 'agent.token.create');
+                    state.pipAgentMintBtn.title = t('agent.token.target_title', { target: label });
                 }
                 if (state.pipAgentMint3xBtn) {
-                    state.pipAgentMint3xBtn.innerText = minting ? 'Minting…' : 'Mint+';
-                    state.pipAgentMint3xBtn.title = `Mint a 3× idle-time external-agent token for ${label}`;
+                    state.pipAgentMint3xBtn.innerText = t(minting ? 'agent.token.creating' : 'agent.token.create_3x');
+                    state.pipAgentMint3xBtn.title = t('agent.token.target_3x_title', { target: label });
                 }
                 if (state.pipAgentPauseBtn) {
                     const pauseVisible = hasAgentPauseCapability(state);
                     state.pipAgentPauseBtn.classList.toggle('visible', pauseVisible);
                     state.pipAgentPauseBtn.disabled = !(pauseVisible && socket && socket.connected && state.connected);
-                    state.pipAgentPauseBtn.title = pauseVisible ? 'Pause Agent terminal input' : 'Agent pause is not available';
+                    state.pipAgentPauseBtn.title = pauseVisible ? t('browser.chrome.pause_input') : t('browser.chrome.pause_unavailable');
                 }
                 updateSftpActionButton(state.pipSftpBtn, state);
             }
@@ -11289,6 +11296,7 @@
             }
 
             function createPipShell(state, pipWindow) {
+                pipWindow.document.documentElement.lang = uiText.locale;
                 const bar = pipWindow.document.createElement('div');
                 bar.className = 'pip-title-bar';
                 const title = pipWindow.document.createElement('span');
@@ -11310,7 +11318,7 @@
                 const pauseButton = pipWindow.document.createElement('button');
                 pauseButton.type = 'button';
                 pauseButton.className = 'pip-agent-button pip-agent-pause';
-                pauseButton.innerText = 'Pause Agent';
+                pauseButton.innerText = t('agent.pause.action');
                 pauseButton.addEventListener('click', () => pauseAgentForState(state));
                 const mintButton = pipWindow.document.createElement('button');
                 mintButton.type = 'button';
@@ -11330,8 +11338,8 @@
                 sftpButton.type = 'button';
                 sftpButton.className = 'pip-agent-button pip-sftp-button';
                 sftpButton.innerText = '\u{1F4C1}';
-                sftpButton.title = 'Open Files';
-                sftpButton.setAttribute('aria-label', 'Open Files');
+                sftpButton.title = t('browser.chrome.files_open');
+                sftpButton.setAttribute('aria-label', t('browser.chrome.files_open'));
                 sftpButton.hidden = true;
                 sftpButton.addEventListener('click', () => openSftpFromTerminalPip(state));
                 bar.append(title, applicationTitleItem, meta, spacer, pauseButton, mintButton, mint3xButton, agentButton, sftpButton);
@@ -11400,7 +11408,7 @@
             async function moveActiveTerminalToPip() {
                 contextMenu.style.display = 'none';
                 if (!canMoveActiveTerminalToPip()) return;
-                if (sftpPipState) return alert('Close Files before moving a terminal to its own window.');
+                if (sftpPipState) return alert(t('browser.chrome.close_files_before_popout'));
                 const state = getActiveTerminalState();
                 if (!state) return;
                 if (pipTerminalState && pipTerminalState !== state) {
@@ -11934,63 +11942,68 @@
                     serverAccessCopyBtn.disabled = true;
                     copyAccessUrl()
                         .catch(err => {
-                            if (serverAccessStatus) serverAccessStatus.textContent = err.message || 'Access URL is unavailable.';
+                            if (serverAccessStatus) serverAccessStatus.textContent = err.message || t('browser.server_access.unavailable');
                         })
                         .finally(() => { serverAccessCopyBtn.disabled = false; });
                 };
             }
             if (serverAccessShowBtn) {
                 serverAccessShowBtn.onclick = () => {
-                    if (!window.confirm('Show the full Access URL for 30 seconds?')) return;
+                    if (!window.confirm(t('browser.server_access.confirm_show'))) return;
                     serverAccessShowBtn.disabled = true;
                     showAccessUrl()
                         .catch(err => {
-                            if (serverAccessStatus) serverAccessStatus.textContent = err.message || 'Access URL is unavailable.';
+                            if (serverAccessStatus) serverAccessStatus.textContent = err.message || t('browser.server_access.unavailable');
                         })
                         .finally(() => { serverAccessShowBtn.disabled = false; });
                 };
             }
             if (platformRecoveryRegisterBtn) {
                 platformRecoveryRegisterBtn.onclick = () => {
+                    let feedback = '';
                     platformRecoveryRegisterBtn.disabled = true;
-                    if (platformRecoveryStatus) platformRecoveryStatus.textContent = 'Waiting for device registration...';
+                    if (platformRecoveryStatus) platformRecoveryStatus.textContent = t('browser.platform.registering');
                     registerPlatformRecoveryCredential()
                         .then(() => {
                             if (platformRecoveryStatus) {
-                                platformRecoveryStatus.textContent = 'Platform recovery is armed for this live session.';
+                                platformRecoveryStatus.textContent = t('browser.platform.armed');
                             }
                         })
                         .catch(error => {
                             if (platformRecoveryStatus) {
-                                platformRecoveryStatus.textContent = formatPlatformRecoveryError(error);
+                                feedback = formatPlatformRecoveryError(error);
+                                platformRecoveryStatus.textContent = feedback;
                             }
                         })
-                        .finally(() => requestPlatformRecoveryStatus());
+                        .finally(() => requestPlatformRecoveryStatus(feedback));
                 };
             }
             if (platformRecoveryArmBtn) {
                 platformRecoveryArmBtn.onclick = () => {
+                    let feedback = '';
                     platformRecoveryArmBtn.disabled = true;
                     if (platformRecoveryStatus) platformRecoveryStatus.textContent = t('browser.recovery.verifying_device');
                     authenticatePlatformRecoveryCredential()
                         .then(() => {
                             if (platformRecoveryStatus) {
-                                platformRecoveryStatus.textContent = 'Platform recovery is armed for this live session.';
+                                platformRecoveryStatus.textContent = t('browser.platform.armed');
                             }
                         })
                         .catch(error => {
                             if (platformRecoveryStatus) {
-                                platformRecoveryStatus.textContent = formatPlatformRecoveryError(error);
+                                feedback = formatPlatformRecoveryError(error);
+                                platformRecoveryStatus.textContent = feedback;
                             }
                         })
-                        .finally(() => requestPlatformRecoveryStatus());
+                        .finally(() => requestPlatformRecoveryStatus(feedback));
                 };
             }
             if (platformRecoveryRemoveBtn) {
                 platformRecoveryRemoveBtn.onclick = async () => {
-                    if (!window.confirm('Revoke all platform recovery registrations for this hostname? Passkeys may remain in the operating system.')) return;
+                    let feedback = '';
+                    if (!window.confirm(t('browser.platform.confirm_revoke'))) return;
                     platformRecoveryRemoveBtn.disabled = true;
-                    if (platformRecoveryStatus) platformRecoveryStatus.textContent = 'Removing platform recovery passkeys...';
+                    if (platformRecoveryStatus) platformRecoveryStatus.textContent = t('browser.platform.revoking');
                     try {
                         const response = await fetch('/session-recovery/credentials/remove', {
                             method: 'POST',
@@ -11999,18 +12012,23 @@
                         await readPlatformRecoveryResponse(response);
                     } catch (error) {
                         if (platformRecoveryStatus) {
-                            platformRecoveryStatus.textContent = formatPlatformRecoveryError(error);
+                            feedback = formatPlatformRecoveryError(error);
+                            platformRecoveryStatus.textContent = feedback;
                         }
                     } finally {
-                        requestPlatformRecoveryStatus();
+                        requestPlatformRecoveryStatus(feedback);
                     }
                 };
             }
             if (connectionDiagnosticsCopyBtn) {
-                connectionDiagnosticsCopyBtn.onclick = () => {
-                    copyToClipboard(buildConnectionDiagnosticsText());
+                connectionDiagnosticsCopyBtn.onclick = async () => {
+                    const count = connectionDiagnostics.length;
+                    connectionDiagnosticsCopyBtn.disabled = true;
+                    if (connectionDiagnosticsStatus) connectionDiagnosticsStatus.textContent = t('browser.diagnostics.copying');
+                    const copied = await copyToClipboard(buildConnectionDiagnosticsText());
+                    connectionDiagnosticsCopyBtn.disabled = false;
                     if (connectionDiagnosticsStatus) {
-                        connectionDiagnosticsStatus.textContent = `Copied ${connectionDiagnostics.length} connection events.`;
+                        connectionDiagnosticsStatus.textContent = t(copied ? 'browser.diagnostics.copied' : 'browser.diagnostics.copy_failed', { count });
                     }
                 };
             }

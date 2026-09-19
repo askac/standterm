@@ -268,6 +268,7 @@ def test_initial_access_login_falls_back_without_localization_or_javascript(brow
 
 
 def test_browser_authorization_gate_hides_connection_controls(browser, access_url, ui_language='en'):
+    from settings_transfer_i18n_browser_smoke import message
     context = browser.new_context(viewport={'width': 390, 'height': 844}, locale='en-US')
     page = context.new_page()
     page.add_init_script("localStorage.setItem('terminal.pref.v1', JSON.stringify(" + json.dumps({'uiLanguage': ui_language}) + "));")
@@ -301,6 +302,7 @@ def test_browser_authorization_gate_hides_connection_controls(browser, access_ur
                 return {
                     title: document.querySelector('#controls h2').innerText,
                     sessionId: document.getElementById('launcher-session-id').innerText,
+                    launcherId: LAUNCHER_INSTANCE_ID,
                     warningPresent: !!document.getElementById('browser-auth-warning'),
                     authorizationTitle: document.getElementById('browser-auth-title').innerText,
                     message: document.getElementById('browser-auth-message').innerText,
@@ -311,8 +313,9 @@ def test_browser_authorization_gate_hides_connection_controls(browser, access_ur
             }"""
         )
         check(state['title'] == 'StandTerm', 'authorization gate does not show the StandTerm product name')
-        check(state['sessionId'].startswith('Session ID: '), 'authorization gate does not show the launcher session ID')
-        check(len(state['sessionId']) > len('Session ID: '), 'authorization gate launcher session ID is empty')
+        check(isinstance(state['launcherId'], str) and bool(state['launcherId']), 'authorization gate launcher session ID is empty')
+        check(state['sessionId'] == message(page, 'browser.chrome.session_id', {'id':state['launcherId']}),
+              'authorization gate does not show the complete localized launcher session ID')
         check(state['warningPresent'] is False, 'authorization gate retained the decorative warning')
         check(state['authorizationTitle'] == ('需要瀏覽器授權' if zh else 'Browser authorization required'),
               'browser authorization title did not match its language')
@@ -590,7 +593,8 @@ def test_browser_access_and_recovery_in_traditional_chinese(browser, access_url)
     test_invalid_session_reconnect_prompts_for_current_token(browser, access_url, ui_language='zh-TW')
 
 
-def test_platform_passkey_recovers_live_session_without_access_token(browser, access_url):
+def test_platform_passkey_recovers_live_session_without_access_token(browser, access_url, ui_language='en'):
+    from settings_transfer_i18n_browser_smoke import message
     parsed = urllib.parse.urlparse(access_url)
     localhost_access_url = urllib.parse.urlunparse(parsed._replace(
         netloc=f'localhost:{parsed.port}',
@@ -600,8 +604,9 @@ def test_platform_passkey_recovers_live_session_without_access_token(browser, ac
         query='',
         fragment='',
     ))
-    context = browser.new_context(viewport={'width': 1280, 'height': 800})
+    context = browser.new_context(viewport={'width': 1280, 'height': 800}, locale='en-US')
     page = context.new_page()
+    page.add_init_script("localStorage.setItem('terminal.pref.v1', JSON.stringify(" + json.dumps({'uiLanguage':ui_language}) + "));")
     cdp = context.new_cdp_session(page)
     try:
         cdp.send('WebAuthn.enable')
@@ -632,12 +637,14 @@ def test_platform_passkey_recovers_live_session_without_access_token(browser, ac
         page.click('#quick-settings')
         page.click('.settings-nav-item[data-tab="server"]')
         page.wait_for_function(
-            "() => document.getElementById('platform-recovery-status').innerText.includes('0 registered')",
+            "expected => document.getElementById('platform-recovery-status').innerText === expected",
+            arg=message(page, 'browser.platform.status', {'configured':0,'armed':0,'rp_id':'localhost'}),
             timeout=5000,
         )
         page.click('#platform-recovery-register')
         page.wait_for_function(
-            "() => document.getElementById('platform-recovery-status').innerText.includes('1 registered, 1 armed')",
+            "expected => document.getElementById('platform-recovery-status').innerText === expected",
+            arg=message(page, 'browser.platform.status', {'configured':1,'armed':1,'rp_id':'localhost'}),
             timeout=10000,
         )
         registered_credentials = cdp.send('WebAuthn.getCredentials', {
@@ -645,7 +652,7 @@ def test_platform_passkey_recovers_live_session_without_access_token(browser, ac
         }).get('credentials', [])
         check(len(registered_credentials) == 1, 'virtual platform authenticator did not retain the recovery credential')
         check(
-            page.locator('#platform-recovery-status').inner_text().endswith('RP ID: localhost'),
+            'localhost' in page.locator('#platform-recovery-status').inner_text(),
             'platform recovery did not bind the passkey to the localhost RP ID',
         )
 
@@ -741,8 +748,8 @@ def attach_agent(page):
     return wait_for_agent(page, "state.mode === 'observe'")
 
 
-def test_toolbar_pause_targets_main_tab_not_panel_override(browser, access_url):
-    context, page = new_page(browser, access_url)
+def test_toolbar_pause_targets_main_tab_not_panel_override(browser, access_url, ui_language='en'):
+    context, page = new_page(browser, access_url, ui_language)
     try:
         attach_agent(page)
         set_agent_mode(page, 'direct', 'direct_active')
@@ -964,8 +971,9 @@ def test_agent_panel_can_be_dragged(browser, access_url):
         close_context(context)
 
 
-def test_terminal_pip_hides_selected_tab_and_keeps_background_tab(browser, access_url):
-    context, page = new_page(browser, access_url)
+def test_terminal_pip_hides_selected_tab_and_keeps_background_tab(browser, access_url, ui_language='en'):
+    from settings_transfer_i18n_browser_smoke import message
+    context, page = new_page(browser, access_url, ui_language)
     try:
         initial = page.evaluate(
             """() => ({
@@ -1024,9 +1032,24 @@ def test_terminal_pip_hides_selected_tab_and_keeps_background_tab(browser, acces
         )
         check(pip_status['applicationTitle'] == 'PiP workspace title', 'Terminal PiP did not show the OSC title')
         check(pip_status['applicationTitleHidden'] is False, 'Terminal PiP hid a non-empty OSC title')
-        check(pip_status['mintText'] == 'Mint' and pip_status['mintHidden'] is False, 'Terminal PiP did not show Mint')
-        check(pip_status['mint3xText'] == 'Mint+' and pip_status['mint3xHidden'] is False, 'Terminal PiP did not show Mint+')
-        check(pip_status['agentPanelText'] == 'Show Agent Panel', 'Terminal PiP Agent panel control was incorrect')
+        check(pip_status['mintText'] == message(page, 'agent.token.create') and pip_status['mintHidden'] is False, 'Terminal PiP did not show Create token')
+        check(pip_status['mint3xText'] == message(page, 'agent.token.create_3x') and pip_status['mint3xHidden'] is False, 'Terminal PiP did not show Create token 3x')
+        check(pip_status['agentPanelText'] == message(page, 'agent.panel.show'), 'Terminal PiP Agent panel control was incorrect')
+        compact_pip = page.evaluate("""() => {
+            const doc = documentPictureInPicture.window.document;
+            doc.documentElement.style.width = '480px';
+            doc.documentElement.style.height = '600px';
+            const buttons = [...doc.querySelectorAll('.pip-agent-button')].filter(button => button.getClientRects().length);
+            const metrics = buttons.map(button => {
+                const rect = button.getBoundingClientRect();
+                return {text:button.innerText,left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom};
+            });
+            doc.documentElement.style.width = '';
+            doc.documentElement.style.height = '';
+            return metrics;
+        }""")
+        check(all(0 <= item['left'] < item['right'] <= 480 and 0 <= item['top'] < item['bottom'] <= 600 for item in compact_pip),
+              f'Terminal PiP controls overflow at 480x600: {compact_pip}')
 
         page.click('#quick-settings')
         page.wait_for_selector('#settings-modal.open', timeout=5000)
@@ -1100,8 +1123,12 @@ def test_terminal_pip_hides_selected_tab_and_keeps_background_tab(browser, acces
         close_context(context)
 
 
-def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
-    context, page = new_page(browser, access_url)
+def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url, ui_language='en'):
+    from settings_transfer_i18n_browser_smoke import message
+    context, page = new_page(browser, access_url, ui_language)
+
+    def text(key, params=None):
+        return message(page, 'browser.files.' + key, params)
     try:
         page.evaluate(
             """() => window.terminalTest.applyTerminalListForTest({
@@ -1141,14 +1168,15 @@ def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
             available_status == {
                 'hidden': False,
                 'disabled': False,
-                'title': 'Open Files',
+                'title': message(page, 'browser.chrome.files_open'),
                 'text': '📁',
             },
             'connected SSH status bar did not expose the SFTP action',
         )
         page.click('#sftp-status-btn')
         page.wait_for_function(
-            "() => documentPictureInPicture.window?.document.querySelector('.sftp-pip-title')?.textContent === 'StandTerm - Files'",
+            "expected => documentPictureInPicture.window?.document.querySelector('.sftp-pip-title')?.textContent === expected",
+            arg=text('title'),
             timeout=5000,
         )
         page.evaluate('() => documentPictureInPicture.window.close()')
@@ -1170,13 +1198,13 @@ def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
         )
         check(unavailable_status['hidden'] is False, 'unavailable SFTP status action disappeared')
         check(unavailable_status['disabled'] is True, 'unavailable SFTP status action remained enabled')
-        check(unavailable_status['title'] == 'Files not available', 'unavailable Files status hint was unclear')
+        check(unavailable_status['title'] == message(page, 'browser.chrome.files_unavailable'), 'unavailable Files status hint was unclear')
         check('×' in unavailable_status['text'], 'unavailable SFTP status action omitted its cross mark')
         check(unavailable_status['markColor'] == 'rgb(255, 69, 58)', 'unavailable SFTP cross was not red')
         unavailable_menu = page.evaluate("() => window.terminalTest.showContextMenuForTest('main')")
         check(unavailable_menu['sftpVisible'] is True, 'unavailable SSH context action disappeared')
         check(unavailable_menu['sftpDisabled'] is True, 'unavailable SSH context action remained enabled')
-        check('Files not available' in unavailable_menu['sftpText'], 'unavailable SSH context action hint was unclear')
+        check(message(page, 'browser.chrome.files_unavailable') in unavailable_menu['sftpText'], 'unavailable SSH context action hint was unclear')
 
         page.evaluate("() => window.terminalTest.setSftpAvailabilityForTest('main', null)")
         page.evaluate("() => window.terminalTest.showContextMenuForTest('main')")
@@ -1197,7 +1225,7 @@ def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
             pip_action == {
                 'hidden': False,
                 'disabled': False,
-                'title': 'Open Files',
+                'title': message(page, 'browser.chrome.files_open'),
                 'text': '📁',
             },
             'Terminal PiP did not expose the SFTP action',
@@ -1205,7 +1233,8 @@ def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
 
         page.evaluate("() => documentPictureInPicture.window.document.querySelector('.pip-sftp-button').click()")
         page.wait_for_function(
-            "() => documentPictureInPicture.window?.document.querySelector('.sftp-pip-title')?.textContent === 'StandTerm - Files'",
+            "expected => documentPictureInPicture.window?.document.querySelector('.sftp-pip-title')?.textContent === expected",
+            arg=text('title'),
             timeout=5000,
         )
         restored = page.evaluate("() => window.terminalTest.getTerminalTabsState()")
@@ -1217,8 +1246,12 @@ def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
         close_context(context)
 
 
-def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, access_url):
-    context, page = new_page(browser, access_url)
+def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, access_url, ui_language='en'):
+    from settings_transfer_i18n_browser_smoke import message
+    context, page = new_page(browser, access_url, ui_language)
+
+    def text(key, params=None):
+        return message(page, 'browser.files.' + key, params)
     browser_console = []
     page.on('console', lambda message: browser_console.append(message.text))
     try:
@@ -1247,7 +1280,7 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
         ssh_menu = page.evaluate("() => window.terminalTest.showContextMenuForTest('main')")
         check(ssh_menu['terminalId'] == 'main', 'SFTP context action targeted the wrong terminal')
         check(ssh_menu['sftpVisible'] is True, 'connected SSH tab did not show SFTP send action')
-        check('Files' in ssh_menu['sftpText'], 'Files context action label was unclear')
+        check(message(page, 'browser.chrome.files_open') in ssh_menu['sftpText'], 'Files context action label was unclear')
         check(page.evaluate('() => !!window.documentPictureInPicture'), 'Document PiP is unavailable in the test browser')
         page.click('#sftp-send-option')
         page.wait_for_function('() => !!window.documentPictureInPicture.window', timeout=5000)
@@ -1263,19 +1296,20 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                     .map(button => button.title)
             })"""
         )
-        check(pip_state['title'] == 'StandTerm - Files', 'Files PiP title was missing')
-        check(pip_state['documentTitle'] == 'StandTerm - Files', 'Files document title was missing')
-        check('Nested SSH sessions' in pip_state['hint'], 'SFTP PiP did not explain the direct endpoint boundary')
+        check(pip_state['title'] == text('title'), 'Files PiP title was missing')
+        check(pip_state['documentTitle'] == text('title'), 'Files document title was missing')
+        check(pip_state['hint'] == text('endpoint_hint'), 'SFTP PiP did not explain the direct endpoint boundary')
         check(pip_state['hasDropZone'] is True, 'SFTP PiP did not expose a file drop zone')
         check(pip_state['hasPathInput'] is True, 'SFTP PiP did not expose destination path navigation')
         check(pip_state['innerCloseCount'] == 0, 'Files kept a duplicate close control')
         check(
-            pip_state['navigationTitles'] == ['Home directory', 'Parent directory', 'Refresh files list'],
+            pip_state['navigationTitles'] == [text(key) for key in ['home','parent','refresh']],
             'Files navigation icons did not expose clear descriptions',
         )
 
         page.wait_for_function(
-            "() => documentPictureInPicture.window.document.querySelector('.sftp-transfer-status')?.textContent !== 'Opening Files…'",
+            "expected => documentPictureInPicture.window.document.querySelector('.sftp-transfer-status')?.textContent !== expected",
+            arg=text('opening'),
             timeout=5000,
         )
         rendered = page.evaluate(
@@ -1378,23 +1412,37 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
             }"""
         )
         check(file_ui['fileCount'] == 2, 'SFTP PiP did not list regular files')
-        check(file_ui['columnHeaders'] == ['Name ▲', 'Size', 'Date'], 'Files list did not expose sortable columns')
+        check(file_ui['columnHeaders'] == [text('name') + ' ▲', text('size'), text('date')], 'Files list did not expose sortable columns')
         check(file_ui['initialRows'] == ['docs', 'existing.txt', 'reference.txt'], 'Files Name sort did not keep folders first')
         check(file_ui['sizeDescendingRows'] == ['docs', 'reference.txt', 'existing.txt'], 'Files Size toggle did not sort descending')
         check(file_ui['dateDescendingRows'] == ['docs', 'existing.txt', 'reference.txt'], 'Files Date toggle did not sort descending')
         check(file_ui['typeaheadMatch'] == 'reference.txt', 'Files typeahead did not accumulate a quick prefix')
         check(file_ui['operationVisible'] is True, 'selecting an SFTP file did not open file actions')
-        check(file_ui['actions'] == ['Download', 'Copy to…', 'Rename…', 'Delete…'], 'Files actions were incomplete')
+        check(file_ui['actions'] == [text(key) for key in ['download','copy_to','rename_action','delete_action']], 'Files actions were incomplete')
         check(file_ui['operationPath'] == '/home/tester/reference.txt', 'selected file card omitted the full path')
-        check('9 B (9 bytes)' in file_ui['operationMeta'] and '1970' in file_ui['operationMeta'], 'selected file card omitted exact file metadata')
-        check(file_ui['preparing'] == {'disabled': True, 'text': 'Preparing…'}, 'SFTP Download was enabled before its ticket was ready')
+        check(text('detailed_bytes', {'size':'9 B','bytes':9}) in file_ui['operationMeta'] and '1970' in file_ui['operationMeta'], 'selected file card omitted exact file metadata')
+        check(file_ui['preparing'] == {'disabled': True, 'text': text('preparing')}, 'SFTP Download was enabled before its ticket was ready')
         check(file_ui['downloadReady'] is True, 'SFTP Download was not enabled after its ticket became ready')
         check(file_ui['selected'] is True and file_ui['selectedPressed'] == 'true', 'selected Files row was not highlighted')
         check(file_ui['sourceOverflow'] == 'auto', 'short Files source pane did not provide a scroll fallback')
         check(file_ui['actionBottom'] <= file_ui['viewportHeight'], 'short Files window clipped the selected file actions')
+        compact_files = page.evaluate("""() => {
+            const doc = documentPictureInPicture.window.document;
+            doc.documentElement.style.width = '480px';
+            doc.documentElement.style.height = '600px';
+            const metrics = [...doc.querySelectorAll('.sftp-path-controls button, .sftp-file-operation-actions button')]
+                .filter(button => button.getClientRects().length).map(button => {
+                    const rect = button.getBoundingClientRect();
+                    return {text:button.innerText,title:button.title,left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom};
+                });
+            doc.documentElement.style.width = '';
+            return metrics;
+        }""")
+        check(all(0 <= item['left'] < item['right'] <= 480 and 0 <= item['top'] < item['bottom'] <= 600 for item in compact_files),
+              f'Files controls overflow at 480x600: {compact_files}')
         page.evaluate("() => { documentPictureInPicture.window.document.documentElement.style.height = ''; }")
         check(
-            file_ui['status'] == 'Selected reference.txt. Click Download to save it.',
+            file_ui['status'] == text('download_ready', {'name':'reference.txt'}),
             'selecting a file implied that it had already downloaded',
         )
 
@@ -1441,7 +1489,7 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
         check(browser_download['clicked']['hiddenByStyle'] is True, 'SFTP browser download trigger could become visible')
         check(browser_download['clicked']['ownerIsPipDocument'] is True, 'SFTP browser download did not preserve the PiP user-activation context')
         check(browser_download['remainingLinks'] == 0, 'SFTP browser download trigger was not removed')
-        check(browser_download['buttonDisabled'] is True and browser_download['buttonText'] == 'Downloaded', 'used SFTP download ticket remained actionable')
+        check(browser_download['buttonDisabled'] is True and browser_download['buttonText'] == text('download_started'), 'used SFTP download ticket remained actionable')
         check(any(message.startswith('[sftp] Download ticket requested') for message in browser_console), 'SFTP browser log omitted the ticket request')
         check(any(message.startswith('[sftp] Download ticket ready') for message in browser_console), 'SFTP browser log omitted the ready ticket')
         check(any(message.startswith('[sftp] Download button clicked') for message in browser_console), 'SFTP browser log omitted the explicit click')
@@ -1504,16 +1552,16 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
             }"""
         )
         check(copy_picker['open'] is True and copy_picker['sourceHidden'] is True, 'Copy to did not switch to the destination Files pane')
-        check(copy_picker['title'] == 'Choose destination', 'destination Files pane title was unclear')
+        check(copy_picker['title'] == text('destination_title'), 'destination Files pane title was unclear')
         check(copy_picker['sourcePath'] == '/home/tester/reference.txt', 'destination Files pane omitted the source file path')
-        check('9 B (9 bytes)' in copy_picker['sourceMeta'], 'destination Files pane omitted exact source file metadata')
+        check(text('detailed_bytes', {'size':'9 B','bytes':9}) in copy_picker['sourceMeta'], 'destination Files pane omitted exact source file metadata')
         check(copy_picker['sessions'] == ['term-2'], 'destination Files pane listed an invalid session')
         check(copy_picker['path'] == '/home/local', 'destination Files pane did not browse the selected session')
         check(copy_picker['filename'] == 'reference.txt', 'destination Files pane did not preserve the source name')
         check(copy_picker['endpoint'].startswith('Local Shell'), 'destination Files pane did not identify Local Shell')
         check(copy_picker['innerCloseCount'] == 0, 'destination Files pane kept a duplicate close icon')
-        check(copy_picker['cancelText'] == 'Cancel', 'destination Files pane did not provide one clear pre-copy exit')
-        check('returns to the previous pane' in copy_picker['lifecycle'], 'destination Files pane did not explain pre-copy cancellation')
+        check(copy_picker['cancelText'] == message(page, 'common.cancel'), 'destination Files pane did not provide one clear pre-copy exit')
+        check(copy_picker['lifecycle'] == text('cancel_before_copy'), 'destination Files pane did not explain pre-copy cancellation')
         check(copy_picker['duplicateSummaryCount'] == 0, 'destination Files pane kept a duplicate instruction card')
 
         clear_emitted(page)
@@ -1626,15 +1674,13 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
             }""",
             copy_payload,
         )
-        check(copy_result_ui['statusAfterForeign'].startswith('Copying '), 'Files copy accepted a foreign copy_id with the same request_id')
-        check('44%' in copy_result_ui['statusAfterForeign'] and '4 B / 9 B' in copy_result_ui['statusAfterForeign'],
-              'Files copy omitted the percentage or transferred bytes')
+        check(copy_result_ui['statusAfterForeign'] == text('copy_progress', {'percent':44,'copied':'4 B','total':'9 B'}), 'Files copy accepted a foreign copy_id with the same request_id')
         check(copy_result_ui['progressVisible'], 'Files copy progress or cancel controls were clipped')
         page.evaluate("() => { const s = documentPictureInPicture.window.document.documentElement.style; s.height = ''; s.width = ''; }")
-        check(copy_result_ui['publishing']['text'] == 'Publishing…', 'commit barrier did not replace the cancel action')
+        check(copy_result_ui['publishing']['text'] == text('publishing'), 'commit barrier did not replace the cancel action')
         check(copy_result_ui['publishing']['disabled'] is True, 'commit barrier still allowed cancellation')
-        check('cannot be cancelled' in copy_result_ui['publishing']['lifecycle'], 'commit barrier did not explain its cancellation boundary')
-        check(copy_result_ui['terminalButtonText'] == 'Close', 'completed Files copy did not provide a clear close action')
+        check(copy_result_ui['publishing']['lifecycle'] == text('publishing_started'), 'commit barrier did not explain its cancellation boundary')
+        check(copy_result_ui['terminalButtonText'] == message(page, 'common.close'), 'completed Files copy did not provide a clear close action')
         check(copy_result_ui['progressHidden'] is True, 'Files copy did not accept its bound terminal result')
         back_navigation = page.evaluate(
             """() => {
@@ -1700,9 +1746,9 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
         cancel_requests = get_emitted(page, 'files_copy_cancel_request')
         check(len(cancel_requests) == 1, 'Cancel copy did not emit one typed cancellation request')
         check(cancel_requests[0]['args'][0]['copy_id'] == 'filesc_cancel_test', 'Cancel copy lost the backend copy id')
-        check(cancel_pending_ui['runningText'] == 'Cancel copy', 'running Files copy did not expose cancellation')
-        check(cancel_pending_ui['pendingText'] == 'Cancelling…' and cancel_pending_ui['pendingDisabled'] is True, 'Files copy cancellation could be submitted twice')
-        check('Cancelling before' in cancel_pending_ui['lifecycle'], 'Files copy did not explain pending cancellation')
+        check(cancel_pending_ui['runningText'] == text('cancel_copy'), 'running Files copy did not expose cancellation')
+        check(cancel_pending_ui['pendingText'] == text('cancelling') and cancel_pending_ui['pendingDisabled'] is True, 'Files copy cancellation could be submitted twice')
+        check(cancel_pending_ui['lifecycle'] == text('cancelling_copy'), 'Files copy did not explain pending cancellation')
         cancelled_ui = page.evaluate(
             """payload => {
                 window.terminalTest.handleFilesCopyResultForTest({
@@ -1728,9 +1774,9 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
             }""",
             cancel_copy_payload,
         )
-        check(cancelled_ui['buttonText'] == 'Close', 'cancelled Files copy did not restore a close action')
+        check(cancelled_ui['buttonText'] == message(page, 'common.close'), 'cancelled Files copy did not restore a close action')
         check('cancelled before publishing' in cancelled_ui['status'], 'Files copy did not show the cancellation boundary')
-        check('You can close Files' in cancelled_ui['lifecycle'], 'Files copy did not explain the terminal cancellation state')
+        check(cancelled_ui['lifecycle'] == text('copy_cancelled_lifecycle'), 'Files copy did not explain the terminal cancellation state')
         check(cancelled_ui['closed'] is True, 'cancelled Files copy destination pane did not close')
 
         clear_emitted(page)
@@ -1778,8 +1824,8 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
         )
         check(local_file_picker['visible'] is True, 'selected local file card was not shown')
         check(local_file_picker['path'] == 'local-upload.txt', 'selected local file card omitted the browser file name')
-        check('6 B (6 bytes)' in local_file_picker['meta'] and '2026' in local_file_picker['meta'], 'selected local file card omitted exact metadata')
-        check(local_file_picker['actions'] == ['Send', 'Copy to…'], 'selected local file card actions were unclear')
+        check(text('detailed_bytes', {'size':'6 B','bytes':6}) in local_file_picker['meta'] and '2026' in local_file_picker['meta'], 'selected local file card omitted exact metadata')
+        check(local_file_picker['actions'] == [text('send'), text('copy_to')], 'selected local file card actions were unclear')
         check(local_file_picker['actionBottom'] <= local_file_picker['viewportHeight'],
               'short Files window clipped the selected local file actions')
         check(local_file_picker['sessions'] == ['main', 'term-2'], 'local file Copy to omitted an eligible Files destination')
@@ -1817,7 +1863,7 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
             }"""
         )
         check(rename_initial['confirmDisabled'] is True, 'Rename allowed the unchanged file name')
-        check('already exists' in rename_initial['hint'], 'Rename did not explain the duplicate name')
+        check(rename_initial['hint'] == text('filename_exists'), 'Rename did not explain the duplicate name')
         check(rename_initial['inputFocused'] is True, 'Rename did not focus the file name input')
         rename_duplicate = page.evaluate(
             """() => {
@@ -1900,7 +1946,7 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                 };
             }"""
         )
-        check(first_delete['question'] == 'Do you want to delete this file?', 'first delete warning was unclear')
+        check(first_delete['question'] == text('delete_question'), 'first delete warning was unclear')
         check(first_delete['path'] == '/home/tester/reference.txt', 'delete warning did not show the full remote path')
         check(first_delete['noFocused'] is True, 'first delete warning did not focus No')
         check(first_delete['secondPhaseVisible'] is False, 'second delete actions were visible during the first phase')
@@ -1919,7 +1965,7 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                 };
             }"""
         )
-        check('cannot be recovered' in second_delete['question'], 'second delete warning did not state permanent loss')
+        check(second_delete['question'] == text('delete_final'), 'second delete warning did not state permanent loss')
         check(second_delete['dontFocused'] is True, 'second delete warning did not focus the safe action')
         check(second_delete['firstPhaseVisible'] is False, 'first delete actions were visible during the second phase')
         original_x = first_delete['yesCenterX']
@@ -1955,7 +2001,7 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
         local_menu = page.evaluate("() => window.terminalTest.showContextMenuForTest('main')")
         check(local_menu['sftpVisible'] is True, 'local shell tab did not expose Files')
         check(local_menu['sftpDisabled'] is False, 'Files was disabled for a capable local shell tab')
-        check('Files' in local_menu['sftpText'], 'local shell Files label was unclear')
+        check(message(page, 'browser.chrome.files_open') in local_menu['sftpText'], 'local shell Files label was unclear')
         page.click('#sftp-send-option')
         page.wait_for_function('() => !!window.documentPictureInPicture.window', timeout=5000)
         reopened_files = page.evaluate(
@@ -1970,7 +2016,7 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
             }"""
         )
         check(reopened_files == {
-            'title': 'StandTerm - Files',
+            'title': text('title'),
             'destinationOpen': False,
             'selectedLocalVisible': False,
             'selectedRemoteVisible': False,
@@ -2054,6 +2100,7 @@ def test_restored_terminal_list_allocates_next_new_tab_id(browser, access_url):
 
 
 def test_operator_observation_warning_ui(browser, access_url):
+    from settings_transfer_i18n_browser_smoke import message
     context, page = new_page(browser, access_url)
     try:
         page.click('#agent-toggle-btn')
@@ -2070,12 +2117,14 @@ def test_operator_observation_warning_ui(browser, access_url):
             """() => ({
                 body: document.body.classList.contains('operator-observing'),
                 panel: document.getElementById('agent-panel').classList.contains('operator-observing'),
+                count: window.terminalTest.getOperatorObservationState().eventCount,
                 text: document.getElementById('operator-observation-state').innerText
             })"""
         )
         check(ui_state['body'] is True, 'operator observation did not set body warning class')
         check(ui_state['panel'] is True, 'operator observation did not set panel warning class')
-        check('OBSERVING' in ui_state['text'], 'operator observation status text did not warn')
+        check(ui_state['text'] == message(page, 'browser.chrome.observing', {'count':ui_state['count'] or 0}),
+              'operator observation status did not show the localized warning and exact event count')
         page.evaluate("() => document.getElementById('operator-observation-mark-btn').click()")
         page.wait_for_function(
             "() => window.terminalTest.getOperatorObservationState()?.eventCount >= 1",
@@ -2186,8 +2235,9 @@ def test_privacy_states_block_snapshots_and_agent_runs(browser, access_url):
         close_context(context)
 
 
-def test_agent_panel_status_gates_and_external_hint(browser, access_url):
-    context, page = new_page(browser, access_url)
+def test_agent_panel_status_gates_and_external_hint(browser, access_url, ui_language='en'):
+    from settings_transfer_i18n_browser_smoke import message
+    context, page = new_page(browser, access_url, ui_language)
     try:
         page.click('#agent-toggle-btn')
         page.wait_for_selector('#agent-panel.visible', timeout=5000)
@@ -2213,7 +2263,7 @@ def test_agent_panel_status_gates_and_external_hint(browser, access_url):
         )
         check(panel_state['statusBoxError'] is True, 'agent status row did not mark action error')
         check('agent_privacy_blocked' in panel_state['statusDetail'], 'agent status row did not show error_code')
-        check('private_input' in panel_state['privacyText'], 'privacy gate chip did not show privacy state')
+        check(panel_state['privacyText'] == message(page, 'browser.chrome.privacy', {'value':'private_input'}), 'privacy gate chip did not show privacy state')
         check(panel_state['privacyBlocking'] is True, 'privacy gate chip did not mark blocking state')
 
         set_privacy(page, 'normal')
@@ -2226,7 +2276,9 @@ def test_agent_panel_status_gates_and_external_hint(browser, access_url):
                 blocking: document.getElementById('agent-gate-human').classList.contains('blocking')
             })"""
         )
-        check('locked' in human_gate['text'], 'human input gate chip did not show active lease')
+        human_pattern = re.escape(message(page, 'browser.chrome.human_seconds', {'seconds':123456})).replace('123456', r'\d+')
+        check(human_gate['text'] == message(page, 'browser.chrome.human_locked') or re.fullmatch(human_pattern, human_gate['text']),
+              'human input gate chip did not show active lease')
         check(human_gate['blocking'] is True, 'human input gate chip did not mark blocking state')
 
         emit_socket(page, 'agent_mode_set', {'terminal_id': TERMINAL_ID, 'mode': 'disabled'})
@@ -2241,10 +2293,10 @@ def test_agent_panel_status_gates_and_external_hint(browser, access_url):
                 modeButtonsDisabled: Array.from(document.querySelectorAll('[data-agent-mode]')).every(button => button.disabled)
             })"""
         )
-        check(disabled_external['accessText'] == 'Enable external agent', 'agent access toggle did not offer enable in disabled mode')
+        check(disabled_external['accessText'] == message(page, 'agent.access.enable'), 'agent access toggle did not offer enable in disabled mode')
         check(disabled_external['modeButtonsDisabled'] is True, 'agent permission buttons were not disabled while access was off')
         check(disabled_external['buttonDisabled'] is True, 'external token button stayed enabled in disabled mode')
-        check('Enable external agent' in disabled_external['hint'], 'external token hint did not explain disabled prerequisite')
+        check(disabled_external['hint'] == message(page, 'agent.token.enable_required'), 'external token hint did not explain disabled prerequisite')
         check(disabled_external['commandTag'] == 'TEXTAREA', 'external token command output is not a textarea')
         check(disabled_external['commandOutputOpen'] is False, 'external token command output was not collapsed by default')
 
@@ -2258,10 +2310,11 @@ def test_agent_panel_status_gates_and_external_hint(browser, access_url):
                 modeLabels: Array.from(document.querySelectorAll('[data-agent-mode]')).map(button => button.innerText)
             })"""
         )
-        check(enabled_external['accessText'] == 'Disable external agent', 'agent access toggle did not offer disable after enabling')
-        check(enabled_external['modeLabels'] == ['Read only', 'Approval required', 'Direct input'], 'agent permission buttons did not use user-facing labels')
+        check(enabled_external['accessText'] == message(page, 'agent.access.disable'), 'agent access toggle did not offer disable after enabling')
+        expected_labels = [message(page, button.get_attribute('data-i18n')) for button in page.locator('[data-agent-mode]').all()]
+        check(enabled_external['modeLabels'] == expected_labels, 'agent permission buttons did not use user-facing labels')
         check(enabled_external['buttonDisabled'] is False, 'external token button did not enable in observe mode')
-        check('Create a local-only token' in enabled_external['hint'], 'external token hint did not show available state')
+        check(enabled_external['hint'] == message(page, 'agent.token.local_hint'), 'external token hint did not show available state')
 
         panel_mint_state = page.evaluate(
             """() => ({
@@ -2675,8 +2728,8 @@ def test_background_terminal_render_uses_mirror_canvas_png(browser, access_url):
         close_context(context)
 
 
-def test_paste_review_approve_and_cancel(browser, access_url):
-    context, page = new_page(browser, access_url)
+def test_paste_review_approve_and_cancel(browser, access_url, ui_language='en'):
+    context, page = new_page(browser, access_url, ui_language)
     try:
         attach_agent(page)
 
@@ -2713,8 +2766,8 @@ def test_paste_review_approve_and_cancel(browser, access_url):
         close_context(context)
 
 
-def test_clipboard_paste_targets_and_native_review(browser, access_url):
-    context, page = new_page(browser, access_url)
+def test_clipboard_paste_targets_and_native_review(browser, access_url, ui_language='en'):
+    context, page = new_page(browser, access_url, ui_language)
     try:
         attach_agent(page)
         page.evaluate('() => window.terminalTest.captureTerminalIoForTest()')
@@ -4016,7 +4069,9 @@ def test_settings_server_tab_loads_readonly_snapshot(browser, access_url, ui_lan
         page.wait_for_selector('#settings-modal.open', timeout=5000)
         page.click('.settings-nav-item[data-tab="server"]')
         page.wait_for_function(
-            "() => document.querySelector('#server-settings-mutable-controls .server-setting-input') !== null",
+            """expected => document.querySelector('#server-settings-mutable-controls .server-setting-input') !== null
+                && document.getElementById('server-settings-status').textContent === expected""",
+            arg=text('settings.server.writable'),
             timeout=5000,
         )
         state = page.evaluate(
@@ -4126,8 +4181,9 @@ def test_settings_server_tab_loads_readonly_snapshot(browser, access_url, ui_lan
         close_context(context)
 
 
-def test_connection_diagnostics_are_session_scoped_and_redacted(browser, access_url):
-    context, page = new_page(browser, access_url)
+def test_connection_diagnostics_are_session_scoped_and_redacted(browser, access_url, ui_language='en'):
+    from settings_transfer_i18n_browser_smoke import message
+    context, page = new_page(browser, access_url, ui_language)
     try:
         token = urllib.parse.parse_qs(urllib.parse.urlparse(access_url).query)['token'][0]
         page.evaluate("() => window.dispatchEvent(new Event('offline'))")
@@ -4148,7 +4204,7 @@ def test_connection_diagnostics_are_session_scoped_and_redacted(browser, access_
         check('page.offline' in events, 'diagnostics did not record browser offline event')
         check('Launcher Session ID:' in state['text'], 'diagnostics omitted launcher session ID')
         check(token not in state['text'], 'diagnostics exposed the access token')
-        check('connection events.' in state['status'], 'diagnostics did not show event count')
+        check(state['status'] == message(page, 'browser.diagnostics.count', {'count':len(state['entries'])}), 'diagnostics did not show event count')
 
         page.evaluate(
             """() => {
@@ -4186,16 +4242,20 @@ def test_connection_diagnostics_are_session_scoped_and_redacted(browser, access_
             })"""
         )
         check(cleared['entries'] == [], 'diagnostics clear did not remove stored events')
-        check(cleared['status'] == '0 connection events.', 'diagnostics clear did not update status')
+        check(cleared['status'] == message(page, 'browser.diagnostics.count', {'count':0}), 'diagnostics clear did not update status')
     finally:
         close_context(context)
 
 
-def test_settings_access_recovery_fetches_access_url_on_demand(browser, access_url):
+def test_settings_access_recovery_fetches_access_url_on_demand(browser, access_url, ui_language='en'):
+    from settings_transfer_i18n_browser_smoke import message
     parsed = urllib.parse.urlparse(access_url)
     token = urllib.parse.parse_qs(parsed.query)['token'][0]
-    context, page = new_page(browser, access_url)
+    context, page = new_page(browser, access_url, ui_language)
     try:
+        page.evaluate("""() => Object.defineProperty(navigator, 'clipboard', {
+            configurable:true,value:{writeText:async () => {}}
+        })""")
         page.click('#quick-settings')
         page.wait_for_selector('#settings-modal.open', timeout=5000)
         page.click('.settings-nav-item[data-tab="server"]')
@@ -4226,13 +4286,14 @@ def test_settings_access_recovery_fetches_access_url_on_demand(browser, access_u
                 location: window.location.href
             })"""
         )
-        check('shown for 30 seconds' in revealed['status'], 'access URL reveal did not update status')
+        check(revealed['status'] == message(page, 'browser.server_access.shown'), 'access URL reveal did not update status')
         check(access_url in revealed['text'], 'revealed access URL did not match server access URL')
         check('token=' not in revealed['location'], 'access URL reveal modified browser location')
 
         page.click('#server-access-copy-btn')
         page.wait_for_function(
-            "() => document.getElementById('server-access-status')?.textContent === 'Access URL copied.'",
+            "expected => document.getElementById('server-access-status')?.textContent === expected",
+            arg=message(page, 'browser.server_access.copied'),
             timeout=5000,
         )
     finally:
