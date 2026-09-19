@@ -13,6 +13,8 @@ COMPILE_TARGETS = [
     'ssh_forwarding.py',
     'ssh_tunnels.py',
     'scripts/access_window.py',
+    'scripts/build_ui_messages.py',
+    'tests/ui_messages_smoke.py',
     'tests/access_window_smoke.py',
     'tests/server_startup_smoke.py',
     'scripts/agent_cli.py',
@@ -38,6 +40,7 @@ COMPILE_TARGETS = [
 ]
 
 HEADLESS_SMOKE_TESTS = [
+    'tests/ui_messages_smoke.py',
     'tests/access_window_smoke.py',
     'tests/terminal_read_smoke.py',
     'tests/ssh_start_smoke.py',
@@ -73,6 +76,8 @@ def main(argv=None):
             'Compile Python entry points and smoke tests',
             [sys.executable, '-m', 'py_compile', *COMPILE_TARGETS],
         )
+
+    run_step('Check generated UI catalog', [sys.executable, 'scripts/build_ui_messages.py', '--check'])
 
     for test_path in HEADLESS_SMOKE_TESTS:
         run_step(test_path, [sys.executable, test_path])

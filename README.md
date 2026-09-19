@@ -316,12 +316,19 @@ states the token status; tab labels include remaining idle seconds, for example
 does not mean an agent is currently executing.
 Revocation, invalidation, or disabling access removes the tint, and connection
 warnings take priority. Background tabs update without opening the Agent panel.
-The **🤖 Agent Mint** action is the leftmost action in the right-side tab tools.
-It applies the permission selected in **Settings > General > Agent Access** to
+The **🤖 Authorize agent** action is the leftmost action in the right-side tab tools.
+It applies the permission selected in **Settings > General > Agent access** to
 the active terminal, waits for Core to confirm it, and mints a standard token.
-The default is **Full + Mint**. The tab-row Mint and Mint 3× buttons remain
-beside Pause Agent when the Agent panel is hidden, and always target the active
+The default is **Direct input + token**. The tab-row Create token and Create
+token 3× buttons remain beside Pause Agent when the Agent panel is hidden, and always target the active
 terminal; compact windows keep those actions in the Agent panel.
+
+**Settings > General > Language (Agent preview)** selects English or Traditional
+Chinese (Taiwan) for Agent access and local connection information. The choice
+applies the next time the page opens; saving it does not reload the current
+page or change its connections and grants. Other areas remain in English.
+The [copy and translation table](docs/ui_copy_review.tsv) and
+[localization plan](docs/agent_ui_review_plan.md) describe the review workflow.
 
 This development build also enables an **experimental IME positioning PoC**:
 the composition overlay follows its starting input line during terminal redraws.
@@ -723,7 +730,7 @@ Python helpers, discovery, and per-tab permissions as a local external agent,
 including normal file-copy approval between two authorized tabs.
 
 The dialog shows the remote **Agent Info URL** with **Copy URL** and **Copy
-Prompt** actions. **Agent Info for Current Tab** appears in the toolbar only after that
+Prompt** actions. **Agent connection** appears in the toolbar only after that
 SSH tab's tunnel is ready, and opens the same prompt and activity information.
 The URL's `127.0.0.1` belongs to the SSH host. Paste the prompt
 to the agent there; it identifies the SSH host and tab and includes the existing skill and discovery
@@ -749,7 +756,7 @@ handoffs live in a private temporary directory on the SSH host. The tunnel
 exposes only scoped Agent discovery and commands over HTTP inside SSH.
 
 Disabling or pausing access in Agent Panel immediately restricts remote access.
-**Start / Renew Access**, a new Enable, or an explicit browser Mint can renew
+**Start / Renew Access**, a new Enable, or an explicit browser Create token can renew
 expired or revoked grants. Reading info, checking the tunnel, ordinary mode
 changes, and resume do not renew invalid grants. **Stop Tunnel**, SSH disconnect, or browser viewer disconnect
 revokes this tunnel's grants and pending input without revoking local agents.
@@ -775,19 +782,19 @@ Typical local flow:
 
 1. Launch StandTerm and open the browser.
 2. Connect a terminal.
-3. Choose **🤖 Agent Mint** to apply the saved permission and mint a standard
-   token for that terminal in one action. The default is **Full + Mint**.
+3. Choose **🤖 Authorize agent** to apply the saved permission and mint a standard
+   token for that terminal in one action. The default is **Direct input + token**.
 4. For another permission or a 3x-idle token, use the browser Agent panel.
    When the Agent panel is hidden, the same actions are available in the status
    bar for the active terminal.
-5. On a local tab, open **Agent Info for Current Tab** in the toolbar. **Copy URL** provides the
+5. On a local tab, open **Agent connection** in the toolbar. **Copy URL** provides the
    local Agent Info URL; **Copy Prompt** includes the skill, discovery
    command, and instructions to run `hello` for each intended tab. Give this to
    the agent running in the Core host environment (WSL when Core runs in WSL).
    The dialog shows each tab's last authenticated request to confirm access.
 
-Reading or copying a prompt does not mint tokens. The single **Agent Info for
-Current Tab** button chooses the environment from the active tab: local tabs
+Reading or copying a prompt does not mint tokens. The single **Agent connection**
+button chooses the environment from the active tab: local tabs
 show Core host information; SSH tabs show that host's information after **Agent
 Tunnel** is ready. The dialog identifies where to run the agent. This choice
 does not narrow access to one tab; permissions still follow Agent Panel.
@@ -892,7 +899,7 @@ stderr.
 any two attached SSH or Local Shell terminals. Both terminals need separately
 minted external-agent tokens from the same browser session. Every copy opens a
 dedicated browser approval card showing the backend-canonical source,
-destination, size, and conflict behavior; Full mode does not bypass this
+destination, size, and conflict behavior; Direct input mode does not bypass this
 per-operation approval. File-copy approval appears even when a different
 terminal tab is active, while ordinary command approvals remain terminal
 scoped. Approved copies expose typed byte progress through the browser card and

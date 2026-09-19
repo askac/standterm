@@ -142,9 +142,12 @@ def stop_server(proc):
         proc.wait(timeout=5)
 
 
-def new_page(browser, access_url):
-    context = browser.new_context(viewport={'width': 1280, 'height': 800})
+def new_page(browser, access_url, ui_language=None):
+    context = browser.new_context(viewport={'width': 1280, 'height': 800}, locale='en-US')
     page = context.new_page()
+    if ui_language is not None:
+        preferences = json.dumps({'uiLanguage': ui_language})
+        page.add_init_script(f"localStorage.setItem('terminal.pref.v1', JSON.stringify({preferences}));")
     page.goto(debug_url(access_url), wait_until='domcontentloaded')
     # Keep debug-only overlays from covering controls during normal UI tests.
     page.add_style_tag(content='#debug-hud, #payload-log { display: none !important; }')
@@ -614,7 +617,7 @@ def test_agent_mint_quick_action_applies_saved_permission(browser, access_url):
         )
         check(placement == {
             'firstTool': 'agent-access-mint-btn',
-            'text': '🤖 Agent Mint',
+            'text': '🤖 Authorize agent',
             'disabled': False,
             'panelVisible': False,
         }, 'Agent Mint was not the ready leftmost right-side action')
@@ -637,7 +640,7 @@ def test_agent_mint_quick_action_applies_saved_permission(browser, access_url):
         check(minted['mode'] == 'direct_active', 'one-click Agent Mint did not apply Full permission')
         check(minted['external_token']['idleTimeoutMultiplier'] == 1,
               'one-click Agent Mint did not mint the standard token lifetime')
-        check(page.locator('#agent-access-mint-btn').inner_text() == '🤖 Agent Mint',
+        check(page.locator('#agent-access-mint-btn').inner_text() == '🤖 Authorize agent',
               'Agent Mint action did not return to its ready label')
         mode_events = [
             entry['args'][0] for entry in get_emitted(page, 'agent_mode_set')
@@ -660,8 +663,104 @@ def test_agent_mint_quick_action_applies_saved_permission(browser, access_url):
             }""",
             timeout=10000,
         )
-        check('Grant Approval access' in page.locator('#agent-access-mint-btn').get_attribute('title'),
+        check('Authorize Approval required access' in page.locator('#agent-access-mint-btn').get_attribute('title'),
               'Agent Mint title did not reflect the saved permission')
+    finally:
+        close_context(context)
+
+
+def test_agent_language_preview_preserves_access_and_applies_on_next_page(browser, access_url):
+    context, page = new_page(browser, access_url, ui_language='zh-TW')
+    token_requests = []
+    page.on('request', lambda request: token_requests.append(request.url)
+            if request.method == 'POST' and urllib.parse.urlparse(request.url).path == '/agent/external/token'
+            else None)
+    try:
+        check(page.locator('html').get_attribute('lang') == 'zh-TW', 'saved language did not set the document language')
+        check(page.inner_text('#agent-access-mint-btn') == '🤖 授權 Agent', 'authorization action was not localized')
+        check(page.inner_text('#agent-connect-btn') == 'Agent 連線', 'connection action was not localized')
+        clear_emitted(page)
+        page.click('#agent-access-mint-btn')
+        wait_for_agent(page, "state.mode === 'direct_active' && state.external_token?.status === 'active'")
+        check(len(token_requests) == 1, 'localized authorization did not create exactly one token')
+        check([entry['args'][0] for entry in get_emitted(page, 'agent_mode_set')] == [
+            {'terminal_id': TERMINAL_ID, 'mode': 'direct_active'}
+        ], 'localized authorization changed the permission protocol value')
+        check('--token' in active_agent_state(page)['external_token']['command'],
+              'localized authorization did not preserve the generated command')
+
+        page.click('#agent-toggle-btn')
+        page.wait_for_selector('#agent-panel.visible')
+        modes = page.locator('[data-agent-mode]').evaluate_all(
+            "buttons => buttons.map(button => ({value: button.dataset.agentMode, label: button.innerText}))"
+        )
+        check(modes == [
+            {'value': 'observe', 'label': '唯讀'},
+            {'value': 'approval_pending', 'label': '需核准'},
+            {'value': 'direct_active', 'label': '直接輸入'},
+        ], 'localized permission labels changed their protocol values')
+        check(page.locator('#agent-mode-controls').get_attribute('aria-label') == 'Agent 權限',
+              'permission selector accessible name was not localized')
+        check(page.inner_text('#agent-external-token-btn') == '更新權杖', 'active token action was not localized')
+        check('檔案複製仍需核准' in page.inner_text('#agent-permission-hint'),
+              'localized direct input omitted file-copy approval')
+        page.click('#agent-panel-close-btn')
+
+        page.evaluate('''() => Object.defineProperty(navigator, 'clipboard', {
+            configurable: true, value: {writeText: async text => {window.copiedAgentText = text;}}
+        })''')
+        page.click('#agent-connect-btn')
+        page.wait_for_selector('#agent-connect-copy:not([disabled])')
+        check(page.get_by_role('dialog', name='Agent 連線').is_visible(), 'connection dialog accessible name was not localized')
+        check(page.locator('#agent-connect-url').get_attribute('aria-label') == 'Agent 資訊網址',
+              'connection URL accessible name was not localized')
+        check(page.locator('#agent-connect-info').get_attribute('aria-label') == 'Agent 連線指引',
+              'connection prompt accessible name was not localized')
+        check(page.inner_text('#agent-connect-copy') == '複製連線指引', 'connection copy action was not localized')
+        check('main: 等待 Agent' in page.inner_text('#agent-connect-activity'),
+              'localized connection activity did not distinguish a grant from Agent activity')
+        prompt = page.input_value('#agent-connect-info')
+        check('Run discover, then hello' in prompt, 'display language translated the machine-facing connection prompt')
+        page.click('#agent-connect-copy')
+        page.wait_for_function('text => window.copiedAgentText === text', arg=prompt)
+        check('已複製' in page.inner_text('#agent-connect-message'), 'clipboard result was not localized')
+        page.click('#agent-connect-close')
+
+        page.evaluate('() => { window.languagePreviewSentinel = true; }')
+        before = active_agent_state(page)
+        socket_before = page.evaluate('() => window.terminalTest.getSocketState()')
+        requests_before = len(token_requests)
+        page.click('#quick-settings')
+        check(page.input_value('#pref-uiLanguage') == 'zh-TW', 'settings did not show the saved language')
+        check(page.input_value('#pref-agentAccessMintMode') == 'direct_active', 'language changed the saved permission')
+        page.select_option('#pref-uiLanguage', 'en')
+        clear_emitted(page)
+        page.click('#settings-save')
+        page.wait_for_selector('#settings-modal.open', state='hidden')
+        check(page.evaluate("() => JSON.parse(localStorage.getItem('terminal.pref.v1')).uiLanguage") == 'en',
+              'settings did not save the display preference')
+        check(page.evaluate('() => window.languagePreviewSentinel === true'), 'saving language reloaded the active page')
+        check(page.inner_text('#agent-access-mint-btn') == '🤖 授權 Agent', 'language changed before opening another page')
+        check(page.locator('html').get_attribute('lang') == 'zh-TW', 'active document language changed before reopening')
+        after = active_agent_state(page)
+        for field in ['terminal_id', 'connected', 'session_id', 'viewer_id', 'agent_binding_id',
+                      'mode', 'mode_version', 'external_token']:
+            check(after[field] == before[field], f'saving language changed Agent state field {field}')
+        check(page.evaluate('() => window.terminalTest.getSocketState()') == socket_before,
+              'saving language changed the active socket')
+        check(len(token_requests) == requests_before, 'saving language created or renewed a token')
+        check(not any(entry['event'] in {'agent_attach', 'agent_detach', 'agent_mode_set', 'agent_pause', 'start_ssh', 'stop_ssh'}
+                      for entry in get_emitted(page)), 'saving language emitted an access or connection mutation')
+
+        next_page = context.new_page()
+        next_page.goto(debug_url(access_url), wait_until='domcontentloaded')
+        next_page.wait_for_function('() => !!window.terminalTest', timeout=10000)
+        check(next_page.locator('html').get_attribute('lang') == 'en', 'new page did not apply the saved language')
+        check(next_page.inner_text('#agent-access-mint-btn') == '🤖 Authorize agent', 'new page did not show English authorization')
+        check(next_page.inner_text('#agent-connect-btn') == 'Agent connection', 'new page did not show English connection text')
+        check(next_page.locator('#agent-mode-controls').get_attribute('aria-label') == 'Agent permission',
+              'new page did not apply English accessible names')
+        check(page.inner_text('#agent-access-mint-btn') == '🤖 授權 Agent', 'new page changed the existing page language')
     finally:
         close_context(context)
 
@@ -1989,9 +2088,9 @@ def test_agent_panel_status_gates_and_external_hint(browser, access_url):
             })"""
         )
         check(enabled_external['accessText'] == 'Disable external agent', 'agent access toggle did not offer disable after enabling')
-        check(enabled_external['modeLabels'] == ['Observer', 'Approval', 'Full'], 'agent permission buttons did not use user-facing labels')
+        check(enabled_external['modeLabels'] == ['Read only', 'Approval required', 'Direct input'], 'agent permission buttons did not use user-facing labels')
         check(enabled_external['buttonDisabled'] is False, 'external token button did not enable in observe mode')
-        check('Mint' in enabled_external['hint'], 'external token hint did not show available state')
+        check('Create a local-only token' in enabled_external['hint'], 'external token hint did not show available state')
 
         panel_mint_state = page.evaluate(
             """() => ({
@@ -2063,7 +2162,7 @@ def test_external_token_tab_indicator_tracks_background_lifecycle(browser, acces
               'Background tab lost its minted-token indicator')
         check(page.locator('.terminal-tab.active.agent-token-active').count() == 0,
               'New tab inherited the other terminal token indicator')
-        check('External agent token active' in page.locator(main_tab).get_attribute('title'),
+        check('Agent token active' in page.locator(main_tab).get_attribute('title'),
               'Active token has no text explanation')
         color = lambda: page.locator(main_tab + ' .tab-state').evaluate(
             'element => getComputedStyle(element).backgroundColor')
@@ -2098,7 +2197,7 @@ def test_external_token_tab_indicator_tracks_background_lifecycle(browser, acces
         token_event('revoked', 60000)
         check(page.locator(main_tab + '.agent-token-active').count() == 0, 'Revoked token stayed bright')
         check(page.locator(main_tab + '.agent-token-expired').count() == 0, 'Revocation was shown as expiry')
-        check('External agent token' not in page.locator(main_tab).get_attribute('title'),
+        check('Agent token' not in page.locator(main_tab).get_attribute('title'),
               'Revoked token tooltip remained stale')
         check(page.locator(main_tab + ' .tab-agent-countdown').is_hidden(),
               'Revoked token retained a countdown label')
@@ -2190,7 +2289,7 @@ def test_session_recovery_new_tab_can_renew_external_agent_token(browser, access
                 command: document.getElementById('agent-external-command').value
             })"""
         )
-        check(recovered_token_ui['buttonText'] == 'Mint token', 'new terminal reused stale external token command state')
+        check(recovered_token_ui['buttonText'] == 'Create token', 'new terminal reused stale external token command state')
         check(recovered_token_ui['command'] == '', 'new terminal kept stale external token command text')
         page.evaluate("() => document.getElementById('agent-external-token-btn').click()")
         page.wait_for_function(
@@ -4001,7 +4100,7 @@ def test_core_agent_connect_info_can_be_copied_and_confirmed(browser, access_url
         check('No active grants' in page.inner_text('#agent-connect-activity'), 'Missing authorization was not explained')
         check(page.locator('#agent-tunnel-btn').is_hidden(), 'Local shell offered an SSH tunnel')
         check(page.locator('#agent-remote-info-btn').count() == 0, 'A separate remote Agent Info button remains')
-        check(page.inner_text('#agent-connect-btn') == 'Agent Info for Current Tab', 'Info button did not identify its tab context')
+        check(page.inner_text('#agent-connect-btn') == 'Agent connection', 'Info button did not identify the Agent connection workflow')
         check(page.inner_text('#agent-connect-copy') == 'Copy Prompt', 'Local info did not offer a prompt')
         page.click('#agent-connect-copy-url')
         page.wait_for_function('url => window.copiedAgentText === url', arg=agentinfo_url)
@@ -4137,7 +4236,7 @@ def test_remote_agent_info_tracks_ssh_carrier_and_rejects_late_replies(browser, 
         page.wait_for_function('text => window.copiedAgentText === text', arg=prompt)
         page.click('#agent-tunnel-close')
         page.click('#agent-connect-btn')
-        check(page.inner_text('#agent-tunnel-title') == 'Agent Info for Current Tab', 'Remote shortcut opened the wrong view')
+        check(page.inner_text('#agent-tunnel-title') == 'Agent connection', 'Remote shortcut opened the wrong view')
         check(page.locator('#agent-tunnel-setup').is_hidden(), 'Remote info repeated setup controls')
         check(page.locator('#agent-tunnel-copy').is_hidden(), 'Remote shortcut offered a stale cached prompt')
         page.evaluate('payload => window.terminalTest.completeAgentTunnelRequestForTest(1, payload)', first)
@@ -4871,6 +4970,7 @@ def main():
         test_agent_panel_can_be_dragged,
         test_toolbar_pause_targets_main_tab_not_panel_override,
         test_agent_mint_quick_action_applies_saved_permission,
+        test_agent_language_preview_preserves_access_and_applies_on_next_page,
         test_terminal_pip_hides_selected_tab_and_keeps_background_tab,
         test_sftp_status_actions_and_terminal_pip_transition,
         test_sftp_send_context_action_is_limited_to_connected_ssh_tabs,

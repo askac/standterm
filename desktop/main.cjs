@@ -411,9 +411,9 @@ async function start() {
         type: 'info', title: 'StandTerm Agent', message: 'Give your agent a StandTerm prompt',
         detail: 'Select the tab where your agent runs. Use Agent Panel to enable access and choose permissions '
           + 'on each tab it may operate.\n\n'
-          + 'For an SSH agent, start Agent Tunnel on its SSH tab. Agent Info for Current Tab appears after setup succeeds. '
-          + 'For a local agent, mint a token in Agent Panel.\n\n'
-          + 'Open Agent Info for Current Tab, choose Copy Prompt, and paste it into your agent with the intended task. '
+          + 'For an SSH agent, start Agent Tunnel on its SSH tab. Agent connection appears after setup succeeds. '
+          + 'For a local agent, use Authorize agent on each intended tab.\n\n'
+          + 'Open Agent connection, choose Copy Prompt, and paste it into your agent with the intended task. '
           + 'Follow the environment shown in that dialog.\n\n'
           + 'Skills do not need to be installed first. The prompt leads to the bundled skills and helpers; '
           + 'Agent Info also provides installation instructions when persistent skills are wanted.',

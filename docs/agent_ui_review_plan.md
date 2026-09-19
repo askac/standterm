@@ -10,7 +10,7 @@ The traverse brief is review input, not a requirement to expand public discovery
 | Tokenless agentinfo | Keep the limited bootstrap and handoff index. Do not expose all ungranted terminals or add localization metadata. |
 | Omitted terminal | Preserve latest-handoff compatibility. Explicit terminal and token arguments remain authoritative. |
 | Capture timeout | `wait_ms` bounds the entire capture after the write, including settling. Retain the completed write and captured events on timeout; never resend automatically. |
-| Agent Mint default | Preserve the saved permission and current Full default. Copy changes do not change authorization. |
+| Primary authorization default | Preserve the saved permission and current Direct input default. Copy changes do not change authorization. |
 | Display and control | Localized text is display data. Keep protocol values, error codes, terminal IDs, and control decisions independent of wording. |
 
 ## Agreed terminology
@@ -42,8 +42,8 @@ do not consolidate them merely to shorten labels.
 | 2 | Bound capture settling by the total deadline | Implemented and validated | Quiet, continuous, late, and absent output produce bounded results without replaying input; the send result survives a capture timeout. |
 | 3 | Review English UI copy and terminology | Core terms agreed; initial English sources reviewed | Review each proposed change for target, permissions, consequences, and next action; check related tooltips, Desktop help, and tests before applying it. |
 | 4 | Finalize the translation exchange table | Initial exchange validated with an independent translator | Stable keys, approved English source, context, and placeholder constraints are sufficient for an independent translator. |
-| 5 | Pilot localization in one complete Core workflow | Deferred | Cover static and dynamic text, titles, and accessible names; preserve connected sessions and authorization; support English fallback. |
-| 6 | Translate and integrate approved rows | Initial translations reviewed; runtime integration deferred | AI edits only target-language cells; validate keys and placeholders; review authorization and destructive-action wording. |
+| 5 | Pilot Agent access and local connection information | Implemented; validation below | Cover static and dynamic text, titles, and accessible names; preserve connected sessions and authorization; support English fallback. |
+| 6 | Translate and integrate approved rows | Pilot translations reviewed and integrated; remaining workflows deferred | AI edits only target-language cells; validate keys and placeholders; review authorization and destructive-action wording. |
 | 7 | Expand Core and Desktop coverage | Deferred | Verify secondary windows, native menus, setup, diagnostics, packaging, and representative layouts. |
 
 ## Validation of the reliability changes
@@ -61,22 +61,25 @@ continuous-output regression failed before the capture deadline fix.
 | Diff whitespace check | Passed. |
 
 These checks ran in WSL. Browser, Desktop packaging, and physical UART checks
-were not rerun for these backend/helper changes. No runtime UI wording changed.
+were not rerun for these backend/helper changes. The subsequent UI pilot is
+validated separately below.
 
 ## Deferred UI work
 
-Stages 3 and 4 do not change runtime UI text. Translation does not start until
-the English source for the selected workflow is reviewed. Extra screen diffing,
-render hints, key aliases, and byte-limit options remain optional optimizations.
+Browser authorization, file-copy review text, Agent diagnostics, SSH tunnel setup,
+secondary windows, and Desktop localization remain outside this pilot. Reviewed
+rows in the table do not imply that every screen has integrated them. Translation
+starts only after the English source for the selected workflow is reviewed.
+Extra screen diffing, render hints, key aliases, and byte-limit options remain optional optimizations.
 Unverified UART end-to-end coverage is a qualification gap, not evidence that
 UART is broken.
 
 ## Copy review and AI translation exchange
 
-The adjacent `ui_copy_review.tsv` is an initial review table, not a complete
-catalog or a runtime resource. `en` contains the reviewed English source;
-`zh-TW` holds its translation when available. `current_en` is the visible
-English text, with
+The adjacent `ui_copy_review.tsv` is the editable source for the pilot catalog and
+future copy review; it does not inventory the entire product. `en` contains the
+reviewed English source; `zh-TW` holds its translation when available.
+`current_en` records the English review baseline, with
 dynamic values normalized to the named placeholders declared in the row.
 HTML emphasis is omitted from the table. Source references identify the current
 implementation and can move as the code changes.
@@ -136,3 +139,46 @@ The initial estimate is 4-7 engineering days for common Core workflows and
 estimates, excluding the reliability fixes, website and CLI documentation,
 remote terminal output, and complete live language switching. A full string
 inventory and pilot are needed before committing to a delivery estimate.
+
+## Pilot implementation and translation handoff
+
+The table contains 82 rows: 81 reviewed translations and one removal row.
+The pilot integrates 75 keys; six reviewed keys belong to deferred workflows.
+An independent translator edited only the 63 new target cells. The integrator
+checked unchanged metadata and placeholders, clarified that Settings changes
+the default permission, and reviewed the translations before changing statuses.
+
+Generate the checked-in browser catalog with
+`python scripts/build_ui_messages.py`; use `--check` to reject a stale catalog.
+The standard headless checks validate the table and generated output. CI also
+runs `node tests/ui_i18n_smoke.cjs` for lookup, interpolation and safe DOM output.
+English source rows require `source-approved` or `translation-reviewed`; target
+text is exported only from `translation-reviewed` rows. Empty translations use
+English. Removed rows are excluded. Runtime needs only the generated assets;
+no new build tool or third-party localization dependency is required. Core
+packaging includes the source table and both runtime scripts.
+
+To outsource another translation batch, send the table and agreed terminology
+above. Ask the translator to edit only target cells in the selected source-approved
+rows and return the same UTF-8 TSV. Compare all other cells and the complete key
+set against the sent copy, review the meaning, then update statuses and regenerate.
+Never accept source or metadata changes merely because placeholder checks pass.
+
+The local `uiLanguage` preference supports `en` and `zh-TW`; unknown values
+fall back to English. Save applies on the next page opening. The active page
+retains its locale and its existing terminal connections, permissions and tokens.
+Machine prompts, protocol values and backend diagnostics are unchanged.
+
+| Pilot check | Result |
+| --- | --- |
+| Complete Agent browser smoke suite | 51 cases passed, including the new Traditional Chinese authorization, connection-info and next-opening language case. |
+| Active session preservation | Saving a language choice retained the socket, terminal session, permission and token; it emitted no authorization or connection mutation. A new page applied the saved language. |
+| Table/exporter tests | Six cases passed; the checked-in catalog also passed `--check`. |
+| Translation lookup tests | Six cases passed for fallback, literal interpolation, safe display attributes and browser loading. |
+| Integrated key audit | All 75 keys have English and reviewed Traditional Chinese text. |
+| Bilingual connection-dialog layout | All controls fit at 600, 800 and 1280 pixel viewport widths. |
+| Core bundle selection | Three focused tests passed, including required catalog assets and source table. |
+| Independent read-only review | No correctness or security findings in permission control, language persistence, interpolation or fallback. |
+
+These checks ran with WSL Chromium and local test servers. Native Desktop
+packaging and physical UART qualification were not part of this UI pilot.

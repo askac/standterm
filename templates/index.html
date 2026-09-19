@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <title>StandTerm</title>
     <!-- Local Fallback Assets -->
@@ -1129,6 +1129,10 @@
                     <div class="settings-tab active" id="tab-general">
                         <fieldset class="settings-fieldset">
                             <legend>General</legend>
+                            <div class="settings-row"><label for="pref-uiLanguage" data-i18n="settings.language.label">Language (Agent preview)</label>
+                                <select id="pref-uiLanguage"><option value="en">English</option><option value="zh-TW" lang="zh-TW">繁體中文（台灣）</option></select>
+                            </div>
+                            <div class="settings-status" data-i18n="settings.language.hint">Applies to Agent access and local connection info next time you open this page. Other areas remain in English.</div>
                             <div class="settings-row"><label for="pref-useCustomMenu">Enable custom context menu</label><input type="checkbox" id="pref-useCustomMenu"></div>
                             <div class="settings-row"><label for="pref-copyOnSelect">Copy on select</label><input type="checkbox" id="pref-copyOnSelect"></div>
                             <div class="settings-row"><label for="pref-enablePicPreview">Enable pic preview</label><input type="checkbox" id="pref-enablePicPreview"></div>
@@ -1140,15 +1144,15 @@
                             </div>
                         </fieldset>
                         <fieldset class="settings-fieldset">
-                            <legend>Agent Access</legend>
-                            <div class="settings-row"><label for="pref-agentAccessMintMode">Agent Mint action</label>
+                            <legend data-i18n="settings.agent.legend">Agent access</legend>
+                            <div class="settings-row"><label for="pref-agentAccessMintMode" data-i18n="settings.agent.permission">Default Agent permission</label>
                                 <select id="pref-agentAccessMintMode">
-                                    <option value="observe">Observer + Mint</option>
-                                    <option value="approval_pending">Approval + Mint</option>
-                                    <option value="direct_active">Full + Mint</option>
+                                    <option value="observe" data-i18n="settings.agent.observe">Read only + token</option>
+                                    <option value="approval_pending" data-i18n="settings.agent.approval">Approval required + token</option>
+                                    <option value="direct_active" data-i18n="settings.agent.direct">Direct input + token</option>
                                 </select>
                             </div>
-                            <div class="settings-status">The tab-bar action applies this permission to the current tab, then mints a standard token.</div>
+                            <div class="settings-status" data-i18n="settings.agent.hint">Authorize agent applies this permission to the current tab and creates a standard token.</div>
                         </fieldset>
                         <fieldset class="settings-fieldset">
                             <legend>Import &amp; Export</legend>
@@ -1438,12 +1442,12 @@
             <div id="tabs-list"></div>
             <button id="new-tab-btn" class="status-action" type="button" title="New terminal tab" aria-label="New terminal tab">+</button>
         </div>
-        <button id="agent-pause-btn" class="status-action" type="button" title="Pause Agent terminal input">Pause Agent</button>
-        <button id="agent-status-mint-btn" class="status-action agent-status-mint" title="Mint a standard external-agent token for the active terminal">Mint</button>
-        <button id="agent-status-mint-3x-btn" class="status-action agent-status-mint" title="Mint a 3x idle-time external-agent token for the active terminal">Mint 3&times;</button>
+        <button id="agent-pause-btn" class="status-action" type="button" title="Pause Agent access" data-i18n="agent.pause.action">Pause Agent</button>
+        <button id="agent-status-mint-btn" class="status-action agent-status-mint" title="Create a standard token for the active terminal">Create token</button>
+        <button id="agent-status-mint-3x-btn" class="status-action agent-status-mint" title="Create a token with 3× idle time for the active terminal">Create token 3&times;</button>
         <div id="terminal-tools">
-            <button id="agent-access-mint-btn" class="status-action" type="button" title="Grant Full access and mint a standard token for the current tab">&#x1F916; Agent Mint</button>
-            <button id="agent-connect-btn" class="status-action" type="button" title="Copy the agent prompt for the current tab's environment">Agent Info for Current Tab</button>
+            <button id="agent-access-mint-btn" class="status-action" type="button" title="Authorize Direct input access and create a standard token for the current tab" data-i18n="agent.access.grant">Authorize agent</button>
+            <button id="agent-connect-btn" class="status-action" type="button" title="Copy the agent prompt for the current tab's environment" data-i18n="agent.connection.title" data-i18n-title="agent.connection.tooltip">Agent connection</button>
             <button id="agent-toggle-btn" class="status-action" type="button" title="Show Agent panel">Show Agent Panel</button>
             <button id="agent-tunnel-btn" class="status-action" type="button" title="Set up remote Agent access through this SSH connection" hidden>Agent Tunnel</button>
             <button id="ssh-tunnels-btn" class="status-action" type="button" title="Manage TCP port forwarding through this SSH connection" hidden>Tunnels</button>
@@ -1465,26 +1469,26 @@
         <div id="transfer-queue-list" aria-live="polite"></div>
     </section>
     <dialog id="agent-connect-dialog" aria-labelledby="agent-connect-title">
-        <h3 id="agent-connect-title">Agent Info for Current Tab</h3>
-        <p>For an agent running on the <strong>Core host</strong>. If you launched Core with <code>run_wsl.bat</code>, this means WSL, not the Windows browser environment. It can access any individually authorized tab.</p>
+        <h3 id="agent-connect-title" data-i18n="agent.connection.title">Agent connection</h3>
+        <p data-i18n="agent.connection.environment">Run the agent where Core runs (WSL if Core runs in WSL). It can access only individually authorized tabs.</p>
         <ol class="agent-connect-steps">
-            <li>On each target tab, open the Agent panel, enable external agent, choose its permission, and click <strong>Mint</strong>.</li>
-            <li>Click <strong>Copy Prompt</strong> below and paste it to the agent running on the Core host.</li>
-            <li>Ask the agent to run <strong>discover</strong>, then <strong>hello</strong>. Its authenticated requests appear below.</li>
+            <li data-i18n="agent.connection.step_authorize">Choose the default permission in Settings, then Authorize agent on each intended tab. Adjust an authorized tab in the Agent panel.</li>
+            <li data-i18n="agent.connection.step_copy">Copy the prompt to the agent running on the Core host.</li>
+            <li data-i18n="agent.connection.step_confirm">Run discover, then hello. Authenticated requests appear below.</li>
         </ol>
         <div class="agent-connect-url">
-            <label for="agent-connect-url">Agent Info URL</label>
-            <input id="agent-connect-url" readonly aria-label="Agent Info URL">
-            <button id="agent-connect-copy-url" type="button" disabled>Copy URL</button>
+            <label for="agent-connect-url" data-i18n="agent.connection.url">Agent Info URL</label>
+            <input id="agent-connect-url" readonly aria-label="Agent Info URL" data-i18n-aria-label="agent.connection.url">
+            <button id="agent-connect-copy-url" type="button" disabled data-i18n="common.copy_url">Copy URL</button>
         </div>
         <p id="agent-connect-message" role="status"></p>
         <p id="agent-connect-activity" class="agent-connect-activity" aria-live="polite"></p>
-        <textarea id="agent-connect-info" readonly aria-label="Local agent prompt" hidden></textarea>
+        <textarea id="agent-connect-info" readonly aria-label="Local agent prompt" hidden data-i18n-aria-label="agent.connection.prompt"></textarea>
         <div class="agent-tunnel-actions">
-            <button id="agent-connect-open-panel" type="button">Open Agent Panel</button>
-            <button id="agent-connect-refresh" type="button">Refresh Status</button>
-            <button id="agent-connect-copy" type="button" disabled>Copy Prompt</button>
-            <button id="agent-connect-close" type="button">Close</button>
+            <button id="agent-connect-open-panel" type="button" data-i18n="agent.panel.open">Open Agent Panel</button>
+            <button id="agent-connect-refresh" type="button" data-i18n="common.refresh">Refresh Status</button>
+            <button id="agent-connect-copy" type="button" disabled data-i18n="agent.connection.copy">Copy Prompt</button>
+            <button id="agent-connect-close" type="button" data-i18n="common.close">Close</button>
         </div>
     </dialog>
     <dialog id="agent-tunnel-dialog" aria-labelledby="agent-tunnel-title">
@@ -1565,19 +1569,19 @@
     <div id="payload-log"></div>
     <div id="agent-panel">
         <div id="agent-panel-header">
-            <span id="agent-panel-title">Agent</span>
+            <span id="agent-panel-title" data-i18n="agent.name">Agent</span>
             <span id="agent-panel-state">disabled</span>
-            <button type="button" id="agent-panel-close-btn" title="Hide Agent panel" aria-label="Hide Agent panel">&times;</button>
+            <button type="button" id="agent-panel-close-btn" title="Hide Agent panel" aria-label="Hide Agent panel" data-i18n-title="agent.panel.hide" data-i18n-aria-label="agent.panel.hide">&times;</button>
         </div>
         <div id="agent-panel-body">
             <div id="agent-access-row">
                 <button type="button" id="agent-access-toggle-btn">Enable external agent</button>
                 <span id="agent-access-summary">Off</span>
             </div>
-            <div id="agent-mode-controls" aria-label="External agent permission">
-                <button type="button" data-agent-mode="observe" aria-pressed="false">Observer</button>
-                <button type="button" data-agent-mode="approval_pending">Approval</button>
-                <button type="button" data-agent-mode="direct_active">Full</button>
+            <div id="agent-mode-controls" aria-label="External agent permission" data-i18n-aria-label="agent.permission.label">
+                <button type="button" data-agent-mode="observe" aria-pressed="false" data-i18n="agent.permission.observe">Read only</button>
+                <button type="button" data-agent-mode="approval_pending" data-i18n="agent.permission.approval">Approval required</button>
+                <button type="button" data-agent-mode="direct_active" data-i18n="agent.permission.direct">Direct input</button>
             </div>
             <div id="agent-permission-hint">Enable external agent to choose what a local agent can do.</div>
             <div id="agent-gate-state">
@@ -1591,13 +1595,13 @@
             </div>
             <div id="agent-external-box">
                 <div id="agent-external-actions">
-                    <button type="button" id="agent-external-token-btn">Mint token</button>
-                    <button type="button" id="agent-external-token-3x-btn">Mint token 3&times;</button>
+                    <button type="button" id="agent-external-token-btn" data-i18n="agent.token.create">Create token</button>
+                    <button type="button" id="agent-external-token-3x-btn" data-i18n="agent.token.create_3x">Create token 3×</button>
                 </div>
                 <div id="agent-external-hint">Enable external agent before minting a token.</div>
                 <details id="agent-external-output">
-                    <summary>Command output</summary>
-                    <textarea id="agent-external-command" rows="6" readonly spellcheck="false" aria-label="External agent command"></textarea>
+                    <summary data-i18n="agent.token.command_output">Command output</summary>
+                    <textarea id="agent-external-command" rows="6" readonly spellcheck="false" aria-label="External agent command" data-i18n-aria-label="agent.token.command"></textarea>
                 </details>
             </div>
             <details id="agent-advanced-tools">
@@ -1656,6 +1660,8 @@
         </div>
     </div>
 
+    <script src="{{ url_for('static', filename='js/standterm-messages.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/standterm-i18n.js') }}"></script>
     <script src="{{ url_for('static', filename='js/standterm-capabilities.js') }}"></script>
     <script src="{{ url_for('static', filename='js/standterm-ssh-routes.js') }}"></script>
     <script src="{{ url_for('static', filename='js/standterm-ssh-node-auth.js') }}"></script>
@@ -1742,6 +1748,7 @@
             return WINDOWS_TERMINAL_FONT_FACE;
         }
         const PREF_DEFAULTS = {
+            uiLanguage: 'en',
             useCustomMenu: true,
             copyOnSelect: false,
             enablePicPreview: true,
@@ -1808,6 +1815,11 @@
             return AGENT_ACCESS_MINT_MODE_OPTIONS.includes(text) ? text : fallback;
         }
         let prefs = loadPrefs();
+        prefs.uiLanguage = window.StandTermI18n.normalizeLocale(prefs.uiLanguage);
+        const uiText = window.StandTermI18n.create(window.StandTermMessages, prefs.uiLanguage);
+        const t = uiText.t;
+        uiText.apply(document);
+        document.documentElement.lang = uiText.locale;
         prefs.fontSize = normalizeFontSize(prefs.fontSize);
         prefs.fontWeight = normalizeFontWeight(prefs.fontWeight);
         prefs.cursorStyle = normalizeCursorStyle(prefs.cursorStyle);
@@ -2890,8 +2902,8 @@
                 document.getElementById(elementId).textContent = entries.length ? entries.map(entry => {
                     const time = Number(entry.last_request_at);
                     return `${entry.terminal_id}: ${time > 0 && Number.isFinite(time)
-                        ? `last authenticated request ${new Date(time * 1000).toLocaleString()}` : 'waiting for agent'}`;
-                }).join('\n') : 'No active grants. Enable Agent and authorize the intended tabs first.';
+                        ? t('agent.connection.request_at', { time: new Date(time * 1000).toLocaleString(uiText.locale) }) : t('agent.connection.waiting')}`;
+                }).join('\n') : t('agent.connection.no_grants');
             }
 
             function setAgentConnectionMessage(element, message, copyFailed = false) {
@@ -2905,12 +2917,12 @@
                 if (!field.value) return;
                 try {
                     await navigator.clipboard.writeText(field.value);
-                    setAgentConnectionMessage(messageElement, 'Copied. Paste this to the agent in the indicated environment.');
+                    setAgentConnectionMessage(messageElement, t('agent.connection.copied'));
                 } catch (_error) {
                     field.focus();
                     field.select();
                     const shortcut = isApplePlatform() ? 'Command+C' : 'Ctrl+C';
-                    setAgentConnectionMessage(messageElement, `Not copied. Text selected; press ${shortcut} to copy it manually.`, true);
+                    setAgentConnectionMessage(messageElement, t('agent.connection.copy_failed', { shortcut }), true);
                     messageElement.scrollIntoView({ block: 'nearest' });
                 }
             }
@@ -2925,10 +2937,10 @@
                 document.getElementById('agent-connect-copy').disabled = true;
                 document.getElementById('agent-connect-copy-url').disabled = true;
                 if (!socket.connected) {
-                    setAgentConnectionMessage(agentConnectMessage, 'Core is disconnected. Reconnect before copying connection info.');
+                    setAgentConnectionMessage(agentConnectMessage, t('agent.connection.disconnected'));
                     return;
                 }
-                setAgentConnectionMessage(agentConnectMessage, 'Loading connection info…');
+                setAgentConnectionMessage(agentConnectMessage, t('agent.connection.loading'));
                 socket.emit('agent_connect_info', result => {
                     if (requestId !== agentConnectRequest || !agentConnectDialog.open) return;
                     const available = result && result.status === 'ok';
@@ -2940,8 +2952,8 @@
                     agentConnectActivity = available ? result.terminals || [] : [];
                     renderAgentConnectionActivity('agent-connect-activity', agentConnectActivity);
                     setAgentConnectionMessage(agentConnectMessage, available
-                        ? 'Copy Prompt to the agent running on the Core host. Its first authenticated request confirms access.'
-                        : result?.message || 'Connection info unavailable.');
+                        ? t('agent.connection.ready')
+                        : result?.message || t('agent.connection.unavailable'));
                 });
             }
 
@@ -3144,7 +3156,7 @@
             });
 
             function setAgentTunnelInfoView(infoView) {
-                document.getElementById('agent-tunnel-title').textContent = infoView ? 'Agent Info for Current Tab' : 'Agent Tunnel';
+                document.getElementById('agent-tunnel-title').textContent = infoView ? t('agent.connection.title') : 'Agent Tunnel';
                 document.getElementById('agent-tunnel-setup').hidden = infoView;
                 document.getElementById('agent-tunnel-apply').hidden = infoView;
                 document.getElementById('agent-tunnel-stop').hidden = infoView;
@@ -3381,7 +3393,7 @@
                 agentPauseBtn.classList.toggle('visible', visible);
                 agentToggleBtn.classList.toggle('shifted', visible);
                 agentPauseBtn.disabled = !(visible && socket && socket.connected && state && state.connected);
-                agentPauseBtn.title = state ? `Pause Agent input for ${getTerminalDisplayLabel(state)} (${state.id})` : 'Pause Agent input';
+                agentPauseBtn.title = t('agent.pause.target', { target: state ? `${getTerminalDisplayLabel(state)} (${state.id})` : t('agent.access.current_tab') });
                 agentPauseBtn.setAttribute('aria-label', agentPauseBtn.title);
                 updatePipStatus(pipTerminalState);
             }
@@ -3552,19 +3564,19 @@
             }
 
             function formatAgentModeLabel(mode) {
-                if (mode === AGENT_MODE_OBSERVE) return 'Observer';
-                if (mode === AGENT_MODE_APPROVAL_PENDING) return 'Approval';
-                if (mode === AGENT_MODE_DIRECT_ACTIVE) return 'Full';
-                if (mode === AGENT_MODE_PAUSED) return 'Paused';
-                return 'Off';
+                if (mode === AGENT_MODE_OBSERVE) return t('agent.permission.observe');
+                if (mode === AGENT_MODE_APPROVAL_PENDING) return t('agent.permission.approval');
+                if (mode === AGENT_MODE_DIRECT_ACTIVE) return t('agent.permission.direct');
+                if (mode === AGENT_MODE_PAUSED) return t('agent.permission.paused');
+                return t('agent.permission.off');
             }
 
             function formatExternalAgentPermissionHint(mode) {
-                if (mode === AGENT_MODE_OBSERVE) return 'Observer can read terminal output. It cannot type.';
-                if (mode === AGENT_MODE_APPROVAL_PENDING) return 'Approval lets the agent propose input. You approve before it is sent. Remote file copies always need separate approval.';
-                if (mode === AGENT_MODE_DIRECT_ACTIVE) return 'Full lets the agent type into this terminal without approval. Remote file copies still need separate approval.';
-                if (mode === AGENT_MODE_PAUSED) return 'Agent input is paused. Choose a permission to resume or disable access.';
-                return 'Enable external agent to choose what a local agent can do.';
+                if (mode === AGENT_MODE_OBSERVE) return t('agent.permission.observe_hint');
+                if (mode === AGENT_MODE_APPROVAL_PENDING) return t('agent.permission.approval_hint');
+                if (mode === AGENT_MODE_DIRECT_ACTIVE) return t('agent.permission.direct_hint');
+                if (mode === AGENT_MODE_PAUSED) return t('agent.permission.paused_hint');
+                return t('agent.permission.disabled_hint');
             }
 
             function clearAgentExternalTokenCountdownTimer() {
@@ -3737,37 +3749,37 @@
                 agentExternalTokenBtn.disabled = disabled;
                 agentExternalToken3xBtn.disabled = disabled;
                 agentExternalTokenBtn.innerText = minting
-                    ? 'Minting...'
-                    : (hasRenewableAgentExternalToken(state) ? 'Renew token' : 'Mint token');
+                    ? t('agent.token.creating')
+                    : (hasRenewableAgentExternalToken(state) ? t('agent.token.renew') : t('agent.token.create'));
                 agentExternalToken3xBtn.innerText = minting
-                    ? 'Minting...'
-                    : (hasRenewableAgentExternalToken(state) ? 'Renew token 3×' : 'Mint token 3×');
+                    ? t('agent.token.creating')
+                    : (hasRenewableAgentExternalToken(state) ? t('agent.token.renew_3x') : t('agent.token.create_3x'));
                 if (!usable) {
-                    agentExternalHint.innerText = 'Connect a terminal before minting a token.';
+                    agentExternalHint.innerText = t('agent.token.connect_required');
                 } else if (minting) {
-                    agentExternalHint.innerText = 'Minting external agent token...';
+                    agentExternalHint.innerText = t('agent.token.creating');
                 } else if (paused) {
-                    agentExternalHint.innerText = 'Resume Observer, Approval, or Full before minting a token.';
+                    agentExternalHint.innerText = t('agent.token.resume_required');
                 } else if (mode === AGENT_MODE_DISABLED) {
-                    agentExternalHint.innerText = 'Enable external agent before minting a token.';
+                    agentExternalHint.innerText = t('agent.token.enable_required');
                 } else if (hasRenewableAgentExternalToken(state) && agent) {
                     if (token.status === 'revoked') {
-                        agentExternalHint.innerText = 'Permission revoked. Renew the token to continue.';
+                        agentExternalHint.innerText = t('agent.token.revoked');
                         return;
                     }
                     const secondsRemaining = getAgentExternalTokenSecondsRemaining(agent);
                     if (secondsRemaining === null) {
-                        agentExternalHint.innerText = 'Token minted for this terminal and permission.';
+                        agentExternalHint.innerText = t('agent.token.ready');
                     } else if (secondsRemaining <= 0) {
-                        agentExternalHint.innerText = 'Permission expired. Renew the token to continue.';
+                        agentExternalHint.innerText = t('agent.token.expired');
                     } else {
-                        agentExternalHint.innerText = `Permission expires in ${secondsRemaining}s without activity.`;
+                        agentExternalHint.innerText = t('agent.token.idle_remaining', { seconds: secondsRemaining });
                     }
                     scheduleAgentExternalTokenCountdown(secondsRemaining);
                 } else if (token && token.status === 'invalidated') {
-                    agentExternalHint.innerText = 'Permission invalidated. Mint a new token to continue.';
+                    agentExternalHint.innerText = t('agent.token.invalidated');
                 } else {
-                    agentExternalHint.innerText = 'Mint a local-only token for this terminal and permission.';
+                    agentExternalHint.innerText = t('agent.token.local_hint');
                 }
             }
 
@@ -3788,12 +3800,12 @@
                     button.classList.toggle('visible', available);
                     button.disabled = !available || minting;
                 });
-                agentStatusMintBtn.innerText = minting ? 'Minting...' : 'Mint';
-                agentStatusMint3xBtn.innerText = minting ? 'Minting...' : 'Mint 3×';
+                agentStatusMintBtn.innerText = minting ? t('agent.token.creating') : t('agent.token.create');
+                agentStatusMint3xBtn.innerText = minting ? t('agent.token.creating') : t('agent.token.create_3x');
                 if (state) {
                     const target = state.label || state.id;
-                    agentStatusMintBtn.title = `Mint a standard external-agent token for ${target}`;
-                    agentStatusMint3xBtn.title = `Mint a 3× idle-time external-agent token for ${target}`;
+                    agentStatusMintBtn.title = t('agent.token.target_title', { target });
+                    agentStatusMint3xBtn.title = t('agent.token.target_3x_title', { target });
                 }
             }
 
@@ -3804,11 +3816,12 @@
                 const minting = !!(token && token.status === 'minting');
                 const available = canUseAgentPanel(state) && !starting && !minting;
                 agentAccessMintBtn.disabled = !available;
-                agentAccessMintBtn.innerText = starting ? 'Starting…' : (minting ? 'Minting…' : '🤖 Agent Mint');
+                agentAccessMintBtn.innerText = starting ? t('agent.access.starting') : (minting ? t('agent.token.creating') : `🤖 ${t('agent.access.grant')}`);
                 const modeLabel = formatAgentModeLabel(prefs.agentAccessMintMode);
-                agentAccessMintBtn.title = state
-                    ? `Grant ${modeLabel} access and mint a standard token for ${getTerminalDisplayLabel(state)} (${state.id})`
-                    : `Grant ${modeLabel} access and mint a standard token for the current tab`;
+                agentAccessMintBtn.title = t('agent.access.grant_title', {
+                    permission: modeLabel,
+                    target: state ? `${getTerminalDisplayLabel(state)} (${state.id})` : t('agent.access.current_tab')
+                });
             }
 
             function applyAgentExternalTokenState(data) {
@@ -3925,21 +3938,21 @@
                 agentPanel.classList.toggle('visible', usable && agentPanelVisible);
                 const mainPanelVisible = agentPanelVisible && !agentPanelTerminalIdOverride;
                 agentToggleBtn.disabled = !canUseAgentPanel(getActiveTerminalState());
-                agentToggleBtn.innerText = mainPanelVisible ? 'Hide Agent Panel' : 'Show Agent Panel';
-                agentToggleBtn.title = mainPanelVisible ? 'Hide Agent panel' : 'Show Agent panel';
+                agentToggleBtn.innerText = t(mainPanelVisible ? 'agent.panel.hide' : 'agent.panel.show');
+                agentToggleBtn.title = t(mainPanelVisible ? 'agent.panel.hide' : 'agent.panel.show');
                 const agent = state ? state.agent : null;
                 const mode = agent ? agent.mode : AGENT_MODE_DISABLED;
                 const pending = agent ? agent.pendingActions : 0;
                 const accessEnabled = mode !== AGENT_MODE_DISABLED;
                 const modeLabel = formatAgentModeLabel(mode);
-                agentPanelState.innerText = state ? `${state.label || state.id} · ${modeLabel}${pending ? ` · ${pending} pending` : ''}` : 'Off';
+                agentPanelState.innerText = state ? `${state.label || state.id} · ${modeLabel}${pending ? ` · ${t('agent.panel.pending', { count: pending })}` : ''}` : t('agent.permission.off');
                 agentAccessToggleBtn.disabled = !usable;
-                agentAccessToggleBtn.innerText = accessEnabled ? 'Disable external agent' : 'Enable external agent';
+                agentAccessToggleBtn.innerText = t(accessEnabled ? 'agent.access.disable' : 'agent.access.enable');
                 agentAccessToggleBtn.classList.toggle('disable', accessEnabled);
                 agentAccessToggleBtn.title = accessEnabled
-                    ? 'Turn off external agent access for this terminal'
-                    : 'Enable external agent access in Observer mode';
-                agentAccessSummary.innerText = accessEnabled ? modeLabel : 'Off';
+                    ? t('agent.access.disable_title')
+                    : t('agent.access.enable_title');
+                agentAccessSummary.innerText = accessEnabled ? modeLabel : t('agent.permission.off');
                 agentPermissionHint.innerText = formatExternalAgentPermissionHint(mode);
                 agentModeButtons.forEach(button => {
                     const buttonMode = button.dataset.agentMode;
@@ -6172,6 +6185,7 @@
                 Object.entries(PREF_DEFAULTS).forEach(([key, defaultValue]) => {
                     if (typeof source[key] === typeof defaultValue) result[key] = source[key];
                 });
+                if ('uiLanguage' in result) result.uiLanguage = window.StandTermI18n.normalizeLocale(result.uiLanguage);
                 if (result.urlClickAction && !['overlay', 'popup', 'newtab'].includes(result.urlClickAction)) delete result.urlClickAction;
                 if (result.colorScheme && !SCHEMES[result.colorScheme]) delete result.colorScheme;
                 if (result.fontFace) result.fontFace = result.fontFace.slice(0, 240);
@@ -6425,8 +6439,8 @@
                 if (state.agentCountdownEl.textContent !== countdown) state.agentCountdownEl.textContent = countdown;
                 state.agentCountdownEl.hidden = !active;
                 const title = active
-                    ? `${label}\nExternal agent token active (${formatAgentModeLabel(state.agent.mode)}); ${secondsRemaining}s remaining without activity`
-                    : expired ? `${label}\nExternal agent token expired; mint again to continue` : label;
+                    ? `${label}\n${t('agent.token.tab_active', { permission: formatAgentModeLabel(state.agent.mode), seconds: secondsRemaining })}`
+                    : expired ? `${label}\n${t('agent.token.tab_expired')}` : label;
                 if (state.tabEl.title !== title) {
                     state.tabEl.title = title;
                     state.tabEl.setAttribute('aria-label', title);
@@ -11734,6 +11748,7 @@
             }
             document.getElementById('pref-colorScheme').onchange = renderColorSchemePreview;
             const openSettings = () => {
+                document.getElementById('pref-uiLanguage').value = prefs.uiLanguage;
                 document.getElementById('pref-useCustomMenu').checked = prefs.useCustomMenu;
                 document.getElementById('pref-copyOnSelect').checked = prefs.copyOnSelect;
                 document.getElementById('pref-enablePicPreview').checked = prefs.enablePicPreview;
@@ -11962,6 +11977,7 @@
                 };
             });
             document.getElementById('settings-save').onclick = () => {
+                prefs.uiLanguage = window.StandTermI18n.normalizeLocale(document.getElementById('pref-uiLanguage').value);
                 prefs.useCustomMenu = document.getElementById('pref-useCustomMenu').checked;
                 prefs.copyOnSelect = document.getElementById('pref-copyOnSelect').checked;
                 prefs.enablePicPreview = document.getElementById('pref-enablePicPreview').checked;
