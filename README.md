@@ -326,7 +326,8 @@ terminal; compact windows keep those actions in the Agent panel.
 **Settings > General > Language (preview)** selects English or Traditional
 Chinese (Taiwan) for browser access and recovery, Agent permissions, input and
 file-copy approvals, transfer results, local connection information, connection
-forms and SSH login (including direct browser-key and host-fingerprint controls). The choice
+forms, SSH login, and SSH profile/route editors (including browser-key and
+host-fingerprint controls). The choice
 applies the next time the page opens; saving it does not reload the current
 page or change its connections and grants. Other areas remain in English.
 The [copy and translation table](docs/ui_copy_review.tsv) and
@@ -352,10 +353,10 @@ Useful launcher options:
 STANDTERM_HOST=127.0.0.1 STANDTERM_PORT=5000 ./run.sh
 ```
 
-## Browser-managed SSH Sessions And Keys
+## Browser-managed SSH Profiles And Keys
 
 Quick Connect can load saved SSH profiles and the six most recent successful
-SSH targets. Use **Settings > SSH Sessions** to create, update, reorder, or
+SSH targets. Use **Settings > SSH profiles** to create, update, reorder, or
 delete profiles and to clear history. Direct entries expose their single node
 in the first level: host, port, username, **Use key**, public key copy and host
 identity. **Save** stores the name, node and referenced key together. **Add jump
@@ -366,11 +367,11 @@ remain unchanged by default.
 Multi-node entries show names, ordering and full route summaries in the first
 level. **Save name** only renames the selected entry. **Edit connection…** opens
 all nodes in a separate editor; **Save route** stores all node and referenced
-key changes for the next connection. **New session** starts an inline draft from
+key changes for the next connection. **New profile** starts an inline draft from
 the current SSH tab's target, or Quick Connect when no SSH tab is connected.
 Switching tabs or connections clears the previous edit selection.
 Profiles and history stay in the current
-browser and never store passwords. In Direct connect, **Save session** saves the
+browser and never store passwords. In Direct connect, **Save connection profile** saves the
 profile and its referenced browser key when **Connect** is pressed, before SSH
 starts. A failed connection does not undo that explicit save. History records
 only successful connections and does not implicitly save a profile or private key.

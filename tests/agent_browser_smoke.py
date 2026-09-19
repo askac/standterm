@@ -4948,7 +4948,7 @@ def test_ssh_profile_picker_and_settings_save_semantics(browser, access_url):
             })"""
         )
         check(
-            preloaded_editor == {'name': 'builder@build.example', 'summary': 'New direct session: builder@build.example:22', 'saveDisabled': False},
+            preloaded_editor == {'name': 'builder@build.example', 'summary': 'New direct profile: builder@build.example:22', 'saveDisabled': False},
             'SSH Settings did not preload the active SSH tab as a create-only draft',
         )
         page.click('#ssh-profile-list button[data-profile-id="profile-a"]')

@@ -1125,7 +1125,7 @@
                 <div class="settings-nav">
                     <div class="settings-nav-item active" data-tab="general">General</div>
                     <div class="settings-nav-item" data-tab="appearance">Appearance</div>
-                    <div class="settings-nav-item" data-tab="ssh-sessions">SSH Sessions</div>
+                    <div class="settings-nav-item" data-tab="ssh-sessions" data-i18n="ssh.profiles.title">SSH profiles</div>
                     <div class="settings-nav-item" data-tab="server">Server</div>
                     <div class="settings-nav-item" data-tab="diagnostics">Diagnostics</div>
                 </div>
@@ -1136,7 +1136,7 @@
                             <div class="settings-row"><label for="pref-uiLanguage" data-i18n="settings.language.label">Language (preview)</label>
                                 <select id="pref-uiLanguage"><option value="en">English</option><option value="zh-TW" lang="zh-TW">繁體中文（台灣）</option></select>
                             </div>
-                            <div class="settings-status" data-i18n="settings.language.hint">Applies next time you open this page to browser and Agent access, approvals, transfers, connection forms and SSH login. Other areas remain in English.</div>
+                            <div class="settings-status" data-i18n="settings.language.hint">Applies next time you open this page to browser and Agent access, approvals, transfers, connection forms, SSH login and profile/route editors. Other areas remain in English.</div>
                             <div class="settings-row"><label for="pref-useCustomMenu">Enable custom context menu</label><input type="checkbox" id="pref-useCustomMenu"></div>
                             <div class="settings-row"><label for="pref-copyOnSelect">Copy on select</label><input type="checkbox" id="pref-copyOnSelect"></div>
                             <div class="settings-row"><label for="pref-enablePicPreview">Enable pic preview</label><input type="checkbox" id="pref-enablePicPreview"></div>
@@ -1210,38 +1210,38 @@
                         </fieldset>
                     </div>
                     <div class="settings-tab" id="tab-ssh-sessions">
-                        <div class="settings-status" id="ssh-profile-status">Profiles are stored only in this browser.</div>
+                        <div class="settings-status" id="ssh-profile-status" data-i18n="ssh.profiles.stored">Profiles are stored only in this browser.</div>
                         <fieldset class="settings-fieldset">
-                            <legend>SSH Sessions</legend>
+                            <legend data-i18n="ssh.profiles.title">SSH profiles</legend>
                             <div class="ssh-profile-manager">
                                 <div>
                                     <div class="ssh-profile-list" id="ssh-profile-list"></div>
                                     <div class="ssh-profile-actions" style="margin-top:9px;">
-                                        <button type="button" id="ssh-profile-up" aria-label="Move profile up">Move Up</button>
-                                        <button type="button" id="ssh-profile-down" aria-label="Move profile down">Move Down</button>
+                                        <button type="button" id="ssh-profile-up" aria-label="Move profile up" data-i18n-aria-label="ssh.profiles.move_up_label" data-i18n="ssh.profiles.move_up">Move Up</button>
+                                        <button type="button" id="ssh-profile-down" aria-label="Move profile down" data-i18n-aria-label="ssh.profiles.move_down_label" data-i18n="ssh.profiles.move_down">Move Down</button>
                                     </div>
                                 </div>
                                 <div class="ssh-profile-editor">
-                                    <label>Profile name<input type="text" id="ssh-profile-name" maxlength="64" autocomplete="off"></label>
+                                    <label><span data-i18n="ssh.profiles.name">Profile name</span><input type="text" id="ssh-profile-name" maxlength="64" autocomplete="off"></label>
                                     <div class="ssh-profile-route-summary" id="ssh-profile-route-summary"></div>
                                     <div id="ssh-profile-node" hidden></div>
                                     <div class="ssh-profile-actions">
-                                        <button type="button" id="ssh-profile-edit-route">Edit connection…</button>
+                                        <button type="button" id="ssh-profile-edit-route" data-i18n="ssh.profiles.edit">Edit connection…</button>
                                     </div>
                                     <div class="settings-status" id="ssh-profile-help"></div>
                                     <div class="ssh-profile-actions">
-                                        <button type="button" id="ssh-profile-create">New session</button>
-                                        <button type="button" class="primary" id="ssh-profile-save">Save name</button>
-                                        <button type="button" class="danger" id="ssh-profile-delete">Delete</button>
+                                        <button type="button" id="ssh-profile-create" data-i18n="ssh.profiles.create">New profile</button>
+                                        <button type="button" class="primary" id="ssh-profile-save" data-i18n="ssh.profiles.save_name">Save name</button>
+                                        <button type="button" class="danger" id="ssh-profile-delete" data-i18n="ssh.profiles.delete">Delete</button>
                                     </div>
                                 </div>
                             </div>
                         </fieldset>
                         <fieldset class="settings-fieldset">
-                            <legend>History</legend>
+                            <legend data-i18n="ssh.profiles.history">History</legend>
                             <div class="settings-row">
                                 <label id="ssh-history-count">0 / 6 recent successful connections</label>
-                                <button type="button" class="settings-inline-action" id="ssh-history-clear">Clear History</button>
+                                <button type="button" class="settings-inline-action" id="ssh-history-clear" data-i18n="ssh.profiles.clear_history">Clear History</button>
                             </div>
                         </fieldset>
                     </div>
@@ -4812,7 +4812,7 @@
             }
 
             function setSshProfileStatus(message, isError = false) {
-                sshProfileStatus.innerText = message || 'Profiles are stored only in this browser.';
+                sshProfileStatus.innerText = message || t('ssh.profiles.stored');
                 sshProfileStatus.style.color = isError ? '#ff9f0a' : '#aaa';
             }
 
@@ -5240,8 +5240,8 @@
                 sshProfileEditorContext = context.key;
                 clearSshProfileEditor(true);
                 setSshProfileStatus(context.fromConnection
-                    ? 'New direct session from the current SSH tab. Select a profile to edit an existing entry.'
-                    : 'New session from Quick Connect. Select a profile to edit an existing entry.');
+                    ? t('ssh.profiles.from_tab')
+                    : t('ssh.profiles.from_form'));
                 return true;
             }
 
@@ -5265,7 +5265,7 @@
                 editingSshProfileId = profile.id;
                 sshProfileNameInput.value = profile.name;
                 await loadSshProfileNode();
-                if (isCurrentSshProfileEditor(version)) setSshProfileStatus(`Selected ${profile.name}.`);
+                if (isCurrentSshProfileEditor(version)) setSshProfileStatus(t('ssh.profiles.selected', { name: profile.name }));
             }
 
             async function loadSshProfileNode(target = null) {
@@ -5281,12 +5281,12 @@
                     const snapshot = await SshRoutes.load(openSshSessionsDb, normalizeLegacySshSessionState, true);
                     if (!isCurrentSshProfileEditor(version)) return;
                     if (snapshot.state.revision !== sshSessionState.revision) {
-                        throw new Error('SSH settings changed in another window. Reload before editing.');
+                        throw new Error(t('ssh.profiles.changed_elsewhere'));
                     }
                     const baseState = SshRoutes.clone(snapshot.state);
                     let entry = snapshot.state.profiles.find(item => item.id === profileId);
                     if (!entry) {
-                        if (profileId) throw new Error('This SSH entry was removed. Reload before editing.');
+                        if (profileId) throw new Error(t('ssh.profiles.removed_edit'));
                         const node = { id: SshRoutes.id(), nextNodeId: null, hostKeyAlias: '',
                             endpoint: target || { host: '', port: '22', username: '' }, authentication: { method: 'password' } };
                         entry = { id: SshRoutes.id(), name: '', startNodeId: node.id,
@@ -5299,7 +5299,7 @@
                     const draft = { state: snapshot.state, baseState, isNew: !profileId, entryId: entry.id, node: route.path[0],
                         savedKeys: snapshot.keys, newKeys: new Map(), pending: 0, saving: false, fields: null };
                     sshProfileNodeDraft = draft;
-                    draft.fields = SshRoutes.nodeFields({ parent: sshProfileNode, role: 'Target', node: draft.node,
+                    draft.fields = SshRoutes.nodeFields({ parent: sshProfileNode, role: t('ssh.login.target'), translate: t, node: draft.node,
                         profiles: draft.state.profiles, savedKeys: draft.savedKeys, newKeys: draft.newKeys,
                         keyAllowed: isBrowserSshKeyAllowedByPolicy(), createKey: createTemporarySshKey,
                         copyPublicKey: value => copyToClipboard(value), editorId: SshRoutes.id(),
@@ -5319,7 +5319,7 @@
 
             function readSshProfileNodeDraft() {
                 const current = sshProfileNodeDraft;
-                if (!current || current.pending || current.saving) throw new Error('Wait for the SSH settings to finish loading or saving.');
+                if (!current || current.pending || current.saving) throw new Error(t('ssh.profiles.wait'));
                 const state = SshRoutes.clone(current.state);
                 const entry = state.profiles.find(item => item.id === current.entryId);
                 const node = { ...current.node, ...current.fields.read() };
@@ -5344,14 +5344,14 @@
                 const loadedVersion = sshProfileEditorVersion;
                 await loading;
                 if (isCurrentSshProfileEditor(loadedVersion)) {
-                    setSshProfileStatus(`Saved ${findSshProfile(entryId).name}. Changes apply to the next connection.`);
+                    setSshProfileStatus(t('ssh.profiles.saved_next', { name: findSshProfile(entryId).name }));
                 }
             }
 
             function describeSshProfile(profile) {
                 const route = SshRoutes.resolve(sshSessionState, profile.startNodeId);
                 const endpoints = route.path.map(node => `${node.endpoint.username}@${node.endpoint.host}:${node.endpoint.port}`);
-                return `Core host → ${endpoints.join(' → ')}${route.error ? ' · Route needs repair' : ''}`;
+                return `Core host → ${endpoints.join(' → ')}${route.error ? ` · ${t('ssh.profiles.route_repair')}` : ''}`;
             }
 
             async function editSshProfileRoute() {
@@ -5372,13 +5372,13 @@
                     snapshot = await SshRoutes.load(openSshSessionsDb, normalizeLegacySshSessionState, true);
                     if (!isCurrentSshProfileEditor(version)) return;
                     if (snapshot.state.revision !== sshSessionState.revision) {
-                        throw new Error('SSH settings changed in another window. Reload before editing.');
+                        throw new Error(t('ssh.profiles.changed_elsewhere'));
                     }
                     const profile = snapshot.state.profiles.find(item => item.id === profileId);
-                    if (!profile) throw new Error('This SSH entry was removed. Reload before editing.');
+                    if (!profile) throw new Error(t('ssh.profiles.removed_edit'));
                     profile.name = sshProfileNameInput.value.trim();
                 }
-                const editor = SshRoutes.edit({ state: snapshot.state, entryId: prepared?.entryId || profileId, target,
+                const editor = SshRoutes.edit({ translate: t, state: snapshot.state, entryId: prepared?.entryId || profileId, target,
                     baseState: inline?.baseState || snapshot.state,
                     temporaryKeys: prepared?.temporaryKeys || [],
                     mode: 'manage', keys: snapshot.keys, keyAllowed: isBrowserSshKeyAllowedByPolicy(),
@@ -5394,7 +5394,7 @@
                 if (!sshSessionState.profiles.length) {
                     const empty = document.createElement('div');
                     empty.className = 'ssh-profile-list-empty';
-                    empty.innerText = 'No saved SSH profiles.';
+                    empty.innerText = t('ssh.profiles.empty');
                     sshProfileList.appendChild(empty);
                 } else {
                     sshSessionState.profiles.forEach(profile => {
@@ -5418,24 +5418,24 @@
                 const profile = findSshProfile(editingSshProfileId);
                 const target = getSshProfileEditorContext().target;
                 sshProfileRouteSummary.textContent = profile ? describeSshProfile(profile)
-                    : target.host ? `New direct session: ${target.username}@${target.host}:${target.port}`
-                    : 'Select a saved entry, or create a new session.';
+                    : target.host ? t('ssh.profiles.new_direct', { username: target.username, host: target.host, port: target.port })
+                    : t('ssh.profiles.select_or_create');
                 const direct = !profile || SshRoutes.resolve(sshSessionState, profile.startNodeId).path.length === 1;
                 const busy = sshProfileNodeLoading || !!(sshProfileNodeDraft?.pending || sshProfileNodeDraft?.saving);
                 sshProfileNode.hidden = !direct;
                 sshProfileNode.inert = !!sshProfileNodeDraft?.saving;
                 sshProfileNameInput.disabled = !!sshProfileNodeDraft?.saving;
-                sshProfileEditRouteBtn.textContent = direct ? 'Add jump node…' : 'Edit connection…';
+                sshProfileEditRouteBtn.textContent = direct ? t('ssh.profiles.add_jump') : t('ssh.profiles.edit');
                 sshProfileEditRouteBtn.disabled = busy || (direct && !sshProfileNodeDraft);
-                sshProfileSaveBtn.textContent = direct ? 'Save' : 'Save name';
+                sshProfileSaveBtn.textContent = direct ? t('ssh.profiles.save') : t('ssh.profiles.save_name');
                 sshProfileSaveBtn.disabled = busy || (direct ? !sshProfileNodeDraft : selectedIndex < 0);
                 sshProfileHelp.textContent = direct
-                    ? 'Save stores the name, connection settings and selected key. Changes apply to the next connection.'
-                    : 'Save name only renames this entry. Edit connection opens all route nodes and their key settings.';
+                    ? t('ssh.profiles.save_help')
+                    : t('ssh.profiles.rename_help');
                 sshProfileDeleteBtn.disabled = selectedIndex < 0;
                 sshProfileUpBtn.disabled = selectedIndex <= 0;
                 sshProfileDownBtn.disabled = selectedIndex < 0 || selectedIndex >= sshSessionState.profiles.length - 1;
-                sshHistoryCount.innerText = `${sshSessionState.history.length} / ${SSH_HISTORY_LIMIT} recent successful connections`;
+                sshHistoryCount.innerText = t('ssh.profiles.history_count', { count: sshSessionState.history.length, limit: SSH_HISTORY_LIMIT });
                 sshHistoryClearBtn.disabled = sshSessionState.history.length === 0;
             }
 
@@ -5486,8 +5486,8 @@
                     .catch(err => {
                         sshSessionState = normalizeSshSessionState(null);
                         renderSshSessionState();
-                        setSshSessionMessage(err.message || 'SSH Sessions storage is unavailable.', true);
-                        setSshProfileStatus(err.message || 'SSH Sessions storage is unavailable.', true);
+                        setSshSessionMessage(err.message || t('ssh.profiles.storage_unavailable'), true);
+                        setSshProfileStatus(err.message || t('ssh.profiles.storage_unavailable'), true);
                         return sshSessionState;
                     });
                 return sshSessionReady;
@@ -5551,10 +5551,10 @@
                     const node = SshRoutes.checkedPath(prepared.state, entry)[0];
                     SshRoutes.publicNode(node);
                     if (node.authentication.method === 'browser-key' && !node.authentication.keyRef) {
-                        throw new Error('Choose or create a browser key for this node.');
+                        throw new Error(t('ssh.profiles.choose_key'));
                     }
                     if (!entry.name) entry.name = normalizeSshProfileName(`${node.endpoint.username}@${node.endpoint.host}`);
-                    if (entry.name.length > SSH_PROFILE_NAME_MAX_LENGTH) throw new Error(`Profile name must be ${SSH_PROFILE_NAME_MAX_LENGTH} characters or fewer.`);
+                    if (entry.name.length > SSH_PROFILE_NAME_MAX_LENGTH) throw new Error(t('ssh.profiles.name_max', { limit: SSH_PROFILE_NAME_MAX_LENGTH }));
                     inline.saving = true;
                     renderSshProfileManager();
                     try { await persistSshProfileRoute(prepared.state, entry.id, prepared.temporaryKeys, version); }
@@ -5564,15 +5564,15 @@
                 if (!findSshProfile(profileId)) return;
                 const name = sshProfileNameInput.value.trim();
                 if (!name || name.length > SSH_PROFILE_NAME_MAX_LENGTH) {
-                    setSshProfileStatus(`Profile name must be 1–${SSH_PROFILE_NAME_MAX_LENGTH} characters.`, true);
+                    setSshProfileStatus(t('ssh.profiles.name_length', { limit: SSH_PROFILE_NAME_MAX_LENGTH }), true);
                     return;
                 }
                 await updateSshSessionState(nextState => {
                     const profile = nextState.profiles.find(item => item.id === profileId);
-                    if (!profile) throw new Error('This SSH entry was removed. Reload before saving.');
+                    if (!profile) throw new Error(t('ssh.profiles.removed_save'));
                     profile.name = name;
                 });
-                if (isCurrentSshProfileEditor(version)) setSshProfileStatus(`Saved ${name}.`);
+                if (isCurrentSshProfileEditor(version)) setSshProfileStatus(t('ssh.profiles.saved', { name }));
             }
 
             async function deleteEditingSshProfile() {
@@ -5581,8 +5581,8 @@
                 if (!profile) return;
                 if (profile.keyId) requireUnreferencedSshKey(profile);
                 const prompt = profile.keyId
-                    ? `Delete SSH profile ${profile.name} and its non-recoverable browser private key?`
-                    : `Delete SSH profile ${profile.name}?`;
+                    ? t('ssh.profiles.confirm_delete_key', { name: profile.name })
+                    : t('ssh.profiles.confirm_delete', { name: profile.name });
                 if (!window.confirm(prompt)) return;
                 const keyRecord = profile.keyId ? await loadSshKeyRecord(profile.keyId) : null;
                 const keyChanges = keyRecord && keyRecord.ownerProfileId === profile.id
@@ -5596,7 +5596,7 @@
                 }
                 if (isCurrentSshProfileEditor(version)) {
                     clearSshProfileEditor(false);
-                    setSshProfileStatus(`Deleted ${profile.name}.`);
+                    setSshProfileStatus(t('ssh.profiles.deleted', { name: profile.name }));
                 }
             }
 
@@ -5605,15 +5605,15 @@
                     const path = SshRoutes.resolve(sshSessionState, entry.startNodeId).path;
                     return path.some(node => node.authentication.keyRef?.ownerProfileId === owner.id && entry.id !== owner.id);
                 });
-                if (dependents.length) throw new Error(`Browser key is used by: ${dependents.map(entry => entry.name || entry.host).join(', ')}. Change those routes before removing or rebinding the key.`);
+                if (dependents.length) throw new Error(t('ssh.profiles.key_dependents', { entries: dependents.map(entry => entry.name || entry.host).join(', ') }));
             }
 
             async function clearSshHistory() {
-                if (!sshSessionState.history.length || !window.confirm('Clear all SSH connection history?')) return;
+                if (!sshSessionState.history.length || !window.confirm(t('ssh.profiles.confirm_clear'))) return;
                 await updateSshSessionState(nextState => {
                     nextState.history = [];
                 });
-                setSshProfileStatus('SSH history cleared.');
+                setSshProfileStatus(t('ssh.profiles.history_cleared'));
             }
 
             async function moveEditingSshProfile(offset) {
@@ -5636,7 +5636,7 @@
                     inline.state = SshRoutes.clone(sshSessionState);
                     inline.baseState = SshRoutes.clone(sshSessionState);
                 }
-                setSshProfileStatus('Profile order updated.');
+                setSshProfileStatus(t('ssh.profiles.order_updated'));
             }
 
             function populateUartFields() {
@@ -8419,9 +8419,9 @@
                     const terminalId = activeTerminalId;
                     await sshSessionWriteQueue.catch(() => {});
                     const snapshot = await SshRoutes.load(openSshSessionsDb, normalizeLegacySshSessionState, true);
-                    if (snapshot.state.revision !== sshSessionState.revision) throw new Error('SSH settings changed in another window. Reload before editing.');
+                    if (snapshot.state.revision !== sshSessionState.revision) throw new Error(t('ssh.profiles.changed_elsewhere'));
                     if (revision !== sshConnectionFormRevision || terminalId !== activeTerminalId) return;
-                    SshRoutes.edit({ state: sshRouteDraft?.state || snapshot.state, entryId: currentSshRouteEntry()?.id,
+                    SshRoutes.edit({ translate: t, state: sshRouteDraft?.state || snapshot.state, entryId: currentSshRouteEntry()?.id,
                         temporaryKeys: sshRouteDraft?.temporaryKeys || [], saveRoute: sshRouteDraft?.saveRoute || false,
                         target: getCurrentSshTarget(),
                         keys: snapshot.keys, keyAllowed: isBrowserSshKeyAllowedByPolicy(),
@@ -8430,7 +8430,7 @@
                         hostIdentity: { request: requestSshHostIdentity, terminalId },
                         onDone: (state, entryId, temporaryKeys, saveRoute) => {
                             if (revision !== sshConnectionFormRevision || terminalId !== activeTerminalId) {
-                                throw new Error('The connection changed. Cancel and reopen the route editor.');
+                                throw new Error(t('ssh.profiles.connection_changed'));
                             }
                             sshRouteDraft = { state, entryId, temporaryKeys, saveRoute };
                             selectedSshRouteEntry = entryId;
@@ -8463,25 +8463,25 @@
             };
             sshProfileCreateBtn.onclick = () => {
                 clearSshProfileEditor(true);
-                setSshProfileStatus('New direct session. Save creates a new entry.');
+                setSshProfileStatus(t('ssh.profiles.new_hint'));
             };
             sshProfileEditRouteBtn.onclick = () => {
-                editSshProfileRoute().catch(err => setSshProfileStatus(err.message || 'Profile could not be edited.', true));
+                editSshProfileRoute().catch(err => setSshProfileStatus(err.message || t('ssh.profiles.edit_failed'), true));
             };
             sshProfileSaveBtn.onclick = () => {
-                saveSshProfileEditor().catch(err => setSshProfileStatus(err.message || 'Profile could not be saved.', true));
+                saveSshProfileEditor().catch(err => setSshProfileStatus(err.message || t('ssh.profiles.save_failed'), true));
             };
             sshProfileDeleteBtn.onclick = () => {
-                deleteEditingSshProfile().catch(err => setSshProfileStatus(err.message || 'Profile could not be deleted.', true));
+                deleteEditingSshProfile().catch(err => setSshProfileStatus(err.message || t('ssh.profiles.delete_failed'), true));
             };
             sshProfileUpBtn.onclick = () => {
-                moveEditingSshProfile(-1).catch(err => setSshProfileStatus(err.message || 'Profile could not be moved.', true));
+                moveEditingSshProfile(-1).catch(err => setSshProfileStatus(err.message || t('ssh.profiles.move_failed'), true));
             };
             sshProfileDownBtn.onclick = () => {
-                moveEditingSshProfile(1).catch(err => setSshProfileStatus(err.message || 'Profile could not be moved.', true));
+                moveEditingSshProfile(1).catch(err => setSshProfileStatus(err.message || t('ssh.profiles.move_failed'), true));
             };
             sshHistoryClearBtn.onclick = () => {
-                clearSshHistory().catch(err => setSshProfileStatus(err.message || 'SSH history could not be cleared.', true));
+                clearSshHistory().catch(err => setSshProfileStatus(err.message || t('ssh.profiles.clear_failed'), true));
             };
             if (settingsExportBtn) {
                 settingsExportBtn.onclick = () => {

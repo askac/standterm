@@ -44,7 +44,7 @@ def test_new_connection_replaces_previous_editor_context(browser, url):
         set_target(page, 'second.example', 'second')
         open_profiles(page)
         assert editor(page) == {'name': 'second@second.example',
-                                'summary': 'New direct session: second@second.example:2222',
+                                'summary': 'New direct profile: second@second.example:2222',
                                 'saveDisabled': False}, editor(page)
         # Reopening the same context preserves an unfinished draft.
         page.fill('#ssh-profile-name', 'Second draft')

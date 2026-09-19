@@ -43,7 +43,7 @@ do not consolidate them merely to shorten labels.
 | 3 | Review English UI copy and terminology | Core terms agreed; initial English sources reviewed | Review each proposed change for target, permissions, consequences, and next action; check related tooltips, Desktop help, and tests before applying it. |
 | 4 | Finalize the translation exchange table | Initial exchange validated with an independent translator | Stable keys, approved English source, context, and placeholder constraints are sufficient for an independent translator. |
 | 5 | Pilot Agent access and local connection information | Implemented; validation below | Cover static and dynamic text, titles, and accessible names; preserve connected sessions and authorization; support English fallback. |
-| 6 | Translate and integrate approved rows | Agent pilot, browser access/recovery, Agent approvals/transfers and connection/login controls integrated | AI edits only target-language cells; validate keys and placeholders; review authorization and destructive-action wording. |
+| 6 | Translate and integrate approved rows | Agent pilot, browser access/recovery, Agent approvals/transfers, connection/login controls and SSH route/profile editors integrated | AI edits only target-language cells; validate keys and placeholders; review authorization and destructive-action wording. |
 | 7 | Expand Core and Desktop coverage | Deferred | Verify secondary windows, native menus, setup, diagnostics, packaging, and representative layouts. |
 
 ## Validation of the reliability changes
@@ -66,7 +66,7 @@ validated separately below.
 
 ## Deferred UI work
 
-Full SSH route/profile editors, Agent diagnostics, SSH tunnel setup, secondary windows,
+Agent diagnostics, SSH tunnel setup, secondary windows,
 and Desktop localization remain outside the completed workflows. Translation
 starts only after the English source for the selected workflow is reviewed.
 Extra screen diffing, render hints, key aliases, and byte-limit options remain optional optimizations.
@@ -275,3 +275,49 @@ Validation ran in WSL Chromium. Native Desktop, physical UART and complete
 route/profile editor localization were not qualified by this phase. The next
 candidate is a separate review of those editors' naming, saving and key-retention
 copy before expanding their translation coverage.
+
+## SSH route and profile editors
+
+The route editor and Settings SSH profiles now share the reviewed catalog,
+including inline node fields, browser-key controls, host identity, edit scope,
+repair suggestions, deletion confirmations and save feedback. The table contains
+373 rows: 372 referenced bilingual messages and the existing decorative removal.
+`SSH Sessions` and `New session` now read `SSH profiles` and `New profile` so saved
+connection settings are not confused with running terminals.
+
+Prepare-mode **Done** returns an edited draft. Its **Save route on Connect**
+checkbox requests persistence at Connect. Manage-mode **Save route** persists
+immediately and changes only future connections. Existing repair/reorder guidance
+incorrectly named Done in both modes; the copy now uses the actual mode's action.
+The advanced reference/copy controls explain that they replace the selected
+node's following route, and copied nodes retain their credential references.
+
+| Finding | Severity | Evidence | Critic remedy | Main response | Resolution | Validation |
+| --- | --- | --- | --- | --- | --- | --- |
+| Management repair guidance names a nonexistent Done button | Medium | Route editor mode-specific action and three hardcoded instructions | Resolve the action label from typed mode | Accept | Keep Save route and Done, inserting the correct label in repair/reorder/append guidance | Route regression and bilingual editor checks |
+| Shared edits, route order and tail replacement have different scope | Medium guard | replaceDraftNode, moveCard and copyPath | State tail replacement and retained key references separately | Accept | Add adjacent reference/copy help; preserve shared-edit notice and entry-only reorder semantics | Shared-node, copy/reference and stored-node regressions |
+| Cancel must not imply discarding an existing parent draft or its keys | Medium guard | Editor clones incoming draft and closes without saving | Keep Cancel scoped to this dialog | Accept | Preserve simple Cancel label and parent draft behavior | Preparation and inline-to-route cancellation tests |
+| Deleting a profile does not always delete its keys | Medium guard | Owner-key branch versus independent credential records | Keep separate confirmation messages and test actual key outcomes | Modify | Preserve both confirmations; reuse existing legacy-key deletion test and add credential-retention coverage | Legacy-key lifecycle and bilingual deletion checks |
+| Referenced legacy owner deletion lacks an explicit blocked-deletion regression in the reviewed files | Low, existing gap | requireUnreferencedSshKey and targeted test inventory | Add owner/receiver/history fixture | Defer | Runtime reference guard remains unchanged; add coverage when changing legacy key deletion or rebinding | Source review only for this branch |
+
+Two bounded independent review passes found no remaining material regression.
+The reviewer independently checked placeholders and missing-translation fallback.
+Raw role markers, entry/node IDs, scope values, references, endpoints, credentials,
+unknown model/backend errors and persistence decisions remain unchanged. Existing
+model/storage diagnostics may remain English; this phase does not infer error
+codes from diagnostic text. Settings outside SSH profiles, Desktop, tunnels and
+secondary windows remain outside the completed localization scope.
+
+| Check | Result |
+| --- | --- |
+| Route editor browser suite | Seven cases passed, including shared references, copy/reorder, cycle repair, migration and trust retry binding. |
+| Profile context browser suite | Six cases passed, including changed terminal context, atomic save failure, inline promotion and stale storage revisions. |
+| Preparation browser suite | Nine cases passed, including parent drafts, temporary keys, cancellation and background history. |
+| Existing profile/key regressions | Two cases passed, including settings save semantics and actual legacy private-key deletion. |
+| Bilingual editor suite | Four cases passed in both languages: prepare/cancel persistence boundaries, managed stale-save rejection, entry/all with copy/reference, exact delete/clear scope and independent credential retention. Cycle repair in both modes uses the actual completion label and does not call onDone before final confirmation. |
+| Layout | English/Traditional Chinese action labels and consequence text fit at 1280 and 480 pixel widths. |
+| Catalog | Six exporter and six lookup tests passed; all 372 exported keys are referenced and the generated catalog is current. |
+
+Validation uses WSL Chromium. Native Desktop and physical UART were not part of
+this phase. The next candidate is a separate copy review of settings import/export
+and its replacement/key-retention consequences before expanding that workflow.
