@@ -1064,6 +1064,7 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                 const typeaheadMatch = pipDocument.activeElement?.dataset.entryName;
                 const files = [...pipDocument.querySelectorAll('.sftp-file-entry')];
                 const reference = files.find(button => button.dataset.entryName === 'reference.txt');
+                pipDocument.documentElement.style.height = '360px';
                 reference.click();
                 const preparing = {
                     disabled: pipDocument.querySelector('.sftp-file-download').disabled,
@@ -1097,6 +1098,11 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                     downloadReady: !pipDocument.querySelector('.sftp-file-download').disabled,
                     selected: reference.classList.contains('selected'),
                     selectedPressed: reference.getAttribute('aria-pressed'),
+                    sourceOverflow: pipDocument.defaultView.getComputedStyle(
+                        pipDocument.querySelector('.sftp-source-pane')).overflowY,
+                    actionBottom: pipDocument.querySelector('.sftp-file-operation-actions')
+                        .getBoundingClientRect().bottom,
+                    viewportHeight: pipDocument.documentElement.clientHeight,
                     status: pipDocument.querySelector('.sftp-transfer-status').innerText
                 };
             }"""
@@ -1114,6 +1120,9 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
         check(file_ui['preparing'] == {'disabled': True, 'text': 'Preparing…'}, 'SFTP Download was enabled before its ticket was ready')
         check(file_ui['downloadReady'] is True, 'SFTP Download was not enabled after its ticket became ready')
         check(file_ui['selected'] is True and file_ui['selectedPressed'] == 'true', 'selected Files row was not highlighted')
+        check(file_ui['sourceOverflow'] == 'auto', 'short Files source pane did not provide a scroll fallback')
+        check(file_ui['actionBottom'] <= file_ui['viewportHeight'], 'short Files window clipped the selected file actions')
+        page.evaluate("() => { documentPictureInPicture.window.document.documentElement.style.height = ''; }")
         check(
             file_ui['status'] == 'Selected reference.txt. Click Download to save it.',
             'selecting a file implied that it had already downloaded',
@@ -1464,6 +1473,7 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                     type: 'text/plain',
                     lastModified: Date.UTC(2026, 8, 2, 2, 20)
                 }));
+                pipDocument.documentElement.style.height = '360px';
                 input.files = transfer.files;
                 input.dispatchEvent(new Event('change', { bubbles: true }));
                 const card = pipDocument.querySelector('.sftp-selected-file');
@@ -1471,8 +1481,11 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                     visible: card.classList.contains('visible'),
                     path: pipDocument.querySelector('.sftp-selected-file-path').innerText,
                     meta: pipDocument.querySelector('.sftp-selected-file-meta').innerText,
-                    actions: [...card.querySelectorAll('button')].map(button => button.innerText)
+                    actions: [...card.querySelectorAll('button')].map(button => button.innerText),
+                    actionBottom: card.querySelector('.sftp-file-operation-actions').getBoundingClientRect().bottom,
+                    viewportHeight: pipDocument.documentElement.clientHeight
                 };
+                pipDocument.documentElement.style.height = '';
                 pipDocument.querySelector('.sftp-local-copy').click();
                 const request = window.terminalTest.getEmitted()
                     .find(item => item.event === 'sftp_browse_request' && item.args[0].terminal_id === 'main');
@@ -1497,6 +1510,8 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
         check(local_file_picker['path'] == 'local-upload.txt', 'selected local file card omitted the browser file name')
         check('6 B (6 bytes)' in local_file_picker['meta'] and '2026' in local_file_picker['meta'], 'selected local file card omitted exact metadata')
         check(local_file_picker['actions'] == ['Send', 'Copy to…'], 'selected local file card actions were unclear')
+        check(local_file_picker['actionBottom'] <= local_file_picker['viewportHeight'],
+              'short Files window clipped the selected local file actions')
         check(local_file_picker['sessions'] == ['main', 'term-2'], 'local file Copy to omitted an eligible Files destination')
         check(local_file_picker['sourcePath'] == 'local-upload.txt', 'local file destination pane omitted its source card')
         clear_emitted(page)

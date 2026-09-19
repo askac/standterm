@@ -148,6 +148,8 @@
         .sftp-source-pane, .sftp-destination-pane {
             min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 10px; overflow: hidden;
         }
+        .sftp-source-pane { overflow-y: auto; }
+        .sftp-source-pane > :not(.sftp-directory-list) { flex-shrink: 0; }
         .sftp-destination-pane {
             animation: sftp-destination-slide 0.16s ease-out;
         }
@@ -9118,6 +9120,7 @@
                 state.elements.conflict.classList.remove('visible');
                 setSftpPipStatus(state, 'Ready to upload.');
                 updateSftpSelectedFile(state);
+                state.elements.selectedFile.scrollIntoView({ block: 'nearest' });
             }
 
             function getSftpRemoteFilePath(state, file) {
@@ -9190,6 +9193,7 @@
                 state.preparedDownload = null;
                 state.downloadConsumed = false;
                 prepareSftpDownloadTicket(state, file);
+                state.elements.fileOperation.scrollIntoView({ block: 'nearest' });
             }
 
             function getSftpRenameValidation(state) {
