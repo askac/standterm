@@ -1459,7 +1459,7 @@
             <button id="agent-connect-btn" class="status-action" type="button" title="Copy the agent prompt for the current tab's environment" data-i18n="agent.connection.title" data-i18n-title="agent.connection.tooltip">Agent connection</button>
             <button id="agent-toggle-btn" class="status-action" type="button" title="Show Agent panel">Show Agent Panel</button>
             <button id="agent-tunnel-btn" class="status-action" type="button" title="Set up remote Agent access through this SSH connection" hidden>Agent Tunnel</button>
-            <button id="ssh-tunnels-btn" class="status-action" type="button" title="Manage TCP port forwarding through this SSH connection" hidden>Tunnels</button>
+            <button id="ssh-tunnels-btn" class="status-action" type="button" title="Manage TCP forwarding for this SSH tab" data-i18n-title="ssh.tunnels.tooltip" data-i18n="ssh.tunnels.action" hidden>Tunnels</button>
             <button id="sftp-status-btn" class="status-action status-sftp" type="button" title="Open Files" aria-label="Open Files" hidden>&#x1F4C1;</button>
             <button id="transfer-queue-btn" class="status-action" type="button" title="Transfer Queue" aria-label="Transfer Queue" data-i18n-title="agent.transfer.queue" data-i18n-aria-label="agent.transfer.queue" hidden><span aria-hidden="true">&#x21C4;</span> <span id="transfer-queue-count">0</span></button>
             <button id="quick-settings" class="status-action" type="button" title="Settings" aria-label="Settings">&#x2699;&#xFE0F;</button>
@@ -1535,29 +1535,28 @@
         </div>
     </dialog>
     <dialog id="ssh-tunnels-dialog" aria-labelledby="ssh-tunnels-title">
-        <h3 id="ssh-tunnels-title">Tunnels for Current SSH Tab</h3>
+        <h3 id="ssh-tunnels-title" data-i18n="ssh.tunnels.title">SSH tunnels for this tab</h3>
         <p id="ssh-tunnels-carrier"></p>
-        <p id="ssh-tunnel-policy">TCP only. Core host means the computer running Core, including WSL when Core runs there.
-            These temporary tunnels stop when this SSH connection closes or this page disconnects, including a reload.</p>
+        <p id="ssh-tunnel-policy" data-i18n="ssh.tunnels.policy">TCP only. Core host is where Core runs, including WSL. SSH remote is the final SSH host in this tab’s route. Closing this dialog keeps tunnels running. They stop when this SSH connection closes or this page disconnects, including a reload.</p>
         <div id="ssh-tunnels-list"></div>
-        <p id="ssh-tunnels-empty">No user tunnels on this tab.</p>
-        <h4>Add tunnel</h4>
+        <p id="ssh-tunnels-empty" data-i18n="ssh.tunnels.empty">No tunnels to show.</p>
+        <h4 data-i18n="ssh.tunnels.add">Add tunnel</h4>
         <form id="ssh-tunnel-form">
-            <label>Name (optional)<input id="ssh-tunnel-name" maxlength="80" autocomplete="off"></label>
-            <label>Direction<select id="ssh-tunnel-direction">
-                <option value="local">Core host → SSH remote (-L)</option>
-                <option value="remote">SSH remote → Core host (-R)</option>
+            <label><span data-i18n="ssh.tunnels.name">Name (optional)</span><input id="ssh-tunnel-name" maxlength="80" autocomplete="off"></label>
+            <label><span data-i18n="ssh.tunnels.direction">Direction</span><select id="ssh-tunnel-direction">
+                <option value="local" data-i18n="ssh.tunnels.local_direction">Listen on Core host (-L)</option>
+                <option value="remote" data-i18n="ssh.tunnels.remote_direction">Listen on SSH remote (-R)</option>
             </select></label>
-            <label id="ssh-tunnel-listen-label">Core listening port (0 = automatic)<input id="ssh-tunnel-listen" type="number" min="0" max="65535" value="0" required></label>
-            <label id="ssh-tunnel-target-host-label">Target host, reached from SSH remote<input id="ssh-tunnel-target-host" value="127.0.0.1" maxlength="253" spellcheck="false" required></label>
-            <label>Target port<input id="ssh-tunnel-target-port" type="number" min="1" max="65535" value="80" required></label>
-            <button id="ssh-tunnel-start" type="submit">Start tunnel</button>
+            <label id="ssh-tunnel-listen-label"><span data-i18n="ssh.tunnels.local_listen">Core listening port (0 = automatic)</span><input id="ssh-tunnel-listen" type="number" min="0" max="65535" value="0" required></label>
+            <label id="ssh-tunnel-target-host-label"><span data-i18n="ssh.tunnels.local_target_host">Target host, reached from SSH remote</span><input id="ssh-tunnel-target-host" value="127.0.0.1" maxlength="253" spellcheck="false" required></label>
+            <label><span data-i18n="ssh.tunnels.target_port">Target port</span><input id="ssh-tunnel-target-port" type="number" min="1" max="65535" value="80" required></label>
+            <button id="ssh-tunnel-start" type="submit" data-i18n="ssh.tunnels.start">Start tunnel</button>
         </form>
-        <p id="ssh-tunnel-bind-hint">Listens on Core's 127.0.0.1.</p>
+        <p id="ssh-tunnel-bind-hint" data-i18n="ssh.tunnels.local_bind">Listens on Core host’s 127.0.0.1.</p>
         <p id="ssh-tunnels-message" role="status" aria-live="polite"></p>
         <div class="agent-tunnel-actions">
-            <button id="ssh-tunnels-refresh" type="button">Refresh status</button>
-            <button id="ssh-tunnels-close" type="button">Close</button>
+            <button id="ssh-tunnels-refresh" type="button" data-i18n="ssh.tunnels.refresh">Refresh status</button>
+            <button id="ssh-tunnels-close" type="button" data-i18n="common.close">Close</button>
         </div>
     </dialog>
     <div id="terminal"></div>
@@ -3023,10 +3022,10 @@
                 if (!sshTunnelView) return;
                 sshTunnelView.invalid = true;
                 clearInterval(sshTunnelTimer);
-                setSshTunnelMessage('The SSH connection or viewer changed. Reopen Tunnels after reconnecting.', true);
+                setSshTunnelMessage(t('ssh.tunnels.view_changed'), true);
                 document.getElementById('ssh-tunnel-start').disabled = true;
                 for (const entry of sshTunnelView.entries.values()) {
-                    entry.element.querySelector('.ssh-tunnel-details').textContent = 'Status unavailable for this viewer.';
+                    entry.element.querySelector('.ssh-tunnel-details').textContent = t('ssh.tunnels.viewer_unavailable');
                     entry.element.querySelector('button').disabled = true;
                 }
             }
@@ -3041,7 +3040,8 @@
                     element.className = 'ssh-tunnel-item';
                     element.dataset.tunnelId = snapshot.tunnel_id;
                     element.innerHTML = '<strong class="ssh-tunnel-name"></strong><div class="ssh-tunnel-route"></div>'
-                        + '<div class="ssh-tunnel-details"></div><div class="ssh-tunnel-error"></div><button type="button">Stop</button>';
+                        + '<div class="ssh-tunnel-details"></div><div class="ssh-tunnel-error"></div><button type="button"></button>';
+                    element.querySelector('button').textContent = t('ssh.tunnels.stop');
                     entry = { element, snapshot };
                     view.entries.set(snapshot.tunnel_id, entry);
                     element.querySelector('button').addEventListener('click', () => requestSshTunnel('stop', { tunnel_id: snapshot.tunnel_id }));
@@ -3049,15 +3049,18 @@
                 }
                 entry.snapshot = snapshot;
                 const remote = snapshot.direction === 'remote';
-                const port = snapshot.bound_port || snapshot.listen_port || 'automatic';
+                const port = snapshot.bound_port || snapshot.listen_port || t('ssh.tunnels.automatic');
                 const target = snapshot.target_host.includes(':') ? `[${snapshot.target_host}]` : snapshot.target_host;
-                entry.element.querySelector('.ssh-tunnel-name').textContent = snapshot.name || (remote ? 'Remote tunnel (-R)' : 'Local tunnel (-L)');
-                entry.element.querySelector('.ssh-tunnel-route').textContent = `${remote ? 'SSH remote' : 'Core host'} 127.0.0.1:${port}`
-                    + ` → ${remote ? 'Core host' : 'SSH remote'} → ${target}:${snapshot.target_port}`;
-                const statuses = { starting: 'Starting', listening: 'Listening', stopped: 'Stopped', failed: 'Failed' };
-                entry.element.querySelector('.ssh-tunnel-details').textContent = `${statuses[snapshot.status] || 'Unknown'} · ${snapshot.connections} connection(s)`
-                    + ` · Sent ${formatSftpBytes(snapshot.bytes_sent)} · Received ${formatSftpBytes(snapshot.bytes_received)}`
-                    + (snapshot.cleanup_pending ? ' · Cleanup pending' : '');
+                entry.element.querySelector('.ssh-tunnel-name').textContent = snapshot.name || t(remote ? 'ssh.tunnels.remote_name' : 'ssh.tunnels.local_name');
+                entry.element.querySelector('.ssh-tunnel-route').textContent = t(remote ? 'ssh.tunnels.remote_route' : 'ssh.tunnels.local_route', {
+                    port, host: target, target_port: snapshot.target_port
+                });
+                const statuses = { starting: 'ssh.tunnels.status_starting', listening: 'ssh.tunnels.status_listening',
+                    stopped: 'ssh.tunnels.status_stopped', failed: 'ssh.tunnels.status_failed' };
+                entry.element.querySelector('.ssh-tunnel-details').textContent = t('ssh.tunnels.details', {
+                    status: t(Object.hasOwn(statuses, snapshot.status) ? statuses[snapshot.status] : 'ssh.tunnels.status_unknown'),
+                    connections: snapshot.connections, sent: formatSftpBytes(snapshot.bytes_sent), received: formatSftpBytes(snapshot.bytes_received)
+                }) + (snapshot.cleanup_pending ? ` · ${t('ssh.tunnels.cleanup_pending')}` : '');
                 entry.element.querySelector('.ssh-tunnel-error').textContent = snapshot.error || '';
                 entry.element.querySelector('button').disabled = !['starting', 'listening'].includes(snapshot.status);
                 document.getElementById('ssh-tunnels-empty').hidden = true;
@@ -3077,7 +3080,7 @@
                     if (requestId !== sshTunnelRequest) return;
                     sshTunnelPending = false;
                     ++sshTunnelRequest;
-                    setSshTunnelMessage('Tunnel status request timed out. Refresh status before retrying.', true);
+                    setSshTunnelMessage(t('ssh.tunnels.timeout'), true);
                     document.getElementById('ssh-tunnel-start').disabled = false;
                 }, 15000);
                 socket.emit('ssh_tunnel', { terminal_id: view.connection.state.id, operation, ...fields }, result => {
@@ -3090,7 +3093,7 @@
                     }
                     document.getElementById('ssh-tunnel-start').disabled = false;
                     if (!result || result.status !== 'ok') {
-                        setSshTunnelMessage(result?.message || 'Tunnel request failed.', true);
+                        setSshTunnelMessage(result?.message || t('ssh.tunnels.request_failed'), true);
                         return;
                     }
                     if (operation === 'status') {
@@ -3111,7 +3114,7 @@
                         document.getElementById('ssh-tunnels-empty').hidden = view.entries.size > 0;
                     } else {
                         renderSshTunnel(result.tunnel);
-                        setSshTunnelMessage(operation === 'start' ? 'Tunnel requested. Watch the tunnel status.' : 'Tunnel stopped.');
+                        setSshTunnelMessage(t(operation === 'start' ? 'ssh.tunnels.start_requested' : 'ssh.tunnels.stop_requested'));
                     }
                 });
             }
@@ -3128,7 +3131,7 @@
                 sshTunnelView = { connection: { state, connectedAt: state.connectedAt }, connectionId: null, entries: new Map() };
                 ++sshTunnelRequest;
                 sshTunnelPending = false;
-                document.getElementById('ssh-tunnels-carrier').textContent = `SSH tab: ${state.title} (${state.id}). Tunnels use this route's final SSH connection.`;
+                document.getElementById('ssh-tunnels-carrier').textContent = t('ssh.tunnels.carrier', { title: state.title, id: state.id });
                 document.getElementById('ssh-tunnels-list').replaceChildren();
                 document.getElementById('ssh-tunnels-empty').hidden = false;
                 setSshTunnelMessage('');
@@ -3148,11 +3151,9 @@
             document.getElementById('ssh-tunnels-refresh').addEventListener('click', () => requestSshTunnel('status'));
             document.getElementById('ssh-tunnel-direction').addEventListener('change', event => {
                 const remote = event.target.value === 'remote';
-                document.getElementById('ssh-tunnel-listen-label').firstChild.textContent = `${remote ? 'Remote' : 'Core'} listening port (0 = automatic)`;
-                document.getElementById('ssh-tunnel-target-host-label').firstChild.textContent = `Target host, reached from ${remote ? 'Core host' : 'SSH remote'}`;
-                document.getElementById('ssh-tunnel-bind-hint').textContent = remote
-                    ? 'Requests remote 127.0.0.1; non-loopback clients are rejected. The SSH server controls its actual listening interfaces.'
-                    : "Listens on Core's 127.0.0.1.";
+                document.getElementById('ssh-tunnel-listen-label').querySelector('span').textContent = t(remote ? 'ssh.tunnels.remote_listen' : 'ssh.tunnels.local_listen');
+                document.getElementById('ssh-tunnel-target-host-label').querySelector('span').textContent = t(remote ? 'ssh.tunnels.remote_target_host' : 'ssh.tunnels.local_target_host');
+                document.getElementById('ssh-tunnel-bind-hint').textContent = t(remote ? 'ssh.tunnels.remote_bind' : 'ssh.tunnels.local_bind');
             });
             document.getElementById('ssh-tunnel-form').addEventListener('submit', event => {
                 event.preventDefault();

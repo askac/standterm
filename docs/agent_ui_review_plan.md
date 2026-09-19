@@ -43,7 +43,7 @@ do not consolidate them merely to shorten labels.
 | 3 | Review English UI copy and terminology | Core terms agreed; initial English sources reviewed | Review each proposed change for target, permissions, consequences, and next action; check related tooltips, Desktop help, and tests before applying it. |
 | 4 | Finalize the translation exchange table | Initial exchange validated with an independent translator | Stable keys, approved English source, context, and placeholder constraints are sufficient for an independent translator. |
 | 5 | Pilot Agent access and local connection information | Implemented; validation below | Cover static and dynamic text, titles, and accessible names; preserve connected sessions and authorization; support English fallback. |
-| 6 | Translate and integrate approved rows | Agent pilot, browser access/recovery, Agent approvals/transfers, connection/login controls, SSH route/profile editors, settings transfer and preference actions integrated | AI edits only target-language cells; validate keys and placeholders; review authorization and destructive-action wording. |
+| 6 | Translate and integrate approved rows | Agent pilot, browser access/recovery, Agent approvals/transfers, connection/login controls, SSH route/profile editors, settings transfer/preference actions and user SSH tunnels integrated | AI edits only target-language cells; validate keys and placeholders; review authorization and destructive-action wording. |
 | 7 | Expand Core and Desktop coverage | Deferred | Verify secondary windows, native menus, setup, diagnostics, packaging, and representative layouts. |
 
 ## Validation of the reliability changes
@@ -66,7 +66,7 @@ validated separately below.
 
 ## Deferred UI work
 
-Agent diagnostics, SSH tunnel setup, secondary windows,
+Agent diagnostics, Agent Tunnel setup, secondary windows,
 and Desktop localization remain outside the completed workflows. Translation
 starts only after the English source for the selected workflow is reviewed.
 Extra screen diffing, render hints, key aliases, and byte-limit options remain optional optimizations.
@@ -416,3 +416,59 @@ Validation uses WSL Chromium; native Desktop and operating-system dialogs were
 not part of this phase. Remaining General/Appearance fields, Server controls and
 Diagnostics content still have English copy. The next candidate is a separate
 review of SSH tunnel setup/stop wording and target scope before localization.
+
+## User SSH tunnel controls
+
+This phase covers the browser's ordinary TCP tunnel dialog, separate from the
+Agent Tunnel authorization workflow. Its copy names the listener side and the
+side that reaches the target. Core host means where Core runs, including WSL;
+SSH remote means the final SSH connection in the selected route. Remote rows
+identify the requested listener, without claiming verification of the server's
+actual interfaces. Traffic counters use the target as their reference point.
+
+Request timeouts leave the outcome unconfirmed. Status polling may resume, but
+start and stop operations are not automatically resent. A stop acknowledgment
+does not prove that the SSH server has removed its listener: cancellation is
+asynchronous, and cleanup_pending only tracks unfinished setup. Closing the
+dialog keeps tunnels running; closing SSH or disconnecting the creating page,
+including a reload, stops them.
+
+| Finding | Severity | Evidence | Critic remedy | Main response | Resolution | Validation |
+| --- | --- | --- | --- | --- | --- | --- |
+| Remote row can imply a verified loopback interface | Medium | renderSshTunnel; request_remote; remote peer rejection | Label the remote listener as requested | Accept | Preserve the actual-interface qualification beside the form and in the row | Real SSH non-loopback peer rejection; bilingual row/bind checks |
+| Timeout and stop text can overstate the result | Medium | Shared request timer; asynchronous cancel_remote; snapshot cleanup_pending | Explain an unconfirmed timeout and requested stop | Accept | Preserve typed state, cleanup flag, request correlation and no mutation replay | Timeout/late acknowledgment and status rendering checks |
+| Close can be mistaken for stopping a tunnel | Medium | Dialog close handler versus close_bridge/on_disconnect | State that closing the dialog keeps tunnels running | Accept | Keep separate Close and Stop actions without a new confirmation | Close/reopen retention and existing viewer-disconnect tests |
+| Sent/received lacks a stable reference point | Low | relay_tcp(channel, target) and _progress | Use To target and From target | Accept | Keep byte units and raw counts; translate only their description | Both forwarding directions and real SSH byte-count tests |
+
+The backend, viewer ownership, transport binding, request/revision checks and
+loopback policy remain unchanged. Localized text never selects an operation,
+terminal or tunnel. Server diagnostics and user-supplied names/addresses stay
+literal. Additional interface inspection and Agent Tunnel localization remain
+outside this phase.
+
+The table contains 445 rows: 444 referenced bilingual messages and the existing
+removal. Thirty-nine reviewed rows cover static labels, direction-dependent
+help, status names and request feedback. Input labels use text spans so applying
+translations preserves controls and their values. Unknown status values render
+as Unknown; only typed starting/listening values enable Stop. Empty-list copy
+avoids claiming that Agent Tunnel or another viewer has no tunnels.
+
+Two bounded independent review passes found no remaining material issue. The
+second pass verified literal interpolation and unknown-status fallbacks in
+memory. Its optional README clarification was adopted: Stop ends forwarding
+and connections without claiming confirmed remote listener removal. Additional
+listener inspection stays deferred unless verified interface reporting becomes
+a requirement; no policy choice blocks this copy change.
+
+| Check | Result |
+| --- | --- |
+| Existing real SSH suite | All 12 tests passed, including both directions/byte counters, three-hop final transport, independent Agent/user tunnels, ownership, disconnect cleanup and non-loopback rejection. |
+| Bilingual browser suite | Three cases in each language passed: existing stale-view/request/revision guards, exact direction payloads and typed states, and timeout with continued status polling but no automatic start replay. |
+| Display boundaries | Raw names, errors and IPv6 endpoint values remain literal; direction changes retain form controls/values, and Close sends no Stop. |
+| Layout | Both languages fit the 480x600 dialog with input/select bounds retained and no horizontal overflow. |
+| Catalog and static checks | Six exporter and six lookup tests passed; all 444 bilingual keys are referenced, the generated catalog is current, Python syntax and diff checks passed. |
+
+Validation uses WSL Chromium and local SSH servers. Native Desktop and a physical
+remote host were not part of this phase. Agent Tunnel authorization/renewal and
+remote verification copy are the next separate review candidate; general TCP
+forwarding does not replace that workflow or grant API access.

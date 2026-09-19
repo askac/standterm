@@ -327,8 +327,8 @@ terminal; compact windows keep those actions in the Agent panel.
 Chinese (Taiwan) for browser access and recovery, Agent permissions, input and
 file-copy approvals, transfer results, local connection information, connection
 forms, SSH login, SSH profile/route editors (including browser-key and
-host-fingerprint controls), settings import/export, and settings navigation and
-preference actions. The choice
+host-fingerprint controls), settings import/export, settings navigation and
+preference actions, and user SSH tunnel controls. The choice
 applies the next time the page opens; saving it does not reload the current
 page or change its connections and grants. Other areas remain in English.
 **Save preferences** stores the General and Appearance preference fields.
@@ -699,10 +699,15 @@ Shell unless `STANDTERM_ALLOW_REMOTE_UART=1` is set.
 After connecting an SSH tab, open **Tunnels** to create temporary TCP forwards
 without reconnecting. Choose a direction, listening port, target host and target
 port; listening port `0` lets the operating system choose an available port.
-Each tunnel shows its assigned port, state, active connections and byte counts.
-**Stop** closes that tunnel's listener and connections while keeping SSH, Files
+Each tunnel shows its assigned port, state, active connections and byte counts
+to and from the target. Remote rows identify the requested listener address;
+they do not verify the SSH server's actual listening interfaces.
+**Stop** stops forwarding and closes its connections while keeping SSH, Files
 and other tunnels available. **Listening** confirms the forward is ready to
 accept connections; target-service failures appear when a client connects.
+If a request times out, its result is unconfirmed. Refresh status before deciding
+whether to retry; the UI does not automatically resend start or stop requests.
+Stopping does not wait for the SSH server to confirm remote listener removal.
 
 | Direction | Listener | Target is reached from |
 | --- | --- | --- |
