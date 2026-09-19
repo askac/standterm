@@ -1139,14 +1139,14 @@
                                 <select id="pref-uiLanguage"><option value="en">English</option><option value="zh-TW" lang="zh-TW">繁體中文（台灣）</option></select>
                             </div>
                             <div class="settings-status" data-i18n="settings.language.hint">Applies next time you open this page. Some areas remain in English.</div>
-                            <div class="settings-row"><label for="pref-useCustomMenu">Enable custom context menu</label><input type="checkbox" id="pref-useCustomMenu"></div>
-                            <div class="settings-row"><label for="pref-copyOnSelect">Copy on select</label><input type="checkbox" id="pref-copyOnSelect"></div>
-                            <div class="settings-row"><label for="pref-enablePicPreview">Enable pic preview</label><input type="checkbox" id="pref-enablePicPreview"></div>
-                            <div class="settings-row"><label for="pref-detectUrls">Detect & linkify URLs</label><input type="checkbox" id="pref-detectUrls"></div>
-                            <div class="settings-row"><label for="pref-showDetailedSshLabels">Show detailed SSH labels</label><input type="checkbox" id="pref-showDetailedSshLabels"></div>
-                            <div class="settings-row"><label for="pref-cjkWideAmbiguous" title="Render ambiguous-width characters (box drawing, symbols) as wide cells. Enable only for legacy BBS/screen setups that require wide ambiguous width.">CJK wide ambiguous width (BBS compatibility)</label><input type="checkbox" id="pref-cjkWideAmbiguous"></div>
-                            <div class="settings-row"><label for="pref-urlClickAction">URL click opens in</label>
-                                <select id="pref-urlClickAction"><option value="overlay">Overlay</option><option value="popup">Popup Window</option><option value="newtab">New Tab</option></select>
+                            <div class="settings-row"><label for="pref-useCustomMenu" data-i18n="settings.general.custom_menu">Use StandTerm context menu</label><input type="checkbox" id="pref-useCustomMenu"></div>
+                            <div class="settings-row"><label for="pref-copyOnSelect" title="On mouse release, copies terminal selection without surrounding whitespace, then clears it." data-i18n-title="settings.general.copy_on_select_hint" data-i18n="settings.general.copy_on_select">Copy terminal selection automatically</label><input type="checkbox" id="pref-copyOnSelect"></div>
+                            <div class="settings-row"><label for="pref-enablePicPreview" data-i18n="settings.general.picture_preview">Preview image links in page overlay</label><input type="checkbox" id="pref-enablePicPreview"></div>
+                            <div class="settings-row"><label for="pref-detectUrls" data-i18n="settings.general.detect_urls">Make terminal URLs clickable</label><input type="checkbox" id="pref-detectUrls"></div>
+                            <div class="settings-row"><label for="pref-showDetailedSshLabels" data-i18n="settings.general.detailed_ssh_labels">Show detailed SSH labels</label><input type="checkbox" id="pref-showDetailedSshLabels"></div>
+                            <div class="settings-row"><label for="pref-cjkWideAmbiguous" data-i18n-title="settings.general.cjk_width_hint" title="Render ambiguous-width characters, such as box drawing and symbols, as two cells. Enable only when the BBS or terminal layout requires it." data-i18n="settings.general.cjk_width">Use wide ambiguous characters (BBS)</label><input type="checkbox" id="pref-cjkWideAmbiguous"></div>
+                            <div class="settings-row"><label for="pref-urlClickAction" data-i18n="settings.general.url_action">Open clicked terminal links in</label>
+                                <select id="pref-urlClickAction"><option value="overlay" data-i18n="settings.general.url_overlay">Page overlay</option><option value="popup" data-i18n="settings.general.url_popup">Popup window</option><option value="newtab" data-i18n="settings.general.url_newtab">New tab</option></select>
                             </div>
                         </fieldset>
                         <fieldset class="settings-fieldset">
@@ -1173,12 +1173,12 @@
                     <div class="settings-tab" id="tab-appearance">
                         <fieldset class="settings-fieldset">
                             <legend data-i18n="settings.nav.appearance">Appearance</legend>
-                            <div class="settings-row"><label for="pref-colorScheme">Color scheme</label>
+                            <div class="settings-row"><label for="pref-colorScheme" data-i18n="settings.appearance.color_scheme">Color scheme</label>
                                 <select id="pref-colorScheme">
-                                    <optgroup label="Custom">
+                                    <optgroup id="settings-theme-group-custom" label="StandTerm">
                                         <option value="ibm5153">IBM 5153 (CGA Classic)</option>
                                     </optgroup>
-                                    <optgroup label="Windows Terminal Official">
+                                    <optgroup id="settings-theme-group-windows-terminal" label="Windows Terminal">
                                         <option value="campbell">Campbell</option>
                                         <option value="campbellPowershell">Campbell PowerShell</option>
                                         <option value="vintage">Vintage</option>
@@ -1191,24 +1191,24 @@
                                     </optgroup>
                                 </select>
                             </div>
-                            <div class="settings-theme-preview" id="settings-theme-preview" role="group" aria-label="Color scheme preview">
+                            <div class="settings-theme-preview" id="settings-theme-preview" role="group" aria-label="Color scheme preview" data-i18n-aria-label="settings.appearance.preview">
                                 <div><span data-theme-color="green">user@host</span>:<span data-theme-color="blue">~</span>$ ls</div>
                                 <div>README.md&nbsp; <span data-theme-color="cyan">logs/</span>&nbsp; <span data-theme-color="magenta">config.json</span></div>
-                                <div><span data-theme-color="green">Ready</span>&nbsp; <span data-theme-color="yellow">Warning</span>&nbsp; <span data-theme-color="red">Error</span></div>
-                                <div>$ <span class="settings-theme-cursor" aria-label="Cursor"></span></div>
+                                <div><span data-theme-color="green" data-i18n="settings.appearance.sample_ready">Ready</span>&nbsp; <span data-theme-color="yellow" data-i18n="settings.appearance.sample_warning">Warning</span>&nbsp; <span data-theme-color="red" data-i18n="settings.appearance.sample_error">Error</span></div>
+                                <div>$ <span class="settings-theme-cursor" aria-label="Cursor" data-i18n-aria-label="settings.appearance.cursor_preview"></span></div>
                                 <div class="settings-theme-palette"></div>
                             </div>
                             <div class="settings-status" data-i18n="settings.theme_preview_hint">Preview only. Save preferences applies this theme.</div>
-                            <div class="settings-row"><label for="pref-fontFace">Font face</label><input type="text" id="pref-fontFace"></div>
-                            <div class="settings-row"><label for="pref-powerlineSymbols" title="Use the bundled Powerline symbols font as a fallback for prompt glyphs such as the branch symbol.">Enable Powerline symbol fallback</label><input type="checkbox" id="pref-powerlineSymbols"></div>
-                            <div class="settings-row"><label for="pref-fontSize">Font size</label><input type="number" id="pref-fontSize" min="8" max="32"></div>
-                            <div class="settings-row"><label for="pref-fontWeight" title="Heavier weights can improve perceived brightness of thin glyphs, especially with macOS grayscale antialiasing.">Font weight</label>
-                                <select id="pref-fontWeight"><option value="normal">Normal (400)</option><option value="500">Medium (500)</option><option value="600">Semibold (600)</option><option value="bold">Bold (700)</option></select>
+                            <div class="settings-row"><label for="pref-fontFace" data-i18n="settings.appearance.font_face">Font family</label><input type="text" id="pref-fontFace"></div>
+                            <div class="settings-row"><label for="pref-powerlineSymbols" data-i18n-title="settings.appearance.powerline_hint" title="Use the bundled font for prompt symbols such as the branch icon." data-i18n="settings.appearance.powerline_symbols">Use bundled Powerline symbols</label><input type="checkbox" id="pref-powerlineSymbols"></div>
+                            <div class="settings-row"><label for="pref-fontSize" data-i18n="settings.appearance.font_size">Font size</label><input type="number" id="pref-fontSize" min="8" max="32"></div>
+                            <div class="settings-row"><label for="pref-fontWeight" data-i18n-title="settings.appearance.font_weight_hint" title="Heavier weights can make thin text appear brighter, especially with macOS grayscale antialiasing." data-i18n="settings.appearance.font_weight">Font weight</label>
+                                <select id="pref-fontWeight"><option value="normal" data-i18n="settings.appearance.weight_normal">Normal (400)</option><option value="500" data-i18n="settings.appearance.weight_medium">Medium (500)</option><option value="600" data-i18n="settings.appearance.weight_semibold">Semibold (600)</option><option value="bold" data-i18n="settings.appearance.weight_bold">Bold (700)</option></select>
                             </div>
-                            <div class="settings-row"><label for="pref-cursorStyle">Cursor type</label>
-                                <select id="pref-cursorStyle"><option value="block">Block</option><option value="underline">Underline</option><option value="bar">Bar</option></select>
+                            <div class="settings-row"><label for="pref-cursorStyle" data-i18n="settings.appearance.cursor_style">Cursor style</label>
+                                <select id="pref-cursorStyle"><option value="block" data-i18n="settings.appearance.cursor_block">Block</option><option value="underline" data-i18n="settings.appearance.cursor_underline">Underline</option><option value="bar" data-i18n="settings.appearance.cursor_bar">Bar</option></select>
                             </div>
-                            <div class="settings-row"><label for="pref-showTerminalTitleInStatusBar">Show terminal title in status bar</label><input type="checkbox" id="pref-showTerminalTitleInStatusBar"></div>
+                            <div class="settings-row"><label for="pref-showTerminalTitleInStatusBar" data-i18n="settings.appearance.terminal_title">Show application title in status bar</label><input type="checkbox" id="pref-showTerminalTitleInStatusBar"></div>
                         </fieldset>
                     </div>
                     <div class="settings-tab" id="tab-ssh-sessions">
@@ -1831,6 +1831,8 @@
         const uiText = window.StandTermI18n.create(window.StandTermMessages, prefs.uiLanguage);
         const t = uiText.t;
         uiText.apply(document);
+        document.getElementById('settings-theme-group-custom').label = t('settings.appearance.group_custom');
+        document.getElementById('settings-theme-group-windows-terminal').label = t('settings.appearance.group_windows_terminal');
         document.documentElement.lang = uiText.locale;
         prefs.fontSize = normalizeFontSize(prefs.fontSize);
         prefs.fontWeight = normalizeFontWeight(prefs.fontWeight);
@@ -11770,16 +11772,24 @@
                 preview.querySelector('.settings-theme-cursor').style.backgroundColor = theme.cursor;
                 const palette = preview.querySelector('.settings-theme-palette');
                 palette.replaceChildren();
+                const colorLabels = {
+                    black: 'settings.appearance.color_black', red: 'settings.appearance.color_red',
+                    green: 'settings.appearance.color_green', yellow: 'settings.appearance.color_yellow',
+                    blue: 'settings.appearance.color_blue', magenta: 'settings.appearance.color_magenta',
+                    cyan: 'settings.appearance.color_cyan', white: 'settings.appearance.color_white'
+                };
                 for (const bright of [false, true]) {
                     const label = document.createElement('span');
-                    label.textContent = bright ? 'Bright' : 'Normal';
+                    label.textContent = t(bright ? 'settings.appearance.palette_bright' : 'settings.appearance.palette_normal');
                     palette.appendChild(label);
-                    for (const color of ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white']) {
+                    for (const [color, labelKey] of Object.entries(colorLabels)) {
                         const key = bright ? `bright${color[0].toUpperCase()}${color.slice(1)}` : color;
                         const swatch = document.createElement('span');
                         swatch.className = 'settings-theme-swatch';
                         swatch.style.backgroundColor = theme[key];
-                        swatch.title = `${bright ? 'Bright ' : ''}${color}: ${theme[key]}`;
+                        swatch.title = t(bright ? 'settings.appearance.swatch_bright' : 'settings.appearance.swatch', {
+                            color: t(labelKey), hex: theme[key]
+                        });
                         swatch.setAttribute('role', 'img');
                         swatch.setAttribute('aria-label', swatch.title);
                         palette.appendChild(swatch);

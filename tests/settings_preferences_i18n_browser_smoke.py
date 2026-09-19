@@ -9,6 +9,7 @@ from settings_transfer_i18n_browser_smoke import message, new_page, snapshot
 
 
 TABS = ['general','appearance','ssh-sessions','server','diagnostics']
+CUSTOM_FONT = '"Fixture <b>& {font}", monospace'
 ACCESS_MUTATIONS = {'agent_mode_set','agent_attach','agent_detach','agent_pause',
                     'agent_external_token_create','start_ssh','stop_ssh'}
 
@@ -36,7 +37,10 @@ def edit_preferences(page, next_locale):
     page.select_option('#pref-urlClickAction', 'newtab')
     page.select_option('#pref-uiLanguage', next_locale)
     page.select_option('#pref-agentAccessMintMode', 'observe')
+    page.locator('#pref-cjkWideAmbiguous').check()
     page.click('.settings-nav-item[data-tab="appearance"]')
+    page.fill('#pref-fontFace', CUSTOM_FONT)
+    page.locator('#pref-powerlineSymbols').uncheck()
     page.fill('#pref-fontSize', '22')
     page.select_option('#pref-fontWeight', '600')
     page.select_option('#pref-cursorStyle', 'bar')
@@ -46,6 +50,19 @@ def edit_preferences(page, next_locale):
 def assert_no_access_mutations(page):
     assert not any(event['event'] in ACCESS_MUTATIONS for event in fixture.get_emitted(page)), \
         'A preference action changed access or started/stopped a connection'
+
+
+def assert_ambiguous_character_width(page, width):
+    page.evaluate('text => window.terminalTest.writeTerminalOutput(text)', '\x1b[2J\x1b[HA─B')
+    expected = [{'chars':'A','width':1},{'chars':'─','width':width}]
+    if width == 2:
+        expected.append({'chars':'','width':0})
+    expected.append({'chars':'B','width':1})
+    for mirror in [False,True]:
+        page.wait_for_function("""({mirror,expected}) => {
+            const cells = window.terminalTest.getActiveTerminalBufferCellsForTest(0, mirror);
+            return cells && JSON.stringify(cells.slice(0,expected.length)) === JSON.stringify(expected);
+        }""", arg={'mirror':mirror,'expected':expected})
 
 
 def test_close_discards_draft_and_save_applies_without_reload(browser, url):
@@ -74,6 +91,10 @@ def test_close_discards_draft_and_save_applies_without_reload(browser, url):
             assert page.input_value('#pref-fontWeight') == before_preferences['fontWeight']
             assert page.input_value('#pref-cursorStyle') == before_preferences['cursorStyle']
             assert page.input_value('#pref-colorScheme') == before_preferences['colorScheme']
+            assert page.input_value('#pref-fontFace') == before_preferences['fontFace']
+            assert page.locator('#pref-powerlineSymbols').is_checked()
+            assert not page.locator('#pref-cjkWideAmbiguous').is_checked()
+            assert_ambiguous_character_width(page, 1)
             assert access_state(page) == before_access
 
             edit_preferences(page, next_locale)
@@ -83,7 +104,8 @@ def test_close_discards_draft_and_save_applies_without_reload(browser, url):
             saved = snapshot(page)
             expected = dict(before_preferences, uiLanguage=next_locale, copyOnSelect=True,
                             useCustomMenu=False, urlClickAction='newtab',agentAccessMintMode='observe',
-                            fontSize=22,fontWeight='600',cursorStyle='bar',colorScheme='campbell')
+                            fontSize=22,fontWeight='600',cursorStyle='bar',colorScheme='campbell',
+                            fontFace=CUSTOM_FONT,powerlineSymbols=False,cjkWideAmbiguous=True)
             assert json.loads(saved['storage']['terminal.pref.v1']) == expected
             assert preferences(page) == expected
             options = page.evaluate('() => window.terminalTest.getActiveTerminalOptions()')
@@ -91,6 +113,8 @@ def test_close_discards_draft_and_save_applies_without_reload(browser, url):
                 assert options[field] == expected[field]
             if options['mirrorCursorStyle'] is not None:
                 assert options['mirrorCursorStyle'] == 'bar'
+            assert options['fontFamily'] == CUSTOM_FONT and options['mirrorFontFamily'] == CUSTOM_FONT
+            assert_ambiguous_character_width(page, 2)
             assert saved['ssh'] == before['ssh'] and saved['key'] == key
             assert {name:value for name,value in saved['storage'].items() if name != 'terminal.pref.v1'} == {
                 name:value for name,value in before['storage'].items() if name != 'terminal.pref.v1'}

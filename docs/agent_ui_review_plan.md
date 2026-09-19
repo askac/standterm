@@ -43,7 +43,7 @@ do not consolidate them merely to shorten labels.
 | 3 | Review English UI copy and terminology | Core terms agreed; initial English sources reviewed | Review each proposed change for target, permissions, consequences, and next action; check related tooltips, Desktop help, and tests before applying it. |
 | 4 | Finalize the translation exchange table | Initial exchange validated with an independent translator | Stable keys, approved English source, context, and placeholder constraints are sufficient for an independent translator. |
 | 5 | Pilot Agent access and local connection information | Implemented; validation below | Cover static and dynamic text, titles, and accessible names; preserve connected sessions and authorization; support English fallback. |
-| 6 | Translate and integrate approved rows | Agent pilot, browser access/recovery, Agent approvals/transfers, connection/login controls, SSH route/profile editors, settings transfer/preference actions, user SSH tunnels and Agent Tunnel integrated | AI edits only target-language cells; validate keys and placeholders; review authorization and destructive-action wording. |
+| 6 | Translate and integrate approved rows | Agent pilot, browser access/recovery, Agent approvals/transfers, connection/login controls, SSH route/profile editors, General/Appearance settings, settings transfer, user SSH tunnels and Agent Tunnel integrated | AI edits only target-language cells; validate keys and placeholders; review authorization and destructive-action wording. |
 | 7 | Expand Core and Desktop coverage | Deferred | Verify secondary windows, native menus, setup, diagnostics, packaging, and representative layouts. |
 
 ## Validation of the reliability changes
@@ -66,7 +66,7 @@ validated separately below.
 
 ## Deferred UI work
 
-Agent diagnostics, remaining settings panels, secondary windows,
+Agent diagnostics, Server/Diagnostics settings, secondary windows,
 and Desktop localization remain outside the completed workflows. Translation
 starts only after the English source for the selected workflow is reviewed.
 Extra screen diffing, render hints, key aliases, and byte-limit options remain optional optimizations.
@@ -528,3 +528,52 @@ physical remote host were not exercised. Typed backend error localization and
 continuous remote health monitoring remain outside scope. The next candidate
 is a compact review of remaining General/Appearance settings labels before
 considering broader Server, Diagnostics or Desktop coverage.
+
+## General and Appearance preferences
+
+Forty-seven reviewed messages cover the remaining General/Appearance labels,
+tooltips, option labels and color-preview descriptions. The table contains 521
+rows: 520 referenced bilingual messages and the existing removal. Preferences,
+option values, defaults and Save/Close/Reset behavior remain unchanged.
+
+The wording identifies automatic terminal selection copying, its removal of
+surrounding whitespace and selection clearing, and the image option's page-overlay
+scope. Application title identifies terminal-program output rather than the SSH
+connection label. CJK ambiguous width describes two terminal cells, without
+claiming a general fix for Chinese text. Powerline wording describes use of the
+bundled symbols without implying a change in font priority or installation of
+the full Powerline application.
+
+The two palette groups use the product names StandTerm and Windows Terminal;
+Custom and Official are unnecessary descriptions. Their label attributes are
+set locally, keeping the shared translator's allowlist unchanged and preserving
+every option. Named themes, raw font-family strings and configuration values are
+not translated. Palette colors still come from the original theme keys. Only
+display labels and the three static sample status words are translated; sample
+commands, paths and color bindings remain intact.
+
+| Finding | Severity | Evidence | Critic remedy | Main response | Resolution | Validation |
+| --- | --- | --- | --- | --- | --- | --- |
+| Picture preview is limited to overlay image links | Medium | openUrlInOverlay and configureWebLinks | Name the overlay/terminal-link scope | Accept | Narrow both labels; retain Desktop restrictions and URL actions | Typed URL options remain intact; source review confirms unchanged opening handlers |
+| Selection copying trims text and clears selection | Low | Left-mouse-release handler | Add a concise consequence tooltip | Accept | State automatic copy and whitespace/selection effects | Tooltip translation plus unchanged-handler review; preference persistence checks |
+| Translating an optgroup/container can delete its children | Medium, integration guard | Shared translator textContent behavior | Set the two optgroup labels directly | Accept | Preserve option nodes/values and translator allowlist | Exact option counts, values and theme names in both locales |
+| Palette display names must not control color selection | Medium, integration guard | renderColorSchemePreview and SCHEMES | Keep typed keys and raw hex values | Accept | Separate display-name lookup from theme lookup | Sixteen swatches for each of two themes; changed display name still renders the typed selection |
+| Preserve sample text and describe Powerline as fallback | Editorial | Static sample markup and getTerminalFontFace | Leave all sample words and fallback wording unchanged | Modify | Translate only sample status words; describe bundled symbols rather than font priority | Sample commands/color bindings preserved; actual font and mirror behavior remain unchanged |
+
+Two bounded independent review passes found no remaining material issue. The
+second pass verified all 47 new key references, placeholders, literal
+interpolation and English fallback in memory. No CSS change was needed for the
+translated labels. Full image-opening and clipboard-trimming behavior tests
+remain existing coverage gaps, not reasons to change those handlers here.
+
+| Check | Result |
+| --- | --- |
+| Bilingual preference suite | Three cases passed in both locales, extended with exact custom font strings, Powerline opt-out and actual ambiguous-character width changing from one to two cells in terminal and mirror after Save. |
+| Bilingual appearance suite | One case passed in both locales: all six select value lists, ten theme names, palette color/title/aria values, display-name independence and preview without persistence. |
+| Existing appearance regressions | Four cases passed: platform font defaults/migration, Powerline existing/new/reloaded terminals, cursor existing/new terminals, and OSC application-title behavior. |
+| Layout | General/Appearance labels and controls fit at 480x600 without overlap or input-value changes. |
+| Catalog and static checks | Six exporter and six lookup tests passed; all 520 bilingual keys are referenced, catalog freshness, Python syntax and diff checks passed. |
+
+Validation uses WSL Chromium. Native Desktop was not qualified; external image
+preview restrictions there remain unchanged. The next candidate is a separate
+review of Server settings actions and their scope before translating them.

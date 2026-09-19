@@ -327,8 +327,8 @@ terminal; compact windows keep those actions in the Agent panel.
 Chinese (Taiwan) for browser access and recovery, Agent permissions, input and
 file-copy approvals, transfer results, local connection information, connection
 forms, SSH login, SSH profile/route editors (including browser-key and
-host-fingerprint controls), settings import/export, settings navigation and
-preference actions, user SSH tunnel controls, and Agent Tunnel setup/status. The choice
+host-fingerprint controls), settings navigation, General/Appearance preferences,
+settings import/export, user SSH tunnel controls, and Agent Tunnel setup/status. The choice
 applies the next time the page opens; saving it does not reload the current
 page or change its connections and grants. Other areas remain in English.
 **Save preferences** stores the General and Appearance preference fields.
