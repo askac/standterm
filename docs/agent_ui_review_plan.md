@@ -1,0 +1,112 @@
+# Agent reliability, UI copy, and localization plan
+
+## Scope and decisions
+
+Complete reliability fixes before changing UI copy or introducing localization.
+The traverse brief is review input, not a requirement to expand public discovery.
+
+| Decision | Resolution |
+| --- | --- |
+| Tokenless agentinfo | Keep the limited bootstrap and handoff index. Do not expose all ungranted terminals or add localization metadata. |
+| Omitted terminal | Preserve latest-handoff compatibility. Explicit terminal and token arguments remain authoritative. |
+| Capture timeout | `wait_ms` bounds the entire capture after the write, including settling. Retain the completed write and captured events on timeout; never resend automatically. |
+| Agent Mint default | Preserve the saved permission and current Full default. Copy changes do not change authorization. |
+| Display and control | Localized text is display data. Keep protocol values, error codes, terminal IDs, and control decisions independent of wording. |
+
+## Work sequence
+
+| Order | Work | State | Exit criteria |
+| --- | --- | --- | --- |
+| 1 | Preserve explicit CLI and REPL terminal selection | Implemented and validated | Explicit `main` and other IDs survive handoff loading; omitted IDs retain defaults; mismatched tokens cannot write. |
+| 2 | Bound capture settling by the total deadline | Implemented and validated | Quiet, continuous, late, and absent output produce bounded results without replaying input; the send result survives a capture timeout. |
+| 3 | Review English UI copy and terminology | Initial review table prepared | Review each proposed change for target, permissions, consequences, and next action; check related tooltips, Desktop help, and tests before applying it. |
+| 4 | Finalize the translation exchange table | Draft schema prepared | Stable keys, approved English source, context, and placeholder constraints are sufficient for an independent translator. |
+| 5 | Pilot localization in one complete Core workflow | Deferred | Cover static and dynamic text, titles, and accessible names; preserve connected sessions and authorization; support English fallback. |
+| 6 | Translate and integrate approved rows | Deferred | AI edits only target-language cells; validate keys and placeholders; review authorization and destructive-action wording. |
+| 7 | Expand Core and Desktop coverage | Deferred | Verify secondary windows, native menus, setup, diagnostics, packaging, and representative layouts. |
+
+## Validation of the reliability changes
+
+The new explicit-terminal regression failed before the CLI/REPL fix. The new
+continuous-output regression failed before the capture deadline fix.
+
+| Check | Result |
+| --- | --- |
+| Complete backend smoke suite | 169 checks passed. |
+| Complete CLI/helper smoke suite | 56 checks passed. |
+| Independent read-only diff review | No correctness or regression findings; separate in-memory checks covered deadline boundaries and explicit overrides. |
+| Initial copy-review table | 19 unique keys; valid columns and placeholders; translation cells intentionally empty. |
+| Diff whitespace check | Passed. |
+
+These checks ran in WSL. Browser, Desktop packaging, and physical UART checks
+were not rerun for these backend/helper changes. No runtime UI wording changed.
+
+## Deferred UI work
+
+Stages 3 and 4 do not change runtime UI text. Translation does not start until
+the English source for the selected workflow is reviewed. Extra screen diffing,
+render hints, key aliases, and byte-limit options remain optional optimizations.
+Unverified UART end-to-end coverage is a qualification gap, not evidence that
+UART is broken.
+
+## Copy review and AI translation exchange
+
+The adjacent `ui_copy_review.tsv` is an initial review table, not a complete
+catalog or a runtime resource. `en` contains a proposed source revision;
+`zh-TW` is intentionally empty. `current_en` is the visible English text, with
+dynamic values normalized to the named placeholders declared in the row.
+HTML emphasis is omitted from the table. Source references identify the current
+implementation and can move as the code changes.
+
+| Column | Ownership and purpose |
+| --- | --- |
+| `key` | Stable semantic identity, maintained by the implementer; never translate it. |
+| `current_en` | Review baseline, not a second runtime source. |
+| `en` | Proposed English source; becomes translation input only after review. |
+| `zh-TW` | Target-language text; the only field an outsourced translation agent edits. |
+| `context` | Meaning, audience, and placement. |
+| `placeholders` | Named runtime values that must remain unchanged in translation. |
+| `constraints` | Scope, safety, terminology, and formatting requirements. |
+| `status` | `proposed`, `retain`, or `remove` during copy review; use `source-approved` before translation and `translation-reviewed` after review. |
+| `source` | Implementation location for checking behavior and surrounding text. |
+
+Use UTF-8 TSV with one physical line per row. Represent intended line breaks as
+literal `\n`; disallow literal tabs or newlines inside cells. Use a proper TSV
+reader/writer for spreadsheet exchange. A removal row has an empty `en` cell
+and must not be translated. Empty translations fall back to English; they do
+not mean that the UI text should be removed.
+
+For translation, export only source-approved rows with their context and
+constraints. Keep the key set and all non-target cells unchanged on return.
+Validate duplicate/missing keys, named placeholder multiplicity, and unknown
+columns before accepting an AI-produced file. Render interpolated values as
+text; do not let translations introduce executable markup.
+
+Keep terminal output, commands, paths, fingerprints, protocol enums, and error
+codes unchanged. Human-facing labels may be localized independently of the
+machine-facing connection prompt. Do not translate an arbitrary backend error
+by matching its English message; use a known structured error code or preserve
+the original diagnostic as fallback.
+
+## Localization implementation boundary
+
+Use the approved table as the only manually maintained catalog and generate
+runtime dictionaries from it. A small exporter/validator and lookup helper are
+sufficient for a pilot; a new UI framework or bundler is not required. Keep the
+current direct-launch workflow and verify generated resources during packaging.
+
+Store language as a local display preference, not server-global session state.
+Do not reload a connected UI merely to change its language. A first version
+may apply the choice on the next UI opening; live switching across all open
+windows is a separate scope decision.
+
+The pilot must include dynamic states, `title`, `aria-label`, document language,
+and a narrow-window check. Keep behavior tests tied to IDs and typed state;
+assert localized wording in dedicated presentation checks. Fix the locale of
+existing English smoke tests so OS language does not change their results.
+
+The initial estimate is 4-7 engineering days for common Core workflows and
+15-25 days cumulatively for full Core plus Desktop. These are preliminary
+estimates, excluding the reliability fixes, website and CLI documentation,
+remote terminal output, and complete live language switching. A full string
+inventory and pilot are needed before committing to a delivery estimate.

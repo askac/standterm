@@ -4387,6 +4387,7 @@ def build_external_agent_send_capture_payload(bridge, state, before_output_seq,
                                               strip_ansi=False):
     wait_ms = parse_external_agent_send_capture_wait_ms(wait_ms)
     settle_ms = parse_external_agent_send_capture_settle_ms(settle_ms)
+    deadline = time.monotonic() + wait_ms / 1000.0
     context_error = get_external_agent_capture_context_error(state)
     if context_error:
         return None, context_error
@@ -4395,7 +4396,6 @@ def build_external_agent_send_capture_payload(bridge, state, before_output_seq,
         since_output_seq=before_output_seq,
         limit=limit,
     )
-    deadline = time.monotonic() + wait_ms / 1000.0
     timed_out = False
 
     while not tail['events'] and not tail['gap']['detected']:
@@ -4422,8 +4422,9 @@ def build_external_agent_send_capture_payload(bridge, state, before_output_seq,
             context_error = get_external_agent_capture_context_error(state)
             if context_error:
                 return None, context_error
-            remaining = settle_deadline - time.monotonic()
+            remaining = min(settle_deadline, deadline) - time.monotonic()
             if remaining <= 0:
+                timed_out = settle_deadline > deadline
                 break
             with bridge.output_condition:
                 bridge.output_condition.wait(timeout=min(remaining, 0.25))
@@ -4436,7 +4437,7 @@ def build_external_agent_send_capture_payload(bridge, state, before_output_seq,
                 tail = latest
                 last_output_seq = latest['output_seq']
                 settle_deadline = time.monotonic() + settle_ms / 1000.0
-        settled = True
+        settled = not timed_out
 
     context_error = get_external_agent_capture_context_error(state)
     if context_error:

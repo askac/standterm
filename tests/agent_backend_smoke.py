@@ -2322,6 +2322,67 @@ def test_external_agent_send_wait_times_out_without_output():
     client.disconnect()
 
 
+def test_external_agent_send_capture_bounds_settle_and_preserves_written_result():
+    cases = (
+        ('settled', [0.01], False),
+        ('continuous', [0.01 + index * 0.02 for index in range(20)], True),
+        ('late', [0.09], True),
+    )
+    for name, output_times, timed_out in cases:
+        client = make_client()
+        session_token = current_session_token()
+        bridge = add_dummy_bridge(session_token)
+        sid = current_sid_for_session(session_token)
+        client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+        client.emit(standterm.AGENT_EVENT_MODE_SET, {
+            'terminal_id': standterm.TERMINAL_ID_MAIN,
+            'mode': 'direct',
+        })
+        token, _record, error_code = standterm.mint_external_agent_attach_token(
+            session_token, standterm.TERMINAL_ID_MAIN, sid,
+        )
+        assert error_code is None
+        clock = [0.0]
+        pending = list(output_times)
+        emitted = []
+
+        def wait_for_output(timeout):
+            wake_at = clock[0] + timeout
+            if pending and pending[0] <= wake_at:
+                clock[0] = pending.pop(0)
+                text = f'{name}-{len(emitted)}\n'
+                emitted.append(text)
+                bridge.emit_output({'message_type': 'terminal', 'data': text})
+            else:
+                clock[0] = wake_at
+
+        try:
+            with patch.object(standterm.time, 'monotonic', side_effect=lambda: clock[0]), \
+                    patch.object(bridge.output_condition, 'wait', side_effect=wait_for_output):
+                result = standterm.process_external_agent_command({
+                    'op': 'send-wait',
+                    'token': token,
+                    'terminal_id': standterm.TERMINAL_ID_MAIN,
+                    'data': 'run-once\n',
+                    'wait_ms': 100,
+                    'settle_ms': 30,
+                })
+            assert clock[0] <= 0.1 + 1e-9, name
+            assert result['status'] == standterm.AGENT_STATUS_COMPLETED
+            assert result['bytes_written'] == len('run-once\n')
+            assert bridge.writes == ['run-once\n']
+            capture = result['capture']
+            assert capture['status'] == ('timeout' if timed_out else 'ok'), name
+            assert capture['timed_out'] is timed_out, name
+            assert capture['settled'] is not timed_out, name
+            assert [event['data'] for event in capture['events']] == emitted
+            assert emitted
+            if timed_out:
+                assert abs(clock[0] - 0.1) < 1e-9, name
+        finally:
+            client.disconnect()
+
+
 def test_external_agent_approval_send_capture_is_pending_without_capture():
     client = make_client()
     session_token = current_session_token()
@@ -3007,7 +3068,7 @@ def test_external_agent_per_terminal_handoffs_are_isolated_and_cli_resolvable():
     flask_client = make_flask_client()
     client = make_socket_client(flask_client)
     session_token = current_session_token()
-    terminal_ids = ('term-2', 'term-3')
+    terminal_ids = ('main', 'term-2', 'term-3')
     bridges_by_terminal = {}
     for terminal_id in terminal_ids:
         bridge = DummyBridge(session_token, terminal_id)
@@ -3106,8 +3167,24 @@ def test_external_agent_per_terminal_handoffs_are_isolated_and_cli_resolvable():
             for thread in threads:
                 thread.join()
             assert all(result['status'] == standterm.AGENT_STATUS_COMPLETED for result in results.values())
+            assert bridges_by_terminal['main'].writes == ['main-input\n']
             assert bridges_by_terminal['term-2'].writes == ['term-2-input\n']
             assert bridges_by_terminal['term-3'].writes == ['term-3-input\n']
+
+            def post_cli_command(_url, payload, **_kwargs):
+                result = standterm.process_external_agent_command(payload)
+                return 200, result
+
+            output = io.StringIO()
+            with patch.object(sys, 'argv', [
+                'agent_cli.py', '--handoff', str(standterm.EXTERNAL_AGENT_HANDOFF_PATH),
+                '--terminal', 'main', 'send', '--text', 'wrong-target\n',
+            ]), patch.object(agent_cli, 'post_json', side_effect=post_cli_command), \
+                    contextlib.redirect_stdout(output):
+                assert agent_cli.main() == 1
+            assert json.loads(output.getvalue())['error_code'] == standterm.AGENT_ERROR_TERMINAL_MISMATCH
+            for terminal_id in terminal_ids:
+                assert bridges_by_terminal[terminal_id].writes == [f'{terminal_id}-input\n']
 
             mismatch = standterm.process_external_agent_command({
                 'op': 'screen',
@@ -8675,6 +8752,7 @@ def main():
         test_external_agent_direct_send_capture_returns_tail_after_write,
         test_external_agent_send_wait_strip_ansi_formats_capture_only_when_requested,
         test_external_agent_send_wait_times_out_without_output,
+        test_external_agent_send_capture_bounds_settle_and_preserves_written_result,
         test_external_agent_approval_send_capture_is_pending_without_capture,
         test_external_agent_send_capture_reports_pause_as_nested_capture_error,
         test_human_input_lease_blocks_external_agent_send,
