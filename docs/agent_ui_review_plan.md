@@ -43,7 +43,7 @@ do not consolidate them merely to shorten labels.
 | 3 | Review English UI copy and terminology | Core terms agreed; initial English sources reviewed | Review each proposed change for target, permissions, consequences, and next action; check related tooltips, Desktop help, and tests before applying it. |
 | 4 | Finalize the translation exchange table | Initial exchange validated with an independent translator | Stable keys, approved English source, context, and placeholder constraints are sufficient for an independent translator. |
 | 5 | Pilot Agent access and local connection information | Implemented; validation below | Cover static and dynamic text, titles, and accessible names; preserve connected sessions and authorization; support English fallback. |
-| 6 | Translate and integrate approved rows | Agent pilot, browser access/recovery, Agent approvals/transfers, connection/login controls, SSH route/profile editors and settings transfer integrated | AI edits only target-language cells; validate keys and placeholders; review authorization and destructive-action wording. |
+| 6 | Translate and integrate approved rows | Agent pilot, browser access/recovery, Agent approvals/transfers, connection/login controls, SSH route/profile editors, settings transfer and preference actions integrated | AI edits only target-language cells; validate keys and placeholders; review authorization and destructive-action wording. |
 | 7 | Expand Core and Desktop coverage | Deferred | Verify secondary windows, native menus, setup, diagnostics, packaging, and representative layouts. |
 
 ## Validation of the reliability changes
@@ -370,3 +370,49 @@ The next small candidate is reviewing reset-to-defaults and general settings
 navigation, especially what reset changes and what its reload stops. Desktop,
 remaining settings panels and full runtime diagnostic localization remain outside
 this completed workflow.
+
+## Settings navigation and preference actions
+
+Settings navigation, heading, close accessible name, preference actions and their
+scope hints now use reviewed English and Traditional Chinese. The table contains
+406 rows: 405 bilingual messages and the existing removal. The language-preview
+hint is shorter; README retains the detailed coverage list. The appearance
+preview note matches the renamed Save preferences button.
+
+Save preferences reads the General and Appearance fields and applies terminal
+appearance without reloading. Close only hides the modal; reopening repopulates
+these fields from saved preferences. SSH profile actions, immediate history
+preferences, imports and Server actions keep their own persistence rules.
+Reset preferences immediately restores every PREF_DEFAULTS entry and reloads,
+including language, history-saving preference and default Agent permission.
+Changing the default permission does not itself grant Agent access. Reload
+loses unsaved drafts and stops this page's temporary SSH tunnels. Saved SSH
+profiles, history, keys and Agent panel position stay stored.
+
+The footer explains both actions on every tab, with separate accessible
+descriptions. Its hints stay outside the scrolling tab content. No handlers,
+typed tab IDs, storage order, authorization rules or confirmation flows changed.
+
+| Finding | Severity | Evidence | Critic remedy | Main response | Resolution | Validation |
+| --- | --- | --- | --- | --- | --- | --- |
+| Save and Close do not commit or undo every settings operation | Medium | Preference handlers, independent SSH/Server actions and immediate history toggle | Name preference scope; avoid global save/cancel claims | Accept | Use Save preferences and Close settings; describe separate actions | Bilingual draft/close/save checks plus existing SSH profile save-semantics regression |
+| Reset is broader than Save and discards unsaved drafts | Medium | PREF_DEFAULTS, reset handler and independent SSH key/profile storage | Distinguish all browser preferences, saved data and drafts | Accept | State immediate defaults/reload, draft loss and saved SSH retention | Real reload restores complete platform defaults; exact SSH/history/key and unrelated storage retention |
+| Consequences must remain visible beside Reset | Low | Existing modal scrolling boundary and disconnect tunnel cleanup | Persistent hints, accessible descriptions and narrow/short-window checks | Accept | Nonshrinking footer with wrapping action row; explicitly scope tunnels to this page | Both locales, all five tabs, content scroll endpoints at 1280x800, 480x800 and 480x600 |
+| Additional Reset confirmation | Optional UX policy | Reset already executes immediately | Alternative confirmation can reduce accidental activation | Defer | Preserve workflow and provide visible consequences | Reconsider if accidental resets are reported or confirmation is requested |
+
+Two bounded independent review passes found no remaining material issue. The
+second pass suggested naming this page's tunnels explicitly; that clarification
+was adopted. The tests exercise actual preference storage and reload, not only
+matching translated labels. Existing non-atomic storage behavior is unchanged.
+
+| Check | Result |
+| --- | --- |
+| New preference browser suite | Three cases passed in both languages: draft/close/save and next-page locale, complete reset/reload boundaries, and navigation/footer layout. |
+| Existing focused regressions | Three cases passed: SSH profile save semantics, key/settings transfer lifecycle, and language behavior with existing access. |
+| Catalog | Six exporter and six lookup tests passed; all 405 bilingual keys are referenced and the generated catalog is current. |
+| Static checks | Python syntax and diff whitespace checks passed. |
+
+Validation uses WSL Chromium; native Desktop and operating-system dialogs were
+not part of this phase. Remaining General/Appearance fields, Server controls and
+Diagnostics content still have English copy. The next candidate is a separate
+review of SSH tunnel setup/stop wording and target scope before localization.

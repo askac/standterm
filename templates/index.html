@@ -482,7 +482,9 @@
             background: #0d0d0d; border: 1px solid #444; border-radius: 5px; color: #ddd;
             padding: 10px; font: 11px/1.45 Consolas, "Courier New", monospace; white-space: pre; outline: none;
         }
-        .settings-footer { display: flex; justify-content: space-between; padding: 12px 20px; border-top: 1px solid #3a3a3c; }
+        .settings-footer { display: flex; flex-direction: column; flex-shrink: 0; gap: 8px; padding: 12px 20px; border-top: 1px solid #3a3a3c; }
+        .settings-footer .settings-status { margin: 0; }
+        .settings-footer-actions { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
         .settings-btn { padding: 7px 18px; border: none; border-radius: 5px; cursor: pointer; font-size: 13px; }
 
         /* Controls */
@@ -1118,25 +1120,25 @@
     <div id="settings-modal">
         <div class="settings-box">
             <div class="settings-header">
-                <h3>Settings</h3>
-                <button class="header-btn" id="settings-close" style="background:#ff453a;">&times;</button>
+                <h3 data-i18n="settings.title">Settings</h3>
+                <button class="header-btn" id="settings-close" style="background:#ff453a;" aria-label="Close settings" title="Close settings" data-i18n-aria-label="settings.close" data-i18n-title="settings.close">&times;</button>
             </div>
             <div class="settings-body">
                 <div class="settings-nav">
-                    <div class="settings-nav-item active" data-tab="general">General</div>
-                    <div class="settings-nav-item" data-tab="appearance">Appearance</div>
+                    <div class="settings-nav-item active" data-tab="general" data-i18n="settings.nav.general">General</div>
+                    <div class="settings-nav-item" data-tab="appearance" data-i18n="settings.nav.appearance">Appearance</div>
                     <div class="settings-nav-item" data-tab="ssh-sessions" data-i18n="ssh.profiles.title">SSH profiles</div>
-                    <div class="settings-nav-item" data-tab="server">Server</div>
-                    <div class="settings-nav-item" data-tab="diagnostics">Diagnostics</div>
+                    <div class="settings-nav-item" data-tab="server" data-i18n="settings.nav.server">Server</div>
+                    <div class="settings-nav-item" data-tab="diagnostics" data-i18n="settings.nav.diagnostics">Diagnostics</div>
                 </div>
                 <div class="settings-content">
                     <div class="settings-tab active" id="tab-general">
                         <fieldset class="settings-fieldset">
-                            <legend>General</legend>
+                            <legend data-i18n="settings.nav.general">General</legend>
                             <div class="settings-row"><label for="pref-uiLanguage" data-i18n="settings.language.label">Language (preview)</label>
                                 <select id="pref-uiLanguage"><option value="en">English</option><option value="zh-TW" lang="zh-TW">繁體中文（台灣）</option></select>
                             </div>
-                            <div class="settings-status" data-i18n="settings.language.hint">Applies next time you open this page to browser and Agent access, approvals, transfers, connection forms, SSH login/editors and settings import/export. Other areas remain in English.</div>
+                            <div class="settings-status" data-i18n="settings.language.hint">Applies next time you open this page. Some areas remain in English.</div>
                             <div class="settings-row"><label for="pref-useCustomMenu">Enable custom context menu</label><input type="checkbox" id="pref-useCustomMenu"></div>
                             <div class="settings-row"><label for="pref-copyOnSelect">Copy on select</label><input type="checkbox" id="pref-copyOnSelect"></div>
                             <div class="settings-row"><label for="pref-enablePicPreview">Enable pic preview</label><input type="checkbox" id="pref-enablePicPreview"></div>
@@ -1170,7 +1172,7 @@
                     </div>
                     <div class="settings-tab" id="tab-appearance">
                         <fieldset class="settings-fieldset">
-                            <legend>Appearance</legend>
+                            <legend data-i18n="settings.nav.appearance">Appearance</legend>
                             <div class="settings-row"><label for="pref-colorScheme">Color scheme</label>
                                 <select id="pref-colorScheme">
                                     <optgroup label="Custom">
@@ -1196,7 +1198,7 @@
                                 <div>$ <span class="settings-theme-cursor" aria-label="Cursor"></span></div>
                                 <div class="settings-theme-palette"></div>
                             </div>
-                            <div class="settings-status">Preview only. Save Changes applies this theme.</div>
+                            <div class="settings-status" data-i18n="settings.theme_preview_hint">Preview only. Save preferences applies this theme.</div>
                             <div class="settings-row"><label for="pref-fontFace">Font face</label><input type="text" id="pref-fontFace"></div>
                             <div class="settings-row"><label for="pref-powerlineSymbols" title="Use the bundled Powerline symbols font as a fallback for prompt glyphs such as the branch symbol.">Enable Powerline symbol fallback</label><input type="checkbox" id="pref-powerlineSymbols"></div>
                             <div class="settings-row"><label for="pref-fontSize">Font size</label><input type="number" id="pref-fontSize" min="8" max="32"></div>
@@ -1308,8 +1310,12 @@
                 </div>
             </div>
             <div class="settings-footer">
-                <button class="settings-btn" id="settings-reset" style="background:#3a3a3c; color:#aaa;">Reset</button>
-                <button class="settings-btn" id="settings-save" style="background:#0a84ff; color:white;">Save Changes</button>
+                <div class="settings-status" id="settings-save-hint" data-i18n="settings.save_scope_hint">Saves General and Appearance preferences. Other settings have separate actions.</div>
+                <div class="settings-status" id="settings-reset-hint" data-i18n="settings.reset_hint">Immediately restores default browser preferences and reloads this page. Unsaved edits are lost and this page's temporary SSH tunnels stop. Saved SSH profiles and keys remain.</div>
+                <div class="settings-footer-actions">
+                    <button class="settings-btn" id="settings-reset" style="background:#3a3a3c; color:#aaa;" aria-describedby="settings-reset-hint" data-i18n="settings.reset">Reset preferences</button>
+                    <button class="settings-btn" id="settings-save" style="background:#0a84ff; color:white;" aria-describedby="settings-save-hint" data-i18n="settings.save">Save preferences</button>
+                </div>
             </div>
         </div>
     </div>

@@ -327,9 +327,15 @@ terminal; compact windows keep those actions in the Agent panel.
 Chinese (Taiwan) for browser access and recovery, Agent permissions, input and
 file-copy approvals, transfer results, local connection information, connection
 forms, SSH login, SSH profile/route editors (including browser-key and
-host-fingerprint controls), and settings import/export. The choice
+host-fingerprint controls), settings import/export, and settings navigation and
+preference actions. The choice
 applies the next time the page opens; saving it does not reload the current
 page or change its connections and grants. Other areas remain in English.
+**Save preferences** stores the General and Appearance preference fields.
+Other settings have separate actions. **Reset preferences** immediately restores
+all browser preference defaults and reloads the page, losing unsaved edits and
+stopping this page's temporary SSH tunnels. Saved SSH profiles, history and keys,
+and the Agent panel position remain stored.
 The [copy and translation table](docs/ui_copy_review.tsv) and
 [localization plan](docs/agent_ui_review_plan.md) describe the review workflow.
 
