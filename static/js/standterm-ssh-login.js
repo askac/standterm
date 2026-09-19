@@ -1,12 +1,18 @@
 (function() {
     'use strict';
 
-    window.StandTermSshLogin = function({ terminalId, attemptId, route, send, cancel, back, isActive }) {
+    window.StandTermSshLogin = function({ terminalId, attemptId, route, send, cancel, back, isActive, translate }) {
+        const t = (key, fallback, params = {}) => {
+            const translated = typeof translate === 'function' ? translate(key, params) : key;
+            if (translated !== key) return translated;
+            return fallback.replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g,
+                (placeholder, name) => Object.hasOwn(params, name) ? String(params[name]) : placeholder);
+        };
         const element = document.createElement('section');
         element.className = 'ssh-login-flow';
         const progress = document.createElement('div');
         progress.className = 'ssh-login-progress';
-        progress.setAttribute('aria-label', 'SSH connection progress');
+        progress.setAttribute('aria-label', t('ssh.login.progress', 'SSH connection progress'));
         const source = document.createElement('span');
         source.textContent = 'Core';
         source.dataset.phase = 'complete';
@@ -25,12 +31,23 @@
             parent.append(value);
             return value;
         };
-        const labels = { waiting: 'Waiting', connect: 'Connecting', forward: 'Opening next hop',
-            verify_and_authenticate: 'Verifying host', local_keys: 'Trying local keys', host_key: 'Confirm host key',
-            password: 'Requires password', authenticate: 'Authenticating', authenticated: 'OK',
-            shell: 'Opening terminal', complete: 'OK', failed: 'Failed' };
+        const labels = {
+            waiting: t('ssh.login.waiting', 'Waiting'),
+            connect: t('ssh.login.connecting', 'Connecting'),
+            forward: t('ssh.login.forwarding', 'Opening next hop'),
+            verify_and_authenticate: t('ssh.login.verifying', 'Verifying host'),
+            local_keys: t('ssh.login.local_keys', 'Trying local keys'),
+            host_key: t('ssh.login.host_key', 'Confirm host key'),
+            password: t('ssh.login.password_required', 'Requires password'),
+            authenticate: t('ssh.login.authenticating', 'Authenticating'),
+            authenticated: t('ssh.login.authenticated', 'Authenticated'),
+            shell: t('ssh.login.opening_terminal', 'Opening terminal'),
+            complete: t('ssh.login.complete', 'Complete'),
+            failed: t('ssh.login.failed', 'Failed'),
+        };
         const nodes = route.map((node, index) => {
-            const role = index === route.length - 1 ? 'Target' : `Node ${index + 1}`;
+            const role = index === route.length - 1 ? t('ssh.login.target', 'Target')
+                : t('ssh.login.node', 'Node {number}', { number: index + 1 });
             const marker = document.createElement('span');
             marker.textContent = role;
             marker.dataset.phase = 'waiting';
@@ -59,8 +76,8 @@
             return { id: node.node_id, role, card, marker, status, body, phase: 'waiting', request: null };
         });
         element.append(message, actions);
-        const cancelButton = button('Cancel connection', cancel, actions);
-        const backButton = button('Back to connection settings', back, actions);
+        const cancelButton = button(t('ssh.login.cancel', 'Cancel connection'), cancel, actions);
+        const backButton = button(t('ssh.login.back', 'Back to connection settings'), back, actions);
         backButton.hidden = true;
         let activeIndex = -1;
         let finished = false;
@@ -118,23 +135,23 @@
             if (data.kind === 'password') {
                 const form = document.createElement('form');
                 const label = document.createElement('label');
-                label.textContent = 'Password';
+                label.textContent = t('ssh.login.password', 'Password');
                 const input = document.createElement('input');
                 input.type = 'password';
                 input.autocomplete = 'off';
-                input.setAttribute('aria-label', `${node.role} password`);
+                input.setAttribute('aria-label', t('ssh.login.password_for_node', '{role} password', { role: node.role }));
                 label.append(input);
                 form.append(label);
-                const submit = button('Log in', () => {}, form);
+                const submit = button(t('ssh.login.submit', 'Log in'), () => {}, form);
                 submit.type = 'submit';
                 form.onsubmit = event => { event.preventDefault(); reply({ password: input.value }); };
                 node.body.append(form);
             } else {
                 const question = document.createElement('p');
-                question.textContent = data.question || 'Remember this host key?';
+                question.textContent = data.question || t('ssh.login.remember_host_key', 'Remember this host key?');
                 node.body.append(question);
-                button('Trust and continue', () => reply({ accept: true }), node.body);
-                button('Cancel connection', cancel, node.body).dataset.defaultFocus = 'true';
+                button(t('ssh.login.trust', 'Trust and continue'), () => reply({ accept: true }), node.body);
+                button(t('ssh.login.cancel', 'Cancel connection'), cancel, node.body).dataset.defaultFocus = 'true';
             }
             requestAnimationFrame(focus);
             return true;

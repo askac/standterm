@@ -43,7 +43,7 @@ do not consolidate them merely to shorten labels.
 | 3 | Review English UI copy and terminology | Core terms agreed; initial English sources reviewed | Review each proposed change for target, permissions, consequences, and next action; check related tooltips, Desktop help, and tests before applying it. |
 | 4 | Finalize the translation exchange table | Initial exchange validated with an independent translator | Stable keys, approved English source, context, and placeholder constraints are sufficient for an independent translator. |
 | 5 | Pilot Agent access and local connection information | Implemented; validation below | Cover static and dynamic text, titles, and accessible names; preserve connected sessions and authorization; support English fallback. |
-| 6 | Translate and integrate approved rows | Agent pilot plus browser access/recovery and Agent approvals/transfers integrated | AI edits only target-language cells; validate keys and placeholders; review authorization and destructive-action wording. |
+| 6 | Translate and integrate approved rows | Agent pilot, browser access/recovery, Agent approvals/transfers and connection/login controls integrated | AI edits only target-language cells; validate keys and placeholders; review authorization and destructive-action wording. |
 | 7 | Expand Core and Desktop coverage | Deferred | Verify secondary windows, native menus, setup, diagnostics, packaging, and representative layouts. |
 
 ## Validation of the reliability changes
@@ -66,7 +66,7 @@ validated separately below.
 
 ## Deferred UI work
 
-General connection forms, Agent diagnostics, SSH tunnel setup, secondary windows,
+Full SSH route/profile editors, Agent diagnostics, SSH tunnel setup, secondary windows,
 and Desktop localization remain outside the completed workflows. Translation
 starts only after the English source for the selected workflow is reviewed.
 Extra screen diffing, render hints, key aliases, and byte-limit options remain optional optimizations.
@@ -227,3 +227,51 @@ focused cases above validate that final correction. Native Desktop packaging,
 real platform authenticator prompts and physical UART were not requalified.
 Core packaging already requires both runtime catalog files and the source table;
 this phase adds no new runtime asset or dependency.
+
+## Connection forms and SSH login implementation
+
+The connection form, direct/history picker, saved-route summary, per-node SSH
+login, direct browser-key controls and direct host-fingerprint controls now use
+the same reviewed catalog. The table contains 274 rows: 273 bilingual messages
+and the existing decorative removal. All exported keys have source references.
+`Save session` now reads `Save connection profile`; this saves reusable settings,
+not the terminal's execution state. The Local Shell tooltip identifies the
+StandTerm host as the execution host. TCP port and UART port remain distinct.
+
+SSH `authenticated`, `shell` and `complete` display `Authenticated`, `Opening
+terminal` and `Complete`. Intermediate nodes can complete without opening their
+own terminal. Schema defaults, manually edited fields, backend shell/serial option
+labels, raw endpoints, key references, fingerprints and server diagnostics remain
+unchanged. Dynamic modules take an optional translator; callers outside this
+phase retain English fallback. The full route/profile editors, tunnel setup,
+Desktop UI and general backend diagnostics remain deferred.
+
+The independent adversarial review completed two bounded passes. It identified
+implementation constraints rather than existing runtime defects; the final
+source review found no material regression.
+
+| Finding | Severity | Evidence | Critic remedy | Main response | Resolution | Validation |
+| --- | --- | --- | --- | --- | --- | --- |
+| SSH phase labels also validate incoming enum values | Medium guard | `standterm-ssh-login.js` labels and handle | Preserve all enum keys; translate only values | Accept | All 12 phase keys and target authenticated-to-shell mapping remain intact | Bilingual phase/prompt tests and real three-hop login |
+| Optional translation must distinguish lookup parameters from fallback copy | Medium guard | `standterm-i18n.js` lookup contract and three SSH factories | Use a thin local fallback wrapper | Accept | Inject `translate(key, params)`; interpolate fallback once only when no key resolves | Missing/absent translator and literal-placeholder tests |
+| Longer wording could clarify Saved routes | Optional wording | Route heading and surrounding SSH form | Consider a longer connection-route label | Keep the shorter label in the existing SSH context | Critic accepted the scoped wording | Desktop/narrow-width label fit checks |
+
+The review added explicit fallback and enum coverage. It did not expand public
+agentinfo or change permission policy, connection routing, default cancel focus,
+or retry behavior. Full editor localization is deferred until its complete
+editing/saving workflow receives a separate copy review. No policy question is
+outstanding for this phase.
+
+| Check | Result |
+| --- | --- |
+| Complete Agent browser suite | 56 top-level cases passed, including localized browser access, approvals, transfers, schema controls, credential redaction and host-key action binding. |
+| SSH preparation browser suite | Nine cases passed, including atomic temporary keys, saved per-hop authentication, fingerprint management, background login and history retention. |
+| SSH login browser suite | Five cases passed, including real three-hop password login, English/Traditional Chinese stale and background prompts, exact host-key/password replies, all phase enums and missing/absent translation fallback. |
+| Connection localization browser suite | Three cases passed: bilingual exact SSH payloads, schema/edited values, raw shell/serial labels, key references, literal placeholders, and stale fingerprint-action binding. |
+| Connection layout | English and Traditional Chinese form headings, actions and save-profile labels fit at 1280 and 480 pixel widths. |
+| Catalog | Six exporter and six lookup tests passed; generated catalog freshness and all 273 referenced bilingual keys verified. |
+
+Validation ran in WSL Chromium. Native Desktop, physical UART and complete
+route/profile editor localization were not qualified by this phase. The next
+candidate is a separate review of those editors' naming, saving and key-retention
+copy before expanding their translation coverage.

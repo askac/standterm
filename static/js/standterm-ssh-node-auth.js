@@ -4,7 +4,13 @@
 
     window.StandTermSshNodeAuth = function({ parent, role, authentication, endpoint, profiles,
         savedKeys, newKeys, keyAllowed, createKey, copyPublicKey, onBusy, onChange,
-        useKeyInput, labelElement, resetOnEndpointChange = false }) {
+        useKeyInput, labelElement, resetOnEndpointChange = false, translate }) {
+        const t = (key, fallback, params = {}) => {
+            const translated = typeof translate === 'function' ? translate(key, params) : key;
+            if (translated !== key) return translated;
+            return fallback.replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g,
+                (placeholder, name) => Object.hasOwn(params, name) ? String(params[name]) : placeholder);
+        };
         const panel = document.createElement('div');
         panel.className = 'ssh-node-key';
         const row = document.createElement('div');
@@ -14,24 +20,24 @@
         label.hidden = false;
         const useKey = useKeyInput || document.createElement('input');
         useKey.type = 'checkbox';
-        useKey.setAttribute('aria-label', `${role} Use key`);
+        useKey.setAttribute('aria-label', t('ssh.key.use_for_node', '{role} Use key', { role }));
         useKey.checked = authentication.method === 'browser-key';
-        label.replaceChildren(useKey, document.createTextNode('Use key'));
+        label.replaceChildren(useKey, document.createTextNode(t('ssh.key.use', 'Use key')));
         const publicKey = document.createElement('input');
         publicKey.type = 'text';
         publicKey.className = 'ssh-node-public-key';
-        publicKey.setAttribute('aria-label', `${role} Public key`);
+        publicKey.setAttribute('aria-label', t('ssh.key.public_for_node', '{role} Public key', { role }));
         publicKey.readOnly = true;
-        publicKey.placeholder = 'No key for this endpoint';
+        publicKey.placeholder = t('ssh.key.no_key', 'No key for this endpoint');
         const copy = document.createElement('button');
         copy.type = 'button';
         copy.className = 'ssh-key-copy';
         copy.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg>';
-        copy.title = 'Copy public key';
-        copy.setAttribute('aria-label', 'Copy public key');
+        copy.title = t('ssh.key.copy_public', 'Copy public key');
+        copy.setAttribute('aria-label', t('ssh.key.copy_public', 'Copy public key'));
         row.append(label, publicKey, copy);
         const keys = document.createElement('select');
-        keys.setAttribute('aria-label', `${role} Browser key`);
+        keys.setAttribute('aria-label', t('ssh.key.browser_for_node', '{role} Browser key', { role }));
         const status = document.createElement('p');
         status.className = 'ssh-key-status';
         panel.append(row, keys, status);
@@ -63,9 +69,9 @@
             if (!selected && available.length === 1) selected = reference(available[0]);
             currentRecord = selected && available.find(record => record.keyId === selected.keyId
                 && JSON.stringify(reference(record)) === JSON.stringify(selected));
-            keys.replaceChildren(new Option('Choose a saved key...', ''));
+            keys.replaceChildren(new Option(t('ssh.key.choose_saved', 'Choose a saved key...'), ''));
             for (const record of available) keys.add(new Option(record.fingerprint, record.keyId));
-            if (selected && !currentRecord) keys.add(new Option('Saved key unavailable for this endpoint', selected.keyId));
+            if (selected && !currentRecord) keys.add(new Option(t('ssh.key.saved_unavailable', 'Saved key unavailable for this endpoint'), selected.keyId));
             keys.value = selected?.keyId || '';
             keys.hidden = available.length < 2 && (!selected || !!currentRecord);
             keys.disabled = generating || !keyAllowed;
@@ -74,14 +80,14 @@
             publicKey.title = currentRecord?.fingerprint || '';
             publicKey.classList.toggle('inactive', !useKey.checked);
             copy.disabled = !currentRecord;
-            status.textContent = generating ? 'Creating key…' : !keyAllowed
-                ? 'Key authentication requires localhost or an authorized HTTPS connection.'
+            status.textContent = generating ? t('ssh.key.creating', 'Creating key…') : !keyAllowed
+                ? t('ssh.key.requires_authorization', 'Key authentication requires localhost or an authorized HTTPS connection.')
                 : currentRecord ? newKeys.has(currentRecord.keyId)
-                    ? 'Temporary key. Save the session or route to keep it.'
-                    : 'Saved key. Copy it to the remote account’s authorized_keys if needed.'
-                : selected ? 'The selected key is unavailable. Choose a saved key or turn Use key off and on to create one.'
-                : available.length > 1 ? 'Choose which saved key to use.'
-                : 'Select Use key to create a key for this endpoint.';
+                    ? t('ssh.key.temporary', 'Temporary key. Save the connection profile or route to keep it.')
+                    : t('ssh.key.saved', 'Saved key. Copy it to the remote account’s authorized_keys if needed.')
+                : selected ? t('ssh.key.selection_unavailable', 'The selected key is unavailable. Choose a saved key or turn Use key off and on to create one.')
+                : available.length > 1 ? t('ssh.key.choose_hint', 'Choose which saved key to use.')
+                : t('ssh.key.create_hint', 'Select Use key to create a key for this endpoint.');
         }
         useKey.onchange = async () => {
             if (!useKey.checked) { update(); onChange(); return; }
@@ -102,7 +108,7 @@
                 newKeys.set(record.keyId, record);
                 if (isCurrent()) selected = reference(record);
             } catch (err) {
-                errorMessage = err.message || 'Browser key creation failed.';
+                errorMessage = err.message || t('ssh.key.creation_failed', 'Browser key creation failed.');
             } finally {
                 generating = false;
                 onBusy(-1);

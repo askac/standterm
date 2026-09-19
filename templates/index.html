@@ -1136,7 +1136,7 @@
                             <div class="settings-row"><label for="pref-uiLanguage" data-i18n="settings.language.label">Language (preview)</label>
                                 <select id="pref-uiLanguage"><option value="en">English</option><option value="zh-TW" lang="zh-TW">繁體中文（台灣）</option></select>
                             </div>
-                            <div class="settings-status" data-i18n="settings.language.hint">Applies next time you open this page: browser access, Agent permissions, approvals, transfers and local connection info. Other areas remain in English.</div>
+                            <div class="settings-status" data-i18n="settings.language.hint">Applies next time you open this page to browser and Agent access, approvals, transfers, connection forms and SSH login. Other areas remain in English.</div>
                             <div class="settings-row"><label for="pref-useCustomMenu">Enable custom context menu</label><input type="checkbox" id="pref-useCustomMenu"></div>
                             <div class="settings-row"><label for="pref-copyOnSelect">Copy on select</label><input type="checkbox" id="pref-copyOnSelect"></div>
                             <div class="settings-row"><label for="pref-enablePicPreview">Enable pic preview</label><input type="checkbox" id="pref-enablePicPreview"></div>
@@ -1366,57 +1366,57 @@
         <div id="connection-form">
             <div class="mode-selector" id="modeSelector">
                 <label data-mode="ssh"><input type="radio" name="connection_type" value="ssh">SSH</label>
-                <label data-mode="local_shell"><input type="radio" name="connection_type" value="local_shell">Local Shell</label>
+                <label data-mode="local_shell" title="Runs on the StandTerm host." data-i18n-title="connection.local_shell_hint"><input type="radio" name="connection_type" value="local_shell"><span data-i18n="connection.local_shell">Local Shell</span></label>
                 <label data-mode="uart"><input type="radio" name="connection_type" value="uart">UART</label>
             </div>
             <div id="ssh-fields">
                 <section class="ssh-preparation-pane" id="ssh-direct-pane">
-                    <button type="button" id="ssh-direct-heading" class="ssh-preparation-heading" aria-expanded="true" aria-controls="ssh-direct-body"><span class="ssh-pane-selection">●</span>Direct connect<small id="ssh-direct-summary"></small></button>
+                    <button type="button" id="ssh-direct-heading" class="ssh-preparation-heading" aria-expanded="true" aria-controls="ssh-direct-body"><span class="ssh-pane-selection">●</span><span data-i18n="connection.direct">Direct connect</span><small id="ssh-direct-summary"></small></button>
                     <div class="ssh-preparation-body" id="ssh-direct-body">
                         <div id="ssh-profile-indicator"></div>
                         <div style="display: flex; gap: 10px;">
-                            <input type="text" id="host" placeholder="Host" value="127.0.0.1" style="flex: 3;">
-                            <input type="text" id="port" placeholder="Port" value="22" style="flex: 1;">
+                            <input type="text" id="host" placeholder="Host" aria-label="Host" data-i18n-placeholder="connection.host" data-i18n-aria-label="connection.host" value="127.0.0.1" style="flex: 3;">
+                            <input type="text" id="port" placeholder="Port" aria-label="Port" data-i18n-placeholder="connection.port" data-i18n-aria-label="connection.port" value="22" style="flex: 1;">
                         </div>
-                        <input type="text" id="username" placeholder="Username" value="aska">
-                        <input type="password" id="password" placeholder="Password (Optional)">
+                        <input type="text" id="username" placeholder="Username" aria-label="Username" data-i18n-placeholder="connection.username" data-i18n-aria-label="connection.username" value="aska">
+                        <input type="password" id="password" placeholder="Password (optional)" aria-label="Password (optional)" data-i18n-placeholder="connection.password" data-i18n-aria-label="connection.password">
                         <div id="ssh-direct-key">
                             <label id="ssh-use-browser-key-label"><input type="checkbox" id="ssh-use-browser-key">Use key</label>
                         </div>
                         <div class="ssh-session-picker">
-                            <button type="button" id="ssh-session-picker-toggle" aria-expanded="false" aria-controls="ssh-session-picker-panel">History &amp; Profiles</button>
+                            <button type="button" id="ssh-session-picker-toggle" aria-expanded="false" aria-controls="ssh-session-picker-panel" data-i18n="connection.history_profiles">History &amp; Profiles</button>
                             <div id="ssh-session-picker-panel" role="listbox"></div>
                         </div>
                         <details class="ssh-host-identity" id="ssh-direct-identity">
-                            <summary>Host identity</summary>
-                            <label>Host key alias (optional)<input id="ssh-direct-alias" autocomplete="off"></label>
+                            <summary data-i18n="connection.host_identity">Host identity</summary>
+                            <label><span data-i18n="connection.host_alias">Host key alias (optional)</span><input id="ssh-direct-alias" autocomplete="off"></label>
                             <div id="ssh-direct-identity-body"></div>
                         </details>
                     </div>
                 </section>
                 <section class="ssh-preparation-pane" id="ssh-route-pane">
-                    <button type="button" id="ssh-route-heading" class="ssh-preparation-heading" aria-expanded="false" aria-controls="ssh-route-body"><span class="ssh-pane-selection">○</span>Saved routes<small id="ssh-route-summary"></small></button>
+                    <button type="button" id="ssh-route-heading" class="ssh-preparation-heading" aria-expanded="false" aria-controls="ssh-route-body"><span class="ssh-pane-selection">○</span><span data-i18n="connection.routes">Saved routes</span><small id="ssh-route-summary"></small></button>
                     <div class="ssh-preparation-body" id="ssh-route-body" hidden>
-                        <select id="ssh-route-picker" aria-label="Saved route"></select>
+                        <select id="ssh-route-picker" aria-label="Saved route" data-i18n-aria-label="connection.saved_route"></select>
                         <div id="ssh-route-path"></div>
-                        <button type="button" id="ssh-edit-route">Edit route...</button>
+                        <button type="button" id="ssh-edit-route" data-i18n="connection.edit_route">Edit route...</button>
                     </div>
                 </section>
                 <div class="ssh-save-options">
-                    <label><input type="checkbox" id="ssh-save-history" checked>Save history</label>
-                    <label><input type="checkbox" id="ssh-save-session">Save session</label>
+                    <label><input type="checkbox" id="ssh-save-history" checked><span data-i18n="connection.save_history">Save history</span></label>
+                    <label><input type="checkbox" id="ssh-save-session"><span data-i18n="connection.save_profile">Save connection profile</span></label>
                 </div>
-                <button type="button" id="ssh-cancel-start" hidden>Cancel connection</button>
+                <button type="button" id="ssh-cancel-start" data-i18n="ssh.login.cancel" hidden>Cancel connection</button>
                 <div id="ssh-session-message" aria-live="polite"></div>
             </div>
             <div id="local-shell-fields">
-                <select id="local-shell-kind"></select>
+                <select id="local-shell-kind" aria-label="Shell" data-i18n-aria-label="connection.shell"></select>
             </div>
             <div id="uart-fields">
-                <select id="uart-port-select"></select>
-                <input type="text" id="uart-port" list="uart-port-list" placeholder="COM3 or /dev/ttyUSB0">
+                <select id="uart-port-select" aria-label="UART port" data-i18n-aria-label="connection.uart_port"></select>
+                <input type="text" id="uart-port" aria-label="UART port" data-i18n-aria-label="connection.uart_port" list="uart-port-list" placeholder="COM3 or /dev/ttyUSB0" data-i18n-placeholder="connection.uart_example">
                 <datalist id="uart-port-list"></datalist>
-                <select id="uart-baud"></select>
+                <select id="uart-baud" aria-label="Baud rate" data-i18n-aria-label="connection.baud"></select>
             </div>
             <button id="connectBtn">Connect to SSH</button>
         </div>
@@ -4788,10 +4788,11 @@
                 if (mode === 'ssh') {
                     const entry = currentSshRouteEntry();
                     return sshPreparationMode === 'route'
-                        ? entry ? `Connect via ${entry.name || `${entry.username}@${entry.host}`}` : 'Select a route to connect'
-                        : 'Connect directly';
+                        ? entry ? t('connection.connect_route', { name: entry.name || `${entry.username}@${entry.host}` }) : t('connection.select_route')
+                        : t('connection.connect_direct');
                 }
-                return `Connect to ${CONNECTION_LABELS[mode] || 'Terminal'}`;
+                return t(mode === 'local_shell' ? 'connection.connect_local'
+                    : mode === 'uart' ? 'connection.connect_uart' : 'connection.connect_terminal');
             }
 
             function populateSshFields() {
@@ -4871,19 +4872,19 @@
                 const picker = document.getElementById('ssh-route-picker');
                 const entries = [...sshSessionState.profiles, ...sshSessionState.history].filter(item => !sshRouteDraft || item.id !== sshRouteDraft.entryId);
                 if (sshRouteDraft && entry) entries.unshift(entry);
-                picker.replaceChildren(new Option(entries.length ? 'Choose a saved route...' : 'No saved routes', ''));
+                picker.replaceChildren(new Option(entries.length ? t('connection.choose_route') : t('connection.no_routes'), ''));
                 for (const item of entries) {
                     const resolved = SshRoutes.resolve(sshRouteDraft && item.id === sshRouteDraft.entryId ? source : sshSessionState, item.startNodeId);
                     const jumps = Math.max(0, resolved.path.length - 1);
-                    picker.add(new Option(`${item.name || `${item.username}@${item.host}`} · ${resolved.error ? 'Invalid route' : jumps ? `${jumps} ${jumps === 1 ? 'jump' : 'jumps'}` : 'Direct'}`, item.id));
+                    picker.add(new Option(`${item.name || `${item.username}@${item.host}`} · ${resolved.error ? t('connection.invalid_route') : jumps ? t(jumps === 1 ? 'connection.jump' : 'connection.jumps', { count: jumps }) : t('connection.direct_route')}`, item.id));
                 }
                 picker.value = entry?.id || '';
-                document.getElementById('ssh-route-summary').textContent = entry?.name || (entry ? `${entry.username}@${entry.host}` : 'None selected');
+                document.getElementById('ssh-route-summary').textContent = entry?.name || (entry ? `${entry.username}@${entry.host}` : t('connection.none_selected'));
                 document.getElementById('ssh-route-path').textContent = path.length
-                    ? `Core → ${path.map(node => `${node.endpoint.username}@${node.endpoint.host}:${node.endpoint.port}`).join(' → ')}\n${result.error ? 'Invalid route — edit before connecting.' : `${path.length - 1} ${path.length === 2 ? 'jump' : 'jumps'}`}`
-                    : 'Select a saved route, or use Edit route to create one.';
+                    ? `Core → ${path.map(node => `${node.endpoint.username}@${node.endpoint.host}:${node.endpoint.port}`).join(' → ')}\n${result.error ? t('connection.repair_route') : t(path.length === 2 ? 'connection.jump' : 'connection.jumps', { count: path.length - 1 })}`
+                    : t('connection.route_hint');
                 if (sshRouteDraft) document.getElementById('ssh-route-path').textContent += sshRouteDraft.saveRoute
-                    ? '\nWill save on Connect.' : '\nTemporary route — not saved.';
+                    ? `\n${t('connection.will_save')}` : `\n${t('connection.temporary_route')}`;
                 renderSshPreparation();
             }
 
@@ -4908,7 +4909,7 @@
                 hideActionPrompt();
                 resetConnectButton();
                 document.getElementById('ssh-cancel-start').hidden = true;
-                setSshSessionMessage('Connection cancelled.');
+                setSshSessionMessage(t('connection.cancelled'));
                 updateActiveTerminalUi();
             }
 
@@ -4929,7 +4930,7 @@
                 const terminalId = formData.terminal_id;
                 discardSshLogin(terminalId);
                 const flow = StandTermSshLogin({
-                    terminalId, attemptId: formData.attempt_id, route: formData.route,
+                    terminalId, attemptId: formData.attempt_id, route: formData.route, translate: t,
                     isActive: () => activeTerminalId === terminalId && sshLoginFlows.get(terminalId) === flow,
                     send: payload => {
                         if (socket.connected && pendingSshConnectionDrafts.get(terminalId)?.attemptId === payload.attempt_id) {
@@ -5116,8 +5117,8 @@
                 }
                 const modified = getSshTargetKey(profile) !== getSshTargetKey(getCurrentSshTarget());
                 sshProfileIndicator.innerText = modified
-                    ? `Based on: ${profile.name} (modified)`
-                    : `Profile: ${profile.name}`;
+                    ? t('connection.profile_modified', { name: profile.name })
+                    : t('connection.profile', { name: profile.name });
                 sshProfileIndicator.style.display = 'block';
                 refreshQuickConnectSshKey(false);
             }
@@ -5213,12 +5214,12 @@
                     const route = SshRoutes.resolve(sshSessionState, entry.startNodeId);
                     return !route.error && route.path.length === 1;
                 });
-                appendSshPickerGroup('Direct Profiles', direct(sshSessionState.profiles), 'profile');
-                appendSshPickerGroup('Direct History', direct(sshSessionState.history), 'history');
+                appendSshPickerGroup(t('connection.direct_profiles'), direct(sshSessionState.profiles), 'profile');
+                appendSshPickerGroup(t('connection.direct_history'), direct(sshSessionState.history), 'history');
                 if (!sshSessionPickerPanel.children.length) {
                     const empty = document.createElement('div');
                     empty.className = 'ssh-session-picker-empty';
-                    empty.innerText = 'No saved profiles or successful SSH connections yet.';
+                    empty.innerText = t('connection.empty_history');
                     sshSessionPickerPanel.appendChild(empty);
                 }
                 updateSshProfileIndicator();
@@ -5533,8 +5534,8 @@
                         draftState.history = [...draftState.history.filter(entry => entry.id === currentDraft.entryId),
                             ...SshRoutes.clone(sshSessionState.history.filter(entry => entry.id !== currentDraft.entryId))];
                     }
-                    setSshSessionMessage('SSH history updated.');
-                } catch (err) { setSshSessionMessage(err.message || 'SSH history could not be saved.', true); }
+                    setSshSessionMessage(t('connection.history_updated'));
+                } catch (err) { setSshSessionMessage(err.message || t('connection.history_failed'), true); }
                 finally { savingSshHistory = false; }
             }
 
@@ -5661,7 +5662,7 @@
                 if (detectedDevices.length > 0) {
                     const manualOption = document.createElement('option');
                     manualOption.value = UART_MANUAL_PORT_VALUE;
-                    manualOption.innerText = 'Manual COM or /dev...';
+                    manualOption.innerText = t('connection.manual_port');
                     uartPortSelect.appendChild(manualOption);
                     uartPortSelect.style.display = '';
 
@@ -6576,13 +6577,13 @@
                 }
                 if (agentConnectDialog.open && !socket.connected) requestAgentConnectInfo();
                 if (!state) return;
-                sshStatusEl.innerText = state.connected ? getTerminalDisplayLabel(state) : (state.connecting ? 'Connecting' : 'Disconnected');
+                sshStatusEl.innerText = state.connected ? getTerminalDisplayLabel(state) : (state.connecting ? t('ssh.login.connecting') : t('connection.disconnected'));
                 sshStatusEl.style.color = state.connected ? '#34c759' : (state.connecting ? '#ffcc00' : '#ff9f0a');
                 document.getElementById('uptime-section').style.display = state.connectedAt ? 'inline' : 'none';
                 document.getElementById('controls').style.display = state.connected ? 'none' : 'block';
                 renderSshLogin();
                 if (state.connecting) {
-                    connectBtn.innerText = 'Connecting...';
+                    connectBtn.innerText = t('connection.connecting');
                     connectBtn.disabled = true;
                 } else {
                     resetConnectButton();
@@ -8212,9 +8213,9 @@
                 pendingAction = actionType;
                 pendingActionId = actionId || null;
                 pendingActionTerminalId = terminalId;
-                actionYesBtn.innerText = actionType === 'confirm_ssh_host_key' ? 'Trust key'
-                    : (actionType === 'forget_ssh_host_key' ? 'Forget key' : 'Yes');
-                actionNoBtn.innerText = actionType === 'offer_localhost_key_setup' ? 'No' : 'Cancel';
+                actionYesBtn.innerText = actionType === 'confirm_ssh_host_key' ? t('connection.trust_key')
+                    : (actionType === 'forget_ssh_host_key' ? t('connection.forget_key') : t('common.yes'));
+                actionNoBtn.innerText = actionType === 'offer_localhost_key_setup' ? t('common.no') : t('common.cancel');
                 actionMessageEl.innerText = message || '';
                 actionQuestionEl.innerText = question || '';
                 actionBox.style.display = 'block';
@@ -8346,7 +8347,7 @@
                     sshPreparedKeys.set(draft.payload, temporaryKeys);
                 }
                 document.getElementById('ssh-cancel-start').hidden = formData.connection_type !== 'ssh';
-                connectBtn.innerText = "Connecting...";
+                connectBtn.innerText = t('connection.connecting');
                 connectBtn.disabled = true;
                 updatePolicyDebugPanel('submit_connection', sshConnectionDiagnostic(formData));
             }
@@ -8386,7 +8387,7 @@
                 });
             }
             directKeyControl = StandTermSshNodeAuth({
-                parent: document.getElementById('ssh-direct-key'), role: 'Direct', authentication: { method: 'password' },
+                parent: document.getElementById('ssh-direct-key'), role: t('connection.role_direct'), translate: t, authentication: { method: 'password' },
                 endpoint: getCurrentSshTarget, profiles: [], savedKeys: [], newKeys: directTemporarySshKeys,
                 keyAllowed: isBrowserSshKeyAllowedByPolicy(), createKey: createTemporarySshKey,
                 copyPublicKey: value => copyToClipboard(value), useKeyInput: sshUseBrowserKeyInput,
@@ -8395,7 +8396,7 @@
                 onChange: () => { invalidateSshRetry(); applyQuickConnectKeySelection(); }
             });
             const directHostIdentity = StandTermSshHostIdentity({
-                parent: document.getElementById('ssh-direct-identity-body'), editorId: SshRoutes.id(), nodeId: 'direct',
+                parent: document.getElementById('ssh-direct-identity-body'), translate: t, editorId: SshRoutes.id(), nodeId: 'direct',
                 read: () => ({ ...SshRoutes.endpoint(getCurrentSshTarget()), terminal_id: activeTerminalId,
                     host_key_alias: document.getElementById('ssh-direct-alias').value.trim() }), request: requestSshHostIdentity
             });
@@ -8435,7 +8436,7 @@
                             selectedSshRouteEntry = entryId;
                             selectSshPreparationMode('route');
                             renderSshSessionState();
-                            setSshSessionMessage('Route ready. Connect to log in at each site.');
+                            setSshSessionMessage(t('connection.route_ready'));
                         }
                     });
                 } catch (err) { setSshSessionMessage(err.message, true); }
@@ -8926,7 +8927,7 @@
                 pendingReconnect = { terminalId, actionId, sourceAttemptId: draft?.attemptId || null,
                     payload: draft?.payload.interactive_login ? draft.payload : getConnectionFormData() };
                 hideActionPrompt();
-                connectBtn.innerText = "Setting up key...";
+                connectBtn.innerText = t('connection.setup_key');
                 connectBtn.disabled = true;
                 socket.emit('setup_localhost_key_access', {
                     action_id: actionId, terminal_id: terminalId
@@ -8979,14 +8980,15 @@
                     case 'ssh_connect_progress':
                         sshLoginFlows.get(state.id)?.handle(data);
                         if (state.id === activeTerminalId) {
-                            const phases = { connect: 'Connecting', forward: 'Opening the next hop',
-                                verify_and_authenticate: 'Verifying host and authenticating', shell: 'Opening terminal' };
-                            setSshSessionMessage(`SSH ${data.hop}/${data.total}: ${data.host}:${data.port} — ${phases[data.phase] || 'Connecting'}`);
+                            const phases = { connect: t('ssh.login.connecting'), forward: t('ssh.login.forwarding'),
+                                verify_and_authenticate: t('connection.verify_authenticate'), shell: t('ssh.login.opening_terminal') };
+                            setSshSessionMessage(t('connection.progress', { hop: data.hop, total: data.total,
+                                host: data.host, port: data.port, phase: phases[data.phase] || t('ssh.login.connecting') }));
                         }
                         break;
                     case 'connection_error':
                         const failedDraft = pendingSshConnectionDrafts.get(state.id);
-                        sshLoginFlows.get(state.id)?.finish(false, data.message || 'Connection failed.', data.route_context);
+                        sshLoginFlows.get(state.id)?.finish(false, data.message || t('connection.failed'), data.route_context);
                         if (data.action_type === 'confirm_ssh_host_key' && failedDraft && data.action_id) {
                             failedDraft.trustActionId = data.action_id;
                         } else if (data.action_type === 'offer_localhost_key_setup' && failedDraft && data.action_id) {
@@ -8998,7 +9000,7 @@
                         state.error = true;
                         state.connectedAt = null;
                         if (state.id === activeTerminalId) {
-                            showError(data.message || 'Connection failed.');
+                            showError(data.message || t('connection.failed'));
                             resetConnectButton();
                             if (['offer_localhost_key_setup', 'confirm_ssh_host_key'].includes(data.action_type) && data.action_id) {
                                 showActionPrompt(data.action_message, data.action_question, data.action_type, data.action_id, state.id);
@@ -9076,7 +9078,7 @@
                         state.needsReplay = false;
                         if (successfulSshDraft) {
                             recordSuccessfulSshConnection(successfulSshDraft)
-                                .catch(err => setSshSessionMessage(err.message || 'SSH history could not be saved.', true));
+                                .catch(err => setSshSessionMessage(err.message || t('connection.history_failed'), true));
                         }
                         requestOperatorObservationState(state);
                         if (state.id === activeTerminalId) {

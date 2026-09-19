@@ -8,6 +8,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ssh_routes_browser_smoke as routes_fixture
 from ssh_login_smoke import password_server
+from connection_i18n_browser_smoke import new_module_page, translated
 
 fixture = routes_fixture.fixture
 
@@ -64,8 +65,8 @@ def test_real_login_cards_preserve_completed_hops(browser, url):
             fixture.close_context(context)
 
 
-def test_background_and_stale_prompts_cannot_steal_focus(browser, url):
-    context, page = fixture.new_page(browser, url)
+def test_background_and_stale_prompts_cannot_steal_focus(browser, url, ui_language='en'):
+    context, page = fixture.new_page(browser, url, ui_language=ui_language)
     try:
         routes_fixture.show_ssh(page)
         page.fill('#host', 'example.test')
@@ -88,7 +89,7 @@ def test_background_and_stale_prompts_cannot_steal_focus(browser, url):
         page.evaluate('data => window.terminalTest.handleSshOutput(data)', {**prompt, 'attempt_id':'older-attempt', 'request_id':'older'})
         page.evaluate('data => window.terminalTest.handleSshOutput(data)', {'message_type':'connection_error', 'terminal_id':'main', 'message':'uncorrelated'})
         assert page.locator('#ssh-login-panel input').input_value() == 'private-draft'
-        page.locator('.ssh-login-actions').get_by_role('button', name='Cancel connection', exact=True).click()
+        page.locator('.ssh-login-actions').get_by_role('button', name='取消連線' if ui_language == 'zh-TW' else 'Cancel connection', exact=True).click()
         assert not page.locator('#ssh-login-panel').is_visible()
         page.click('#connectBtn')
         page.wait_for_selector('.ssh-login-card')
@@ -96,6 +97,95 @@ def test_background_and_stale_prompts_cannot_steal_focus(browser, url):
         assert page.locator('#ssh-login-panel input').count() == 0
     finally:
         fixture.close_context(context)
+
+
+def test_localized_background_and_stale_prompts(browser, url):
+    test_background_and_stale_prompts_cannot_steal_focus(browser, url, ui_language='zh-TW')
+
+
+def test_login_translation_preserves_prompt_binding_and_safe_focus(browser, url):
+    for locale in [None, 'missing', 'zh-TW']:
+        context, page = new_module_page(browser, locale)
+        try:
+            phases = {
+                'waiting': ('waiting', 'Waiting'), 'connect': ('connecting', 'Connecting'),
+                'forward': ('forwarding', 'Opening next hop'),
+                'verify_and_authenticate': ('verifying', 'Verifying host'),
+                'local_keys': ('local_keys', 'Trying local keys'), 'host_key': ('host_key', 'Confirm host key'),
+                'password': ('password_required', 'Requires password'), 'authenticate': ('authenticating', 'Authenticating'),
+                'authenticated': ('authenticated', 'Authenticated'), 'shell': ('opening_terminal', 'Opening terminal'),
+                'complete': ('complete', 'Complete'), 'failed': ('failed', 'Failed'),
+            }
+            observed = page.evaluate("""phases => phases.map(phase => {
+                const flow = StandTermSshLogin({terminalId:'phase-terminal',attemptId:'phase-attempt',
+                    route:[{node_id:'first-node',host:'jump.test',port:'22',username:'user'},
+                           {node_id:'target-node',host:'target.test',port:'22',username:'user'}],
+                    send:() => {throw new Error('Progress sent a login reply');},cancel:() => {},back:() => {},
+                    isActive:() => true,translate:fixtureTranslate});
+                const accepted = flow.handle({terminal_id:'phase-terminal',attempt_id:'phase-attempt',node_id:'first-node',
+                    hop:1,total:2,message_type:'ssh_login_progress',phase,message:'Authenticated'});
+                const card = flow.element.querySelector('.ssh-login-card');
+                const result = {accepted,phase:card.dataset.phase,label:card.querySelector('.ssh-login-card-status').textContent};
+                flow.destroy();
+                return result;
+            })""", [*phases, 'Authenticated', '已驗證', '__proto__', 'unknown'])
+            for (phase, (key, english)), result in zip(phases.items(), observed):
+                label = translated(page, 'ssh.login.' + key) if locale == 'zh-TW' else english
+                assert result == {'accepted':True, 'phase':phase, 'label':label}
+            assert all(not result['accepted'] and result['phase'] == 'waiting' for result in observed[len(phases):]), (
+                'Display labels or unknown phases were accepted as protocol control')
+            page.evaluate("""() => {
+                window.loginReplies = []; window.loginCancelled = 0;
+                window.loginFlow = StandTermSshLogin({terminalId:'fixture-terminal',attemptId:'fixture-attempt',
+                    route:[{node_id:'first-node',host:'jump.test',port:'2222',username:'jump-user'},
+                           {node_id:'target-node',host:'target.test',port:'2223',username:'target-user'}],
+                    send:payload => loginReplies.push(payload),cancel:() => {loginCancelled++;},back:() => {},
+                    isActive:() => true,translate:fixtureTranslate});
+                document.getElementById('fixture').append(loginFlow.element);
+            }""")
+            prompt = {'message_type':'ssh_login_prompt', 'terminal_id':'fixture-terminal', 'attempt_id':'fixture-attempt',
+                      'node_id':'first-node', 'hop':1, 'total':2, 'request_id':'host-key-request',
+                      'kind':'host_key', 'phase':'host_key', 'message':'SHA256:fixture <b>Authenticated</b>',
+                      'question':'Password text does not change this host-key request.'}
+            assert page.evaluate('data => loginFlow.handle(data)', prompt)
+            cancel_label = translated(page, 'ssh.login.cancel') if locale == 'zh-TW' else 'Cancel connection'
+            trust_label = translated(page, 'ssh.login.trust') if locale == 'zh-TW' else 'Trust and continue'
+            page.wait_for_function('text => document.activeElement?.textContent === text', arg=cancel_label)
+            body = page.locator('.ssh-login-card[data-node-id="first-node"] .ssh-login-card-body')
+            assert body.locator('b').count() == 0
+            assert 'SHA256:fixture <b>Authenticated</b>' in body.inner_text()
+            body.get_by_role('button', name=trust_label, exact=True).click()
+            binding = {key:prompt[key] for key in ['terminal_id','attempt_id','node_id','request_id','kind']}
+            assert page.evaluate('() => loginReplies') == [{**binding, 'accept':True}]
+            assert not page.evaluate('data => loginFlow.handle(data)', prompt), 'Duplicate request reopened a host-key prompt'
+
+            password_prompt = {**prompt, 'request_id':'password-request', 'kind':'password', 'phase':'password',
+                               'message':'message_type=connection_error <b>Trust and continue</b>'}
+            assert page.evaluate('data => loginFlow.handle(data)', password_prompt)
+            password = body.locator('input[type="password"]')
+            page.wait_for_function('() => document.activeElement?.type === "password"')
+            role = translated(page, 'ssh.login.node', {'number':1}) if locale == 'zh-TW' else 'Node 1'
+            accessible_name = translated(page, 'ssh.login.password_for_node', {'role':role}) if locale == 'zh-TW' else 'Node 1 password'
+            assert password.get_attribute('aria-label') == accessible_name
+            password.fill('fixture-password-value')
+            assert not page.evaluate('data => loginFlow.handle(data)', {**password_prompt, 'attempt_id':'stale-attempt', 'request_id':'stale-request'})
+            assert password.input_value() == 'fixture-password-value'
+            login_label = translated(page, 'ssh.login.submit') if locale == 'zh-TW' else 'Log in'
+            body.get_by_role('button', name=login_label, exact=True).click()
+            binding = {key:password_prompt[key] for key in ['terminal_id','attempt_id','node_id','request_id','kind']}
+            assert page.evaluate('() => loginReplies.at(-1)') == {**binding, 'password':'fixture-password-value'}
+            assert page.evaluate('() => loginReplies.length') == 2
+            assert body.locator('input').count() == 0
+            assert page.locator('.ssh-login-card').first.get_attribute('data-phase') == 'authenticate'
+            page.evaluate('data => loginFlow.handle(data)', {**password_prompt, 'message_type':'ssh_login_progress', 'phase':'authenticated'})
+            assert page.locator('.ssh-login-card-status').first.inner_text() == ('已驗證' if locale == 'zh-TW' else 'Authenticated')
+            assert page.locator('.ssh-login-card').first.get_attribute('data-phase') == 'authenticated'
+            page.evaluate("() => loginFlow.finish(true, 'Raw server completion', {})")
+            assert page.locator('.ssh-login-card-status').all_inner_texts() == [('已完成' if locale == 'zh-TW' else 'Complete')] * 2
+            assert page.locator('.ssh-login-card').evaluate_all('cards => cards.every(card => card.dataset.phase === "complete")')
+            assert page.locator('.ssh-login-message').inner_text() == 'Raw server completion'
+        finally:
+            fixture.close_context(context)
 
 
 def test_local_key_setup_retries_keep_cards_and_original_attempt_binding(browser, url):
@@ -163,6 +253,8 @@ runpy.run_path('app.py', run_name='__main__')
                 browser = playwright.chromium.launch(headless=True)
                 try:
                     for test in (test_real_login_cards_preserve_completed_hops, test_background_and_stale_prompts_cannot_steal_focus,
+                                 test_localized_background_and_stale_prompts,
+                                 test_login_translation_preserves_prompt_binding_and_safe_focus,
                                  test_local_key_setup_retries_keep_cards_and_original_attempt_binding):
                         test(browser, url)
                         print(test.__name__ + ': ok', flush=True)

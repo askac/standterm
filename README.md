@@ -325,7 +325,8 @@ terminal; compact windows keep those actions in the Agent panel.
 
 **Settings > General > Language (preview)** selects English or Traditional
 Chinese (Taiwan) for browser access and recovery, Agent permissions, input and
-file-copy approvals, transfer results, and local connection information. The choice
+file-copy approvals, transfer results, local connection information, connection
+forms and SSH login (including direct browser-key and host-fingerprint controls). The choice
 applies the next time the page opens; saving it does not reload the current
 page or change its connections and grants. Other areas remain in English.
 The [copy and translation table](docs/ui_copy_review.tsv) and
