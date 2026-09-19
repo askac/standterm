@@ -4002,11 +4002,12 @@ def test_access_window_copy_token_requires_current_status():
 def test_browser_authorization_gate_ui_contract():
     template = (Path(__file__).resolve().parents[1] / 'templates' / 'index.html').read_text(encoding='utf-8')
 
-    assert 'YOU SHALL NOT PASS!!' in template
-    assert 'First time? Please use an Auth URL.' in template
+    assert 'YOU SHALL NOT PASS!!' not in template
+    assert 'Browser authorization required' in template
+    assert 'Paste a browser authorization URL to continue.' in template
     assert 'Session ID: {{ launcher_instance_id }}' in template
     assert 'id="browser-auth-url-input"' in template
-    assert 'Download authorization file manually' in template
+    assert 'Download authorization file' in template
     assert 'id="browser-auth-help-modal"' in template
     assert "authorizationUrl.searchParams.get('authorize')" in template
     assert "const serverUnavailable = serverConnectionState === 'unavailable';" in template

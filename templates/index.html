@@ -566,7 +566,6 @@
         #local-shell-fields { display: none; }
         #uart-fields { display: none; }
         #browser-auth-box { display: none; }
-        #browser-auth-warning { margin-bottom: 8px; color: #ff453a; font-size: 1.35rem; font-weight: 800; text-align: center; }
         #browser-auth-title { margin-bottom: 6px; color: #fff; font-size: 1rem; font-weight: 700; text-align: center; }
         #browser-auth-message { min-height: 34px; margin-bottom: 14px; color: #bbb; font-size: 12px; line-height: 1.4; text-align: center; overflow-wrap: anywhere; }
         #browser-auth-url-form { display: flex; align-items: stretch; gap: 8px; }
@@ -946,6 +945,11 @@
             text-overflow: ellipsis;
             white-space: nowrap;
         }
+        #agent-status-detail.outcome-unknown,
+        .transfer-queue-status.outcome-unknown {
+            white-space: normal;
+            overflow-wrap: anywhere;
+        }
         .transfer-queue-progress {
             height: 3px;
             margin-top: 7px;
@@ -1129,10 +1133,10 @@
                     <div class="settings-tab active" id="tab-general">
                         <fieldset class="settings-fieldset">
                             <legend>General</legend>
-                            <div class="settings-row"><label for="pref-uiLanguage" data-i18n="settings.language.label">Language (Agent preview)</label>
+                            <div class="settings-row"><label for="pref-uiLanguage" data-i18n="settings.language.label">Language (preview)</label>
                                 <select id="pref-uiLanguage"><option value="en">English</option><option value="zh-TW" lang="zh-TW">繁體中文（台灣）</option></select>
                             </div>
-                            <div class="settings-status" data-i18n="settings.language.hint">Applies to Agent access and local connection info next time you open this page. Other areas remain in English.</div>
+                            <div class="settings-status" data-i18n="settings.language.hint">Applies next time you open this page: browser access, Agent permissions, approvals, transfers and local connection info. Other areas remain in English.</div>
                             <div class="settings-row"><label for="pref-useCustomMenu">Enable custom context menu</label><input type="checkbox" id="pref-useCustomMenu"></div>
                             <div class="settings-row"><label for="pref-copyOnSelect">Copy on select</label><input type="checkbox" id="pref-copyOnSelect"></div>
                             <div class="settings-row"><label for="pref-enablePicPreview">Enable pic preview</label><input type="checkbox" id="pref-enablePicPreview"></div>
@@ -1332,9 +1336,9 @@
             <span id="launcher-session-id">Session ID: {{ launcher_instance_id }}</span>
         </div>
         <div id="server-availability-message" role="status" aria-live="polite">
-            <strong>Server not available</strong>
-            <div>StandTerm is not running or cannot be reached. This page will keep checking and reconnect automatically. If the server restarted, you may be asked for the current access token.</div>
-            <button type="button" id="server-retry-now">Retry Now</button>
+            <strong data-i18n="browser.connection.unavailable">Cannot reach StandTerm</strong>
+            <div data-i18n="browser.connection.unavailable_hint">This page will keep trying to reconnect. If StandTerm restarted, use the access token from its current launcher.</div>
+            <button type="button" id="server-retry-now" data-i18n="browser.connection.retry">Reconnect now</button>
         </div>
         <div id="errorBox" class="error-msg"></div>
         <div id="actionBox" class="action-box">
@@ -1346,18 +1350,17 @@
             </div>
         </div>
         <div id="browser-auth-box">
-            <div id="browser-auth-warning">YOU SHALL NOT PASS!!</div>
-            <div id="browser-auth-title">Unauthorized browser</div>
-            <div id="browser-auth-message">First time? Please use an Auth URL.</div>
+            <div id="browser-auth-title" data-i18n="browser.auth.required">Browser authorization required</div>
+            <div id="browser-auth-message" data-i18n="browser.auth.instructions">Paste a browser authorization URL to continue.</div>
             <form id="browser-auth-url-form">
-                <input id="browser-auth-url-input" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="Paste Browser Authorization URL">
-                <button id="browser-auth-url-submit" type="submit">OK</button>
+                <input id="browser-auth-url-input" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="Paste browser authorization URL" aria-label="Browser authorization URL" data-i18n-placeholder="browser.auth.url_placeholder" data-i18n-aria-label="browser.auth.url_label">
+                <button id="browser-auth-url-submit" type="submit" data-i18n="browser.auth.submit">Authorize browser</button>
             </form>
             <div id="browser-auth-url-error"></div>
-            <div class="browser-auth-divider">or</div>
+            <div class="browser-auth-divider" data-i18n="common.or">or</div>
             <div id="browser-auth-actions">
-                <button id="authorizeBrowserBtn" type="button">Download authorization file manually</button>
-                <button id="browser-auth-help-btn" type="button" title="How to use the authorization file" aria-label="How to use the authorization file">&#x2753;</button>
+                <button id="authorizeBrowserBtn" type="button" data-i18n="browser.auth.download">Download authorization file</button>
+                <button id="browser-auth-help-btn" type="button" title="How to use the authorization file" aria-label="How to use the authorization file" data-i18n-title="browser.auth.help_button" data-i18n-aria-label="browser.auth.help_button">&#x2753;</button>
             </div>
         </div>
         <div id="connection-form">
@@ -1423,16 +1426,16 @@
     <div id="browser-auth-help-modal" aria-hidden="true">
         <div class="browser-auth-help-box" role="dialog" aria-modal="true" aria-labelledby="browser-auth-help-title">
             <div class="browser-auth-help-header">
-                <h3 id="browser-auth-help-title">Manual browser authorization</h3>
-                <button id="browser-auth-help-close" type="button" aria-label="Close">X</button>
+                <h3 id="browser-auth-help-title" data-i18n="browser.auth.help_title">Manual browser authorization</h3>
+                <button id="browser-auth-help-close" type="button" aria-label="Close" data-i18n-aria-label="common.close">X</button>
             </div>
             <div class="browser-auth-help-body">
                 <ol>
-                    <li>Download the authorization file for this browser.</li>
-                    <li>Move it into <code id="browser-auth-help-dir">authorized/</code> on the StandTerm host.</li>
-                    <li>Keep this page open. StandTerm checks for the file automatically and unlocks the connection options when it is accepted.</li>
+                    <li data-i18n="browser.auth.help_download">Download the authorization file for this browser.</li>
+                    <li><span data-i18n="browser.auth.help_move">Move the file to this directory on the StandTerm host:</span> <code id="browser-auth-help-dir">authorized/</code></li>
+                    <li data-i18n="browser.auth.help_wait">Keep this page open. StandTerm checks for the file automatically and enables connection options when it is accepted.</li>
                 </ol>
-                <p id="browser-auth-ca-help"><strong>HTTPS still grumpy?</strong> <a id="browser-auth-ca-link" href="#">Download StandTerm CA</a> and import it into the browser host's trusted root certificates.</p>
+                <p id="browser-auth-ca-help"><strong data-i18n="browser.auth.ca_title">HTTPS certificate warning?</strong> <a id="browser-auth-ca-link" href="#" data-i18n="browser.auth.ca_download">Download StandTerm CA</a> <span data-i18n="browser.auth.ca_import">Import it into the browser host’s trusted root certificates.</span></p>
             </div>
         </div>
     </div>
@@ -1452,7 +1455,7 @@
             <button id="agent-tunnel-btn" class="status-action" type="button" title="Set up remote Agent access through this SSH connection" hidden>Agent Tunnel</button>
             <button id="ssh-tunnels-btn" class="status-action" type="button" title="Manage TCP port forwarding through this SSH connection" hidden>Tunnels</button>
             <button id="sftp-status-btn" class="status-action status-sftp" type="button" title="Open Files" aria-label="Open Files" hidden>&#x1F4C1;</button>
-            <button id="transfer-queue-btn" class="status-action" type="button" title="Transfer Queue" aria-label="Transfer Queue" hidden><span aria-hidden="true">&#x21C4;</span> <span id="transfer-queue-count">0</span></button>
+            <button id="transfer-queue-btn" class="status-action" type="button" title="Transfer Queue" aria-label="Transfer Queue" data-i18n-title="agent.transfer.queue" data-i18n-aria-label="agent.transfer.queue" hidden><span aria-hidden="true">&#x21C4;</span> <span id="transfer-queue-count">0</span></button>
             <button id="quick-settings" class="status-action" type="button" title="Settings" aria-label="Settings">&#x2699;&#xFE0F;</button>
             <details id="tab-more">
                 <summary class="status-action" title="More terminal actions" aria-label="More terminal actions">&#x22EF;</summary>
@@ -1460,11 +1463,11 @@
             </details>
         </div>
     </div>
-    <section id="transfer-queue-panel" aria-label="Transfer Queue" aria-hidden="true">
+    <section id="transfer-queue-panel" aria-label="Transfer Queue" aria-hidden="true" data-i18n-aria-label="agent.transfer.queue">
         <div id="transfer-queue-header">
-            <strong id="transfer-queue-title">Transfer Queue</strong>
-            <button id="transfer-queue-clear" type="button">Clear finished</button>
-            <button id="transfer-queue-close" type="button" aria-label="Close Transfer Queue">&times;</button>
+            <strong id="transfer-queue-title" data-i18n="agent.transfer.queue">Transfer Queue</strong>
+            <button id="transfer-queue-clear" type="button" data-i18n="agent.transfer.clear_finished">Dismiss finished</button>
+            <button id="transfer-queue-close" type="button" aria-label="Close Transfer Queue" data-i18n-aria-label="agent.transfer.close_queue">&times;</button>
         </div>
         <div id="transfer-queue-list" aria-live="polite"></div>
     </section>
@@ -1620,42 +1623,43 @@
             </details>
         </div>
         <div id="agent-action-box">
-            <div id="agent-action-content" tabindex="0" aria-label="Agent action details">
+            <div id="agent-action-content" tabindex="0" aria-label="Agent action details" data-i18n-aria-label="agent.approval.details">
                 <div class="agent-preview" id="agent-action-preview"></div>
                 <div id="agent-file-copy-details">
-                    <div class="agent-file-copy-route"><span class="agent-file-copy-label">From</span><span id="agent-file-copy-source"></span></div>
-                    <div class="agent-file-copy-route"><span class="agent-file-copy-label">To</span><span id="agent-file-copy-destination"></span></div>
-                    <div class="agent-file-copy-route"><span class="agent-file-copy-label">Size</span><span id="agent-file-copy-size"></span></div>
+                    <div class="agent-file-copy-route"><span class="agent-file-copy-label" data-i18n="agent.copy.source">From</span><span id="agent-file-copy-source"></span></div>
+                    <div class="agent-file-copy-route"><span class="agent-file-copy-label" data-i18n="agent.copy.destination">To</span><span id="agent-file-copy-destination"></span></div>
+                    <div class="agent-file-copy-route"><span class="agent-file-copy-label" data-i18n="agent.copy.size">Size</span><span id="agent-file-copy-size"></span></div>
                     <span id="agent-file-copy-conflict" hidden></span>
                     <div id="agent-file-copy-warning"></div>
                 </div>
                 <div id="agent-action-meta">
-                    <span>target: <span id="agent-action-target">--</span></span>
-                    <span>bytes: <span id="agent-action-bytes">0</span></span>
-                    <span>lines: <span id="agent-action-lines">0</span></span>
-                    <span>newline: <span id="agent-action-newline">no</span></span>
-                    <span>control: <span id="agent-action-control">no</span></span>
-                    <span>status: <span id="agent-action-status">--</span></span>
+                    <span><span data-i18n="agent.approval.target">Target</span>: <span id="agent-action-target">--</span></span>
+                    <span><span data-i18n="agent.approval.bytes">Bytes</span>: <span id="agent-action-bytes">0</span></span>
+                    <span><span data-i18n="agent.approval.lines">Lines</span>: <span id="agent-action-lines">0</span></span>
+                    <span><span data-i18n="agent.approval.newline">Ends with newline</span>: <span id="agent-action-newline" data-i18n="common.no">No</span></span>
+                    <span><span data-i18n="agent.approval.control">Contains control characters</span>: <span id="agent-action-control" data-i18n="common.no">No</span></span>
+                    <span><span data-i18n="agent.approval.status">Status</span>: <span id="agent-action-status">--</span></span>
                 </div>
             </div>
             <div id="agent-action-controls">
-                <button type="button" id="agent-approve-btn">Approve</button>
-                <button type="button" id="agent-reject-btn">Reject</button>
-                <button type="button" id="agent-action-pause-btn">Pause</button>
+                <button type="button" id="agent-approve-btn" data-i18n="agent.approval.input">Approve input</button>
+                <button type="button" id="agent-reject-btn" data-i18n="agent.approval.reject">Reject</button>
+                <button type="button" id="agent-action-pause-btn" data-i18n="agent.approval.pause">Pause Agent</button>
             </div>
         </div>
     </div>
 
     <div id="session-recovery-modal">
         <div class="session-recovery-box">
-            <h3>Recover StandTerm session</h3>
-            <p>Use a registered device to recover a live session, or enter the access token printed by the current launcher. A restarted server always requires its current token.</p>
+            <h3 data-i18n="browser.recovery.title">Restore StandTerm access</h3>
+            <p data-i18n="browser.recovery.hint">Use a device registered for this hostname and enabled for a still-valid session, or enter the current launcher’s access token. After StandTerm restarts, use the current access token.</p>
             <form id="session-recovery-form" autocomplete="off">
+                <label for="session-recovery-token" data-i18n="browser.recovery.token_label">Access token</label>
                 <input id="session-recovery-token" name="token" type="password" required>
-                <button type="submit">Unlock</button>
+                <button type="submit" data-i18n="browser.recovery.submit">Use access token</button>
             </form>
-            <button id="session-recovery-platform" type="button">Recover live session with device</button>
-            <button id="session-recovery-remembered-token" type="button">Use remembered token</button>
+            <button id="session-recovery-platform" type="button" data-i18n="browser.recovery.device">Verify with device</button>
+            <button id="session-recovery-remembered-token" type="button" data-i18n="browser.recovery.saved">Use saved access token</button>
             <div id="session-recovery-message"></div>
         </div>
     </div>
@@ -3641,6 +3645,7 @@
                 const action = state && state.agent ? state.agent.lastAction : null;
                 const hasError = isAgentActionError(action);
                 agentStatusBox.classList.toggle('error', hasError);
+                agentStatusDetail.classList.toggle('outcome-unknown', !!(action && action.errorCode === 'file_copy_publish_outcome_unknown'));
                 if (!action) {
                     agentStatusMain.innerText = 'last: none';
                     agentStatusDetail.innerText = 'error: none';
@@ -3654,7 +3659,7 @@
                 if (action.errorCode) parts.push(`error: ${action.errorCode}`);
                 else parts.push('error: none');
                 if (action.errorCode === 'file_copy_publish_outcome_unknown') {
-                    parts.push('destination may have changed; inspect it before retrying');
+                    parts.push(t('agent.copy.result_unknown'));
                 }
                 if (action.bytesWritten !== null && Number.isFinite(Number(action.bytesWritten))) {
                     parts.push(`written: ${action.bytesWritten}`);
@@ -3860,11 +3865,11 @@
                     agentActionTarget.innerText = '--';
                     agentActionBytes.innerText = '0';
                     agentActionLines.innerText = '0';
-                    agentActionNewline.innerText = 'no';
-                    agentActionControl.innerText = 'no';
+                    agentActionNewline.innerText = t('common.no');
+                    agentActionControl.innerText = t('common.no');
                     agentActionStatus.innerText = '--';
-                    agentApproveBtn.innerText = 'Approve';
-                    agentRejectBtn.innerText = 'Reject';
+                    agentApproveBtn.innerText = t('agent.approval.input');
+                    agentRejectBtn.innerText = t('agent.approval.reject');
                     agentApproveBtn.disabled = true;
                     agentRejectBtn.disabled = true;
                     agentActionPauseBtn.disabled = true;
@@ -3886,12 +3891,12 @@
                     agentFileCopyConflict.innerText = String(action.conflict_mode || 'fail').replace('_', ' ');
                     if (action.conflict_mode === 'replace') {
                         agentFileCopyWarning.innerText = action.destination_exists
-                            ? `This will atomically replace an existing regular file (${formatSftpBytes(action.destination_existing_size)}).`
-                            : 'Replace was requested, but no destination file existed during preflight.';
+                            ? t('agent.copy.replace', { size: formatSftpBytes(action.destination_existing_size) })
+                            : t('agent.copy.replace_missing');
                     } else if (action.conflict_mode === 'keep_both') {
-                        agentFileCopyWarning.innerText = 'The displayed destination is the exact keep-both name selected by the backend.';
+                        agentFileCopyWarning.innerText = t('agent.copy.keep_both');
                     } else if (action.destination_exists) {
-                        agentFileCopyWarning.innerText = 'The destination exists. Approval reveals the conflict result; no file will be copied.';
+                        agentFileCopyWarning.innerText = t('agent.copy.destination_exists');
                     } else {
                         agentFileCopyWarning.innerText = '';
                     }
@@ -3900,14 +3905,14 @@
                     const copied = normalizeAgentCount(action.bytes_copied);
                     const total = normalizeAgentCount(action.total_bytes || action.source_size);
                     agentActionBytes.innerText = action.status === 'pending_approval'
-                        ? 'after approval'
+                        ? t('agent.copy.after_approval')
                         : `${formatSftpBytes(copied)} / ${formatSftpBytes(total)}`;
                 } else {
                     agentActionBytes.innerText = String(normalizeAgentCount(action.byte_length));
                 }
                 agentActionLines.innerText = isFileCopy ? '--' : String(normalizeAgentCount(action.line_count));
-                agentActionNewline.innerText = isFileCopy ? '--' : (action.ends_with_newline ? 'yes' : 'no');
-                agentActionControl.innerText = isFileCopy ? '--' : (action.contains_control_chars ? 'yes' : 'no');
+                agentActionNewline.innerText = isFileCopy ? '--' : t(action.ends_with_newline ? 'common.yes' : 'common.no');
+                agentActionControl.innerText = isFileCopy ? '--' : t(action.contains_control_chars ? 'common.yes' : 'common.no');
                 const copied = normalizeAgentCount(action.bytes_copied);
                 const total = normalizeAgentCount(action.total_bytes || action.source_size);
                 const percent = isFileCopy && total > 0
@@ -3916,8 +3921,8 @@
                 agentActionStatus.innerText = percent === null
                     ? (action.status || '--')
                     : `${action.status || '--'} · ${percent}%`;
-                agentApproveBtn.innerText = isFileCopy ? 'Approve copy' : 'Approve';
-                agentRejectBtn.innerText = isFileCopy ? 'Deny' : 'Reject';
+                agentApproveBtn.innerText = t(isFileCopy ? 'agent.approval.copy' : 'agent.approval.input');
+                agentRejectBtn.innerText = t('agent.approval.reject');
                 const canDecide = canUseAgentPanel(state)
                     && action.status === 'pending_approval'
                     && !!action.action_id
@@ -5754,7 +5759,7 @@
                 browserAuthBox.style.display = !serverUnavailable && authorizationRequired ? 'block' : 'none';
                 connectionForm.style.display = serverUnavailable || authorizationRequired ? 'none' : 'block';
                 browserAuthMessage.innerText = authorizationRequired
-                    ? (message || 'First time? Please use an Auth URL.')
+                    ? (message || t('browser.auth.instructions'))
                     : '';
                 browserAuthHelpDir.innerText = terminalPolicy.authorized_dir || 'authorized/';
                 browserAuthCaHelp.style.display = terminalPolicy.ca_download_url ? 'block' : 'none';
@@ -5994,7 +5999,7 @@
             }
 
             function registerBrowserIdentity() {
-                if (!socket || !socket.connected) return Promise.reject(new Error('Socket is not connected yet.'));
+                if (!socket || !socket.connected) return Promise.reject(new Error(t('browser.auth.disconnected')));
                 return getBrowserIdentity()
                     .then(identity => {
                         socket.emit('register_browser_identity', {
@@ -6017,7 +6022,7 @@
                     cleanUrl.searchParams.delete('authorize');
                     window.history.replaceState({}, document.title, cleanUrl.toString());
                 } catch (e) {}
-                updateBrowserAuthUi('Authorizing this browser from the launch URL...');
+                updateBrowserAuthUi(t('browser.auth.authorizing'));
                 socket.emit('browser_authorization_grant', {
                     grant_token: BROWSER_AUTH_GRANT
                 });
@@ -6284,7 +6289,7 @@
                 if (browserPairingResponseTimer) clearTimeout(browserPairingResponseTimer);
                 browserPairingResponseTimer = setTimeout(() => {
                     setBrowserAuthBusy(false);
-                    updateBrowserAuthUi('No authorization response from server. Refresh this page, then try the manual download again.');
+                    updateBrowserAuthUi(t('browser.auth.no_response'));
                 }, 5000);
             }
 
@@ -6306,7 +6311,7 @@
                 const check = () => {
                     if (Date.now() >= browserPairingCheckExpiresAt) {
                         stopBrowserPairingAutoCheck();
-                        updateBrowserAuthUi('Still locked. Put the downloaded file in the authorized directory, then download a fresh file to retry.');
+                        updateBrowserAuthUi(t('browser.auth.file_not_accepted'));
                         return;
                     }
                     if (socket && socket.connected) socket.emit('check_browser_pairing');
@@ -7229,7 +7234,7 @@
                         return isAccessTokenRemembered();
                     },
                     showSessionRecoveryForTest(message) {
-                        showSessionRecovery(message || 'Session expired. Enter the access token again.');
+                        showSessionRecovery(message || t('browser.recovery.expired'));
                     },
                     applyTerminalPolicy(policy) {
                         applyTerminalPolicy(cloneForTest(policy));
@@ -7548,7 +7553,7 @@
                 });
                 if (isSessionRequiredConnectError(err)) {
                     setServerConnectionState('session_required');
-                    showSessionRecovery('Enter the access token printed by the current StandTerm launcher.');
+                    showSessionRecovery(t('browser.recovery.current_token'));
                 } else {
                     setServerConnectionState('unavailable');
                 }
@@ -7690,7 +7695,7 @@
                 setBrowserAuthBusy(false);
                 if (!data || typeof data.filename !== 'string' || typeof data.content !== 'string') return;
                 downloadTextFile(data.filename, data.content);
-                updateBrowserAuthUi(`Downloaded ${data.filename}. Move it to ${data.authorized_dir}; this page will spot it automatically.`);
+                updateBrowserAuthUi(t('browser.auth.downloaded', { filename: data.filename, directory: data.authorized_dir }));
                 startBrowserPairingAutoCheck();
             });
             socket.on('browser_authorization_status', data => {
@@ -7704,7 +7709,7 @@
                 if (data.status === 'authorized') {
                     stopBrowserPairingAutoCheck();
                     userSelectedConnectionType = null;
-                    updateBrowserAuthUi('Welcome aboard. Loading connection options...');
+                    updateBrowserAuthUi(t('browser.auth.authorized'));
                     updatePolicyDebugPanel('browser_authorized', data);
                     if (socket && socket.connected) socket.emit('refresh_terminal_policy');
                 } else if (data.message) {
@@ -7803,16 +7808,16 @@
                 }
                 updateBrowserAuthUi();
                 if (state === 'available') {
-                    socketStatusEl.innerText = 'Connected';
+                    socketStatusEl.innerText = t('browser.connection.connected');
                     socketStatusEl.style.color = '#34c759';
                 } else if (state === 'session_required') {
-                    socketStatusEl.innerText = 'Access token required';
+                    socketStatusEl.innerText = t('browser.connection.required');
                     socketStatusEl.style.color = '#ff453a';
                 } else if (state === 'unavailable') {
-                    socketStatusEl.innerText = 'Server not available (retrying)';
+                    socketStatusEl.innerText = t('browser.connection.retrying');
                     socketStatusEl.style.color = '#ff9f0a';
                 } else {
-                    socketStatusEl.innerText = 'Connecting...';
+                    socketStatusEl.innerText = t('browser.connection.connecting');
                     socketStatusEl.style.color = '#ffcc00';
                 }
                 connectBtn.disabled = state !== 'available';
@@ -7826,10 +7831,10 @@
                 });
                 if (serverRetryNowBtn) {
                     serverRetryNowBtn.disabled = true;
-                    serverRetryNowBtn.innerText = 'Retrying...';
+                    serverRetryNowBtn.innerText = t('browser.connection.reconnecting');
                     setTimeout(() => {
                         serverRetryNowBtn.disabled = false;
-                        serverRetryNowBtn.innerText = 'Retry Now';
+                        serverRetryNowBtn.innerText = t('browser.connection.retry');
                     }, 1000);
                 }
                 const manager = socket.io;
@@ -7932,7 +7937,7 @@
             async function readPlatformRecoveryResponse(response) {
                 const payload = await response.json().catch(() => ({}));
                 if (!response.ok || payload.status !== 'ok') {
-                    const error = new Error(payload.message || 'Platform session recovery failed.');
+                    const error = new Error(payload.message || t('browser.recovery.failed'));
                     error.errorCode = payload.error_code || null;
                     throw error;
                 }
@@ -7941,9 +7946,15 @@
 
             function formatPlatformRecoveryError(error) {
                 if (error && error.name === 'NotAllowedError') {
-                    return 'Device verification was cancelled or no matching passkey is available.';
+                    return t('browser.recovery.device_cancelled');
                 }
-                return error && error.message ? error.message : 'Platform session recovery failed.';
+                if (error && error.errorCode === 'session_recovery_not_configured') {
+                    return t('browser.recovery.not_configured');
+                }
+                if (error && error.errorCode === 'session_recovery_no_live_session') {
+                    return t('browser.recovery.no_live_session');
+                }
+                return error && error.message ? error.message : t('browser.recovery.failed');
             }
 
             async function registerPlatformRecoveryCredential() {
@@ -8077,7 +8088,7 @@
                         headers: { 'Accept': 'application/json' },
                     });
                     if (!response.ok) {
-                        showSessionRecovery('Session expired. Enter the access token again.');
+                        showSessionRecovery(t('browser.recovery.expired'));
                         return;
                     }
                     const result = await response.json().catch(() => ({}));
@@ -8122,7 +8133,7 @@
                     body,
                 });
                 if (!response.ok) {
-                    throw new Error('Access token was not accepted.');
+                    throw new Error(t('browser.recovery.token_rejected'));
                 }
             }
 
@@ -8145,7 +8156,7 @@
                     headers: { 'Accept': 'application/json' },
                 });
                 if (!response.ok) {
-                    showSessionRecovery('Session expired. Enter the access token again.');
+                    showSessionRecovery(t('browser.recovery.expired'));
                     throw new Error('Session expired.');
                 }
                 const result = await response.json();
@@ -8501,21 +8512,21 @@
                 try {
                     authorizationUrl = new URL(browserAuthUrlInput.value.trim());
                 } catch (e) {
-                    setBrowserAuthUrlError('That does not look like a complete Auth URL.');
+                    setBrowserAuthUrlError(t('browser.auth.invalid_url'));
                     browserAuthUrlInput.focus();
                     return;
                 }
                 if (!['http:', 'https:'].includes(authorizationUrl.protocol)) {
-                    setBrowserAuthUrlError('Auth URLs must use HTTP or HTTPS.');
+                    setBrowserAuthUrlError(t('browser.auth.invalid_scheme'));
                     browserAuthUrlInput.focus();
                     return;
                 }
                 if (!authorizationUrl.searchParams.get('authorize')) {
-                    setBrowserAuthUrlError('That URL is missing its one-time authorization code.');
+                    setBrowserAuthUrlError(t('browser.auth.missing_grant'));
                     browserAuthUrlInput.focus();
                     return;
                 }
-                browserAuthMessage.innerText = 'Opening the gate...';
+                browserAuthMessage.innerText = t('browser.auth.opening');
                 window.location.assign(authorizationUrl.toString());
             };
             browserAuthUrlInput.oninput = () => setBrowserAuthUrlError('');
@@ -8526,15 +8537,15 @@
             };
             authorizeBrowserBtn.onclick = () => {
                 if (!socket || !socket.connected) {
-                    updateBrowserAuthUi('Socket is not connected yet. Wait until the Socket status is Connected, then try again.');
+                    updateBrowserAuthUi(t('browser.auth.disconnected'));
                     return;
                 }
                 clearBrowserPairingResponseTimer();
                 setBrowserAuthBusy(true);
-                updateBrowserAuthUi('Preparing browser authorization...');
+                updateBrowserAuthUi(t('browser.auth.preparing'));
                 registerBrowserIdentity()
                     .then(() => {
-                        updateBrowserAuthUi('Requesting authorization file from server...');
+                        updateBrowserAuthUi(t('browser.auth.requesting_file'));
                         socket.emit('request_browser_pairing');
                         startBrowserPairingResponseTimer();
                     })
@@ -9154,16 +9165,21 @@
             function agentTransferStatusText(action) {
                 const copied = normalizeAgentCount(action.bytes_copied);
                 const total = normalizeAgentCount(action.total_bytes || action.source_size);
-                const amount = total > 0 ? `${formatSftpBytes(copied)} of ${formatSftpBytes(total)}` : formatSftpBytes(copied);
-                if (action.status === 'approved') return `Starting · ${formatSftpBytes(total)}`;
+                const amount = total > 0
+                    ? t('agent.transfer.amount', { copied: formatSftpBytes(copied), total: formatSftpBytes(total) })
+                    : formatSftpBytes(copied);
+                if (action.status === 'approved') return `${t('agent.transfer.starting')} · ${formatSftpBytes(total)}`;
                 if (action.status === 'running') {
                     const percent = total > 0 ? Math.min(100, Math.floor(copied * 100 / total)) : 0;
                     return `${percent}% · ${amount}`;
                 }
-                if (action.status === 'committing') return `Finishing · ${formatSftpBytes(total)}`;
-                if (action.status === 'completed') return `Completed · ${formatSftpBytes(total)}`;
-                if (action.error_code === 'file_copy_cancelled_by_operator') return 'Stopped';
-                return action.error_code ? `Failed · ${action.error_code}` : 'Failed';
+                if (action.status === 'committing') return `${t('agent.transfer.finishing')} · ${formatSftpBytes(total)}`;
+                if (action.status === 'completed') return `${t('agent.transfer.completed')} · ${formatSftpBytes(total)}`;
+                if (action.error_code === 'file_copy_cancelled_by_operator') return t('agent.transfer.stopped');
+                if (action.error_code === 'file_copy_publish_outcome_unknown') {
+                    return `${t('agent.copy.result_unknown')} · ${action.error_code}`;
+                }
+                return action.error_code ? `${t('agent.transfer.failed')} · ${action.error_code}` : t('agent.transfer.failed');
             }
 
             function removeAgentTransfer(actionId) {
@@ -9238,6 +9254,7 @@
                     route.title = route.innerText;
                     const status = document.createElement('div');
                     status.className = 'transfer-queue-status';
+                    status.classList.toggle('outcome-unknown', action.error_code === 'file_copy_publish_outcome_unknown');
                     status.innerText = agentTransferStatusText(action);
                     content.append(name, route, status);
                     if (action.status !== 'failed') {
@@ -9263,13 +9280,14 @@
                     button.type = 'button';
                     if (isFinishedAgentTransfer(action)) {
                         button.innerText = '×';
-                        button.title = 'Dismiss';
-                        button.setAttribute('aria-label', `Dismiss ${agentTransferFilename(action)}`);
+                        button.title = t('agent.transfer.dismiss');
+                        button.setAttribute('aria-label', t('agent.transfer.dismiss_file', { filename: agentTransferFilename(action) }));
                         button.onclick = () => removeAgentTransfer(action.action_id);
                     } else {
-                        button.innerText = action.status === 'committing' ? '…' : 'Stop';
+                        button.innerText = action.status === 'committing' ? '…'
+                            : t(record.cancelPending ? 'agent.transfer.stopping' : 'agent.transfer.stop');
                         button.disabled = action.status === 'committing' || record.cancelPending;
-                        button.title = action.status === 'committing' ? 'The destination is being published and cannot be stopped' : 'Stop transfer';
+                        button.title = t(action.status === 'committing' ? 'agent.transfer.committing' : 'agent.transfer.stop_hint');
                         button.onclick = () => {
                             const state = terminals.get(action.terminal_id);
                             if (!state || !socket || !socket.connected || button.disabled) return;
@@ -11840,10 +11858,10 @@
             if (sessionRecoveryForm) {
                 sessionRecoveryForm.onsubmit = event => {
                     event.preventDefault();
-                    if (sessionRecoveryMessage) sessionRecoveryMessage.textContent = 'Unlocking...';
+                    if (sessionRecoveryMessage) sessionRecoveryMessage.textContent = t('browser.recovery.checking');
                     submitSessionRecoveryToken(sessionRecoveryToken ? sessionRecoveryToken.value : '')
                         .catch(err => {
-                            if (sessionRecoveryMessage) sessionRecoveryMessage.textContent = err.message || 'Access token was not accepted.';
+                            if (sessionRecoveryMessage) sessionRecoveryMessage.textContent = err.message || t('browser.recovery.token_rejected');
                         });
                 };
             }
@@ -11851,10 +11869,10 @@
                 sessionRecoveryRememberedTokenBtn.onclick = () => {
                     if (!isAccessTokenRemembered()) return;
                     sessionRecoveryRememberedTokenBtn.disabled = true;
-                    if (sessionRecoveryMessage) sessionRecoveryMessage.textContent = 'Unlocking with remembered token...';
+                    if (sessionRecoveryMessage) sessionRecoveryMessage.textContent = t('browser.recovery.checking_saved');
                     submitRememberedSessionRecoveryToken()
                         .catch(err => {
-                            if (sessionRecoveryMessage) sessionRecoveryMessage.textContent = err.message || 'Access token was not accepted.';
+                            if (sessionRecoveryMessage) sessionRecoveryMessage.textContent = err.message || t('browser.recovery.token_rejected');
                         })
                         .finally(() => {
                             sessionRecoveryRememberedTokenBtn.disabled = false;
@@ -11865,7 +11883,7 @@
             if (sessionRecoveryPlatformBtn) {
                 sessionRecoveryPlatformBtn.onclick = () => {
                     sessionRecoveryPlatformBtn.disabled = true;
-                    if (sessionRecoveryMessage) sessionRecoveryMessage.textContent = 'Waiting for device verification...';
+                    if (sessionRecoveryMessage) sessionRecoveryMessage.textContent = t('browser.recovery.verifying_device');
                     recoverSessionWithPlatformCredential()
                         .catch(error => {
                             if (sessionRecoveryMessage) {
@@ -11917,7 +11935,7 @@
             if (platformRecoveryArmBtn) {
                 platformRecoveryArmBtn.onclick = () => {
                     platformRecoveryArmBtn.disabled = true;
-                    if (platformRecoveryStatus) platformRecoveryStatus.textContent = 'Waiting for device verification...';
+                    if (platformRecoveryStatus) platformRecoveryStatus.textContent = t('browser.recovery.verifying_device');
                     authenticatePlatformRecoveryCredential()
                         .then(() => {
                             if (platformRecoveryStatus) {

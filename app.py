@@ -5630,7 +5630,7 @@ def build_access_required_response():
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>StandTerm Access Required</title>
+  <title>StandTerm access required</title>
   <style>
     body {
       font-family: system-ui, sans-serif;
@@ -5695,19 +5695,21 @@ def build_access_required_response():
 </head>
 <body>
   <main>
-    <h1>StandTerm access required</h1>
-    <p>Enter the access token printed by the launcher, or open the full Access URL.</p>
+    <h1 data-i18n="browser.access.required">StandTerm access required</h1>
+    <p data-i18n="browser.access.instructions">Enter the launcher’s access token, or open its full Access URL.</p>
     <form id="access-login-form" method="post" action="/login" autocomplete="off">
-      <label for="access-token">Access token</label>
+      <label for="access-token" data-i18n="browser.recovery.token_label">Access token</label>
       <input id="access-token" name="token" type="password" autofocus required>
-      <button type="submit">Unlock</button>
+      <button type="submit" data-i18n="browser.recovery.submit">Use access token</button>
     </form>
-    <div id="access-recovery-divider" class="divider">or</div>
-    <button id="access-recovery-button" class="secondary" type="button">Recover live session with device</button>
+    <div id="access-recovery-divider" class="divider" data-i18n="common.or">or</div>
+    <button id="access-recovery-button" class="secondary" type="button" data-i18n="browser.recovery.device">Verify with device</button>
     <p id="access-login-status" class="hint" role="status"></p>
-    <p class="hint">Device recovery uses Windows Hello, Touch ID, or another platform passkey previously registered for this hostname. It only restores a session still running in this StandTerm process.</p>
-    <p class="hint">For Windows browsers connecting to a WSL IP over HTTPS, the browser may also require trusting the StandTerm local CA.</p>
+    <p class="hint" data-i18n="browser.recovery.hint">Use a device registered for this hostname and enabled for a still-valid session, or enter the current launcher’s access token. After StandTerm restarts, use the current access token.</p>
+    <p class="hint" data-i18n="browser.access.ca_hint">For Windows browsers connecting to a WSL IP over HTTPS, the browser may also require trusting the StandTerm local CA.</p>
   </main>
+  <script src="/static/js/standterm-messages.js"></script>
+  <script src="/static/js/standterm-i18n.js"></script>
   <script>
     (() => {
       const form = document.getElementById('access-login-form');
@@ -5716,6 +5718,30 @@ def build_access_required_response():
       const recoveryButton = document.getElementById('access-recovery-button');
       const recoveryDivider = document.getElementById('access-recovery-divider');
       if (!form || !tokenInput) return;
+
+      let requestedLocale = 'en';
+      try {
+        const stored = JSON.parse(localStorage.getItem('terminal.pref.v1'));
+        if (stored && typeof stored === 'object' && !Array.isArray(stored)) {
+          requestedLocale = stored.uiLanguage;
+        }
+      } catch (exc) {
+        // Invalid or unavailable preferences retain the English access form.
+      }
+      let uiText = null;
+      if (window.StandTermI18n && window.StandTermMessages) {
+        uiText = window.StandTermI18n.create(window.StandTermMessages, requestedLocale);
+      }
+      const t = (key, fallback) => {
+        if (!uiText) return fallback;
+        const translated = uiText.t(key);
+        return translated === key ? fallback : translated;
+      };
+      document.querySelectorAll('[data-i18n]').forEach(element => {
+        element.textContent = t(element.dataset.i18n, element.textContent);
+      });
+      document.documentElement.lang = uiText ? uiText.locale : 'en';
+      document.title = t('browser.access.required', 'StandTerm access required');
 
       const base64urlToBytes = value => {
         const padding = '='.repeat((4 - (value.length % 4)) % 4);
@@ -5758,7 +5784,13 @@ def build_access_required_response():
       const readJsonResponse = async response => {
         const payload = await response.json().catch(() => ({}));
         if (!response.ok || payload.status !== 'ok') {
-          throw new Error(payload.message || 'Platform recovery failed.');
+          let message = payload.message || t('browser.recovery.failed', 'Device recovery failed.');
+          if (payload.error_code === 'session_recovery_not_configured') {
+            message = t('browser.recovery.not_configured', message);
+          } else if (payload.error_code === 'session_recovery_no_live_session') {
+            message = t('browser.recovery.no_live_session', message);
+          }
+          throw new Error(message);
         }
         return payload;
       };
@@ -5770,7 +5802,7 @@ def build_access_required_response():
 
       if (recoveryButton) recoveryButton.addEventListener('click', async () => {
         recoveryButton.disabled = true;
-        if (statusEl) statusEl.textContent = 'Waiting for device verification...';
+        if (statusEl) statusEl.textContent = t('browser.recovery.verifying_device', 'Waiting for device verification…');
         try {
           const optionsResponse = await fetch('/session-recovery/authenticate/options', {
             method: 'POST',
@@ -5798,9 +5830,10 @@ def build_access_required_response():
           appUrl.searchParams.delete('token');
           window.location.replace(`${appUrl.pathname}${appUrl.search}${appUrl.hash}` || '/');
         } catch (exc) {
-          if (statusEl) statusEl.textContent = exc && exc.message
-            ? exc.message
-            : 'Platform recovery was cancelled or failed.';
+          if (statusEl) statusEl.textContent = exc && exc.name === 'NotAllowedError'
+            ? t('browser.recovery.device_cancelled', 'Device verification was cancelled or no matching passkey is available.')
+            : (exc && exc.message ? exc.message
+              : t('browser.recovery.cancelled_or_failed', 'Device verification was cancelled or failed.'));
           recoveryButton.disabled = false;
         }
       });
@@ -5810,7 +5843,7 @@ def build_access_required_response():
         const token = tokenInput.value || '';
         const body = new URLSearchParams();
         body.set('token', token);
-        if (statusEl) statusEl.textContent = 'Unlocking...';
+        if (statusEl) statusEl.textContent = t('browser.recovery.checking', 'Checking access token…');
         try {
           const response = await fetch('/login', {
             method: 'POST',
@@ -5821,7 +5854,7 @@ def build_access_required_response():
             body,
           });
           if (!response.ok) {
-            if (statusEl) statusEl.textContent = 'Access token was not accepted.';
+            if (statusEl) statusEl.textContent = t('browser.recovery.token_rejected', 'Access token was not accepted.');
             return;
           }
           const appUrl = new URL(window.location.href);
@@ -5832,7 +5865,7 @@ def build_access_required_response():
             headers: { 'Accept': 'text/html' },
           });
           if (!appResponse.ok) {
-            throw new Error('Unable to load StandTerm.');
+            throw new Error(t('browser.access.load_failed', 'Unable to load StandTerm.'));
           }
           const html = await appResponse.text();
           window.standtermPendingAccessToken = token;
@@ -5841,7 +5874,7 @@ def build_access_required_response():
           document.write(html);
           document.close();
         } catch (exc) {
-          if (statusEl) statusEl.textContent = 'Unable to unlock. Check the connection and try again.';
+          if (statusEl) statusEl.textContent = t('browser.access.unlock_failed', 'Cannot restore access. Check the connection and try again.');
         }
       });
     })();

@@ -43,7 +43,7 @@ do not consolidate them merely to shorten labels.
 | 3 | Review English UI copy and terminology | Core terms agreed; initial English sources reviewed | Review each proposed change for target, permissions, consequences, and next action; check related tooltips, Desktop help, and tests before applying it. |
 | 4 | Finalize the translation exchange table | Initial exchange validated with an independent translator | Stable keys, approved English source, context, and placeholder constraints are sufficient for an independent translator. |
 | 5 | Pilot Agent access and local connection information | Implemented; validation below | Cover static and dynamic text, titles, and accessible names; preserve connected sessions and authorization; support English fallback. |
-| 6 | Translate and integrate approved rows | Pilot translations reviewed and integrated; remaining workflows deferred | AI edits only target-language cells; validate keys and placeholders; review authorization and destructive-action wording. |
+| 6 | Translate and integrate approved rows | Agent pilot plus browser access/recovery and Agent approvals/transfers integrated | AI edits only target-language cells; validate keys and placeholders; review authorization and destructive-action wording. |
 | 7 | Expand Core and Desktop coverage | Deferred | Verify secondary windows, native menus, setup, diagnostics, packaging, and representative layouts. |
 
 ## Validation of the reliability changes
@@ -66,9 +66,8 @@ validated separately below.
 
 ## Deferred UI work
 
-Browser authorization, file-copy review text, Agent diagnostics, SSH tunnel setup,
-secondary windows, and Desktop localization remain outside this pilot. Reviewed
-rows in the table do not imply that every screen has integrated them. Translation
+General connection forms, Agent diagnostics, SSH tunnel setup, secondary windows,
+and Desktop localization remain outside the completed workflows. Translation
 starts only after the English source for the selected workflow is reviewed.
 Extra screen diffing, render hints, key aliases, and byte-limit options remain optional optimizations.
 Unverified UART end-to-end coverage is a qualification gap, not evidence that
@@ -142,8 +141,8 @@ inventory and pilot are needed before committing to a delivery estimate.
 
 ## Pilot implementation and translation handoff
 
-The table contains 82 rows: 81 reviewed translations and one removal row.
-The pilot integrates 75 keys; six reviewed keys belong to deferred workflows.
+The initial pilot contained 82 rows: 81 reviewed translations and one removal row.
+It integrated 75 keys; six reviewed keys were reserved for the next phase.
 An independent translator edited only the 63 new target cells. The integrator
 checked unchanged metadata and placeholders, clarified that Settings changes
 the default permission, and reviewed the translations before changing statuses.
@@ -182,3 +181,49 @@ Machine prompts, protocol values and backend diagnostics are unchanged.
 
 These checks ran with WSL Chromium and local test servers. Native Desktop
 packaging and physical UART qualification were not part of this UI pilot.
+
+## Browser access, recovery, approval and transfer implementation
+
+The accepted [phase-two proposal](ui_copy_phase2_proposal.md) is implemented.
+The authoritative table now contains 170 rows: 169 reviewed messages and one
+decorative removal. All 169 exported keys are referenced by the integrated UI.
+The companion proposal TSV remains a historical snapshot; do not export it to
+the runtime catalog or append its duplicate keys to the authoritative table.
+
+Browser authorization, the separate initial access page, recovery prompts and
+manual authorization help now share reviewed English and Traditional Chinese
+copy. Pending, rejected, reconnect and reset states use the same catalog.
+Initial access retains its English HTML form when JavaScript or translation
+assets are unavailable. Known recovery errors use typed error codes; unknown
+server diagnostics retain their original messages. Credentials, auth routes,
+recovery eligibility and public discovery scope are unchanged.
+
+Agent approval distinguishes input from file copies. Reject handles one proposal;
+Pause Agent retains its terminal scope. Transfer cancellation distinguishes a
+pending request from an operator-confirmed stop and stays disabled after the
+commit barrier. Dismiss actions hide entries without issuing file operations.
+Canonical endpoints, paths, sizes, proposal bindings and raw diagnostic codes
+remain intact.
+
+Independent read-only implementation reviews found no control or authorization
+regressions. A subsequent browser layout check found that existing single-line
+ellipsis hid the end of unknown-publication warnings, despite the full strings
+being present in the DOM. Only that typed error now enables wrapping in Agent
+details and the transfer queue. The critic accepted this correction and clarified
+that its earlier review established text content, not visual completeness.
+
+| Check | Result |
+| --- | --- |
+| Complete Agent browser suite | 56 top-level cases passed, including English/Traditional Chinese access and recovery, exact input decisions, file-copy plans, stop states and dismissal. |
+| Complete Agent backend suite | 169 cases passed, including browser grants, recovery eligibility, stale proposals and transfer commit/cancel boundaries. |
+| Final warning-layout correction | Five focused approval/transfer cases passed after the CSS correction; both locales preserve full warning text at 1280 and 480 pixel widths. |
+| Initial access fallback | Real token login passed with JavaScript disabled and with both translation assets blocked; invalid Agent-style token input remained rejected. |
+| Browser URL validation | Native invalid-URL validation stays in place; parser/scheme/missing-grant branches preserve their behavior. A syntactically valid authorization URL only navigates, without claiming authorization succeeded. |
+| Catalog and lookup | Six exporter tests and six lookup tests passed; generated catalog freshness and all 169 referenced bilingual keys verified. |
+| Static verification | Python compilation and diff whitespace checks passed. |
+
+The browser suite ran before the final warning-only layout correction; the five
+focused cases above validate that final correction. Native Desktop packaging,
+real platform authenticator prompts and physical UART were not requalified.
+Core packaging already requires both runtime catalog files and the source table;
+this phase adds no new runtime asset or dependency.

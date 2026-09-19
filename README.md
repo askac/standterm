@@ -323,8 +323,9 @@ The default is **Direct input + token**. The tab-row Create token and Create
 token 3× buttons remain beside Pause Agent when the Agent panel is hidden, and always target the active
 terminal; compact windows keep those actions in the Agent panel.
 
-**Settings > General > Language (Agent preview)** selects English or Traditional
-Chinese (Taiwan) for Agent access and local connection information. The choice
+**Settings > General > Language (preview)** selects English or Traditional
+Chinese (Taiwan) for browser access and recovery, Agent permissions, input and
+file-copy approvals, transfer results, and local connection information. The choice
 applies the next time the page opens; saving it does not reload the current
 page or change its connections and grants. Other areas remain in English.
 The [copy and translation table](docs/ui_copy_review.tsv) and
@@ -640,8 +641,8 @@ To enable recovery:
    select **Arm existing passkey** before relying on recovery for that live
    process.
 
-When the session cookie is missing, select **Recover live session with device**
-on the Access Required page or in the in-app recovery prompt. Recovery succeeds
+When the session cookie is missing, select **Verify with device**
+on the Access Required page or in the **Restore StandTerm access** dialog. Recovery succeeds
 only while that session remains active in the same `app.py` process. A backend
 restart, expired session, closed terminal bridge, or disconnected remote host
 cannot be reconstructed by the passkey.
