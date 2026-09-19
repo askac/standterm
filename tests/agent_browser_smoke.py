@@ -2685,9 +2685,12 @@ def test_file_copy_approval_shows_canonical_plan(browser, access_url):
                 source: document.getElementById('agent-file-copy-source').innerText,
                 destination: document.getElementById('agent-file-copy-destination').innerText,
                 size: document.getElementById('agent-file-copy-size').innerText,
-                conflict: document.getElementById('agent-file-copy-conflict').innerText,
                 warning: document.getElementById('agent-file-copy-warning').innerText,
                 approve: document.getElementById('agent-approve-btn').innerText,
+                deny: document.getElementById('agent-reject-btn').innerText,
+                previewDisplay: getComputedStyle(document.getElementById('agent-action-preview')).display,
+                metaDisplay: getComputedStyle(document.getElementById('agent-action-meta')).display,
+                actionHeight: document.getElementById('agent-action-box').getBoundingClientRect().height,
                 approveDisabled: document.getElementById('agent-approve-btn').disabled
             })"""
         )
@@ -2695,9 +2698,11 @@ def test_file_copy_approval_shows_canonical_plan(browser, access_url):
         check(details['source'] == 'builder@source.example:22:/srv/releases/image.bin', 'source plan was not exact')
         check(details['destination'] == 'Local Shell (bash):/tmp/image.bin', 'destination plan was not exact')
         check(details['size'] == '1.50 KiB', 'source size was not rendered')
-        check(details['conflict'] == 'replace', 'replace mode was not rendered')
         check('atomically replace' in details['warning'], 'replace warning was not explicit')
         check(details['approve'] == 'Approve copy', 'copy approval button was not explicit')
+        check(details['deny'] == 'Deny', 'copy denial button was not concise')
+        check(details['previewDisplay'] == 'none' and details['metaDisplay'] == 'none', 'generic action details expanded the copy prompt')
+        check(details['actionHeight'] < 220, 'copy approval prompt was not compact')
         check(details['approveDisabled'] is False, 'copy approval button was unexpectedly disabled')
         page.evaluate(
             """payload => window.terminalTest.applyAgentActionPayloadForTest(payload)""",
@@ -2796,16 +2801,32 @@ def test_file_copy_approval_is_global_and_decision_is_single_shot(browser, acces
         )
         progress = page.evaluate(
             """() => ({
-                visible: document.getElementById('agent-action-box').classList.contains('visible'),
-                bytes: document.getElementById('agent-action-bytes').innerText,
-                status: document.getElementById('agent-action-status').innerText,
-                approveDisabled: document.getElementById('agent-approve-btn').disabled
+                actionVisible: document.getElementById('agent-action-box').classList.contains('visible'),
+                queueButtonVisible: !document.getElementById('transfer-queue-btn').hidden,
+                queueVisible: document.getElementById('transfer-queue-panel').classList.contains('visible'),
+                count: document.getElementById('transfer-queue-count').innerText,
+                status: document.querySelector('.transfer-queue-status')?.innerText,
+                progress: document.querySelector('.transfer-queue-progress')?.getAttribute('aria-valuenow'),
+                stop: document.querySelector('.transfer-queue-stop')?.innerText,
+                toolbarOrder: [
+                    document.getElementById('sftp-status-btn').nextElementSibling.id,
+                    document.getElementById('transfer-queue-btn').nextElementSibling.id
+                ]
             })"""
         )
-        check(progress['visible'] is True, 'running file copy progress was hidden')
-        check(progress['bytes'] == '768 B / 1.50 KiB', 'file copy byte progress was incorrect')
-        check(progress['status'] == 'running · 50%', 'file copy percentage was incorrect')
-        check(progress['approveDisabled'] is True, 'running file copy could still be approved')
+        check(progress['actionVisible'] is False, 'running file copy kept the approval prompt open')
+        check(progress['queueButtonVisible'] is True and progress['queueVisible'] is True, 'running transfer queue was hidden')
+        check(progress['count'] == '1', 'transfer queue count was incorrect')
+        check(progress['status'] == '50% · 768 B of 1.50 KiB', 'file copy progress was incorrect')
+        check(progress['progress'] == '50', 'file copy progress bar was incorrect')
+        check(progress['stop'] == 'Stop', 'running transfer could not be stopped')
+        check(progress['toolbarOrder'] == ['transfer-queue-btn', 'quick-settings'], 'transfer queue was not between Files and Settings')
+
+        clear_emitted(page)
+        page.click('.transfer-queue-stop')
+        cancel_events = get_emitted(page, 'agent_action_cancel')
+        check(len(cancel_events) == 1, 'transfer stop did not emit one cancellation')
+        check(cancel_events[0]['args'][0]['terminal_id'] == 'main', 'transfer stop targeted the active tab instead of its source tab')
 
         page.evaluate(
             "payload => window.terminalTest.applyAgentActionPayloadForTest(payload)",
@@ -2820,6 +2841,18 @@ def test_file_copy_approval_is_global_and_decision_is_single_shot(browser, acces
         )
         check(monotonic['last_action']['status'] == 'completed', 'stale progress replaced the completed action')
         check(monotonic['pending_action'] is None, 'stale progress reopened the completed action')
+        completed_queue = page.evaluate(
+            """() => ({
+                status: document.querySelector('.transfer-queue-status')?.innerText,
+                dismiss: document.querySelector('.transfer-queue-stop')?.innerText,
+                buttonVisible: !document.getElementById('transfer-queue-btn').hidden
+            })"""
+        )
+        check(completed_queue['status'] == 'Completed · 1.50 KiB', 'completed transfer result was not retained')
+        check(completed_queue['dismiss'] == '×', 'completed transfer did not offer dismissal')
+        check(completed_queue['buttonVisible'] is True, 'completed transfer disappeared immediately')
+        page.wait_for_selector('#transfer-queue-btn', state='hidden', timeout=12000)
+        check(page.locator('#transfer-queue-panel').get_attribute('aria-hidden') == 'true', 'empty transfer queue stayed open')
         page.click('#agent-panel-close-btn')
         page.evaluate(
             """payload => window.terminalTest.applyAgentActionPayloadForTest(payload)""",
@@ -2871,14 +2904,17 @@ def test_file_copy_approval_keeps_controls_visible_with_long_paths(browser, acce
             geometry = page.evaluate("""() => {
                 const panel = document.getElementById('agent-panel').getBoundingClientRect();
                 const content = document.getElementById('agent-action-content');
-                const buttons = ['agent-approve-btn', 'agent-reject-btn', 'agent-action-pause-btn'].map(id => {
+                const actionBox = document.getElementById('agent-action-box').getBoundingClientRect();
+                const buttons = ['agent-approve-btn', 'agent-reject-btn'].map(id => {
                     const button = document.getElementById(id);
                     const r = button.getBoundingClientRect();
                     return r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth
                         && document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === button;
                 });
                 return { buttons, panel: { top: panel.top, bottom: panel.bottom, height: panel.height },
-                    hits: ['agent-approve-btn', 'agent-reject-btn', 'agent-action-pause-btn'].map(id => {
+                    actionHeight: actionBox.height,
+                    pauseDisplay: getComputedStyle(document.getElementById('agent-action-pause-btn')).display,
+                    hits: ['agent-approve-btn', 'agent-reject-btn'].map(id => {
                         const r = document.getElementById(id).getBoundingClientRect();
                         const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
                         return { id: hit?.id, tag: hit?.tagName };
@@ -2890,6 +2926,8 @@ def test_file_copy_approval_keeps_controls_visible_with_long_paths(browser, acce
             }""")
             check(all(geometry['buttons']), f'long copy details hid or covered an approval control: {geometry}')
             check(geometry['panelFits'], 'approval panel exceeded the viewport')
+            check(geometry['actionHeight'] <= min(320, height * 0.48) + 1, 'copy approval card exceeded its compact limit')
+            check(geometry['pauseDisplay'] == 'none', 'copy approval showed the unrelated pause control')
             check(geometry['scrollable'], 'long copy details were not scrollable')
             check(geometry['noHorizontalOverflow'], 'long paths caused horizontal overflow')
             page.evaluate("document.getElementById('agent-action-content').scrollTop = 999999")

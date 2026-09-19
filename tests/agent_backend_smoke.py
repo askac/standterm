@@ -4684,6 +4684,61 @@ def test_external_agent_file_copy_requires_approval_and_streams_between_ssh_brid
     assert completed['result']['source_preserved'] is True
     assert completed['result']['destination_path'] == '/srv/output/payload (1).bin'
 
+    stop_started = threading.Event()
+    stop_gate = threading.Event()
+    stop_finished = threading.Event()
+
+    def stopped_upload(stream, _upload, expected_size, before_read_callback=None,
+                       progress_callback=None, pre_commit_callback=None,
+                       report_publish_outcome_unknown=False):
+        assert report_publish_outcome_unknown is True
+        stop_started.set()
+        assert stop_gate.wait(2), 'stopped file copy gate was not released'
+        try:
+            before_read_callback(0, expected_size)
+        finally:
+            stop_finished.set()
+        raise AssertionError('operator stop should prevent the next file read')
+
+    destination_bridge.upload_sftp_stream = stopped_upload
+    stopped_pending = standterm.process_external_agent_command({
+        'op': 'file-copy',
+        'token': source_token,
+        'terminal_id': source_terminal_id,
+        'source_path': '/srv/input/../payload.bin',
+        'destination_token': destination_token,
+        'destination_terminal_id': destination_terminal_id,
+        'destination_path': '/srv/output/payload.bin',
+        'conflict_mode': 'keep_both',
+    })
+    stopped_action = last_payload(client, standterm.AGENT_EVENT_ACTION_REQUEST)
+    client.emit(standterm.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': source_terminal_id,
+        'action_id': stopped_action['action_id'],
+        'proposal_id': stopped_action['proposal_id'],
+    })
+    assert stopped_pending['status'] == standterm.AGENT_STATUS_PENDING_APPROVAL
+    assert stop_started.wait(1), 'file copy did not start before operator stop'
+    client.emit(standterm.AGENT_EVENT_ACTION_CANCEL, {
+        'terminal_id': source_terminal_id,
+        'action_id': stopped_action['action_id'],
+        'proposal_id': stopped_action['proposal_id'],
+    })
+    stopped_result = last_payload(client, standterm.AGENT_EVENT_ACTION_RESULT)
+    assert stopped_result['status'] == standterm.AGENT_STATUS_FAILED
+    assert stopped_result['error_code'] == standterm.AGENT_ERROR_FILE_COPY_CANCELLED
+    stop_gate.set()
+    assert stop_finished.wait(1), 'stopped file copy worker did not exit'
+    stopped = standterm.process_external_agent_command({
+        'op': 'action-status',
+        'token': source_token,
+        'terminal_id': source_terminal_id,
+        'action_id': stopped_action['action_id'],
+    })
+    assert stopped['status'] == standterm.AGENT_STATUS_FAILED
+    assert stopped['error_code'] == standterm.AGENT_ERROR_FILE_COPY_CANCELLED
+
+    destination_bridge.upload_sftp_stream = upload_stream
     rejected_pending = standterm.process_external_agent_command({
         'op': 'file-copy',
         'token': source_token,

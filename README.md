@@ -542,6 +542,9 @@ atomic commit barrier has been crossed and cancellation is no longer possible.
 Keep Files open for the final result; closing the system PiP window does not
 cancel the backend transaction. Agent-initiated copies use the same bounded
 transfer core but still require their separate, fresh **Approve copy** decision.
+After approval, progress moves to the cross-tab **Transfer Queue** between Files
+and Settings. It can stop a running copy, and finished entries disappear after
+about ten seconds.
 If the backend cannot determine whether an SSH publish succeeded, inspect the
 destination before retrying; a blind retry may duplicate or replace a file that
 was already published.

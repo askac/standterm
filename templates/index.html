@@ -796,6 +796,14 @@
             order: 1;
         }
         #agent-action-box.visible { display: flex; flex-direction: column; gap: 8px; }
+        #agent-action-box.file-copy {
+            max-height: min(320px, 48dvh);
+            padding: 7px;
+            margin-top: 6px;
+        }
+        #agent-action-box.file-copy #agent-action-preview,
+        #agent-action-box.file-copy #agent-action-meta,
+        #agent-action-box.file-copy #agent-action-pause-btn { display: none; }
         #agent-action-content { display: grid; gap: 8px; min-height: 0; overflow: auto; overscroll-behavior: contain; }
         #agent-action-controls { flex-shrink: 0; }
         #agent-action-meta { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px 10px; color: #bbb; overflow-wrap: anywhere; }
@@ -811,6 +819,13 @@
             overflow-wrap: anywhere;
         }
         #agent-file-copy-details.visible { display: grid; }
+        #agent-action-box.file-copy #agent-file-copy-details { padding: 6px 8px; gap: 4px; }
+        #agent-file-copy-details .agent-file-copy-route {
+            display: grid;
+            grid-template-columns: 34px minmax(0, 1fr);
+            gap: 6px;
+        }
+        #agent-file-copy-details .agent-file-copy-label { color: #aaa; }
         #agent-file-copy-warning { color: #ff9f0a; font-weight: 700; }
         .agent-preview {
             max-height: 120px;
@@ -842,6 +857,114 @@
         /* Quick Settings Button */
         #quick-settings { cursor: pointer; opacity: 0.6; transition: opacity 0.2s; padding: 0 5px; }
         #quick-settings:hover { opacity: 1; color: #0a84ff; }
+        #transfer-queue-btn { cursor: pointer; padding: 0 5px; }
+        #transfer-queue-btn[hidden] { display: none; }
+        #transfer-queue-count {
+            display: inline-flex;
+            min-width: 15px;
+            height: 15px;
+            padding: 0 3px;
+            box-sizing: border-box;
+            align-items: center;
+            justify-content: center;
+            border-radius: 8px;
+            background: #0a84ff;
+            color: #fff;
+            font-size: 10px;
+            font-weight: 700;
+        }
+        #transfer-queue-panel {
+            display: none;
+            position: fixed;
+            top: calc(var(--tab-bar-height) + 7px);
+            right: 8px;
+            z-index: 220;
+            width: min(430px, calc(100vw - 16px));
+            max-height: min(440px, calc(100dvh - var(--tab-bar-height) - 36px));
+            box-sizing: border-box;
+            overflow: hidden;
+            border: 1px solid #454545;
+            border-radius: 10px;
+            background: #202020;
+            color: #eee;
+            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.48);
+        }
+        #transfer-queue-panel.visible { display: flex; flex-direction: column; }
+        #transfer-queue-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 9px 10px 7px;
+            border-bottom: 1px solid #383838;
+        }
+        #transfer-queue-title { flex: 1; font-size: 13px; }
+        #transfer-queue-header button,
+        .transfer-queue-stop {
+            border: 0;
+            border-radius: 5px;
+            background: transparent;
+            color: #bbb;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        #transfer-queue-close { width: 26px; height: 26px; font-size: 18px !important; }
+        #transfer-queue-list { min-height: 0; overflow: auto; }
+        .transfer-queue-item {
+            display: grid;
+            grid-template-columns: 30px minmax(0, 1fr) auto;
+            gap: 8px;
+            align-items: start;
+            padding: 10px;
+            border-bottom: 1px solid #343434;
+        }
+        .transfer-queue-item:last-child { border-bottom: 0; }
+        .transfer-queue-icon {
+            display: flex;
+            width: 28px;
+            height: 28px;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            background: #303030;
+            color: #7ab8ff;
+            font-size: 16px;
+        }
+        .transfer-queue-name {
+            overflow: hidden;
+            color: #f2f2f2;
+            font-size: 12px;
+            font-weight: 600;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .transfer-queue-route,
+        .transfer-queue-status {
+            margin-top: 3px;
+            overflow: hidden;
+            color: #aaa;
+            font: 11px/1.35 Consolas, "Courier New", monospace;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .transfer-queue-progress {
+            height: 3px;
+            margin-top: 7px;
+            overflow: hidden;
+            border-radius: 2px;
+            background: #444;
+        }
+        .transfer-queue-progress > span {
+            display: block;
+            height: 100%;
+            background: #0a84ff;
+            transition: width 0.2s ease;
+        }
+        .transfer-queue-item.completed .transfer-queue-icon { color: #54c96b; }
+        .transfer-queue-item.failed .transfer-queue-icon { color: #ff6961; }
+        .transfer-queue-stop { min-width: 38px; padding: 5px 6px; }
+        .transfer-queue-stop:hover:not(:disabled),
+        #transfer-queue-header button:hover { background: #383838; color: #fff; }
+        .transfer-queue-stop:disabled { cursor: default; opacity: 0.45; }
         #debug-hud {
             position: fixed;
             right: 10px;
@@ -1325,6 +1448,7 @@
             <button id="agent-tunnel-btn" class="status-action" type="button" title="Set up remote Agent access through this SSH connection" hidden>Agent Tunnel</button>
             <button id="ssh-tunnels-btn" class="status-action" type="button" title="Manage TCP port forwarding through this SSH connection" hidden>Tunnels</button>
             <button id="sftp-status-btn" class="status-action status-sftp" type="button" title="Open Files" aria-label="Open Files" hidden>&#x1F4C1;</button>
+            <button id="transfer-queue-btn" class="status-action" type="button" title="Transfer Queue" aria-label="Transfer Queue" hidden><span aria-hidden="true">&#x21C4;</span> <span id="transfer-queue-count">0</span></button>
             <button id="quick-settings" class="status-action" type="button" title="Settings" aria-label="Settings">&#x2699;&#xFE0F;</button>
             <details id="tab-more">
                 <summary class="status-action" title="More terminal actions" aria-label="More terminal actions">&#x22EF;</summary>
@@ -1332,6 +1456,14 @@
             </details>
         </div>
     </div>
+    <section id="transfer-queue-panel" aria-label="Transfer Queue" aria-hidden="true">
+        <div id="transfer-queue-header">
+            <strong id="transfer-queue-title">Transfer Queue</strong>
+            <button id="transfer-queue-clear" type="button">Clear finished</button>
+            <button id="transfer-queue-close" type="button" aria-label="Close Transfer Queue">&times;</button>
+        </div>
+        <div id="transfer-queue-list" aria-live="polite"></div>
+    </section>
     <dialog id="agent-connect-dialog" aria-labelledby="agent-connect-title">
         <h3 id="agent-connect-title">Agent Info for Current Tab</h3>
         <p>For an agent running on the <strong>Core host</strong>. If you launched Core with <code>run_wsl.bat</code>, this means WSL, not the Windows browser environment. It can access any individually authorized tab.</p>
@@ -1487,10 +1619,10 @@
             <div id="agent-action-content" tabindex="0" aria-label="Agent action details">
                 <div class="agent-preview" id="agent-action-preview"></div>
                 <div id="agent-file-copy-details">
-                    <div>source: <span id="agent-file-copy-source"></span></div>
-                    <div>destination: <span id="agent-file-copy-destination"></span></div>
-                    <div>size: <span id="agent-file-copy-size"></span></div>
-                    <div>conflict: <span id="agent-file-copy-conflict"></span></div>
+                    <div class="agent-file-copy-route"><span class="agent-file-copy-label">From</span><span id="agent-file-copy-source"></span></div>
+                    <div class="agent-file-copy-route"><span class="agent-file-copy-label">To</span><span id="agent-file-copy-destination"></span></div>
+                    <div class="agent-file-copy-route"><span class="agent-file-copy-label">Size</span><span id="agent-file-copy-size"></span></div>
+                    <span id="agent-file-copy-conflict" hidden></span>
                     <div id="agent-file-copy-warning"></div>
                 </div>
                 <div id="agent-action-meta">
@@ -1574,6 +1706,7 @@
             'committing'
         ]);
         const AGENT_VIEWPORT_SNAPSHOT_DEBOUNCE_MS = 250;
+        const TRANSFER_QUEUE_FINISHED_RETENTION_MS = 10000;
         const AGENT_SNAPSHOT_BLOCKED_PRIVACY_STATES = new Set(['private_input', 'paste_review', 'paused']);
         const AGENT_VIEWPORT_RENDER_MAX_PIXELS = 4096 * 4096;
         const AGENT_VIEWPORT_RENDER_MAX_IMAGE_BYTES = 1024 * 1024;
@@ -2307,6 +2440,12 @@
             const newTabBtn = document.getElementById('new-tab-btn');
             const closeTabsBtn = document.getElementById('close-tabs-btn');
             const sftpStatusBtn = document.getElementById('sftp-status-btn');
+            const transferQueueBtn = document.getElementById('transfer-queue-btn');
+            const transferQueueCount = document.getElementById('transfer-queue-count');
+            const transferQueuePanel = document.getElementById('transfer-queue-panel');
+            const transferQueueList = document.getElementById('transfer-queue-list');
+            const transferQueueClearBtn = document.getElementById('transfer-queue-clear');
+            const transferQueueCloseBtn = document.getElementById('transfer-queue-close');
             const sessionRecoveryModal = document.getElementById('session-recovery-modal');
             const sessionRecoveryForm = document.getElementById('session-recovery-form');
             const sessionRecoveryToken = document.getElementById('session-recovery-token');
@@ -2394,6 +2533,8 @@
             let agentPanelVisible = false;
             let agentPanelTerminalIdOverride = null;
             const agentDecisionActionIds = new Set();
+            const agentTransfers = new Map();
+            let transferQueueVisible = false;
             let agentPanelPosition = null;
             let agentPanelDrag = null;
             let agentExternalTokenCountdownTimer = null;
@@ -3686,8 +3827,15 @@
             }
 
             function renderAgentActionPanel(state) {
-                const action = state && state.agent ? state.agent.pendingAction : null;
+                const pendingAction = state && state.agent ? state.agent.pendingAction : null;
+                const isPendingFileCopy = pendingAction
+                    && pendingAction.action_type === 'file_copy'
+                    && pendingAction.status === 'pending_approval';
+                const action = pendingAction && (pendingAction.action_type !== 'file_copy' || isPendingFileCopy)
+                    ? pendingAction
+                    : null;
                 agentActionBox.classList.toggle('visible', !!action);
+                agentActionBox.classList.toggle('file-copy', !!isPendingFileCopy);
                 if (!action) {
                     agentActionPreview.innerText = '';
                     agentFileCopyDetails.classList.remove('visible');
@@ -3703,6 +3851,7 @@
                     agentActionControl.innerText = 'no';
                     agentActionStatus.innerText = '--';
                     agentApproveBtn.innerText = 'Approve';
+                    agentRejectBtn.innerText = 'Reject';
                     agentApproveBtn.disabled = true;
                     agentRejectBtn.disabled = true;
                     agentActionPauseBtn.disabled = true;
@@ -3731,7 +3880,7 @@
                     } else if (action.destination_exists) {
                         agentFileCopyWarning.innerText = 'The destination exists. Approval reveals the conflict result; no file will be copied.';
                     } else {
-                        agentFileCopyWarning.innerText = 'The source file will be preserved.';
+                        agentFileCopyWarning.innerText = '';
                     }
                 }
                 if (isFileCopy) {
@@ -3755,6 +3904,7 @@
                     ? (action.status || '--')
                     : `${action.status || '--'} · ${percent}%`;
                 agentApproveBtn.innerText = isFileCopy ? 'Approve copy' : 'Approve';
+                agentRejectBtn.innerText = isFileCopy ? 'Deny' : 'Reject';
                 const canDecide = canUseAgentPanel(state)
                     && action.status === 'pending_approval'
                     && !!action.action_id
@@ -4550,6 +4700,7 @@
                     state.agent.actionRevisions.set(actionId, actionRevision);
                 }
                 if (actionId && status !== 'pending_approval') agentDecisionActionIds.delete(actionId);
+                if (isFileCopy) updateAgentTransfer(data);
                 state.agent.lastAction = {
                     actionId,
                     actionRevision,
@@ -7589,6 +7740,17 @@
                 for (const terminalId of [...sshLoginFlows.keys()]) discardSshLogin(terminalId);
                 handledSshSignRequestIds.clear();
                 agentDecisionActionIds.clear();
+                agentTransfers.forEach(record => {
+                    if (isFinishedAgentTransfer(record.action)) return;
+                    record.action = {
+                        ...record.action,
+                        status: 'failed',
+                        error_code: 'connection_lost'
+                    };
+                    record.cancelPending = false;
+                    scheduleAgentTransferRemoval(record);
+                });
+                renderTransferQueue();
                 clearSessionRenewTimer();
                 setServerConnectionState('unavailable');
                 terminals.forEach(state => {
@@ -8963,6 +9125,148 @@
                     unit = units[index];
                 }
                 return `${size.toFixed(size >= 10 ? 1 : 2)} ${unit}`;
+            }
+
+            function isFinishedAgentTransfer(action) {
+                return !!action && ['completed', 'failed'].includes(action.status);
+            }
+
+            function agentTransferFilename(action) {
+                const path = typeof action.destination_path === 'string' ? action.destination_path : '';
+                const parts = path.split(/[\\/]/).filter(Boolean);
+                return parts.at(-1) || 'File transfer';
+            }
+
+            function agentTransferStatusText(action) {
+                const copied = normalizeAgentCount(action.bytes_copied);
+                const total = normalizeAgentCount(action.total_bytes || action.source_size);
+                const amount = total > 0 ? `${formatSftpBytes(copied)} of ${formatSftpBytes(total)}` : formatSftpBytes(copied);
+                if (action.status === 'approved') return `Starting · ${formatSftpBytes(total)}`;
+                if (action.status === 'running') {
+                    const percent = total > 0 ? Math.min(100, Math.floor(copied * 100 / total)) : 0;
+                    return `${percent}% · ${amount}`;
+                }
+                if (action.status === 'committing') return `Finishing · ${formatSftpBytes(total)}`;
+                if (action.status === 'completed') return `Completed · ${formatSftpBytes(total)}`;
+                if (action.error_code === 'file_copy_cancelled_by_operator') return 'Stopped';
+                return action.error_code ? `Failed · ${action.error_code}` : 'Failed';
+            }
+
+            function removeAgentTransfer(actionId) {
+                const record = agentTransfers.get(actionId);
+                if (!record) return;
+                if (record.removeTimer) clearTimeout(record.removeTimer);
+                agentTransfers.delete(actionId);
+                renderTransferQueue();
+            }
+
+            function scheduleAgentTransferRemoval(record) {
+                if (record.removeTimer || !isFinishedAgentTransfer(record.action)) return;
+                const actionId = record.action.action_id;
+                record.removeTimer = setTimeout(() => {
+                    const current = agentTransfers.get(actionId);
+                    if (current === record && isFinishedAgentTransfer(current.action)) {
+                        agentTransfers.delete(actionId);
+                        renderTransferQueue();
+                    }
+                }, TRANSFER_QUEUE_FINISHED_RETENTION_MS);
+            }
+
+            function updateAgentTransfer(data) {
+                if (!data || data.action_type !== 'file_copy' || typeof data.action_id !== 'string') return;
+                const status = typeof data.status === 'string' ? data.status : '';
+                const existing = agentTransfers.get(data.action_id);
+                const visibleStatus = ['approved', 'running', 'committing', 'completed'].includes(status);
+                if (!existing && !visibleStatus) return;
+                const record = existing || { action: data, cancelPending: false, removeTimer: null };
+                if (!existing) {
+                    agentTransfers.set(data.action_id, record);
+                    transferQueueVisible = true;
+                }
+                record.action = data;
+                if (!['approved', 'running'].includes(status)) record.cancelPending = false;
+                if (isFinishedAgentTransfer(data)) {
+                    scheduleAgentTransferRemoval(record);
+                } else if (record.removeTimer) {
+                    clearTimeout(record.removeTimer);
+                    record.removeTimer = null;
+                }
+                renderTransferQueue();
+            }
+
+            function renderTransferQueue() {
+                const records = [...agentTransfers.values()];
+                transferQueueBtn.hidden = records.length === 0;
+                transferQueueCount.innerText = String(records.length);
+                if (!records.length) transferQueueVisible = false;
+                transferQueuePanel.classList.toggle('visible', transferQueueVisible && records.length > 0);
+                transferQueuePanel.setAttribute('aria-hidden', transferQueueVisible && records.length > 0 ? 'false' : 'true');
+                transferQueueClearBtn.disabled = !records.some(record => isFinishedAgentTransfer(record.action));
+                transferQueueList.replaceChildren();
+                records.forEach(record => {
+                    const action = record.action;
+                    const item = document.createElement('div');
+                    item.className = `transfer-queue-item ${isFinishedAgentTransfer(action) ? action.status : ''}`;
+                    item.dataset.actionId = action.action_id;
+
+                    const icon = document.createElement('div');
+                    icon.className = 'transfer-queue-icon';
+                    icon.setAttribute('aria-hidden', 'true');
+                    icon.innerText = action.status === 'completed' ? '✓' : (action.status === 'failed' ? '!' : '⇄');
+
+                    const content = document.createElement('div');
+                    const name = document.createElement('div');
+                    name.className = 'transfer-queue-name';
+                    name.innerText = agentTransferFilename(action);
+                    const route = document.createElement('div');
+                    route.className = 'transfer-queue-route';
+                    route.innerText = `${formatSftpEndpoint(action.source_endpoint)}:${action.source_path || ''} → ${formatSftpEndpoint(action.destination_endpoint)}:${action.destination_path || ''}`;
+                    route.title = route.innerText;
+                    const status = document.createElement('div');
+                    status.className = 'transfer-queue-status';
+                    status.innerText = agentTransferStatusText(action);
+                    content.append(name, route, status);
+                    if (action.status !== 'failed') {
+                        const total = normalizeAgentCount(action.total_bytes || action.source_size);
+                        const copied = normalizeAgentCount(action.bytes_copied);
+                        const percent = action.status === 'completed' || action.status === 'committing'
+                            ? 100
+                            : (total > 0 ? Math.min(100, copied * 100 / total) : 0);
+                        const progress = document.createElement('div');
+                        progress.className = 'transfer-queue-progress';
+                        progress.setAttribute('role', 'progressbar');
+                        progress.setAttribute('aria-valuemin', '0');
+                        progress.setAttribute('aria-valuemax', '100');
+                        progress.setAttribute('aria-valuenow', String(Math.floor(percent)));
+                        const bar = document.createElement('span');
+                        bar.style.width = `${percent}%`;
+                        progress.appendChild(bar);
+                        content.appendChild(progress);
+                    }
+
+                    const button = document.createElement('button');
+                    button.className = 'transfer-queue-stop';
+                    button.type = 'button';
+                    if (isFinishedAgentTransfer(action)) {
+                        button.innerText = '×';
+                        button.title = 'Dismiss';
+                        button.setAttribute('aria-label', `Dismiss ${agentTransferFilename(action)}`);
+                        button.onclick = () => removeAgentTransfer(action.action_id);
+                    } else {
+                        button.innerText = action.status === 'committing' ? '…' : 'Stop';
+                        button.disabled = action.status === 'committing' || record.cancelPending;
+                        button.title = action.status === 'committing' ? 'The destination is being published and cannot be stopped' : 'Stop transfer';
+                        button.onclick = () => {
+                            const state = terminals.get(action.terminal_id);
+                            if (!state || !socket || !socket.connected || button.disabled) return;
+                            record.cancelPending = true;
+                            renderTransferQueue();
+                            socket.emit('agent_action_cancel', buildAgentActionDecisionPayload(state, action));
+                        };
+                    }
+                    item.append(icon, content, button);
+                    transferQueueList.appendChild(item);
+                });
             }
 
             function formatSftpDetailedBytes(value) {
@@ -11455,6 +11759,19 @@
             };
             document.getElementById('settings-option').onclick = openSettings;
             document.getElementById('quick-settings').onclick = openSettings;
+            transferQueueBtn.onclick = () => {
+                transferQueueVisible = !transferQueueVisible;
+                renderTransferQueue();
+            };
+            transferQueueCloseBtn.onclick = () => {
+                transferQueueVisible = false;
+                renderTransferQueue();
+            };
+            transferQueueClearBtn.onclick = () => {
+                [...agentTransfers.entries()].forEach(([actionId, record]) => {
+                    if (isFinishedAgentTransfer(record.action)) removeAgentTransfer(actionId);
+                });
+            };
             // This interface exposes only existing page actions, not native privileges.
             // Desktop checks its own window/origin before invoking it. Targets are IDs,
             // never terminal labels or other display text.

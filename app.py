@@ -325,6 +325,7 @@ AGENT_EVENT_SUGGESTION_REQUEST = 'agent_suggestion_request'
 AGENT_EVENT_PROVIDER_RUN_REQUEST = 'agent_provider_run_request'
 AGENT_EVENT_ACTION_APPROVE = 'agent_action_approve'
 AGENT_EVENT_ACTION_REJECT = 'agent_action_reject'
+AGENT_EVENT_ACTION_CANCEL = 'agent_action_cancel'
 AGENT_EVENT_VIEWPORT_SNAPSHOT = 'agent_viewport_snapshot'
 AGENT_EVENT_VIEWPORT_RENDER_REQUEST = 'agent_viewport_render_request'
 AGENT_EVENT_VIEWPORT_RENDER_RESULT = 'agent_viewport_render_result'
@@ -413,6 +414,7 @@ AGENT_ERROR_EXTERNAL_AGENT_ORIGIN_BLOCKED = 'agent_external_origin_blocked'
 AGENT_ERROR_EXTERNAL_AGENT_DISABLED = 'agent_external_disabled'
 AGENT_ERROR_HUMAN_INPUT_ACTIVE = 'agent_human_input_active'
 AGENT_ERROR_FILE_COPY_BUSY = 'file_copy_busy'
+AGENT_ERROR_FILE_COPY_CANCELLED = 'file_copy_cancelled_by_operator'
 AGENT_ERROR_FILE_COPY_PUBLISH_OUTCOME_UNKNOWN = 'file_copy_publish_outcome_unknown'
 AGENT_REASON_DETACHED = 'agent_detached'
 AGENT_REASON_DISABLED = 'agent_disabled'
@@ -516,6 +518,7 @@ AGENT_AUDIT_CONTEXT_BUILT = 'context_built'
 AGENT_AUDIT_PROPOSAL_CREATED = 'proposal_created'
 AGENT_AUDIT_ACTION_APPROVE = 'action_approve'
 AGENT_AUDIT_ACTION_REJECT = 'action_reject'
+AGENT_AUDIT_ACTION_CANCEL = 'action_cancel'
 AGENT_AUDIT_ACTION_RESULT = 'action_result'
 AGENT_AUDIT_DIRECT_WRITE = 'direct_write'
 AGENT_AUDIT_TERMINAL_CLEANUP = 'terminal_cleanup'
@@ -10181,6 +10184,61 @@ def on_agent_action_reject(data):
         record_agent_audit_event(state, AGENT_AUDIT_ACTION_REJECT, action=action)
         record_agent_audit(state, action, AGENT_STATUS_REJECTED)
         emit_agent_action_result(request.sid, action, AGENT_STATUS_REJECTED)
+        emit_agent_state(request.sid, state)
+
+
+@socketio.on(AGENT_EVENT_ACTION_CANCEL)
+def on_agent_action_cancel(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    if not session_token or not terminal_id or not isinstance(data, dict):
+        return
+    action_id = data.get('action_id')
+    proposal_id = data.get('proposal_id')
+    if not isinstance(action_id, str) and not isinstance(proposal_id, str):
+        emit_agent_error(request.sid, terminal_id, AGENT_ERROR_ACTION_NOT_FOUND)
+        return
+    with agent_lock:
+        state = get_agent_state(session_token, terminal_id, request.sid)
+        if not state:
+            emit_agent_error(request.sid, terminal_id, AGENT_ERROR_NOT_ATTACHED)
+            return
+        action, error_code = validate_agent_action_decision(state, data)
+        if error_code:
+            emit_agent_decision_error(request.sid, terminal_id, state, action, error_code)
+            return
+        if action.get('action_type') != AGENT_ACTION_FILE_COPY:
+            emit_agent_action_failure(request.sid, action, AGENT_ERROR_ACTION_NOT_ALLOWED)
+            emit_agent_state(request.sid, state)
+            return
+        if action.get('status') not in {AGENT_STATUS_APPROVED, AGENT_STATUS_RUNNING}:
+            emit_agent_action_result(
+                request.sid,
+                action,
+                action.get('status') or AGENT_STATUS_FAILED,
+            )
+            emit_agent_state(request.sid, state)
+            return
+        if not transition_agent_file_copy_action(
+            state,
+            action,
+            AGENT_FILE_COPY_EVENT_CANCEL,
+            error_code=AGENT_ERROR_FILE_COPY_CANCELLED,
+        ):
+            emit_agent_action_result(
+                request.sid,
+                action,
+                action.get('status') or AGENT_STATUS_FAILED,
+            )
+            emit_agent_state(request.sid, state)
+            return
+        record_agent_audit_event(state, AGENT_AUDIT_ACTION_CANCEL, action=action)
+        emit_agent_action_result(
+            request.sid,
+            action,
+            AGENT_STATUS_FAILED,
+            error_code=AGENT_ERROR_FILE_COPY_CANCELLED,
+        )
         emit_agent_state(request.sid, state)
 
 

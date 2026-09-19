@@ -49,6 +49,7 @@ terminal display text.
 
 The mock Agent panel may send `agent_mode_set`, `agent_suggestion_request`,
 `agent_provider_run_request`, `agent_action_approve`, `agent_action_reject`,
+`agent_action_cancel`,
 `agent_privacy_set`, and `agent_pause`. The approval panel must display only
 the public action metadata returned by the backend, including `escaped_preview`;
 it must not receive or render the raw terminal input payload.
@@ -820,6 +821,11 @@ that the user requested a copy as authorization. The authorizing viewer shows
 file-copy approval globally even when another terminal tab is active; ordinary
 terminal-input approvals remain scoped to their terminal tab.
 
+After approval, the authorizing viewer moves the copy into a cross-tab Transfer
+Queue. The queue may request cancellation while the action is `approved` or
+`running`. Once the action is `committing`, the destination publish attempt is
+already inside the commit barrier and cannot be cancelled.
+
 The browser Files UI has a separate human-initiated **Copy to…** path. Its final
 **Copy** button is the explicit authorization for that one browser transaction,
 so it does not create an Agent action. It shares the bounded backend stream,
@@ -1150,6 +1156,20 @@ Payload:
 ```
 
 Rejects a pending action for this exact sid and terminal.
+
+### `agent_action_cancel`
+
+Payload:
+
+```json
+{ "terminal_id": "main", "action_id": "...", "proposal_id": "agp_..." }
+```
+
+Stops an approved or running `file_copy` for this exact sid and source
+terminal. A successful stop transitions the action to `failed` with
+`file_copy_cancelled_by_operator`, which prevents the worker from reading the
+next source chunk or entering the commit barrier. A request received after the
+action reaches `committing` returns the authoritative current action unchanged.
 
 ### `agent_viewport_snapshot`
 
