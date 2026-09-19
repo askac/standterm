@@ -43,7 +43,7 @@ do not consolidate them merely to shorten labels.
 | 3 | Review English UI copy and terminology | Core terms agreed; initial English sources reviewed | Review each proposed change for target, permissions, consequences, and next action; check related tooltips, Desktop help, and tests before applying it. |
 | 4 | Finalize the translation exchange table | Initial exchange validated with an independent translator | Stable keys, approved English source, context, and placeholder constraints are sufficient for an independent translator. |
 | 5 | Pilot Agent access and local connection information | Implemented; validation below | Cover static and dynamic text, titles, and accessible names; preserve connected sessions and authorization; support English fallback. |
-| 6 | Translate and integrate approved rows | Agent pilot, browser access/recovery, Agent approvals/transfers, connection/login controls and SSH route/profile editors integrated | AI edits only target-language cells; validate keys and placeholders; review authorization and destructive-action wording. |
+| 6 | Translate and integrate approved rows | Agent pilot, browser access/recovery, Agent approvals/transfers, connection/login controls, SSH route/profile editors and settings transfer integrated | AI edits only target-language cells; validate keys and placeholders; review authorization and destructive-action wording. |
 | 7 | Expand Core and Desktop coverage | Deferred | Verify secondary windows, native menus, setup, diagnostics, packaging, and representative layouts. |
 
 ## Validation of the reliability changes
@@ -321,3 +321,52 @@ secondary windows remain outside the completed localization scope.
 Validation uses WSL Chromium. Native Desktop and physical UART were not part of
 this phase. The next candidate is a separate copy review of settings import/export
 and its replacement/key-retention consequences before expanding that workflow.
+
+## Settings import and export
+
+Settings import/export now uses reviewed English and Traditional Chinese copy.
+The table contains 395 rows: 394 referenced bilingual messages and the existing
+removal. The confirmation identifies the normalized input counts, supplied
+preference/layout replacement, added SSH profiles, existing-first history limit,
+key reselection and page reload. Reload stops this page's temporary SSH tunnels;
+the copy does not promise uninterrupted terminal access or say all terminals end.
+
+The review also corrected README's obsolete stable-ID merge and history-deduplication
+claims. Imported profiles/nodes receive new IDs, while existing profiles and key
+bindings remain intact. History appends after existing entries and keeps the first
+six. Export excludes key material and references; imported browser-key routes
+require key selection again. The export status reports that download started,
+without claiming that the browser saved the file to disk.
+
+A preference write can fail after SSH data is committed. A small error wrapper
+now identifies this partial completion and preserves the original diagnostic as
+plain text. It does not roll back, retry, reload, or change storage order. The
+existing best-effort Agent panel position writer still suppresses its own storage
+errors; this phase does not make the entire import atomic across storage systems.
+Unknown JSON, Base64 and route-model errors remain original diagnostics.
+
+| Finding | Severity | Evidence | Critic remedy | Main response | Resolution | Validation |
+| --- | --- | --- | --- | --- | --- | --- |
+| Preference failure can follow a successful SSH commit | Medium, existing limitation | importBrowserSettingsText and savePrefs | Explain partial completion and avoid automatic retry advice | Accept with a stage-specific wrapper | Wrap only post-SSH browser writes; retain raw detail and original error timing | Injected preference quota failure preserves committed SSH data, keys and prior preference storage, with no reload or second import |
+| Confirmation omits preference/layout replacement and reload | Medium | Import pipeline and normalized UI fields | Describe the effects before writes | Accept | Add replacement, reload and temporary-tunnel consequences | Exact bilingual confirmation, cancellation and real navigation checks |
+| File counts do not guarantee retained history; profiles are added with new IDs | Medium | importState and history slice | Describe counts as input and state existing-first limit | Accept | Correct confirmation and README; retain algorithm | Import seven history entries into two existing entries and verify first-six order, plus new profile/node IDs |
+| Excluding keys also removes imported key bindings | Low | exportState and importState | Explain key reselection without changing local keys | Accept | State excluded bindings and required selection | Real downloaded ZIP contains no key material; existing key records/links survive import |
+
+Two bounded independent passes found no remaining material issue. The critic
+verified placeholder consistency, literal diagnostic interpolation and the
+successful/failed write order using the actual functions and catalog in memory.
+Cross-storage rollback remains deferred unless atomic import is explicitly
+required or observed failures justify a separate recovery design.
+
+| Check | Result |
+| --- | --- |
+| New settings-transfer browser suite | Four cases passed in English and Traditional Chinese: actual download, cancel, successful merge/reload and validation/partial-failure boundaries. |
+| Existing focused browser regressions | Two cases passed: settings/key lifecycle and language preference behavior. |
+| Invalid input and fallbacks | JSON/model diagnostics stay raw; unsupported envelopes/payloads, archive size/checksum and oversized files reject before confirmation. Empty-message file-read/export failures use localized fallback. |
+| Layout | On-page help, actions and partial-failure text fit at 1280 and 480 pixel widths in both languages, including long literal diagnostic text. Native browser confirmation chrome was not visually qualified. |
+| Catalog and static checks | Six exporter and six lookup tests passed; catalog freshness, all 394 referenced bilingual keys, Python syntax and diff checks passed. |
+
+The next small candidate is reviewing reset-to-defaults and general settings
+navigation, especially what reset changes and what its reload stops. Desktop,
+remaining settings panels and full runtime diagnostic localization remain outside
+this completed workflow.

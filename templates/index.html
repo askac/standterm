@@ -1136,7 +1136,7 @@
                             <div class="settings-row"><label for="pref-uiLanguage" data-i18n="settings.language.label">Language (preview)</label>
                                 <select id="pref-uiLanguage"><option value="en">English</option><option value="zh-TW" lang="zh-TW">繁體中文（台灣）</option></select>
                             </div>
-                            <div class="settings-status" data-i18n="settings.language.hint">Applies next time you open this page to browser and Agent access, approvals, transfers, connection forms, SSH login and profile/route editors. Other areas remain in English.</div>
+                            <div class="settings-status" data-i18n="settings.language.hint">Applies next time you open this page to browser and Agent access, approvals, transfers, connection forms, SSH login/editors and settings import/export. Other areas remain in English.</div>
                             <div class="settings-row"><label for="pref-useCustomMenu">Enable custom context menu</label><input type="checkbox" id="pref-useCustomMenu"></div>
                             <div class="settings-row"><label for="pref-copyOnSelect">Copy on select</label><input type="checkbox" id="pref-copyOnSelect"></div>
                             <div class="settings-row"><label for="pref-enablePicPreview">Enable pic preview</label><input type="checkbox" id="pref-enablePicPreview"></div>
@@ -1159,11 +1159,11 @@
                             <div class="settings-status" data-i18n="settings.agent.hint">Authorize agent applies this permission to the current tab and creates a standard token.</div>
                         </fieldset>
                         <fieldset class="settings-fieldset">
-                            <legend>Import &amp; Export</legend>
-                            <div class="settings-status" id="settings-transfer-status">Exports include browser preferences, SSH profiles, and SSH history. SSH keys are never included.</div>
+                            <legend data-i18n="settings.transfer.section">Import &amp; Export</legend>
+                            <div class="settings-status" id="settings-transfer-status" data-i18n="settings.transfer.hint">Export browser preferences, Agent panel position, SSH profiles and routes, and history. SSH keys and key bindings are excluded.</div>
                             <div class="settings-transfer-actions">
-                                <button type="button" id="settings-export">Export Settings</button>
-                                <button type="button" id="settings-import">Import Settings</button>
+                                <button type="button" id="settings-export" data-i18n="settings.transfer.export">Export settings</button>
+                                <button type="button" id="settings-import" data-i18n="settings.transfer.import">Import settings</button>
                                 <input type="file" id="settings-import-file" accept="application/json,.json" hidden>
                             </div>
                         </fieldset>
@@ -6104,7 +6104,7 @@
 
             function readStoredSettingsZip(bytes) {
                 if (!(bytes instanceof Uint8Array) || bytes.byteLength < 22 || bytes.byteLength > 524288) {
-                    throw new Error('Settings archive is too large.');
+                    throw new Error(t('settings.transfer.archive_size_invalid'));
                 }
                 const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
                 let eocdOffset = -1;
@@ -6112,21 +6112,21 @@
                     if (view.getUint32(offset, true) === 0x06054b50) { eocdOffset = offset; break; }
                 }
                 if (eocdOffset < 0 || view.getUint16(eocdOffset + 10, true) !== 1) {
-                    throw new Error('Settings archive must contain exactly one file.');
+                    throw new Error(t('settings.transfer.archive_one_file'));
                 }
                 const centralOffset = view.getUint32(eocdOffset + 16, true);
                 if (centralOffset + 46 > bytes.length || view.getUint32(centralOffset, true) !== 0x02014b50) {
-                    throw new Error('Settings archive directory is invalid.');
+                    throw new Error(t('settings.transfer.archive_directory_invalid'));
                 }
                 const method = view.getUint16(centralOffset + 10, true);
                 const checksum = view.getUint32(centralOffset + 16, true);
                 const compressedSize = view.getUint32(centralOffset + 20, true);
                 const contentSize = view.getUint32(centralOffset + 24, true);
                 const nameLength = view.getUint16(centralOffset + 28, true);
-                if (centralOffset + 46 + nameLength > eocdOffset) throw new Error('Settings archive directory is truncated.');
+                if (centralOffset + 46 + nameLength > eocdOffset) throw new Error(t('settings.transfer.archive_directory_truncated'));
                 const name = new TextDecoder().decode(bytes.slice(centralOffset + 46, centralOffset + 46 + nameLength));
                 if (method !== 0 || compressedSize !== contentSize || contentSize > 262144 || name !== 'standterm-settings.json') {
-                    throw new Error('Settings archive uses an unsupported format.');
+                    throw new Error(t('settings.transfer.archive_format_unsupported'));
                 }
                 if (
                     view.getUint32(0, true) !== 0x04034b50
@@ -6134,15 +6134,15 @@
                     || view.getUint32(14, true) !== checksum
                     || view.getUint32(18, true) !== contentSize
                     || view.getUint32(22, true) !== contentSize
-                ) throw new Error('Settings archive entry is invalid.');
+                ) throw new Error(t('settings.transfer.archive_entry_invalid'));
                 const localNameLength = view.getUint16(26, true);
                 const localExtraLength = view.getUint16(28, true);
                 const contentOffset = 30 + localNameLength + localExtraLength;
-                if (contentOffset + contentSize > bytes.length) throw new Error('Settings archive is truncated.');
+                if (contentOffset + contentSize > bytes.length) throw new Error(t('settings.transfer.archive_truncated'));
                 const localName = new TextDecoder().decode(bytes.slice(30, 30 + localNameLength));
-                if (localName !== name) throw new Error('Settings archive entry name is invalid.');
+                if (localName !== name) throw new Error(t('settings.transfer.archive_entry_name_invalid'));
                 const content = bytes.slice(contentOffset, contentOffset + contentSize);
-                if (crc32(content) !== checksum) throw new Error('Settings archive checksum failed.');
+                if (crc32(content) !== checksum) throw new Error(t('settings.transfer.archive_checksum_failed'));
                 return content;
             }
 
@@ -6181,7 +6181,7 @@
                 const envelope = await createBrowserSettingsEnvelope();
                 const date = new Date().toISOString().slice(0, 10).replaceAll('-', '');
                 downloadTextFile(`standterm-settings-${date}.json`, JSON.stringify(envelope, null, 2));
-                settingsTransferStatus.textContent = 'Settings exported. SSH keys were not included.';
+                settingsTransferStatus.textContent = t('settings.transfer.exported');
                 return envelope;
             }
 
@@ -6242,16 +6242,16 @@
             }
 
             function parseBrowserSettingsEnvelope(text) {
-                if (typeof text !== 'string' || text.length > 1048576) throw new Error('Settings file is too large.');
+                if (typeof text !== 'string' || text.length > 1048576) throw new Error(t('settings.transfer.file_size_invalid'));
                 const envelope = JSON.parse(text);
                 if (
                     !envelope || envelope.format !== 'standterm-settings-envelope' || envelope.version !== 1
                     || envelope.contentType !== 'application/zip' || envelope.encoding !== 'base64'
                     || typeof envelope.content !== 'string'
-                ) throw new Error('Settings envelope is not supported.');
+                ) throw new Error(t('settings.transfer.envelope_unsupported'));
                 const inner = JSON.parse(new TextDecoder().decode(readStoredSettingsZip(base64ToUint8Array(envelope.content))));
                 if (!inner || inner.format !== 'standterm-browser-settings' || inner.version !== 1 || inner.keys) {
-                    throw new Error('Settings payload is not supported.');
+                    throw new Error(t('settings.transfer.payload_unsupported'));
                 }
                 return {
                     preferences: normalizeImportedPreferences(inner.preferences),
@@ -6264,7 +6264,8 @@
                 const imported = parseBrowserSettingsEnvelope(text);
                 const preferenceCount = Object.keys(imported.preferences).length;
                 if (!window.confirm(
-                    `Import ${preferenceCount} preferences, ${imported.ssh.profiles.length} SSH profiles, and ${imported.ssh.history.length} history entries? Existing browser SSH keys will not change.`
+                    t('settings.transfer.confirm', { preferences: preferenceCount, profiles: imported.ssh.profiles.length,
+                        history: imported.ssh.history.length, limit: SSH_HISTORY_LIMIT })
                 )) return false;
                 await sshSessionReady;
                 await updateSshSessionState(nextState => {
@@ -6272,16 +6273,22 @@
                     Object.assign(nextState, SshRoutes.importState(nextState, source));
                     nextState.history = nextState.history.slice(0, SSH_HISTORY_LIMIT);
                 });
-                prefs = { ...prefs, ...imported.preferences };
-                savePrefs(prefs);
-                if (Object.prototype.hasOwnProperty.call(imported.ui, 'agentPanelPosition')) {
-                    if (imported.ui.agentPanelPosition) {
-                        saveAgentPanelPosition(imported.ui.agentPanelPosition);
-                    } else {
-                        localStorage.removeItem('agentPanelPosition.v1');
+                try {
+                    prefs = { ...prefs, ...imported.preferences };
+                    savePrefs(prefs);
+                    if (Object.prototype.hasOwnProperty.call(imported.ui, 'agentPanelPosition')) {
+                        if (imported.ui.agentPanelPosition) {
+                            saveAgentPanelPosition(imported.ui.agentPanelPosition);
+                        } else {
+                            localStorage.removeItem('agentPanelPosition.v1');
+                        }
                     }
+                } catch (err) {
+                    throw new Error(t('settings.transfer.partial_failure', {
+                        detail: err.message || t('settings.transfer.import_failed')
+                    }));
                 }
-                settingsTransferStatus.textContent = 'Settings imported. Reloading to apply browser preferences...';
+                settingsTransferStatus.textContent = t('settings.transfer.imported');
                 setTimeout(() => location.reload(), 50);
                 return true;
             }
@@ -8487,7 +8494,7 @@
                 settingsExportBtn.onclick = () => {
                     settingsExportBtn.disabled = true;
                     exportBrowserSettings()
-                        .catch(err => { settingsTransferStatus.textContent = err.message || 'Settings could not be exported.'; })
+                        .catch(err => { settingsTransferStatus.textContent = err.message || t('settings.transfer.export_failed'); })
                         .finally(() => { settingsExportBtn.disabled = false; });
                 };
             }
@@ -8498,12 +8505,12 @@
                     settingsImportFile.value = '';
                     if (!file) return;
                     if (file.size > 1048576) {
-                        settingsTransferStatus.textContent = 'Settings file is too large.';
+                        settingsTransferStatus.textContent = t('settings.transfer.file_size_invalid');
                         return;
                     }
                     file.text()
                         .then(importBrowserSettingsText)
-                        .catch(err => { settingsTransferStatus.textContent = err.message || 'Settings could not be imported.'; });
+                        .catch(err => { settingsTransferStatus.textContent = err.message || t('settings.transfer.import_failed'); });
                 };
             }
             browserAuthUrlForm.onsubmit = event => {

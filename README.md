@@ -326,8 +326,8 @@ terminal; compact windows keep those actions in the Agent panel.
 **Settings > General > Language (preview)** selects English or Traditional
 Chinese (Taiwan) for browser access and recovery, Agent permissions, input and
 file-copy approvals, transfer results, local connection information, connection
-forms, SSH login, and SSH profile/route editors (including browser-key and
-host-fingerprint controls). The choice
+forms, SSH login, SSH profile/route editors (including browser-key and
+host-fingerprint controls), and settings import/export. The choice
 applies the next time the page opens; saving it does not reload the current
 page or change its connections and grants. Other areas remain in English.
 The [copy and translation table](docs/ui_copy_review.tsv) and
@@ -571,13 +571,25 @@ that the backend canonicalizes, validates, and rechecks before publish.
 Downloads, copies, and file actions accept regular files only; symbolic links
 and other non-regular entries are rejected.
 
-**Settings > General > Import & Export** transfers browser preferences, SSH
-profiles and order, SSH history, and persistent UI layout in a versioned JSON
-envelope containing a Base64 ZIP archive. Import merges profiles by stable ID,
-appends new IDs, and deduplicates history. A local keyed profile keeps its local
-host, port, and username so import cannot silently rebind its key. SSH keys, key
-IDs, passwords, browser authorization identity, access tokens, and runtime
-diagnostics are never included or changed by import.
+**Settings > General > Import & Export** transfers browser preferences, Agent
+panel position, SSH profiles/routes and history in a versioned JSON envelope
+containing a Base64 ZIP archive. Import applies the valid preferences and panel
+position supplied by the file, retaining values that were not supplied. Imported
+SSH profiles and nodes receive new IDs; existing profiles and their key bindings
+remain unchanged. Importing the same file again creates additional profiles.
+History appends imported entries after existing entries and retains the first
+six, without deduplication.
+
+SSH keys, key bindings, passwords, browser authorization identity, access tokens
+and runtime diagnostics are excluded from exports. Imported browser-key routes
+need a key selected again; existing browser key records remain intact. Successful
+import reloads the page to apply preferences and stops this page's temporary SSH
+tunnels. The confirmation describes these effects before any import writes.
+
+SSH settings are committed before browser preferences. If a later preference
+write fails, the error reports that SSH settings were already saved. Check the
+stored settings before importing again to avoid duplicate profiles; the import
+does not roll back or retry automatically.
 
 ## Browser Authorization And HTTPS
 
