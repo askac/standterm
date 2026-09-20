@@ -6,6 +6,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 const { createRequire } = require('node:module');
+const { pathToFileURL } = require('node:url');
 const { create } = require('../i18n.js');
 
 const filename = path.join(__dirname, '..', 'setup.cjs');
@@ -30,7 +31,7 @@ async function snapshot(locale, mode) {
       this.webContents.setWindowOpenHandler = callback => assert.equal(callback().action, 'deny');
       this.webContents.executeJavaScript = async script => { scripts.push(script); };
     }
-    async loadURL(url) { assert.ok(url.endsWith('/desktop/setup.html')); }
+    async loadURL(url) { assert.equal(url, pathToFileURL(path.join(path.dirname(filename), 'setup.html')).href); }
     isDestroyed() { return !!this.destroyed; }
     destroy() { this.destroyed = true; this.emit('closed'); }
     setTitle(title) { titles.push(title); }

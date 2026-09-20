@@ -17,6 +17,10 @@ const archive = path.join(resources, 'app.asar');
 const manifest = JSON.parse(fs.readFileSync(path.join(resources, 'bundle', 'manifest.json'), 'utf8'));
 const stagedManifest = JSON.parse(fs.readFileSync(path.join(stage, 'bundle', 'manifest.json'), 'utf8'));
 assert.deepEqual(manifest, stagedManifest);
+for (const file of ['bootstrap.py', 'windows_job.py', 'runtime.py', 'runtime_cleanup.py', 'core_manager.py', 'backend.py']) {
+  assert.deepEqual(fs.readFileSync(path.join(resources, 'bundle', file)),
+    fs.readFileSync(path.join(stage, 'bundle', file)), `Bootstrap helper mismatch: ${file}`);
+}
 validateCoreFiles(path.join(resources, 'bundle', 'core'), Object.keys(manifest.files));
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 for (const [file, expected] of Object.entries(manifest.files)) {

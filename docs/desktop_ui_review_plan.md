@@ -15,9 +15,11 @@ acceptance remain separate. Browser acceptance is recorded in
 | 2 — Complete | Localize Browser Access, Diagnostics, About, external-browser confirmations and Capture; retain the window when recording save fails during close/quit. | Medium | Sensitive clipboard feedback, fixed authorization actions, escaped diagnostic fields, literal event JSON, typed Capture state, folder settings and combined save-failure plus close/quit coverage verified. |
 | 3 — Complete | Localize setup, Core source selection/recovery, startup error wrappers and per-mode environment cleanup confirmations. | Medium to large | Both languages work before Core is available. Cancellation waits for owned installers; stale confirmations do nothing; source switching, restart/session closure, retained files and recovery moves remain explicit. Installer-wide dialogs remain in order 3b. |
 | 3b — Complete | Localize port selection, Files download feedback, installer-wide summary/error dialogs and native paste confirmation. | Small to medium | Preserve structured outcomes/counts, numeric actions and clipboard guards. Installer-wide notices use the common effective language of relevant modes, otherwise English; no shared preference is written. |
-| 4 | Complete Windows and macOS native acceptance and packaged asset checks. | Platform-dependent | Menus, native dialogs, narrow layouts, keyboard/ARIA labels, clipboard, setup and recovery are checked on each OS. Verify staged and packaged Desktop catalogs independently of the selected Core version. |
+| 4 — Partial; Windows candidate produced | Complete Windows and macOS native acceptance and packaged asset checks. | Platform-dependent | Windows native rendering, 165 Windows unit tests, exact extracted-installer payload and packaged Windows/WSL smoke passed. Native OS dialogs, install/upgrade/uninstall and macOS remain; see the acceptance report. |
 
-The next stage is native Windows/macOS and packaged acceptance in order 4.
+Order 4 produced a Windows evaluation candidate; results, source/artifact hashes
+and remaining native acceptance are recorded in
+[desktop_ui_acceptance.md](desktop_ui_acceptance.md).
 Raw diagnostic errors, errors before profile selection, legacy shortcut setup
 and external installer UI are outside the current Desktop catalog coverage.
 The operator chose to retain the window and show the error and unfinished-file
@@ -357,5 +359,6 @@ this review.
 The review table is checked using `build_ui_messages.build_catalog` for schema,
 keys, placeholders and review gates. Only the 301 reviewed rows enter the
 Desktop runtime catalog; retired rows stay out of it.
-Windows/macOS native localization, installer lifecycle and packaged acceptance
+Windows automated native rendering and packaged acceptance are recorded in the
+acceptance report. Native dialog/installer lifecycle and macOS qualification
 remain future work. This plan does not qualify or publish a release.
