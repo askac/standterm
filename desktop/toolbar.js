@@ -23,8 +23,10 @@ function showNotice(message, error = false) {
 for (const button of document.querySelectorAll('[data-action], [data-menu]')) {
   button.addEventListener('click', () => {
     const action = button.dataset.action || `menu:${button.dataset.menu}`;
-    window.desktopToolbar.invoke(action).catch(() => {
-      showNotice('Action unavailable. Please retry.', true);
+    window.desktopToolbar.invoke(action).then(result => {
+      if (result === false) showNotice('Action unavailable in the current window state.', true);
+    }).catch(() => {
+      showNotice('Could not confirm the action result. Check the current state.', true);
     });
   });
 }

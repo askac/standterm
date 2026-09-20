@@ -1,21 +1,21 @@
 # Desktop copy review and localization plan
 
-Review date: 2026-09-20. This phase inventories Desktop copy, reviews behavior
-and orders implementation. It does not change runtime behavior or enable a
-Desktop language setting. Browser acceptance is recorded separately in
+Review date: 2026-09-20. The initial review inventories Desktop copy, reviews
+behavior and orders implementation. Completed implementation steps are recorded
+below; a Desktop language setting is not yet enabled. Browser acceptance is recorded separately in
 [browser_ui_acceptance.md](browser_ui_acceptance.md).
 
 ## Recommended implementation order
 
 | Order | Deliverable | Relative effort | Completion evidence |
 | --- | --- | --- | --- |
-| 0 | Clarify toolbar action feedback before localization. A resolved `false` currently has no notice; a rejected invocation says to retry despite an uncertain result. | Small | Reproduce both paths; show unavailable feedback for explicit rejection and unknown-result feedback for an exception. Invoke once, with no automatic replay. Preserve successful action notices. |
+| 0 — Complete | Clarify toolbar action feedback before localization. A resolved `false` now shows unavailable feedback; a rejected invocation reports an uncertain result without suggesting retry. | Small | Both original failures reproduced before the fix; renderer and command-guard checks passed. Each click invokes once, with no automatic replay or invented completion notice. |
 | 1 | Add a Desktop-owned language preference and catalog; pilot custom menus, toolbar labels and Agent help. | Medium | English default/fallback, `en` and `zh-TW`, malformed preference fallback, next-launch application, translated title/ARIA labels without losing SVGs, fixed command IDs, focus/origin guards and explicit packaged asset inventory. |
 | 2 | Review and localize Capture, Browser Access and Diagnostics. Resolve the recording save-failure exit policy before the Capture portion. | Medium | Typed recording states, partial-file paths, cancel/default buttons, first-folder seeding, sensitive clipboard feedback and escaped diagnostic fields retain their contracts. Add combined save-failure plus close/quit coverage. |
 | 3 | Localize setup, Core source selection, startup failure and recoverable environment cleanup. | Medium to large | Both languages work before Core is available. Cancellation waits for owned installers; stale confirmations do nothing; source switching, restart/session closure, retained files and recovery moves remain explicit. |
 | 4 | Complete Windows and macOS native acceptance and packaged asset checks. | Platform-dependent | Menus, native dialogs, narrow layouts, keyboard/ARIA labels, clipboard, setup and recovery are checked on each OS. Verify staged and packaged Desktop catalogs independently of the selected Core version. |
 
-The smallest next implementation is order 0, as a separate behavioral fix.
+The next implementation is the language preference and small pilot in order 1.
 Orders 1–3 should remain separate reviewable changes. First-run setup can move
 ahead of order 2 if onboarding becomes the priority; it is not required to prove
 the small localization pilot.
@@ -123,6 +123,15 @@ allowlists and recoverable cleanup. No discovery expansion is needed for
 Desktop localization.
 
 ## Evidence and acceptance limits
+
+Order 0 completed on 2026-09-20. Before the renderer change, regression tests
+reproduced both the missing explicit-rejection notice and the misleading retry
+notice. After the change, all seven renderer notice tests passed, covering
+action and menu dispatch, exactly one invocation per click, strict `false`
+handling, existing operation feedback and notice expiry. The toolbar and UI
+command guard test files also passed under Electron's Node 24.20.0 runtime.
+The independent critic checked the bounded patch and test coverage. No native
+GUI acceptance or language rollout is claimed for this step.
 
 The review baseline passed five Node test-file entries:
 `agent-menu.test.cjs`, `ui-commands.test.cjs`, `toolbar.test.cjs`,
