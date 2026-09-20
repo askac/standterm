@@ -6,6 +6,10 @@ source-run workflow, an unsigned Windows x64 evaluation installer and a native
 Apple Silicon macOS evaluation app/DMG. It is not
 a production release or a replacement for `run.sh` / `run.bat`.
 
+Desktop copy and localization are planned in the
+[review plan](../docs/desktop_ui_review_plan.md), with a separate
+[translation review table](../docs/desktop_ui_copy_review.tsv).
+
 ## macOS Apple Silicon evaluation
 
 The arm64 DMG contains `StandTermDesktop.app`, Electron and the verified Core
