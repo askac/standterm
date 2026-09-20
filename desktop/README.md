@@ -15,8 +15,11 @@ Chinese (Taiwan) for the next launch. The preference belongs to the Desktop
 profile; Core keeps its own language setting. Saving a choice does not restart
 StandTerm or interrupt recording. Coverage includes custom menus, toolbar labels,
 Agent help, Browser Access, Diagnostics, About, external-browser confirmations
-and Capture dialogs/status. Setup, recovery and other Desktop
-text still use English; native role labels follow the platform.
+and Capture dialogs/status, environment preparation and Core source/recovery.
+Installer preparation and cleanup confirmations use the relevant mode profile's
+language. Installer-wide summary/error dialogs, port selection and Files download
+notices still use English; raw technical errors remain unchanged and native role
+labels follow the platform.
 
 Edit reviewed messages in the table, then generate the independent shell
 catalog with `python scripts/build_ui_messages.py --desktop` from the repository
@@ -28,6 +31,9 @@ menus, dialogs or installers.
 `desktop/test/diagnostics-i18n-browser-smoke.py` checks the actual diagnostics
 HTML in both languages, including escaped display data and unchanged event JSON.
 It needs Node 22.12+; use `--node <executable>` to select a prepared runtime.
+`desktop/test/setup-i18n-browser-smoke.py` uses the same option and checks the
+actual setup initialization, progress and cancellation scripts in both languages
+for Windows, macOS and WSL. Setup processes and native dialogs are mocked.
 
 ## macOS Apple Silicon evaluation
 

@@ -13,10 +13,11 @@ acceptance remain separate. Browser acceptance is recorded in
 | 0 — Complete | Clarify toolbar action feedback before localization. A resolved `false` now shows unavailable feedback; a rejected invocation reports an uncertain result without suggesting retry. | Small | Both original failures reproduced before the fix; renderer and command-guard checks passed. Each click invokes once, with no automatic replay or invented completion notice. |
 | 1 — Complete | Add a Desktop-owned language preference and catalog; pilot custom menus, toolbar labels and Agent help. | Medium | English default/fallback, `en` and `zh-TW`, malformed preference fallback, next-launch application, translated title/ARIA labels without losing SVGs, fixed command IDs, focus/origin guards and staging inclusion verified. Native acceptance remains order 4. |
 | 2 — Complete | Localize Browser Access, Diagnostics, About, external-browser confirmations and Capture; retain the window when recording save fails during close/quit. | Medium | Sensitive clipboard feedback, fixed authorization actions, escaped diagnostic fields, literal event JSON, typed Capture state, folder settings and combined save-failure plus close/quit coverage verified. |
-| 3 | Localize setup, Core source selection, startup failure and recoverable environment cleanup. | Medium to large | Both languages work before Core is available. Cancellation waits for owned installers; stale confirmations do nothing; source switching, restart/session closure, retained files and recovery moves remain explicit. |
+| 3 — Complete | Localize setup, Core source selection/recovery, startup error wrappers and per-mode environment cleanup confirmations. | Medium to large | Both languages work before Core is available. Cancellation waits for owned installers; stale confirmations do nothing; source switching, restart/session closure, retained files and recovery moves remain explicit. Installer-wide dialogs remain in order 3b. |
+| 3b | Review and localize remaining shell notices: port selection, Files download feedback and installer-wide summary/error dialogs. | Small to medium | Preserve structured port outcomes, download status and recovery counts. Settle the installer-wide locale when Windows/WSL preferences differ; do not infer a new shared preference from per-mode setup. |
 | 4 | Complete Windows and macOS native acceptance and packaged asset checks. | Platform-dependent | Menus, native dialogs, narrow layouts, keyboard/ARIA labels, clipboard, setup and recovery are checked on each OS. Verify staged and packaged Desktop catalogs independently of the selected Core version. |
 
-The next implementation is setup and Core source/recovery in order 3.
+The next implementation is the remaining shell notices in order 3b.
 The operator chose to retain the window and show the error and unfinished-file
 location when recording save fails during close/quit. Orders 1–3 remain separate
 reviewable changes; native OS acceptance remains order 4.
@@ -67,14 +68,15 @@ Keep these implementation boundaries:
 
 [desktop_ui_copy_review.tsv](desktop_ui_copy_review.tsv) is a prioritized seed
 inventory, not a claim that every Desktop string has been extracted. It uses
-the same nine columns as the browser table. After Capture,
-170 rows are `translation-reviewed` with English and Traditional Chinese text;
-11 setup/Core source rows remain `proposed` with empty `zh-TW` cells. One retired
-Capture sentence fragment is marked `remove`. Some `current_en` cells are exact fragments or normalize
+the same nine columns as the browser table. After setup/Core source,
+269 rows are `translation-reviewed` with English and Traditional Chinese text.
+Four retired Capture/setup fragments or renamed messages are marked `remove`;
+no seed rows remain `proposed`. This does not include every remaining shell
+notice listed in order 3b. Some `current_en` cells are exact fragments or normalize
 dynamic values to named placeholders; `context` identifies these cases.
 
 Approve the English behavior and terminology before requesting translations of
-the remaining proposed rows. Keep already reviewed rows unchanged.
+newly inventoried rows. Keep already reviewed rows unchanged.
 An external translation AI should return the same keys/order/columns, fill only
 `zh-TW`, preserve placeholders and literal identifiers, and keep `status`
 unchanged. Human/source review promotes rows to `translation-reviewed`; a
@@ -91,9 +93,9 @@ separate keys instead of a grammatical `{action}` fragment.
 
 Existing agreed terms remain in
 [agent_ui_review_plan.md](agent_ui_review_plan.md#agreed-terminology). The
-following Desktop additions are proposals to settle before translation:
+following Desktop additions are used by the reviewed messages:
 
-| Concept | English | Proposed Traditional Chinese | Boundary |
+| Concept | English | Traditional Chinese | Boundary |
 | --- | --- | --- | --- |
 | Image of the terminal view | Screenshot | 螢幕截圖 | A PNG of the Core view; not CLI output capture. |
 | Silent video of the terminal view | Recording | 錄影 | WebM without audio; not a transcript or terminal log. |
@@ -211,6 +213,52 @@ Capture completed on 2026-09-20:
   installer acceptance was run for this batch. Capture permissions, recorder
   isolation and automatic finalization on hide/minimize/navigation are unchanged.
 
+## Setup and Core source review and evidence
+
+The batch adds 99 reviewed bilingual messages. Python prerequisites, environment
+creation consent, preparation/cancellation progress, per-mode cleanup, Core source
+management and recovery use the Desktop catalog before Core is available. Stable
+setup error codes select translated explanations; unknown codes retain the
+platform-help fallback. Original technical errors, paths, distribution names and
+commit identifiers remain data. The replaced macOS help constant was removed;
+interpreter discovery and architecture checks are unchanged.
+
+Normal Desktop calls pass the language captured at launch, so a newly saved
+preference does not change later dialogs until restart. Installer preparation
+and cleanup read the selected Windows/WSL mode profile directly; the maintenance
+profile does not override either mode. Installer-wide summary/error dialogs stay
+English for now. Their common-language policy is separate from per-mode setup.
+No OS-language inference, preference migration or installer lifecycle change was
+introduced.
+
+| Finding | Severity | Evidence | Critic remedy | Main response | Resolution | Validation |
+| --- | --- | --- | --- | --- | --- | --- |
+| Shared setup page promises not to modify a Git checkout while Git update uses that page | Medium; preexisting copy defect | `setup.html`, `manageCore`, `runPreparation` | Remove the shared Git assertion | Keep the narrower bundled-setup promise in its action-specific consent; remove it from shared progress copy | Accept | Actual page and Git/copy progress scripts checked in both locales. |
+| Maintenance exits before normal Desktop language initialization | Medium; integration requirement | `main.cjs` maintenance branch and `installer.cjs` setup/cleanup callbacks | Wire per-mode locale or explicitly defer installer UI | Read the relevant mode profile in setup/cleanup defaults; pass launch language explicitly for normal Desktop | Modify | Both Windows and WSL tests use a conflicting maintenance preference; installer ownership tests remain passing. |
+| Existing setup tests do not execute injected DOM updates | Medium; validation gap | `setup.test.cjs` original no-op renderer | Add bilingual DOM execution with literal interpolation | Capture actual initialization/progress/cancel scripts and execute them against actual HTML in Chromium | Accept | Six locale/platform cases passed, including malicious distribution text, ARIA and 700px layout. |
+| English-only button mocks do not prove localized routing | Low; validation gap | Setup and Core manager dialog fixtures | Test numeric action effects in both languages | Preserve numeric decisions and fixed action IDs; add bilingual consent, cleanup, cancellation, retry/recover and label-collision cases | Accept | Both-language action tests and retained typed error codes passed. |
+| Inherited progress-map properties can display unknown stages | Low; preexisting hardening | Original `labels[stage]` lookup | Use an own-property or supported-stage check when translating | Limit display updates to five existing stage IDs | Accept | Unknown `__proto__`, `constructor` and markup-like stages leave the display unchanged; cancellation suppresses later progress. |
+
+The focused second review found no remaining material correctness issue. The
+review changed shared copy, maintenance locale wiring and validation coverage;
+it preserved process ownership, stale-confirmation guards, no-space-freed cleanup,
+restart/session closure, reauthorization warnings and raw error details. Native
+dialog and installer-wide language qualification remain deferred until their
+explicit acceptance/implementation stages. No behavioral policy was reopened.
+
+Setup/Core source completed on 2026-09-20:
+
+- All 145 Desktop unit tests passed under Electron's Node 24.20.0 runtime.
+- Seven catalog regression tests and both generated catalog freshness checks
+  passed. The table contains 269 reviewed messages and four retired rows.
+- The real setup HTML and injected scripts passed six Chromium cases: both
+  locales on Windows, macOS and WSL display branches. Progress/cancel text,
+  language/title, ARIA, literal data, no injection, no external requests and
+  700x500 layout passed. Native dialogs and setup processes are mocked.
+- No renderer scripts/assets or permissions were added; the existing setup URL
+  allowlist and CSP are unchanged. No native GUI, real dependency installation,
+  installer build or packaged acceptance is claimed for this batch.
+
 ## Evidence and acceptance limits
 
 Browser Access/Diagnostics completed on 2026-09-20:
@@ -259,7 +307,7 @@ inspection of Capture/setup/recovery does not imply their smoke suites ran in
 this review.
 
 The review table is checked using `build_ui_messages.build_catalog` for schema,
-keys, placeholders and review gates. Only the 170 reviewed rows enter the
-Desktop runtime catalog; the remaining workflow proposals stay out of it.
+keys, placeholders and review gates. Only the 269 reviewed rows enter the
+Desktop runtime catalog; retired rows stay out of it.
 Windows/macOS native localization, installer lifecycle and packaged acceptance
 remain future work. This plan does not qualify or publish a release.

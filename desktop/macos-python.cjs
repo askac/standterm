@@ -2,11 +2,6 @@
 
 const path = require('node:path');
 
-const MACOS_HELP = 'Install native macOS Python 3.10+ with venv and ensurepip support first.\n\n'
-  + 'Python must match this app’s CPU architecture. StandTerm checks Homebrew, MacPorts and PATH, '
-  + 'or lets you select an installed interpreter. Apple’s /usr/bin/python3 developer-tools stub is not launched. '
-  + 'StandTerm does not install Python, Homebrew, Rosetta or system packages.';
-
 function macPythonCandidates(saved, env = {}) {
   // Finder launch has a minimal PATH; known package-manager locations remain usable.
   return [...new Set([saved, '/opt/homebrew/bin/python3', '/opt/local/bin/python3', '/usr/local/bin/python3',
@@ -25,4 +20,4 @@ function validMacPython(info, arch) {
     && info.executable !== '/usr/bin/python3' && !/[\r\n\0]/.test(info.executable);
 }
 
-module.exports = { MACOS_HELP, macPythonCandidates, validMacPython };
+module.exports = { macPythonCandidates, validMacPython };

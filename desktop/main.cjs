@@ -244,8 +244,8 @@ async function start() {
   diagnostics.write('setup_start');
   if (app.isPackaged && !smoke) {
     coreStore = await installedStore(app.getPath('userData'), process.resourcesPath, app.getVersion());
-    coreManager = coreController({ store: coreStore, prepareBundled: () => preparePackagedBackend(mode),
-      manage: action => manageCore(mode, action), dialog,
+    coreManager = coreController({ store: coreStore, prepareBundled: () => preparePackagedBackend(mode, { language }),
+      manage: action => manageCore(mode, action, { language }), dialog, t,
       openLogs: () => shell.openPath(path.dirname(diagnostics.file)),
       restart: action => { restartRequest = { action }; app.quit(); },
     });
@@ -392,7 +392,7 @@ async function start() {
       commands.item('settings'),
       { id: 'desktop-language', label: t('desktop.language.menu'), click: () => { void language.choose(dialog, win); } },
       ...(coreManager ? [{ label: t('desktop.menu.core_source'), click: () => {
-        void coreManager.showManager().catch(error => dialog.showErrorBox('Core management unavailable', error.message));
+        void coreManager.showManager().catch(error => dialog.showErrorBox(t('desktop.startup.management_unavailable'), error.message));
       } }] : []),
       { label: t('desktop.menu.capture_settings'), click: () => capture.configure() },
       browserAccess.menu,
@@ -544,12 +544,12 @@ async function handleCoreFailure(error) {
     } else {
       exitCode = 1;
       if (smoke) console.error(error.stack || error.message);
-      else dialog.showErrorBox('StandTerm Desktop could not start', `${error.message}\n\nDiagnostics: ${diagnostics.file}`);
+      else dialog.showErrorBox(t('desktop.startup.start_failed'), t('desktop.startup.diagnostics_detail', { error: error.message, path: diagnostics.file }));
       app.quit();
     }
   } catch (failure) {
     restartRequest = null;
-    dialog.showErrorBox('StandTerm Desktop could not recover', failure.message);
+    dialog.showErrorBox(t('desktop.startup.recovery_failed'), failure.message);
     app.quit();
   } finally { failurePending = false; }
 }
@@ -587,7 +587,7 @@ app.on('before-quit', event => {
     app.exit(exitCode);
   })().catch(error => {
     restartRequest = null;
-    if (!smoke) dialog.showErrorBox('StandTerm could not complete shutdown', error.message);
+    if (!smoke) dialog.showErrorBox(t('desktop.startup.shutdown_failed'), error.message);
     stopped = true;
     app.exit(1);
   });
