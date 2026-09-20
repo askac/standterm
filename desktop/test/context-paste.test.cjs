@@ -17,7 +17,7 @@ function fixture(locale = 'en') {
   const state = { focused: true, visible: true, minimized: false, destroyed: false, loading: false,
     url: origin + '/', target: 'fixture-request', prompts: 0, reads: 0, delivered: true };
   const win = { isDestroyed: () => state.destroyed, isVisible: () => state.visible, isMinimized: () => state.minimized };
-  let handler;
+  let handler, checkHandler;
   const contents = new EventEmitter();
   const frame = { isDestroyed: () => state.destroyed, executeJavaScript: async code => {
     scripts.push(code);
@@ -26,7 +26,10 @@ function fixture(locale = 'en') {
     return state.target;
   } };
   Object.assign(contents, { mainFrame: frame, isDestroyed: () => state.destroyed, getURL: () => state.url,
-    isLoadingMainFrame: () => state.loading, session: { setPermissionRequestHandler: fn => { handler = fn; } } });
+    isLoadingMainFrame: () => state.loading, session: {
+      setPermissionRequestHandler: fn => { handler = fn; },
+      setPermissionCheckHandler: fn => { checkHandler = fn; },
+    } });
   const electron = { BrowserWindow: { getFocusedWindow: () => state.focused ? win : null },
     dialog: { showMessageBox: (_owner, options) => { state.prompts++; state.dialog = options; return consent.promise; } },
     clipboard: { readText: () => { state.reads++; return read.promise; } } };
@@ -36,11 +39,42 @@ function fixture(locale = 'en') {
   });
   api.exports.installContextPaste(win, contents, origin, async value => notices.push(value), create(locale).t);
   return { state, consent, read, contents, scripts, callbacks, notices,
+    check: (permission = 'clipboard-sanitized-write', requester = contents, requestingOrigin = origin,
+      details = { isMainFrame: true, requestingUrl: state.url }) => checkHandler(requester, permission, requestingOrigin, details),
     request: (permission = 'clipboard-read', requester = contents, details = { isMainFrame: true, requestingUrl: state.url }) =>
       new Promise(resolve => handler(requester, permission, value => { callbacks.push(value); resolve(value); }, details)),
     navigate: () => contents.emit('did-start-navigation', {}, origin + '/', false, true),
   };
 }
+
+test('focused Core may copy without gaining clipboard read permission', async () => {
+  const f = fixture();
+  assert.equal(f.check(), true);
+  assert.equal(await f.request('clipboard-sanitized-write'), true);
+  assert.equal(f.check('clipboard-read'), false);
+  assert.equal(f.check('deprecated-sync-clipboard-read'), false);
+  assert.equal(f.state.prompts + f.state.reads, 0);
+});
+
+test('copy permission rejects foreign, child, loading and inactive contents', async () => {
+  for (const change of [s => { s.focused = false; }, s => { s.visible = false; },
+    s => { s.minimized = true; }, s => { s.destroyed = true; }, s => { s.loading = true; },
+    s => { s.url = 'https://example.com/'; }]) {
+    const f = fixture(); change(f.state);
+    assert.equal(f.check(), false);
+    assert.equal(await f.request('clipboard-sanitized-write'), false);
+  }
+  const f = fixture();
+  assert.equal(f.check('clipboard-sanitized-write', {}), false);
+  assert.equal(f.check('clipboard-sanitized-write', f.contents, 'https://example.com'), false);
+  for (const details of [undefined, { isMainFrame: false, requestingUrl: origin },
+    { isMainFrame: true, requestingUrl: 'https://example.com' }]) {
+    const invalid = details || {};
+    assert.equal(f.check('clipboard-sanitized-write', f.contents, origin, invalid), false);
+    assert.equal(await f.request('clipboard-sanitized-write', f.contents, invalid), false);
+  }
+  assert.equal(f.state.prompts + f.state.reads, 0);
+});
 
 test('one explicit native confirmation reads text once without granting renderer permission', async () => {
   const f = fixture();

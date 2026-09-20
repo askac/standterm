@@ -588,6 +588,9 @@ places Copy/Paste after the title in the window's Desktop toolbar. Menu labels a
 not selectable; terminal text, text fields and status notices remain selectable.
 
 **Copy selected text** uses native Copy, never the terminal Ctrl+C interrupt.
+Core's copy buttons may write sanitized clipboard content only from the focused,
+visible main Core page at the owned backend origin. This does not grant clipboard
+reads, child-frame access, or access to other windows sharing the session.
 **Paste clipboard text** restores the Core editing target and uses native Paste;
 text fields keep normal editing behavior. Windows/Linux Ctrl+V remains the terminal
 control code; use Ctrl+Shift+V for keyboard paste (Cmd+V on macOS).

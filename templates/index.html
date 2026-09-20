@@ -304,6 +304,7 @@
         .agent-connect-url input { flex: 1; min-width: 220px; background: #111; color: #ddd; padding: 8px; border: 1px solid #555; }
         .agent-connect-activity { white-space: pre-wrap; }
         .agent-connect-steps { padding-left: 24px; line-height: 1.5; }
+        #agent-connect-details summary, #agent-tunnel-details summary { cursor: pointer; margin: 12px 0; }
         #agent-tunnel-message { white-space: pre-wrap; }
         #ssh-tunnels-dialog { width: min(720px, calc(100vw - 32px)); box-sizing: border-box;
             max-height: 85vh; overflow: auto; background: #222; color: #ddd; border: 1px solid #555; border-radius: 8px; }
@@ -1480,61 +1481,72 @@
     </section>
     <dialog id="agent-connect-dialog" aria-labelledby="agent-connect-title">
         <h3 id="agent-connect-title" data-i18n="agent.connection.title">Agent connection</h3>
-        <p data-i18n="agent.connection.environment">Run the agent where Core runs (WSL if Core runs in WSL). It can access only individually authorized tabs.</p>
-        <ol class="agent-connect-steps">
-            <li data-i18n="agent.connection.step_authorize">Choose the default permission in Settings, then Authorize agent on each intended tab. Adjust an authorized tab in the Agent panel.</li>
-            <li data-i18n="agent.connection.step_copy">Copy the prompt to the agent running on the Core host.</li>
-            <li data-i18n="agent.connection.step_confirm">Run discover, then hello. Authenticated requests appear below.</li>
-        </ol>
+        <p data-i18n="agent.connection.summary">Copy the connection instructions and give them to the agent in the current tab’s environment.</p>
         <div class="agent-connect-url">
             <label for="agent-connect-url" data-i18n="agent.connection.url">Agent Info URL</label>
             <input id="agent-connect-url" readonly aria-label="Agent Info URL" data-i18n-aria-label="agent.connection.url">
-            <button id="agent-connect-copy-url" type="button" disabled data-i18n="common.copy_url">Copy URL</button>
+            <button id="agent-connect-copy" type="button" disabled data-i18n="agent.connection.copy">Copy Prompt</button>
         </div>
         <p id="agent-connect-message" role="status"></p>
-        <p id="agent-connect-activity" class="agent-connect-activity" aria-live="polite"></p>
-        <textarea id="agent-connect-info" readonly aria-label="Local agent prompt" hidden data-i18n-aria-label="agent.connection.prompt"></textarea>
+        <details id="agent-connect-details">
+            <summary data-i18n="agent.connection.read_more">Read more</summary>
+            <p data-i18n="agent.connection.environment">Run the agent where Core runs (WSL if Core runs in WSL). It can access only individually authorized tabs.</p>
+            <ol class="agent-connect-steps">
+                <li data-i18n="agent.connection.step_authorize">Choose the default permission in Settings, then Authorize agent on each intended tab. Adjust an authorized tab in the Agent panel.</li>
+                <li data-i18n="agent.connection.step_copy">Copy the prompt to the agent running on the Core host.</li>
+                <li data-i18n="agent.connection.step_confirm">Run discover, then hello. Authenticated requests appear below.</li>
+            </ol>
+            <p id="agent-connect-activity" class="agent-connect-activity" aria-live="polite"></p>
+            <textarea id="agent-connect-info" readonly aria-label="Local agent prompt" hidden data-i18n-aria-label="agent.connection.prompt"></textarea>
+            <div class="agent-tunnel-actions">
+                <button id="agent-connect-open-panel" type="button" data-i18n="agent.panel.open">Open Agent Panel</button>
+                <button id="agent-connect-refresh" type="button" data-i18n="common.refresh">Refresh Status</button>
+                <button id="agent-connect-copy-url" type="button" disabled data-i18n="common.copy_url">Copy URL</button>
+            </div>
+        </details>
         <div class="agent-tunnel-actions">
-            <button id="agent-connect-open-panel" type="button" data-i18n="agent.panel.open">Open Agent Panel</button>
-            <button id="agent-connect-refresh" type="button" data-i18n="common.refresh">Refresh Status</button>
-            <button id="agent-connect-copy" type="button" disabled data-i18n="agent.connection.copy">Copy Prompt</button>
             <button id="agent-connect-close" type="button" data-i18n="common.close">Close</button>
         </div>
     </dialog>
     <dialog id="agent-tunnel-dialog" aria-labelledby="agent-tunnel-title">
         <h3 id="agent-tunnel-title" data-i18n="agent.tunnel.title">Agent Tunnel</h3>
-        <p id="agent-tunnel-carrier"></p>
-        <div id="agent-tunnel-setup">
-        <ol class="agent-connect-steps">
-            <li data-i18n="agent.tunnel.step_permissions">In each intended tab’s Agent panel, enable access and choose its permission.</li>
-            <li data-i18n="agent.tunnel.step_start">Click Start / Renew Access to start or update this tunnel’s access. Valid tokens keep their expiry; separate local tokens are not required.</li>
-            <li data-i18n="agent.tunnel.step_copy">Once ready, click Copy Prompt and paste it to the agent on this SSH host.</li>
-        </ol>
-        <p data-i18n="agent.tunnel.requirements">A new tunnel copies the current helpers and skills to a private temporary directory on this SSH host. Requires Python 3.9+, SFTP, remote forwarding and listener inspection; checks support Linux, FreeBSD and macOS.</p>
-        <p id="agent-tunnel-targets-hint" data-i18n="agent.tunnel.targets_hint">Refresh Status updates this list; it does not check the tunnel.</p>
-        <div id="agent-tunnel-targets"></div>
-        </div>
-        <p id="agent-tunnel-lifecycle-hint" data-i18n="agent.tunnel.lifecycle_hint">This tunnel follows this page’s tab permissions, including tabs enabled later. Close keeps it running. Stop revokes this tunnel’s access. It stops when its SSH connection closes or this page disconnects, including a reload.</p>
-        <p id="agent-tunnel-check-hint" data-i18n="agent.tunnel.check_hint">Check Tunnel verifies the remote loopback listener, helpers, and connection to this Core instance. Failure stops this tunnel and revokes its access.</p>
-        <p id="agent-tunnel-message" role="status"></p>
+        <p id="agent-tunnel-introduction" data-i18n="agent.connection.summary" hidden>Copy the connection instructions and give them to the agent in the current tab’s environment.</p>
         <div id="agent-tunnel-connection" hidden>
-            <h4 data-i18n="agent.connection.title">Agent connection</h4>
             <div class="agent-connect-url">
                 <label for="agent-tunnel-url" data-i18n="agent.connection.url">Agent Info URL</label>
                 <input id="agent-tunnel-url" readonly aria-label="Agent Info URL" data-i18n-aria-label="agent.connection.url">
-                <button id="agent-tunnel-copy-url" type="button" data-i18n="common.copy_url">Copy URL</button>
+                <button id="agent-tunnel-copy" type="button" data-i18n="agent.connection.copy" hidden>Copy Prompt</button>
             </div>
+        </div>
+        <p id="agent-tunnel-message" role="status"></p>
+        <details id="agent-tunnel-details" open>
+            <summary id="agent-tunnel-details-summary" data-i18n="agent.connection.read_more" hidden>Read more</summary>
+            <p id="agent-tunnel-carrier"></p>
+            <div id="agent-tunnel-setup">
+            <ol class="agent-connect-steps">
+                <li data-i18n="agent.tunnel.step_permissions">In each intended tab’s Agent panel, enable access and choose its permission.</li>
+                <li data-i18n="agent.tunnel.step_start">Click Start / Renew Access to start or update this tunnel’s access. Valid tokens keep their expiry; separate local tokens are not required.</li>
+                <li data-i18n="agent.tunnel.step_copy">Once ready, click Copy Prompt and paste it to the agent on this SSH host.</li>
+            </ol>
+            <p data-i18n="agent.tunnel.requirements">A new tunnel copies the current helpers and skills to a private temporary directory on this SSH host. Requires Python 3.9+, SFTP, remote forwarding and listener inspection; checks support Linux, FreeBSD and macOS.</p>
+            <p id="agent-tunnel-targets-hint" data-i18n="agent.tunnel.targets_hint">Refresh Status updates this list; it does not check the tunnel.</p>
+            <div id="agent-tunnel-targets"></div>
+            </div>
+            <p id="agent-tunnel-lifecycle-hint" data-i18n="agent.tunnel.lifecycle_hint">This tunnel follows this page’s tab permissions, including tabs enabled later. Close keeps it running. Stop revokes this tunnel’s access. It stops when its SSH connection closes or this page disconnects, including a reload.</p>
+            <p id="agent-tunnel-check-hint" data-i18n="agent.tunnel.check_hint">Check Tunnel verifies the remote loopback listener, helpers, and connection to this Core instance. Failure stops this tunnel and revokes its access.</p>
             <p id="agent-tunnel-verification"></p>
             <p id="agent-tunnel-activity" class="agent-connect-activity" aria-live="polite"></p>
-        </div>
-        <textarea id="agent-tunnel-info" readonly aria-label="Agent connection prompt" data-i18n-aria-label="agent.connection.prompt" hidden></textarea>
+            <textarea id="agent-tunnel-info" readonly aria-label="Agent connection prompt" data-i18n-aria-label="agent.connection.prompt" hidden></textarea>
+            <div class="agent-tunnel-actions">
+                <button id="agent-tunnel-copy-url" type="button" data-i18n="common.copy_url" disabled>Copy URL</button>
+                <button id="agent-tunnel-manage" type="button" data-i18n="agent.tunnel.manage" hidden>Manage Tunnel</button>
+                <button id="agent-tunnel-refresh" type="button" data-i18n="common.refresh">Refresh Status</button>
+                <button id="agent-tunnel-check" type="button" data-i18n="agent.tunnel.check" aria-describedby="agent-tunnel-check-hint" disabled>Check Tunnel</button>
+                <button id="agent-tunnel-stop" type="button" data-i18n="agent.tunnel.stop" aria-describedby="agent-tunnel-lifecycle-hint">Stop Tunnel</button>
+                <button id="agent-tunnel-apply" type="button" data-i18n="agent.tunnel.apply">Start / Renew Access</button>
+            </div>
+        </details>
         <div class="agent-tunnel-actions">
-            <button id="agent-tunnel-copy" type="button" data-i18n="agent.connection.copy" hidden>Copy Prompt</button>
-            <button id="agent-tunnel-manage" type="button" data-i18n="agent.tunnel.manage" hidden>Manage Tunnel</button>
-            <button id="agent-tunnel-refresh" type="button" data-i18n="common.refresh">Refresh Status</button>
-            <button id="agent-tunnel-check" type="button" data-i18n="agent.tunnel.check" aria-describedby="agent-tunnel-check-hint" disabled>Check Tunnel</button>
-            <button id="agent-tunnel-stop" type="button" data-i18n="agent.tunnel.stop" aria-describedby="agent-tunnel-lifecycle-hint">Stop Tunnel</button>
-            <button id="agent-tunnel-apply" type="button" data-i18n="agent.tunnel.apply">Start / Renew Access</button>
             <button id="agent-tunnel-close" type="button" data-i18n="common.close">Close</button>
         </div>
     </dialog>
@@ -2910,6 +2922,7 @@
             const agentConnectDialog = document.getElementById('agent-connect-dialog');
             const agentConnectInfo = document.getElementById('agent-connect-info');
             const agentConnectMessage = document.getElementById('agent-connect-message');
+            let agentTunnelInfoView = false;
             let agentTunnelCarrier = null;
             let agentTunnelRequest = 0;
             let agentTunnelId = null;
@@ -2931,6 +2944,7 @@
                 element.classList.toggle('agent-copy-warning', copyFailed);
                 element.setAttribute('role', copyFailed ? 'alert' : 'status');
                 element.textContent = message;
+                element.hidden = !message;
             }
 
             async function copyAgentConnectionField(fieldId, messageElement) {
@@ -2940,6 +2954,8 @@
                     await navigator.clipboard.writeText(field.value);
                     setAgentConnectionMessage(messageElement, t('agent.connection.copied'));
                 } catch (_error) {
+                    const details = field.closest('details');
+                    if (details) details.open = true;
                     field.focus();
                     field.select();
                     const shortcut = isApplePlatform() ? 'Command+C' : 'Ctrl+C';
@@ -2973,7 +2989,7 @@
                     agentConnectActivity = available ? result.terminals || [] : [];
                     renderAgentConnectionActivity('agent-connect-activity', agentConnectActivity);
                     setAgentConnectionMessage(agentConnectMessage, available
-                        ? t('agent.connection.ready')
+                        ? ''
                         : result?.message || t('agent.connection.unavailable'));
                 });
             }
@@ -2986,6 +3002,7 @@
                     return;
                 }
                 agentConnectInfo.hidden = true;
+                document.getElementById('agent-connect-details').open = false;
                 agentConnectDialog.showModal();
                 requestAgentConnectInfo();
             });
@@ -3179,6 +3196,10 @@
             });
 
             function setAgentTunnelInfoView(infoView) {
+                agentTunnelInfoView = infoView;
+                document.getElementById('agent-tunnel-introduction').hidden = !infoView;
+                document.getElementById('agent-tunnel-details-summary').hidden = !infoView;
+                document.getElementById('agent-tunnel-details').open = !infoView;
                 document.getElementById('agent-tunnel-title').textContent = t(infoView ? 'agent.connection.title' : 'agent.tunnel.title');
                 document.getElementById('agent-tunnel-setup').hidden = infoView;
                 document.getElementById('agent-tunnel-apply').hidden = infoView;
@@ -3214,6 +3235,7 @@
                 agentTunnelInfo.hidden = true;
                 document.getElementById('agent-tunnel-connection').hidden = true;
                 document.getElementById('agent-tunnel-url').value = '';
+                document.getElementById('agent-tunnel-copy-url').disabled = true;
                 document.getElementById('agent-tunnel-check').disabled = true;
                 document.getElementById('agent-tunnel-stop').disabled = true;
                 document.getElementById('agent-tunnel-copy').hidden = true;
@@ -3246,7 +3268,7 @@
                     readyAgentTunnels.delete(agentTunnelCarrier);
                 }
                 updateAgentTunnelButtons();
-                setAgentConnectionMessage(agentTunnelMessage, ready ? t('agent.tunnel.ready')
+                setAgentConnectionMessage(agentTunnelMessage, ready ? (agentTunnelInfoView ? '' : t('agent.tunnel.ready'))
                     : result && result.status === 'stopped'
                         ? t(result.cleanup_pending ? 'agent.tunnel.cleanup_pending' : 'agent.tunnel.stopped')
                     : (result && result.message) || t('agent.tunnel.setup_failed'));
@@ -3256,6 +3278,7 @@
                 agentTunnelActivity = ready ? result.terminals || [] : [];
                 document.getElementById('agent-tunnel-connection').hidden = !ready;
                 document.getElementById('agent-tunnel-url').value = ready ? result.agentinfo_url : '';
+                document.getElementById('agent-tunnel-copy-url').disabled = !ready;
                 document.getElementById('agent-tunnel-check').disabled = !ready;
                 document.getElementById('agent-tunnel-verification').textContent = ready
                     ? t('agent.tunnel.verified_at', { time: new Date(result.verified_at * 1000).toLocaleString(uiText.locale) }) : '';

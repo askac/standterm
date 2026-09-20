@@ -26,6 +26,41 @@ The operator chose to retain the window and show the error and unfinished-file
 location when recording save fails during close/quit. Orders 1–3 remain separate
 reviewable changes; native OS acceptance remains order 4.
 
+## Follow-up from candidate feedback
+
+The candidate exposed a copy regression: the Desktop permission handlers denied
+`clipboard-sanitized-write` along with reads, so Core's Agent connection copy
+buttons always reported failure. The source fix permits sanitized writes only
+for the owned, focused, visible Core main frame at its backend origin. Clipboard
+reads retain their native confirmation and target guards. The existing candidate
+installer does not contain this fix until rebuilt.
+
+Validation: all 167 Desktop unit tests pass, including foreground write access
+and foreign-frame/background denial. A separate Windows Electron 44.2.0 window
+reports clipboard-write permission changing from `denied` to `granted` with the
+fix while clipboard-read stays `denied`. This probe queries permissions only;
+it does not read or replace the operator's clipboard and is not OS copy/paste
+acceptance. The attempted Linux headless runtime probe exited before producing
+results; Windows provided the native permission evidence.
+
+The operator requests a single language setting and asks about live switching.
+The following is the proposed next implementation phase, not completed behavior:
+
+| Order | Change | Effort | Required acceptance |
+| --- | --- | --- | --- |
+| 1 | Apply the saved Core language without reloading the page. Replace the fixed translator with a current-locale lookup and refresh labels from structured state. | Medium | Switch both ways with connected terminals, an active Agent grant, Files and floating windows; preserve input, selection, drafts and pending operations. |
+| 2 | Make Desktop follow the current Core page's language and remove the separate Desktop language menu. | Medium | Validate the exact owned sender/frame/origin and the two supported locale values; rebuild menus and refresh toolbar, tray and diagnostics without restarting Core or recording. |
+| 3 | Keep `language.json` as the last synchronized language for startup/setup/recovery before Core is available. | Small | Retain the cached value for older Core versions lacking synchronization; use English when no valid cache exists. Preserve the agreed installer common-language/English fallback. |
+
+Core's setting remains scoped to its browser profile; this does not synchronize
+unrelated browsers, hosts or backend modes. A browser connection does not acquire
+authority to change another Desktop instance. Already-open native confirmations
+keep their language and button meanings until dismissed; subsequent dialogs use
+the new language. Existing terminal output and raw diagnostic messages are not
+translated retroactively. Dynamic UI must render from state/message keys rather
+than infer state by matching displayed text. Settings import/reset must use the
+same language application path as Settings Save.
+
 ## Difficulty and design choices
 
 Copy extraction is straightforward. Most work lies in several display contexts:
@@ -34,14 +69,15 @@ scriptless diagnostics. A complete Desktop rollout has moderate implementation
 cost and broader acceptance cost than the toolbar pilot. The estimates above
 are relative scope assessments, not measured delivery times.
 
-The pilot stores the Desktop language in `language.json` under the existing profile's `userData`,
+The shipped pilot stores the Desktop language in `language.json` under the existing profile's `userData`,
 with English as default and only `en` / `zh-TW` initially. Apply a change on the
 next launch; changing language should not itself restart StandTerm or stop a
 recording. Keep the existing Core browser preference independent. This covers
 setup and recovery before Core starts, at the cost of two language preferences.
 It is a product choice, not a security requirement. A validated
 two-value advisory preference from Core is also feasible, but needs startup,
-origin and older-Core fallback rules. Automatic OS-language selection is deferred.
+origin and older-Core fallback rules. The follow-up above supersedes the independent
+preference design once implemented. Automatic OS-language selection is deferred.
 
 Ship the Desktop catalog with the shell. Do not depend on the selected bundled
 or Git Core supplying compatible renderer scripts. Reuse the existing TSV
