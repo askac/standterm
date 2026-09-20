@@ -15,10 +15,14 @@ Chinese (Taiwan) for the next launch. The preference belongs to the Desktop
 profile; Core keeps its own language setting. Saving a choice does not restart
 StandTerm or interrupt recording. Coverage includes custom menus, toolbar labels,
 Agent help, Browser Access, Diagnostics, About, external-browser confirmations
-and Capture dialogs/status, environment preparation and Core source/recovery.
+and Capture dialogs/status, environment preparation, Core source/recovery, port
+selection, Files download notices and native paste confirmation.
 Installer preparation and cleanup confirmations use the relevant mode profile's
-language. Installer-wide summary/error dialogs, port selection and Files download
-notices still use English; raw technical errors remain unchanged and native role
+language. Installer-wide summary/error dialogs use the common language of the
+selected modes, or English when they differ. Uninstall considers both Windows
+and WSL; missing or invalid preferences use the usual English fallback. This
+does not write a shared preference. Raw technical errors, early startup/legacy
+installer messages and the external installer UI remain English; native role
 labels follow the platform.
 
 Edit reviewed messages in the table, then generate the independent shell

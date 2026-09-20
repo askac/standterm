@@ -261,7 +261,7 @@ async function start() {
     fs.writeFileSync(settingsPath, JSON.stringify({ version: 1, port }), { flag: 'wx' });
   }
   const handoff = await startWithPort({
-    settingsPath,
+    settingsPath, t,
     launch: port => launchBackend(prepared, port), verify: verifyBackend, stop: stopBackend,
     checkHost: process.platform === 'win32' && mode === 'wsl' ? async (port, options) => {
       try { await checkHostPort(port, options); }
@@ -270,13 +270,12 @@ async function start() {
     confirm: async (port, candidate, reason) => {
       diagnostics.write('port_change', { port, candidate });
       if (smoke) { testPortChanges++; console.log(`Port smoke: approved replacement ${port} -> ${candidate} (${reason || 'backend_address_in_use'}).`); return 'remember'; }
-      const problem = reason === 'host_permission_denied' ? 'is reserved or denied by Windows'
-        : reason === 'host_address_in_use' ? 'is already in use on Windows' : 'is already in use';
+      const message = reason === 'host_permission_denied' ? 'desktop.port.confirm_permission'
+        : reason === 'host_address_in_use' ? 'desktop.port.confirm_host_in_use' : 'desktop.port.confirm_in_use';
       const answer = await dialog.showMessageBox({ type: 'question', title: MODES[mode],
-        message: `Port ${port} ${problem}. Use port ${candidate}?`,
-        detail: 'No existing service will be stopped or reused. Changing the port changes the browser origin; '
-          + 'browser settings and SSH keys are not migrated. Windows and WSL remember their ports separately.',
-        buttons: ['Cancel', 'Use once', 'Use and remember'], defaultId: 0, cancelId: 0, noLink: true });
+        message: t(message, { port, candidate }), detail: t('desktop.port.change_detail'),
+        buttons: [t('desktop.common.cancel'), t('desktop.port.use_once'), t('desktop.port.use_and_remember')],
+        defaultId: 0, cancelId: 0, noLink: true });
       return ['cancel', 'once', 'remember'][answer.response];
     },
     notify: message => smoke ? console.warn(message) : dialog.showMessageBox({ type: 'warning', title: MODES[mode], message }),
@@ -344,7 +343,7 @@ async function start() {
     } } : {}),
   });
   toolbar = installToolbar(win, coreView, capture, commands, language.locale);
-  installContextPaste(win, contents, handoff.origin, toolbar.notify);
+  installContextPaste(win, contents, handoff.origin, toolbar.notify, t);
   const browserAccess = createBrowserAccess({ origin: handoff.origin, session: desktopSession, launcherToken,
     t,
     available: () => !win.isDestroyed() && !contents.isDestroyed() && allowedNavigation(contents.getURL(), handoff.origin),
@@ -460,10 +459,10 @@ async function start() {
   installFloatingWindows(win, handoff.origin, openExternal, contents, (result, owner) => {
     const completed = result.state === 'completed' && !!result.path;
     void dialog.showMessageBox(owner, {
-      type: completed ? 'info' : 'warning', title: 'Files download',
-      message: completed ? 'Download complete' : 'Download did not complete',
-      detail: completed ? `Saved to:\n${result.path}` : 'The connection was interrupted. Retry the download from Files.',
-      buttons: completed ? ['Close', 'Show in folder'] : ['Close'],
+      type: completed ? 'info' : 'warning', title: t('desktop.download.title'),
+      message: t(completed ? 'desktop.download.complete' : 'desktop.download.incomplete'),
+      detail: completed ? t('desktop.download.saved_to', { path: result.path }) : t('desktop.download.retry'),
+      buttons: completed ? [t('desktop.download.close'), t('desktop.download.show_in_folder')] : [t('desktop.download.close')],
       defaultId: 0, cancelId: 0, noLink: true,
     }).then(answer => {
       if (completed && answer.response === 1) shell.showItemInFolder(result.path);

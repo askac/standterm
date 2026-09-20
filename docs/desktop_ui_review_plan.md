@@ -14,10 +14,12 @@ acceptance remain separate. Browser acceptance is recorded in
 | 1 — Complete | Add a Desktop-owned language preference and catalog; pilot custom menus, toolbar labels and Agent help. | Medium | English default/fallback, `en` and `zh-TW`, malformed preference fallback, next-launch application, translated title/ARIA labels without losing SVGs, fixed command IDs, focus/origin guards and staging inclusion verified. Native acceptance remains order 4. |
 | 2 — Complete | Localize Browser Access, Diagnostics, About, external-browser confirmations and Capture; retain the window when recording save fails during close/quit. | Medium | Sensitive clipboard feedback, fixed authorization actions, escaped diagnostic fields, literal event JSON, typed Capture state, folder settings and combined save-failure plus close/quit coverage verified. |
 | 3 — Complete | Localize setup, Core source selection/recovery, startup error wrappers and per-mode environment cleanup confirmations. | Medium to large | Both languages work before Core is available. Cancellation waits for owned installers; stale confirmations do nothing; source switching, restart/session closure, retained files and recovery moves remain explicit. Installer-wide dialogs remain in order 3b. |
-| 3b | Review and localize remaining shell notices: port selection, Files download feedback and installer-wide summary/error dialogs. | Small to medium | Preserve structured port outcomes, download status and recovery counts. Settle the installer-wide locale when Windows/WSL preferences differ; do not infer a new shared preference from per-mode setup. |
+| 3b — Complete | Localize port selection, Files download feedback, installer-wide summary/error dialogs and native paste confirmation. | Small to medium | Preserve structured outcomes/counts, numeric actions and clipboard guards. Installer-wide notices use the common effective language of relevant modes, otherwise English; no shared preference is written. |
 | 4 | Complete Windows and macOS native acceptance and packaged asset checks. | Platform-dependent | Menus, native dialogs, narrow layouts, keyboard/ARIA labels, clipboard, setup and recovery are checked on each OS. Verify staged and packaged Desktop catalogs independently of the selected Core version. |
 
-The next implementation is the remaining shell notices in order 3b.
+The next stage is native Windows/macOS and packaged acceptance in order 4.
+Raw diagnostic errors, errors before profile selection, legacy shortcut setup
+and external installer UI are outside the current Desktop catalog coverage.
 The operator chose to retain the window and show the error and unfinished-file
 location when recording save fails during close/quit. Orders 1–3 remain separate
 reviewable changes; native OS acceptance remains order 4.
@@ -68,11 +70,11 @@ Keep these implementation boundaries:
 
 [desktop_ui_copy_review.tsv](desktop_ui_copy_review.tsv) is a prioritized seed
 inventory, not a claim that every Desktop string has been extracted. It uses
-the same nine columns as the browser table. After setup/Core source,
-269 rows are `translation-reviewed` with English and Traditional Chinese text.
+the same nine columns as the browser table. After the remaining shell notices,
+301 rows are `translation-reviewed` with English and Traditional Chinese text.
 Four retired Capture/setup fragments or renamed messages are marked `remove`;
-no seed rows remain `proposed`. This does not include every remaining shell
-notice listed in order 3b. Some `current_en` cells are exact fragments or normalize
+no seed rows remain `proposed`. This does not claim translation of raw errors or
+the external installer UI. Some `current_en` cells are exact fragments or normalize
 dynamic values to named placeholders; `context` identifies these cases.
 
 Approve the English behavior and terminology before requesting translations of
@@ -259,6 +261,52 @@ Setup/Core source completed on 2026-09-20:
   allowlist and CSP are unchanged. No native GUI, real dependency installation,
   installer build or packaged acceptance is claimed for this batch.
 
+## Remaining shell notices review and evidence
+
+The batch adds 32 reviewed bilingual messages for port selection, download
+results, installer-wide summaries/errors and the native context-paste dialog.
+Port prompts use whole messages selected by typed reasons, preserving cancel,
+use-once and remember decisions. Saving still follows host checks, authenticated
+verification and consent. The saved-port warning now states only that the port
+passed verification but its setting could not be saved; it does not promise that
+later startup steps succeed.
+
+Installer-wide notices capture the common effective language of the relevant
+profiles at entry: selected modes for preparation, Windows and WSL for uninstall.
+Missing/invalid preferences retain the existing English fallback, and mixed
+effective locales use English. No preference is written or migrated; per-mode
+preparation and cleanup keep their own language. The operator selected this
+policy: use the common setting, otherwise English, without a new preference.
+
+| Finding | Severity | Evidence | Critic remedy | Main response | Resolution | Validation |
+| --- | --- | --- | --- | --- | --- | --- |
+| Interrupted or pathless download result does not establish a connection failure | Medium | `floating-windows.cjs` reports state/path only; `main.cjs` requires a completed state and path | Use neutral outcome wording | Report unconfirmed completion and ask the operator to inspect the download destination before downloading again | Accept | Both languages cover completed/pathless/interrupted outcomes; reveal requires completed plus response 1; no automatic replay. |
+| Retained count mixes per-item results and whole-mode retention | Medium | `installer.cjs` aggregation and `cleanupManagedVenvs` top-level retained result | Name the count as results, not environments | Preserve aggregation and explain the mixed units; count unknown modes separately | Accept | Mixed item/mode results and cleanup exceptions retain exact numeric totals. |
+| Generic installer failure can occur after completed recovery moves or shortcut changes | Medium | Uninstall cleanup/report precede shortcut updates | Acknowledge partial changes without implying rollback | Explain that completed changes remain and recovery locations should be checked before retry | Accept | Injected shortcut failure after two confirmed moves retains original error and failure exit code. |
+| Cleanup scope wording implies both environments were successfully checked | Low | Missing settings/interpreter can retain a mode before inventory | Describe the permitted scope only | State that cleanup is limited to Windows and the configured WSL distribution | Accept | Copy review; mode iteration and owned installer lifecycle unchanged. |
+| Notification rejection can still abort startup despite a saved-port notice | Preexisting behavior boundary | `startWithPort` awaits `notify` | Avoid silently changing notification behavior during localization | Remove the future-continuation promise; defer any best-effort notification change to a separate behavior patch | Modify | Existing startup flow retained; verification and persistence-failure ordering tested. |
+| Files is the source UI, not the local download destination | Low; focused second pass | Download completion reports a native path | Direct the operator to the destination | Applied in both languages | Accept | Final table/callback review. |
+| Paste delivery can precede a rejected acknowledgment | Main-review addition after independent review | `context-paste.cjs` awaits `completeContextPaste` before generic catch | Avoid encouraging a second paste when the outcome is unknown | Use an unconfirmed-result notice and tell the operator to inspect the terminal | Accept | One clipboard read and one delivery attempt despite lost acknowledgment; both-language cancel/stale-target tests pass. |
+
+The independent two-round review of port/download/installer changes found no
+remaining material correctness, authorization or lifetime issue. The final
+context-paste inventory addition was reviewed by the main agent and covered by
+the final suite; it was not a third independent review round. Existing clipboard
+permission denial, focus/frame/navigation/target guards, silent canceled downloads,
+typed action dispatch, owner watching and shortcut publication order remain.
+
+Order 3b completed on 2026-09-20:
+
+- All 165 Desktop unit tests passed under Electron's Node 24.20.0 runtime,
+  including actual main-process callbacks and the installer coordinator in VM
+  fixtures. Native dialogs and installer subprocesses are mocked.
+- Seven catalog regression tests and both catalog freshness checks passed;
+  the catalog contains 301 reviewed messages and four retired rows.
+- No renderer HTML/CSS/assets changed in this batch, so the earlier DOM results
+  remain separate evidence; no new browser or native GUI acceptance is claimed.
+- Native dialog readability, Windows installer behavior and packaged acceptance
+  remain order 4. This batch does not build or publish a release.
+
 ## Evidence and acceptance limits
 
 Browser Access/Diagnostics completed on 2026-09-20:
@@ -307,7 +355,7 @@ inspection of Capture/setup/recovery does not imply their smoke suites ran in
 this review.
 
 The review table is checked using `build_ui_messages.build_catalog` for schema,
-keys, placeholders and review gates. Only the 269 reviewed rows enter the
+keys, placeholders and review gates. Only the 301 reviewed rows enter the
 Desktop runtime catalog; retired rows stay out of it.
 Windows/macOS native localization, installer lifecycle and packaged acceptance
 remain future work. This plan does not qualify or publish a release.
