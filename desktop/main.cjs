@@ -346,12 +346,12 @@ async function start() {
   toolbar = installToolbar(win, coreView, capture, commands, language.locale);
   installContextPaste(win, contents, handoff.origin, toolbar.notify);
   const browserAccess = createBrowserAccess({ origin: handoff.origin, session: desktopSession, launcherToken,
+    t,
     available: () => !win.isDestroyed() && !contents.isDestroyed() && allowedNavigation(contents.getURL(), handoff.origin),
     confirm: async () => {
-      const result = await dialog.showMessageBox(win, { type: 'warning', title: 'Authorize another browser',
-        message: 'Allow another browser to access this StandTerm instance?',
-        detail: 'The authorization URL contains sensitive access information. Share it only with your own trusted browser. Opening it may store it in browser history. A new authorization link replaces the previous unused link.',
-        buttons: ['Cancel', 'Continue'], defaultId: 0, cancelId: 0, noLink: true });
+      const result = await dialog.showMessageBox(win, { type: 'warning', title: t('desktop.browser_access.confirm_title'),
+        message: t('desktop.browser_access.confirm_message'), detail: t('desktop.browser_access.confirm_detail'),
+        buttons: [t('desktop.common.cancel'), t('desktop.browser_access.continue')], defaultId: 0, cancelId: 0, noLink: true });
       return result.response === 1;
     },
     copy: value => clipboard.writeText(value), open: value => shell.openExternal(value), notify: toolbar.notify,
@@ -363,29 +363,29 @@ async function start() {
     updateTitle();
   });
   const connectionInfo = agentConnectionInfo({ origin: handoff.origin, instanceId: handoff.instance_id, mode });
-  const coreVersion = handoff.core_version || 'Unknown (older Core)';
+  const coreVersion = handoff.core_version || t('desktop.about.unknown_version');
   const coreBuild = prepared?.source === 'git' ? prepared.coreSource
-    : handoff.core_bundle_id || 'Source checkout / no managed bundle identity';
-  const pythonVersion = handoff.python_version || 'Unknown (older Core)';
-  const buildLabel = prepared?.source === 'git' ? 'Core Git revision' : 'Core bundle SHA-256';
-  const aboutDetails = `Core version: ${coreVersion}\n${buildLabel}: ${coreBuild}\n`
-    + `Backend: ${MODES[mode]}\nPython: ${pythonVersion}\n`
-    + `Electron: ${process.versions.electron}\nChromium: ${process.versions.chrome}\nNode.js: ${process.versions.node}\n`
-    + `Platform: ${process.platform} / ${process.arch}\n\nEvaluation build; updates are installed manually.`;
+    : handoff.core_bundle_id || t('desktop.about.unmanaged_source');
+  const pythonVersion = handoff.python_version || t('desktop.about.unknown_version');
+  const buildLabel = t(prepared?.source === 'git' ? 'desktop.about.git_revision' : 'desktop.about.bundle_sha256');
+  const aboutDetails = t('desktop.about.details', { core_version: coreVersion, build_label: buildLabel,
+    core_build: coreBuild, backend: MODES[mode], python_version: pythonVersion,
+    electron_version: process.versions.electron, chromium_version: process.versions.chrome,
+    node_version: process.versions.node, platform: process.platform, arch: process.arch });
   const openStatus = createStatusWindow(win, () => ({ rows: [
-    ['Desktop version', app.getVersion()], ['Backend mode', MODES[mode]],
-    ['Core version', coreVersion], [buildLabel, coreBuild], ['Python version', pythonVersion],
-    ['Backend URL', handoff.origin], ['Instance ID', handoff.instance_id],
-    ['Platform', `${process.platform} / ${process.arch}`],
-    ['Electron / Chromium / Node', `${process.versions.electron} / ${process.versions.chrome} / ${process.versions.node}`],
-    ['Backend process', child && child.exitCode === null && child.signalCode === null ? 'Running' : 'Stopped'],
-    ['Renderer process', contents.isCrashed() ? 'Crashed' : 'Running'],
-    ['Browser storage', smoke ? 'Temporary test profile' : 'Persistent per origin; same as Core'],
-    ['Profile directory', app.getPath('userData')], ['Port settings', settingsPath],
-    ['Diagnostic log', diagnostics.file], ['Log writable', diagnostics.available ? 'Yes' : 'No'],
-    ['Security', 'Core sandbox on; Node/preload off; isolated Desktop toolbar; external preview network blocked'],
+    [t('desktop.diagnostics.desktop_version'), app.getVersion()], [t('desktop.diagnostics.backend_mode'), MODES[mode]],
+    [t('desktop.diagnostics.core_version'), coreVersion], [buildLabel, coreBuild], [t('desktop.diagnostics.python_version'), pythonVersion],
+    [t('desktop.diagnostics.backend_url'), handoff.origin], [t('desktop.diagnostics.instance_id'), handoff.instance_id],
+    [t('desktop.diagnostics.platform'), `${process.platform} / ${process.arch}`],
+    [t('desktop.diagnostics.engines'), `${process.versions.electron} / ${process.versions.chrome} / ${process.versions.node}`],
+    [t('desktop.diagnostics.backend_process'), t(child && child.exitCode === null && child.signalCode === null ? 'desktop.diagnostics.running' : 'desktop.diagnostics.stopped')],
+    [t('desktop.diagnostics.renderer_process'), t(contents.isCrashed() ? 'desktop.diagnostics.crashed' : 'desktop.diagnostics.running')],
+    [t('desktop.diagnostics.browser_storage'), t(smoke ? 'desktop.diagnostics.storage_temporary' : 'desktop.diagnostics.storage_persistent')],
+    [t('desktop.diagnostics.profile_directory'), app.getPath('userData')], [t('desktop.diagnostics.port_settings'), settingsPath],
+    [t('desktop.diagnostics.log_file'), diagnostics.file], [t('desktop.diagnostics.log_writable'), t(diagnostics.available ? 'desktop.diagnostics.log_write_ok' : 'desktop.diagnostics.log_write_failed')],
+    [t('desktop.diagnostics.security'), t('desktop.diagnostics.security_detail')],
   ], events: diagnostics.snapshot() }), {
-    copyUrl: () => clipboard.writeText(connectionInfo.base_url),
+    copyUrl: () => clipboard.writeText(connectionInfo.base_url), i18n: language,
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { id: 'standterm', label: 'StandTerm', submenu: [
@@ -401,7 +401,7 @@ async function start() {
       commands.item('files'), commands.item('pip'),
       { type: 'separator' },
       { id: 'desktop-about', label: t('desktop.menu.about'), click: () => dialog.showMessageBox(win, {
-        type: 'info', title: t('desktop.menu.about'), message: `StandTerm Desktop ${app.getVersion()}`,
+        type: 'info', title: t('desktop.menu.about'), message: t('desktop.about.desktop_version', { version: app.getVersion() }),
         detail: aboutDetails, buttons: [t('desktop.common.ok')], noLink: true,
       }) },
       { label: t('desktop.menu.show'), click: showWindow },
@@ -424,22 +424,21 @@ async function start() {
       ...capture.menu().submenu,
     ] },
     diagnosticsMenu({ origin: handoff.origin, mode, instanceId: handoff.instance_id,
+      t,
       version: app.getVersion(), coreVersion: handoff.core_version, logger: diagnostics, persistent: !smoke,
       copyText: text => clipboard.writeText(text),
       openStatus: () => openStatus().catch(() => {
-        if (!win.isDestroyed()) dialog.showMessageBox(win, { type: 'warning', message: 'Could not open the diagnostics page.' });
+        if (!win.isDestroyed()) dialog.showMessageBox(win, { type: 'warning', message: t('desktop.diagnostics.open_failed') });
       }),
       openLogs: async () => {
         const error = await shell.openPath(diagnostics.directory);
-        if (error) await dialog.showMessageBox(win, { type: 'warning', message: 'Could not open the diagnostics folder.', detail: diagnostics.directory });
+        if (error) await dialog.showMessageBox(win, { type: 'warning', message: t('desktop.diagnostics.folder_failed'), detail: diagnostics.directory });
       },
       openTools: async () => {
         const opened = await openDeveloperTools(contents, async () => {
-          const answer = await dialog.showMessageBox(win, { type: 'warning', title: 'Developer Tools',
-            message: 'Open Developer Tools for this authenticated terminal UI?',
-            detail: 'Console code can read page data and operate connected terminals. Only run code you trust. '
-              + 'This opens a local frontend debugger, not a remote debugging port or a Node.js bridge.',
-            buttons: ['Cancel', 'Open Developer Tools'], defaultId: 0, cancelId: 0, noLink: true });
+          const answer = await dialog.showMessageBox(win, { type: 'warning', title: t('desktop.diagnostics.devtools_title'),
+            message: t('desktop.diagnostics.devtools_message'), detail: t('desktop.diagnostics.devtools_detail'),
+            buttons: [t('desktop.common.cancel'), t('desktop.diagnostics.devtools_open')], defaultId: 0, cancelId: 0, noLink: true });
           return answer.response === 1;
         });
         if (opened) diagnostics.write('devtools_opened');
@@ -448,15 +447,15 @@ async function start() {
   ]));
   const openExternal = createExternalOpener({ origin: handoff.origin, owner: contents,
     confirm: async url => {
-      const answer = await dialog.showMessageBox(win, { type: 'question', title: 'Open in default browser',
-        message: `Open ${new URL(url).host} in your default browser?`,
-        detail: `${url}\n\nThe browser uses its own login. StandTerm does not add its token or cookies.`,
-        buttons: ['Cancel', 'Open in browser'], defaultId: 0, cancelId: 0, noLink: true });
+      const answer = await dialog.showMessageBox(win, { type: 'question', title: t('desktop.external_browser.title'),
+        message: t('desktop.external_browser.message', { host: new URL(url).host }),
+        detail: t('desktop.external_browser.detail', { url }),
+        buttons: [t('desktop.common.cancel'), t('desktop.external_browser.open')], defaultId: 0, cancelId: 0, noLink: true });
       return answer.response === 1;
     },
     open: url => shell.openExternal(url),
-    notify: () => dialog.showMessageBox(win, { type: 'warning', message: 'Could not open the default browser.',
-      detail: 'Check the default HTTP/HTTPS browser in your operating system settings.' }),
+    notify: () => dialog.showMessageBox(win, { type: 'warning', message: t('desktop.external_browser.failed'),
+      detail: t('desktop.external_browser.failure_hint') }),
   });
   installFloatingWindows(win, handoff.origin, openExternal, contents, (result, owner) => {
     const completed = result.state === 'completed' && !!result.path;

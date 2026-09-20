@@ -13,8 +13,9 @@ Desktop copy and localization are planned in the
 Choose **StandTerm > Desktop language...** to select English or Traditional
 Chinese (Taiwan) for the next launch. The preference belongs to the Desktop
 profile; Core keeps its own language setting. Saving a choice does not restart
-StandTerm or interrupt recording. This initial coverage includes custom menus,
-toolbar labels and Agent help. Capture status, setup, recovery and other Desktop
+StandTerm or interrupt recording. Coverage includes custom menus, toolbar labels,
+Agent help, Browser Access, Diagnostics, About and external-browser confirmations.
+Capture status, setup, recovery and other Desktop
 text still use English; native role labels follow the platform.
 
 Edit reviewed messages in the table, then generate the independent shell
@@ -24,6 +25,9 @@ headless smoke runner checks both Desktop and Core catalogs. The toolbar DOM
 check, `desktop/test/toolbar-i18n-browser-smoke.py`, uses the existing Playwright
 development environment and mocked native IPC; it does not qualify native
 menus, dialogs or installers.
+`desktop/test/diagnostics-i18n-browser-smoke.py` checks the actual diagnostics
+HTML in both languages, including escaped display data and unchanged event JSON.
+It needs Node 22.12+; use `--node <executable>` to select a prepared runtime.
 
 ## macOS Apple Silicon evaluation
 

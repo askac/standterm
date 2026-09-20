@@ -4,6 +4,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const vm = require('node:vm');
+const { EventEmitter } = require('node:events');
+const { create } = require('../i18n.js');
 const { createDiagnostics, diagnosticsMenu, agentConnectionInfo, openDeveloperTools, MAX_LOG_BYTES } = require('../diagnostics.cjs');
 const { statusHtml } = require('../diagnostics-window.cjs');
 
@@ -30,6 +33,109 @@ test('diagnostics persist only bounded structured metadata, never payloads or cr
   assert.equal(exited.expected, true);
   assert.equal(Object.hasOwn(exited, 'exitCode'), false);
   assert.equal(Object.hasOwn(exited, 'port'), false);
+});
+
+test('both diagnostic languages preserve menu IDs, callbacks and literal backend URLs', t => {
+  const { logger } = fixture(t);
+  for (const locale of ['en', 'zh-TW']) {
+    const { t: translate } = create(locale), calls = [], copied = [];
+    const menu = diagnosticsMenu({ t: translate, origin: 'http://127.0.0.1:64487', mode: 'wsl',
+      instanceId: 'test-instance', version: '0.5.2', logger, persistent: true,
+      openLogs: () => calls.push('logs'), openTools: () => calls.push('tools'), openStatus: () => calls.push('status'),
+      copyText: value => copied.push(value) });
+    assert.equal(menu.id, 'diagnostics');
+    assert.equal(menu.label, translate('desktop.toolbar.menu_diagnostics'));
+    const item = id => menu.submenu.find(item => item.id === id);
+    item('diagnostics-status').click(); item('diagnostics-logs').click(); item('diagnostics-devtools').click();
+    item('diagnostics-copy-origin').click();
+    assert.deepEqual(calls, ['status', 'logs', 'tools']);
+    assert.deepEqual(copied, ['http://127.0.0.1:64487']);
+    assert.equal(item('diagnostics-origin').label, translate('desktop.diagnostics.origin', { origin: copied[0] }));
+    assert.equal(item('diagnostics-core-version').label, translate('desktop.about.core_version', { version: translate('desktop.about.unknown_version') }));
+    assert.ok(menu.submenu.some(item => item.label === translate('desktop.diagnostics.web_settings_persistent')));
+  }
+});
+
+test('diagnostic translations and raw events stay escaped in a scriptless snapshot', () => {
+  const event = { event: 'backend_ready', mode: 'wsl', code: 'ECONNREFUSED', value: '</pre><script>bad()</script>&' };
+  for (const locale of ['en', 'zh-TW']) {
+    const i18n = create(locale);
+    const html = statusHtml([['Literal label', '/tmp/<profile>&{value}']], [event], i18n);
+    assert.ok(html.includes(`<html lang="${locale}">`));
+    assert.ok(html.includes(i18n.t('desktop.diagnostics.title')));
+    assert.ok(html.includes('/tmp/&lt;profile&gt;&amp;{value}'));
+    assert.ok(html.includes('&quot;event&quot;:&quot;backend_ready&quot;'));
+    assert.ok(html.includes('ECONNREFUSED'));
+    assert.ok(!html.includes('<script'));
+    assert.ok(html.includes("default-src 'none'"));
+    assert.ok(statusHtml([], [], i18n).includes(i18n.t('desktop.diagnostics.no_events')));
+  }
+  const injected = statusHtml([], [], { locale: 'en" onload="bad()', t: () => '<img src=x onerror=bad()>&' });
+  assert.ok(injected.includes('<html lang="en">'));
+  assert.ok(!injected.includes('<img'));
+  assert.ok(injected.includes('&lt;img'));
+});
+
+test('translated diagnostic windows refresh through the same isolated scriptless route', async () => {
+  for (const locale of ['en', 'zh-TW']) {
+    const owner = new EventEmitter(); owner.isDestroyed = () => false;
+    let requestFilter, permission, device, snapshotCalls = 0, copied = 0;
+    const windows = [];
+    class Window extends EventEmitter {
+      constructor(options) {
+        super(); this.options = options; this.urls = []; this.destroyed = false;
+        this.webContents = new EventEmitter();
+        this.webContents.setWindowOpenHandler = handler => { this.openHandler = handler; };
+        windows.push(this);
+      }
+      isDestroyed() { return this.destroyed; }
+      destroy() { this.destroyed = true; this.emit('closed'); }
+      setMenu(menu) { this.menu = menu; }
+      async loadURL(url) { this.urls.push(url); }
+      show() {}
+      focus() {}
+    }
+    const isolated = {
+      setPermissionRequestHandler: handler => { permission = handler; },
+      setPermissionCheckHandler: handler => { isolated.permissionCheck = handler; },
+      setDevicePermissionHandler: handler => { device = handler; },
+      webRequest: { onBeforeRequest: handler => { requestFilter = handler; } },
+    };
+    const electron = { BrowserWindow: Window, Menu: { buildFromTemplate: template => template },
+      session: { fromPartition: (_partition, options) => { assert.equal(options.cache, false); return isolated; } } };
+    const api = { exports: {} };
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'diagnostics-window.cjs'), 'utf8'), {
+      require: name => name === 'electron' ? electron : require(name.startsWith('.') ? path.join(__dirname, '..', name) : name),
+      module: api,
+    });
+    const i18n = create(locale);
+    const show = api.exports.createStatusWindow(owner, () => ({ rows: [['Snapshot', ++snapshotCalls]], events: [] }),
+      { copyUrl: () => copied++, i18n });
+    const win = await show();
+    assert.equal(win.options.title, i18n.t('desktop.diagnostics.window_title'));
+    assert.equal(win.options.webPreferences.sandbox, true);
+    assert.equal(win.options.webPreferences.nodeIntegration, false);
+    assert.equal(win.options.webPreferences.preload, undefined);
+    assert.equal(win.menu[0].label, i18n.t('desktop.toolbar.menu_view'));
+    const [refresh, copy] = win.menu[0].submenu;
+    assert.equal(refresh.label, i18n.t('desktop.diagnostics.refresh'));
+    assert.equal(refresh.accelerator, 'CommandOrControl+R');
+    await refresh.click(); copy.click();
+    assert.equal(snapshotCalls, 2);
+    assert.equal(copied, 1);
+    assert.equal(await show(), win);
+    assert.equal(windows.length, 1);
+    assert.ok(decodeURIComponent(win.urls.at(-1)).includes(`<html lang="${locale}">`));
+    assert.equal(win.openHandler().action, 'deny');
+    for (const [url, blocked] of [[win.urls[0], false], ['https://example.com/', true], ['file:///private.txt', true]]) {
+      requestFilter({ url }, result => assert.equal(result.cancel, blocked));
+    }
+    permission(null, 'media', allowed => assert.equal(allowed, false));
+    assert.equal(isolated.permissionCheck(), false);
+    assert.equal(device(), false);
+    owner.emit('closed');
+    assert.equal(win.isDestroyed(), true);
+  }
 });
 
 test('diagnostic rotation is bounded and write failure does not block startup', t => {

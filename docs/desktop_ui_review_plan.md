@@ -12,11 +12,11 @@ acceptance remain separate. Browser acceptance is recorded in
 | --- | --- | --- | --- |
 | 0 — Complete | Clarify toolbar action feedback before localization. A resolved `false` now shows unavailable feedback; a rejected invocation reports an uncertain result without suggesting retry. | Small | Both original failures reproduced before the fix; renderer and command-guard checks passed. Each click invokes once, with no automatic replay or invented completion notice. |
 | 1 — Complete | Add a Desktop-owned language preference and catalog; pilot custom menus, toolbar labels and Agent help. | Medium | English default/fallback, `en` and `zh-TW`, malformed preference fallback, next-launch application, translated title/ARIA labels without losing SVGs, fixed command IDs, focus/origin guards and staging inclusion verified. Native acceptance remains order 4. |
-| 2 | Review and localize Capture, Browser Access and Diagnostics. Resolve the recording save-failure exit policy before the Capture portion. | Medium | Typed recording states, partial-file paths, cancel/default buttons, first-folder seeding, sensitive clipboard feedback and escaped diagnostic fields retain their contracts. Add combined save-failure plus close/quit coverage. |
+| 2 — Partial | Browser Access and Diagnostics are localized, including About and external-browser confirmations. Capture remains; resolve its save-failure exit policy first. | Medium | Sensitive clipboard feedback, fixed authorization actions, escaped diagnostic fields and literal event JSON verified in both languages. Capture still needs typed state, partial-file, folder-seeding and combined save-failure plus close/quit coverage. |
 | 3 | Localize setup, Core source selection, startup failure and recoverable environment cleanup. | Medium to large | Both languages work before Core is available. Cancellation waits for owned installers; stale confirmations do nothing; source switching, restart/session closure, retained files and recovery moves remain explicit. |
 | 4 | Complete Windows and macOS native acceptance and packaged asset checks. | Platform-dependent | Menus, native dialogs, narrow layouts, keyboard/ARIA labels, clipboard, setup and recovery are checked on each OS. Verify staged and packaged Desktop catalogs independently of the selected Core version. |
 
-The next implementation is Browser Access/Diagnostics and then Capture in order 2.
+The next implementation is Capture in order 2.
 Resolve the recording save-failure exit policy before changing its confirmation.
 Orders 1–3 should remain separate reviewable changes. First-run setup can move
 ahead of order 2 if onboarding becomes the priority; it is not required to prove
@@ -68,8 +68,8 @@ Keep these implementation boundaries:
 
 [desktop_ui_copy_review.tsv](desktop_ui_copy_review.tsv) is a prioritized seed
 inventory, not a claim that every Desktop string has been extracted. It uses
-the same nine columns as the browser table. After the pilot, 50 rows are
-`translation-reviewed` with English and Traditional Chinese text; 20 workflow
+the same nine columns as the browser table. After Browser Access/Diagnostics,
+126 rows are `translation-reviewed` with English and Traditional Chinese text; 17 workflow
 rows remain `proposed` with empty `zh-TW` cells. Some `current_en` cells are exact fragments or normalize
 dynamic values to named placeholders; `context` identifies these cases.
 
@@ -146,7 +146,43 @@ remaining gap in the new preference, DOM and command tests.
 No policy was reopened. Core's independent language preference and the existing
 recording-exit behavior remain intact. Native OS qualification is still order 4.
 
+## Browser Access and Diagnostics review
+
+The second implementation batch adds 76 reviewed bilingual messages. Browser
+authorization notices describe opening a link, without claiming the browser
+completed authorization. Copying a token/access URL still makes no grant request;
+creating an authorization link still requires the existing confirmation. The
+warning retains sensitive URL handling, browser history and replacement of the
+previous unused link. Exceptions still produce a sanitized notice.
+
+Diagnostics localizes menus, runtime field labels/states and explanatory text.
+Version strings, paths, bundle hashes, instance IDs, backend origins and event
+JSON remain literal data. The diagnostic HTML still has no scripts; every
+translated string and displayed value is escaped at the final HTML boundary.
+About and external-browser confirmations share these display conventions.
+
+| Finding | Severity | Evidence | Critic remedy | Main response | Resolution | Validation |
+| --- | --- | --- | --- | --- | --- | --- |
+| “Log writable” implies a live filesystem check | Low | `createDiagnostics.available` starts true and tracks write outcomes | Describe write status, not present writability | Use “Log write status” with “No write error reported” / “Write failed” | Accept | Existing log-failure tests and localized display reviewed; flag semantics unchanged. |
+| An opened authorization link does not prove completed authorization | Correctness boundary | `createBrowserAccess.run` awaits the OS open callback | Keep link-open feedback distinct from authorization | Applied reviewed copy; no request or permission changes | Accept | Both locales exercise four actions, exact payloads/request counts, cancellation and sanitized exceptions. |
+| Translation must not introduce markup or change diagnostic exports | Correctness boundary | `statusHtml` and structured logger | Escape all display content; retain raw event JSON and CSP | No event translation layer or renderer scripts added | Accept | Malicious translation/data tests, isolated window callbacks and real browser DOM checks passed. |
+
+The critic's focused second pass found no remaining material issue. It also
+checked that Browser Access, DevTools and external-browser confirmations retain
+`response === 1`, default/cancel index 0 and the original sensitive-data boundaries.
+Native dialog layout and interaction are still part of order 4.
+
 ## Evidence and acceptance limits
+
+Browser Access/Diagnostics completed on 2026-09-20:
+
+- All 115 Desktop unit tests passed under Electron's Node 24.20.0 runtime.
+- Seven catalog regression tests and both catalog freshness checks passed.
+- The actual diagnostics HTML passed headless Chromium checks in both locales
+  at 640px: translated headings/labels, raw paths and JSON, empty-state copy,
+  escaped markup, no external requests and no horizontal overflow.
+- No native OS GUI or installer acceptance is claimed. The new messages use
+  the catalog already included by the existing staging and builder rules.
 
 Order 1 completed on 2026-09-20 with 50 reviewed bilingual messages:
 
@@ -184,7 +220,7 @@ inspection of Capture/setup/recovery does not imply their smoke suites ran in
 this review.
 
 The review table is checked using `build_ui_messages.build_catalog` for schema,
-keys, placeholders and review gates. Only the 50 reviewed pilot rows enter the
+keys, placeholders and review gates. Only the 126 reviewed rows enter the
 Desktop runtime catalog; the remaining workflow proposals stay out of it.
 Windows/macOS native localization, installer lifecycle and packaged acceptance
 remain future work. This plan does not qualify or publish a release.
