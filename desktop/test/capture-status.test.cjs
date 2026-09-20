@@ -6,8 +6,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
+const { create } = require('../i18n.js');
 
-function fixture() {
+function fixture(locale = 'en') {
   const filename = path.join(__dirname, '..', 'capture.cjs');
   const localRequire = createRequire(filename);
   let now = 13000, status, diagnostic, message;
@@ -18,7 +19,7 @@ function fixture() {
   vm.runInNewContext(fs.readFileSync(filename, 'utf8'), context);
   const capture = Object.create(context.module.exports.DesktopCapture.prototype);
   Object.assign(capture, {
-    state: 'recording', job: { startedAt: 1000 },
+    t: create(locale).t, state: 'recording', job: { startedAt: 1000 },
     onChange: (_title, state) => { status = state; },
     onDiagnostic: state => { diagnostic = state; },
     notify: async value => { message = value; },
@@ -48,7 +49,18 @@ test('failed capture reports only window metadata and releases the screenshot ac
   assert.deepEqual(JSON.parse(JSON.stringify(f.diagnostic())), {
     width: 624, height: 561, visible: true, minimized: false, focused: true,
   });
-  assert.match(f.message(), /foreground and retry/);
+  assert.equal(f.message(), create('en').t('desktop.capture.capture_failed'));
   assert.ok(!f.message().includes('sensitive fixture'));
   assert.equal(f.capture.screenshotBusy, false);
+});
+
+test('translated status preserves typed recording state and raw clock values', () => {
+  const f = fixture('zh-TW');
+  for (const [state, key] of [['recording', 'status_recording'], ['paused', 'status_paused'],
+    ['starting', 'status_starting'], ['stopping', 'status_saving'], ['idle', 'status_idle']]) {
+    f.capture.state = state;
+    f.capture.update();
+    assert.equal(f.status().state, state);
+    assert.equal(f.status().label, f.capture.t(`desktop.capture.${key}`, { time: '00:12' }));
+  }
 });

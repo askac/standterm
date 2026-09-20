@@ -47,11 +47,15 @@ def run():
                         const box = el.getBoundingClientRect(); return box.width > 0 && box.x >= 0 && box.right <= innerWidth;
                     })""")
                 for state, key in [('recording', 'record_pause'), ('paused', 'record_resume')]:
-                    page.evaluate("state => fixture.receive({state, label:'Fixture 00:04'})", state)
+                    label = page.evaluate("({locale,state}) => StandTermDesktopI18n.create(locale).t('desktop.capture.status_' + state, {time:'00:04'})", dict(locale=locale, state=state))
+                    page.evaluate("({state,label}) => fixture.receive({state,label})", dict(state=state, label=label))
                     expected = page.evaluate("({locale,key}) => StandTermDesktopI18n.create(locale).t('desktop.toolbar.' + key)", dict(locale=locale, key=key))
                     assert page.locator('#pause').get_attribute('title') == expected
                     assert page.locator('#pause').get_attribute('aria-label') == expected
-                    assert page.locator('#recording-status').text_content() == 'Fixture 00:04'
+                    assert page.locator('#recording-status').text_content() == label
+                    layout = page.evaluate("""() => [...document.querySelectorAll('#capture-tools button')]
+                        .filter(el => !el.hidden).map(el => ({id:el.id, right:el.getBoundingClientRect().right, width:innerWidth}))""")
+                    assert all(item['right'] <= item['width'] for item in layout), (locale, state, layout)
                 page.evaluate("fixture.receive({state:'idle'}); fixture.result = false")
                 page.click('#save')
                 expected = page.evaluate("locale => StandTermDesktopI18n.create(locale).t('desktop.toolbar.action_unavailable')", locale)

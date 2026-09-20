@@ -12,15 +12,14 @@ acceptance remain separate. Browser acceptance is recorded in
 | --- | --- | --- | --- |
 | 0 — Complete | Clarify toolbar action feedback before localization. A resolved `false` now shows unavailable feedback; a rejected invocation reports an uncertain result without suggesting retry. | Small | Both original failures reproduced before the fix; renderer and command-guard checks passed. Each click invokes once, with no automatic replay or invented completion notice. |
 | 1 — Complete | Add a Desktop-owned language preference and catalog; pilot custom menus, toolbar labels and Agent help. | Medium | English default/fallback, `en` and `zh-TW`, malformed preference fallback, next-launch application, translated title/ARIA labels without losing SVGs, fixed command IDs, focus/origin guards and staging inclusion verified. Native acceptance remains order 4. |
-| 2 — Partial | Browser Access and Diagnostics are localized, including About and external-browser confirmations. Capture remains; resolve its save-failure exit policy first. | Medium | Sensitive clipboard feedback, fixed authorization actions, escaped diagnostic fields and literal event JSON verified in both languages. Capture still needs typed state, partial-file, folder-seeding and combined save-failure plus close/quit coverage. |
+| 2 — Complete | Localize Browser Access, Diagnostics, About, external-browser confirmations and Capture; retain the window when recording save fails during close/quit. | Medium | Sensitive clipboard feedback, fixed authorization actions, escaped diagnostic fields, literal event JSON, typed Capture state, folder settings and combined save-failure plus close/quit coverage verified. |
 | 3 | Localize setup, Core source selection, startup failure and recoverable environment cleanup. | Medium to large | Both languages work before Core is available. Cancellation waits for owned installers; stale confirmations do nothing; source switching, restart/session closure, retained files and recovery moves remain explicit. |
 | 4 | Complete Windows and macOS native acceptance and packaged asset checks. | Platform-dependent | Menus, native dialogs, narrow layouts, keyboard/ARIA labels, clipboard, setup and recovery are checked on each OS. Verify staged and packaged Desktop catalogs independently of the selected Core version. |
 
-The next implementation is Capture in order 2.
-Resolve the recording save-failure exit policy before changing its confirmation.
-Orders 1–3 should remain separate reviewable changes. First-run setup can move
-ahead of order 2 if onboarding becomes the priority; it is not required to prove
-the small localization pilot.
+The next implementation is setup and Core source/recovery in order 3.
+The operator chose to retain the window and show the error and unfinished-file
+location when recording save fails during close/quit. Orders 1–3 remain separate
+reviewable changes; native OS acceptance remains order 4.
 
 ## Difficulty and design choices
 
@@ -68,9 +67,10 @@ Keep these implementation boundaries:
 
 [desktop_ui_copy_review.tsv](desktop_ui_copy_review.tsv) is a prioritized seed
 inventory, not a claim that every Desktop string has been extracted. It uses
-the same nine columns as the browser table. After Browser Access/Diagnostics,
-126 rows are `translation-reviewed` with English and Traditional Chinese text; 17 workflow
-rows remain `proposed` with empty `zh-TW` cells. Some `current_en` cells are exact fragments or normalize
+the same nine columns as the browser table. After Capture,
+170 rows are `translation-reviewed` with English and Traditional Chinese text;
+11 setup/Core source rows remain `proposed` with empty `zh-TW` cells. One retired
+Capture sentence fragment is marked `remove`. Some `current_en` cells are exact fragments or normalize
 dynamic values to named placeholders; `context` identifies these cases.
 
 Approve the English behavior and terminology before requesting translations of
@@ -115,7 +115,7 @@ proposals, not implementation authorization.
 | --- | --- | --- | --- | --- | --- | --- |
 | Rejected toolbar invocation encourages retry despite an uncertain outcome | Low | `toolbar.js` click handler; `toolbar-notice.test.cjs` rejection case | Clarify result and avoid replay | Use “Could not confirm the action result. Check the current state.” | Modify; order 0 | Add assertion that invocation occurs once and the unknown-result notice appears. |
 | Explicit toolbar rejection has no notice | Low; main-review addition | `toolbar.cjs` handler returns `false`; renderer only catches exceptions | Complement exception handling | Handle exactly `false`; do not infer completion from truthiness or message content | Accept; order 0 | Cover explicit rejection, exception and successful operation separately. |
-| Stop/save failure still permits close or quit | Medium | `capture.cjs:confirmStop` awaits `stop()` then returns true; `main.cjs` close and before-quit handlers | Do not promise a successful save before leaving | Current copy proposal says “attempt to save”; retaining the window on failure is a separate behavior decision | Policy before order 2 | Existing capture smoke checks partial output and successful confirmation separately; combined failure plus exit coverage is missing. |
+| Stop/save failure still permits close or quit | Medium | Original `capture.cjs:confirmStop` awaited `stop()` then returned true | Retain the window when saving fails | Operator approved retaining the window and showing error/file locations | Resolved in Capture batch below | Combined failure, close/quit and concurrent-dialog coverage now passes. |
 | Capture folder hint sounds global | Low | `capture.cjs:chooseDirectory`; `capture-settings.cjs:set` | Describe per-format preference | Preserve first-selection seeding of the other unset format; do not claim preferences are completely independent | Modify; order 2 | Cover initial seeding and later independent PNG/WebM changes. |
 | Localization could alter command or renderer boundaries | Integration constraint | `ui-commands.cjs:UI_ACTIONS`; `toolbar.cjs` sender and asset guards | Preserve structural commands and strict assets | Accept as invariants, not findings of a current bypass | Accept; order 1 | Existing guard tests plus explicit asset and localized-label cases. |
 | Independent Desktop locale adds a second preference | Product tradeoff | Pre-Core setup/recovery; independently selectable Core source | Consider shared/advisory locale | Recommend independence for startup coverage; validated advisory locale is a feasible alternative | Policy; recommended for order 1 | Test missing/malformed preference and unavailable/older Core. |
@@ -143,8 +143,9 @@ remaining gap in the new preference, DOM and command tests.
 | Save can finish before its notification fails | Validation boundary | `language.cjs:choose` persists before notification | Verify saved choice survives notification failure | Keep uncertain-result wording and the stored selection | Accept | Lost-notification test plus reopening the chooser passed. |
 | Labels must not change action or target dispatch | Correctness boundary | `ui-commands.cjs` action and snapshot target | Test both locales with unchanged dispatch values | Retained existing guards | Accept | Typed command/terminal ID, invalid display-label dispatch and focus tests passed. |
 
-No policy was reopened. Core's independent language preference and the existing
-recording-exit behavior remain intact. Native OS qualification is still order 4.
+The pilot preserved Core's independent language preference and recording-exit
+behavior. The later Capture batch changes the exit policy with operator approval.
+Native OS qualification is still order 4.
 
 ## Browser Access and Diagnostics review
 
@@ -171,6 +172,44 @@ The critic's focused second pass found no remaining material issue. It also
 checked that Browser Access, DevTools and external-browser confirmations retain
 `response === 1`, default/cancel index 0 and the original sensitive-data boundaries.
 Native dialog layout and interaction are still part of order 4.
+
+## Capture review and evidence
+
+The operator-approved contract cancels the current close/quit when recording
+save fails or cannot be confirmed. Desktop restores/shows the window and displays
+a persistent error dialog with the original error and available unfinished-file
+and requested-destination paths. It does not automatically retry. Once recording
+is inactive and the dialog is dismissed, a later explicit close/quit is allowed;
+this is not a permanent exit lock. A canceled recording folder chooser is not a
+save failure.
+
+The batch adds 44 reviewed bilingual messages for Capture settings, menus,
+recording state, notifications and whole close/quit prompts. The old grammatical
+`{action}` fragment is retired. Action IDs and numeric dialog responses remain
+structural; paths and lower-level recorder/file errors remain literal data.
+Folder selection still seeds the other format only when that preference is unset.
+
+| Finding | Severity | Evidence | Critic remedy | Main response | Resolution | Validation |
+| --- | --- | --- | --- | --- | --- | --- |
+| Startup/background failure can clear the job before confirmation observes it | High | `begin`, `stop`, `finish` and pending confirmation lifetime | Preserve the original job outcome across awaits | Save structured results on the job and propagate startup failure; reject stale replacement jobs | Accept | Startup failure, background completion, canceled chooser and stale/duplicate confirmation tests pass. |
+| A notification exception can obscure a saved result or reach generic process exit | High | Publication precedes notification; before-quit generic exception path exits | Separate file outcome from notification; reject uncertain quit | Store result before notification, treat notification as best effort and make quit rejection keep the app running | Accept | Notification/dialog rejection, single publication and actual main shutdown callback tests pass. |
+| Final and partial paths can both exist after partial-link cleanup fails | Medium | Hard-link publication precedes partial unlink | Avoid claiming the destination is absent | Show a requested destination without asserting save completion; preserve both files | Accept | Real temporary-file test verifies both paths retain bytes after an injected unlink failure. |
+
+The critic's focused second pass found no remaining material race or premature
+exit issue. Main review also blocks repeated close events while the failure
+dialog is pending. Native dialog readability remains unqualified.
+
+Capture completed on 2026-09-20:
+
+- All 133 Desktop unit tests passed under Electron's Node 24.20.0 runtime.
+- Seven catalog regression tests and both catalog freshness checks passed.
+- The real toolbar DOM passed in both locales at 640px, including active/paused
+  labels, pause/resume ARIA and visible capture controls. The paused English case
+  initially placed the stop button about 29px outside the viewport; reducing the
+  existing compact button padding fixes this without shortening state text.
+- Native IPC is mocked in the DOM test. No native OS dialog, encoder smoke or
+  installer acceptance was run for this batch. Capture permissions, recorder
+  isolation and automatic finalization on hide/minimize/navigation are unchanged.
 
 ## Evidence and acceptance limits
 
@@ -220,7 +259,7 @@ inspection of Capture/setup/recovery does not imply their smoke suites ran in
 this review.
 
 The review table is checked using `build_ui_messages.build_catalog` for schema,
-keys, placeholders and review gates. Only the 126 reviewed rows enter the
+keys, placeholders and review gates. Only the 170 reviewed rows enter the
 Desktop runtime catalog; the remaining workflow proposals stay out of it.
 Windows/macOS native localization, installer lifecycle and packaged acceptance
 remain future work. This plan does not qualify or publish a release.

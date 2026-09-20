@@ -14,8 +14,8 @@ Choose **StandTerm > Desktop language...** to select English or Traditional
 Chinese (Taiwan) for the next launch. The preference belongs to the Desktop
 profile; Core keeps its own language setting. Saving a choice does not restart
 StandTerm or interrupt recording. Coverage includes custom menus, toolbar labels,
-Agent help, Browser Access, Diagnostics, About and external-browser confirmations.
-Capture status, setup, recovery and other Desktop
+Agent help, Browser Access, Diagnostics, About, external-browser confirmations
+and Capture dialogs/status. Setup, recovery and other Desktop
 text still use English; native role labels follow the platform.
 
 Edit reviewed messages in the table, then generate the independent shell
@@ -484,9 +484,9 @@ layout is shared with Core Web and does not change approval policy or payloads.
 Use the direct capture buttons in the Desktop toolbar. Capture shortcuts are
 also available under **View**; there is no separate Capture dropdown:
 
-- **Copy screenshot** (Ctrl/Cmd+Alt+S): PNG to the OS clipboard.
+- **Copy screenshot to clipboard** (Ctrl/Cmd+Alt+S): PNG to the OS clipboard.
 - **Save screenshot (PNG)**: save directly to the configured screenshot folder.
-- **Start recording (WebM)**: record directly to the configured recording folder.
+- **Start recording (WebM, no audio)**: record directly to the configured recording folder.
 - **Pause / resume recording**: suspend capture without finishing the file.
 - **Stop and save recording** (Ctrl/Cmd+Alt+R): finalize the silent WebM.
 
@@ -498,7 +498,12 @@ while recording records the newly visible tab as well.
 
 The native title and Desktop toolbar show recording status and elapsed active
 recording time. The stop button remains available while paused. Closing
-or quitting asks whether to keep recording or stop and save. Hiding, minimizing,
+or quitting asks whether to keep the window open or stop and save. If saving
+fails or its result cannot be confirmed, Desktop cancels that close/quit,
+keeps the window open and shows an error dialog with the original error and
+available unfinished-file and requested-destination paths. Dismissing the error
+does not retry saving; a later explicit close/quit is allowed once recording is
+inactive. Hiding, minimizing,
 reloading or entering fullscreen stops and saves automatically, because hidden
 pages can stop producing frames or hide the indicator. Leave fullscreen before
 starting a recording; maximizing is supported.
@@ -516,7 +521,9 @@ varies between players because this prototype does not rewrite container indexes
 Successful output is published without overwriting existing files or copying the
 video a second time. This currently requires a filesystem with hard-link support
 (for example NTFS or ext4); choose a local supported drive rather than FAT/exFAT.
-If publication fails, the error reports the retained partial file. Unix files
+If publication fails, the error reports the retained partial file. If publication
+succeeds but removing the partial link fails, both paths may exist; a requested
+destination in an error does not imply a confirmed save. Unix files
 are created with mode `0600`; Windows access follows the destination directory's
 ACL. Screenshot files use the same no-overwrite publication policy.
 

@@ -335,7 +335,7 @@ async function start() {
     if (!win.isDestroyed()) win.setTitle(`${captureTitle ? `[${captureTitle}] ` : ''}${MODES[mode]} - ${pageTitle}`);
   };
   capture = new DesktopCapture(win, {
-    contents,
+    contents, t,
     onDiagnostic: state => diagnostics.write('capture_failed', state),
     onChange: (value, state) => { captureTitle = value; updateTitle(); toolbar?.send(state); },
     notify: async (message, error) => toolbar?.notify(message, error),
@@ -477,11 +477,11 @@ async function start() {
   });
   contents.on('will-attach-webview', event => event.preventDefault());
   win.on('close', event => {
-    if (capture.active) {
+    if (capture.active || capture.confirming || closePending) {
       event.preventDefault();
       if (!quitting && !closePending) {
         closePending = true;
-        capture.confirmStop('closing the window').then(allowed => {
+        capture.confirmStop('close').then(allowed => {
           closePending = false;
           if (allowed) win.close();
         }).catch(() => { closePending = false; });
@@ -572,8 +572,8 @@ app.on('before-quit', event => {
   diagnostics.write('shutdown');
   (async () => {
     if (!await confirmSetupQuit()) { restartRequest = null; quitting = false; return; }
-    if (capture?.active) {
-      const allowed = smoke ? (await capture.stop(), true) : await capture.confirmStop('quitting StandTerm');
+    if (capture?.active || capture?.confirming) {
+      const allowed = smoke ? (await capture.stop(), true) : await capture.confirmStop('quit').catch(() => false);
       if (!allowed) { restartRequest = null; quitting = false; return; }
     }
     cancelSetup();
