@@ -2,7 +2,8 @@
 
 Review date: 2026-09-20. The initial review inventories Desktop copy, reviews
 behavior and orders implementation. Completed implementation steps are recorded
-below; a Desktop language setting is not yet enabled. Browser acceptance is recorded separately in
+below. The Desktop language pilot is available; broader translation and native
+acceptance remain separate. Browser acceptance is recorded in
 [browser_ui_acceptance.md](browser_ui_acceptance.md).
 
 ## Recommended implementation order
@@ -10,12 +11,13 @@ below; a Desktop language setting is not yet enabled. Browser acceptance is reco
 | Order | Deliverable | Relative effort | Completion evidence |
 | --- | --- | --- | --- |
 | 0 — Complete | Clarify toolbar action feedback before localization. A resolved `false` now shows unavailable feedback; a rejected invocation reports an uncertain result without suggesting retry. | Small | Both original failures reproduced before the fix; renderer and command-guard checks passed. Each click invokes once, with no automatic replay or invented completion notice. |
-| 1 | Add a Desktop-owned language preference and catalog; pilot custom menus, toolbar labels and Agent help. | Medium | English default/fallback, `en` and `zh-TW`, malformed preference fallback, next-launch application, translated title/ARIA labels without losing SVGs, fixed command IDs, focus/origin guards and explicit packaged asset inventory. |
+| 1 — Complete | Add a Desktop-owned language preference and catalog; pilot custom menus, toolbar labels and Agent help. | Medium | English default/fallback, `en` and `zh-TW`, malformed preference fallback, next-launch application, translated title/ARIA labels without losing SVGs, fixed command IDs, focus/origin guards and staging inclusion verified. Native acceptance remains order 4. |
 | 2 | Review and localize Capture, Browser Access and Diagnostics. Resolve the recording save-failure exit policy before the Capture portion. | Medium | Typed recording states, partial-file paths, cancel/default buttons, first-folder seeding, sensitive clipboard feedback and escaped diagnostic fields retain their contracts. Add combined save-failure plus close/quit coverage. |
 | 3 | Localize setup, Core source selection, startup failure and recoverable environment cleanup. | Medium to large | Both languages work before Core is available. Cancellation waits for owned installers; stale confirmations do nothing; source switching, restart/session closure, retained files and recovery moves remain explicit. |
 | 4 | Complete Windows and macOS native acceptance and packaged asset checks. | Platform-dependent | Menus, native dialogs, narrow layouts, keyboard/ARIA labels, clipboard, setup and recovery are checked on each OS. Verify staged and packaged Desktop catalogs independently of the selected Core version. |
 
-The next implementation is the language preference and small pilot in order 1.
+The next implementation is Browser Access/Diagnostics and then Capture in order 2.
+Resolve the recording save-failure exit policy before changing its confirmation.
 Orders 1–3 should remain separate reviewable changes. First-run setup can move
 ahead of order 2 if onboarding becomes the priority; it is not required to prove
 the small localization pilot.
@@ -28,19 +30,21 @@ scriptless diagnostics. A complete Desktop rollout has moderate implementation
 cost and broader acceptance cost than the toolbar pilot. The estimates above
 are relative scope assessments, not measured delivery times.
 
-Recommend storing the Desktop language in the existing profile's `userData`,
+The pilot stores the Desktop language in `language.json` under the existing profile's `userData`,
 with English as default and only `en` / `zh-TW` initially. Apply a change on the
 next launch; changing language should not itself restart StandTerm or stop a
 recording. Keep the existing Core browser preference independent. This covers
 setup and recovery before Core starts, at the cost of two language preferences.
-It is a proposed product choice, not a security requirement. A validated
+It is a product choice, not a security requirement. A validated
 two-value advisory preference from Core is also feasible, but needs startup,
 origin and older-Core fallback rules. Automatic OS-language selection is deferred.
 
 Ship the Desktop catalog with the shell. Do not depend on the selected bundled
 or Git Core supplying compatible renderer scripts. Reuse the existing TSV
-schema and validation rules; extend generator support minimally when integration
-starts. Do not add the Desktop rows to the Core runtime catalog.
+schema and validation rules. `build_ui_messages.py --desktop` produces
+`desktop/messages.js`; the default command still produces only Core's catalog.
+The headless smoke runner checks both targets. Do not add the Desktop rows to
+the Core runtime catalog.
 
 Keep these implementation boundaries:
 
@@ -64,11 +68,13 @@ Keep these implementation boundaries:
 
 [desktop_ui_copy_review.tsv](desktop_ui_copy_review.tsv) is a prioritized seed
 inventory, not a claim that every Desktop string has been extracted. It uses
-the same nine columns as the browser table. All initial rows are `proposed`;
-`zh-TW` is empty. Some `current_en` cells are exact fragments or normalize
+the same nine columns as the browser table. After the pilot, 50 rows are
+`translation-reviewed` with English and Traditional Chinese text; 20 workflow
+rows remain `proposed` with empty `zh-TW` cells. Some `current_en` cells are exact fragments or normalize
 dynamic values to named placeholders; `context` identifies these cases.
 
-Approve the English behavior and terminology before requesting translations.
+Approve the English behavior and terminology before requesting translations of
+the remaining proposed rows. Keep already reviewed rows unchanged.
 An external translation AI should return the same keys/order/columns, fill only
 `zh-TW`, preserve placeholders and literal identifiers, and keep `status`
 unchanged. Human/source review promotes rows to `translation-reviewed`; a
@@ -122,7 +128,43 @@ limited public Agent Info, per-tab permission instructions, exact renderer
 allowlists and recoverable cleanup. No discovery expansion is needed for
 Desktop localization.
 
+## Pilot review and evidence
+
+The independent implementation review accepted the preference lifetime, numeric
+dialog responses, typed commands and exact renderer asset boundaries. Its only
+copy finding changed the language dialog from “Some Desktop dialogs remain in
+English” to “Some Desktop text remains in English”: recording status and some
+menus are also outside this pilot. The focused second pass found no material
+remaining gap in the new preference, DOM and command tests.
+
+| Finding | Severity | Evidence | Critic remedy | Main response | Resolution | Validation |
+| --- | --- | --- | --- | --- | --- | --- |
+| Partial coverage disclosure mentions dialogs only | Low | `toolbar.js` preserves raw capture status; View retains capture menu labels | Say some Desktop text remains English | Applied to both languages | Accept | Reviewed TSV and regenerated catalog. |
+| Save can finish before its notification fails | Validation boundary | `language.cjs:choose` persists before notification | Verify saved choice survives notification failure | Keep uncertain-result wording and the stored selection | Accept | Lost-notification test plus reopening the chooser passed. |
+| Labels must not change action or target dispatch | Correctness boundary | `ui-commands.cjs` action and snapshot target | Test both locales with unchanged dispatch values | Retained existing guards | Accept | Typed command/terminal ID, invalid display-label dispatch and focus tests passed. |
+
+No policy was reopened. Core's independent language preference and the existing
+recording-exit behavior remain intact. Native OS qualification is still order 4.
+
 ## Evidence and acceptance limits
+
+Order 1 completed on 2026-09-20 with 50 reviewed bilingual messages:
+
+- All 110 Desktop unit tests passed under Electron's Node 24.20.0 runtime.
+- Seven catalog regression tests passed, including independent Desktop output
+  and stale detection without changing Core output. Both generated catalogs
+  passed their freshness checks.
+- The real toolbar DOM passed in English and Traditional Chinese at 640px:
+  labels, ARIA, SVG preservation, typed recording state, literal notices,
+  failure feedback without replay and unknown-locale fallback. Native IPC was
+  mocked in this headless Chromium check.
+- The actual staging script copied the new catalog/helper/preferences module.
+  Their bytes matched the source; the staged catalog loaded independently, and
+  the builder's inclusion rules covered all three files. No installer was built.
+
+The restricted sandbox initially blocked Chromium startup and a Git subprocess
+used by the full Desktop suite. The same checks passed after running outside
+that process restriction. This was an environment failure, not a product fix.
 
 Order 0 completed on 2026-09-20. Before the renderer change, regression tests
 reproduced both the missing explicit-rejection notice and the misleading retry
@@ -142,7 +184,7 @@ inspection of Capture/setup/recovery does not imply their smoke suites ran in
 this review.
 
 The review table is checked using `build_ui_messages.build_catalog` for schema,
-keys and placeholders, plus an assertion that all rows are proposed and all
-Traditional Chinese cells remain empty. No runtime catalog is generated.
+keys, placeholders and review gates. Only the 50 reviewed pilot rows enter the
+Desktop runtime catalog; the remaining workflow proposals stay out of it.
 Windows/macOS native localization, installer lifecycle and packaged acceptance
 remain future work. This plan does not qualify or publish a release.

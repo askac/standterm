@@ -132,6 +132,33 @@ class UiMessagesSmoke(unittest.TestCase):
         self.assertNotEqual(output.read_bytes(), original)
         self.assertEqual(invoke('--check').returncode, 0)
 
+    def test_desktop_cli_targets_its_own_catalog_without_touching_core(self):
+        root = Path(self.directory.name)
+        script = root / 'scripts' / BUILDER.name
+        source = root / 'docs' / 'desktop_ui_copy_review.tsv'
+        output = root / 'desktop' / 'messages.js'
+        core_output = root / 'static' / 'js' / 'standterm-messages.js'
+        for path in (script, source, output, core_output):
+            path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(BUILDER, script)
+        core_output.write_text('Core fixture stays unchanged', encoding='utf-8')
+        write_table(source, [message(status='translation-reviewed', **{'zh-TW': 'Translated'})])
+
+        def invoke(*args):
+            return subprocess.run([sys.executable, str(script), '--desktop', *args],
+                                  capture_output=True, text=True, timeout=10, check=False)
+
+        self.assertEqual(invoke('--check').returncode, 1)
+        result = invoke()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        original = output.read_bytes()
+        self.assertIn(b'root.StandTermDesktopMessages', original)
+        self.assertEqual(invoke('--check').returncode, 0)
+        write_table(source, [message(en='Changed')])
+        self.assertEqual(invoke('--check').returncode, 1)
+        self.assertEqual(output.read_bytes(), original)
+        self.assertEqual(core_output.read_text(encoding='utf-8'), 'Core fixture stays unchanged')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -10,6 +10,21 @@ Desktop copy and localization are planned in the
 [review plan](../docs/desktop_ui_review_plan.md), with a separate
 [translation review table](../docs/desktop_ui_copy_review.tsv).
 
+Choose **StandTerm > Desktop language...** to select English or Traditional
+Chinese (Taiwan) for the next launch. The preference belongs to the Desktop
+profile; Core keeps its own language setting. Saving a choice does not restart
+StandTerm or interrupt recording. This initial coverage includes custom menus,
+toolbar labels and Agent help. Capture status, setup, recovery and other Desktop
+text still use English; native role labels follow the platform.
+
+Edit reviewed messages in the table, then generate the independent shell
+catalog with `python scripts/build_ui_messages.py --desktop` from the repository
+root. Add `--check` to detect a stale catalog without writing. The regular
+headless smoke runner checks both Desktop and Core catalogs. The toolbar DOM
+check, `desktop/test/toolbar-i18n-browser-smoke.py`, uses the existing Playwright
+development environment and mocked native IPC; it does not qualify native
+menus, dialogs or installers.
+
 ## macOS Apple Silicon evaluation
 
 The arm64 DMG contains `StandTermDesktop.app`, Electron and the verified Core

@@ -7,11 +7,12 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 
-function fixture(platform = 'win32') {
+function fixture(platform = 'win32', locale = 'en') {
   let handler, requestFilter, permission, device, popup = 0, calls = 0, focused;
   const edits = [];
+  const sent = [];
   const contents = new EventEmitter();
-  Object.assign(contents, { mainFrame: {}, isDestroyed: () => false, send: () => {}, setWindowOpenHandler: () => {},
+  Object.assign(contents, { mainFrame: {}, isDestroyed: () => false, send: (_channel, value) => sent.push(value), setWindowOpenHandler: () => {},
     session: { setPermissionRequestHandler: fn => { permission = fn; }, setPermissionCheckHandler: () => {},
       setDevicePermissionHandler: fn => { device = fn; }, webRequest: { onBeforeRequest: fn => { requestFilter = fn; } } } });
   const win = new EventEmitter();
@@ -24,18 +25,18 @@ function fixture(platform = 'win32') {
     ipcMain: { handle: (_name, fn) => { handler = fn; }, removeHandler: () => { handler = null; } },
     Menu: { getApplicationMenu: () => ({ getMenuItemById: () => ({ submenu: { popup: () => { popup++; } } }) }) } };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'toolbar.cjs'), 'utf8'), {
-    require: name => name === 'electron' ? electron : require(name), module: api,
+    require: name => name === 'electron' ? electron : require(name.startsWith('.') ? path.join(__dirname, '..', name) : name), module: api,
     __dirname: path.join(__dirname, '..'), process: { platform },
   });
   const capture = { screenshot: async () => { calls++; }, start: async () => { calls++; },
     togglePause: async () => { calls++; }, stop: async () => { calls++; } };
   const toolbar = api.exports.installToolbar(win, core, capture, {
     refresh: async () => {}, edit: action => { edits.push(action); return true; },
-  });
+  }, locale);
   contents.mainFrame.url = toolbar.url;
   const event = { sender: contents, senderFrame: contents.mainFrame };
   return { invoke: (action, source = event) => handler(source, action), event, win, core, contents, toolbar,
-    unfocus: () => { focused = null; }, calls: () => calls, popup: () => popup, edits,
+    unfocus: () => { focused = null; }, calls: () => calls, popup: () => popup, edits, sent,
     filter: url => new Promise(resolve => requestFilter({ url }, resolve)),
     permission: () => new Promise(resolve => permission(contents, 'media', resolve)), device: () => device() };
 }
@@ -71,7 +72,9 @@ test('toolbar resource and permission boundaries are identical on Windows and ma
   for (const platform of ['win32', 'darwin']) {
     const f = fixture(platform);
     assert.equal((await f.filter(f.toolbar.url)).cancel, false);
-    for (const url of ['https://example.com/', 'http://127.0.0.1:5000/', 'file:///private.txt']) {
+    for (const file of ['messages.js', 'i18n.js']) assert.equal((await f.filter(new URL(file, f.toolbar.url).href)).cancel, false);
+    for (const url of ['https://example.com/', 'http://127.0.0.1:5000/', 'file:///private.txt',
+      new URL('language.cjs', f.toolbar.url).href, new URL('messages.js?locale=zh-TW', f.toolbar.url).href]) {
       assert.equal((await f.filter(url)).cancel, true);
     }
     assert.equal(await f.permission(), false);
@@ -80,5 +83,15 @@ test('toolbar resource and permission boundaries are identical on Windows and ma
     assert.equal(f.core.bounds.height, 444);
     f.contents.mainFrame.url = 'https://example.com/';
     assert.equal(await f.invoke('record'), false);
+  }
+});
+
+test('toolbar readiness sends only a normalized locale alongside existing state', async () => {
+  for (const [locale, expected] of [['en', 'en'], ['zh-TW', 'zh-TW'], ['../private', 'en']]) {
+    const f = fixture('win32', locale);
+    assert.equal(await f.invoke('ready'), true);
+    assert.equal(f.sent[0].locale, expected);
+    assert.equal(f.sent[0].state, 'idle');
+    assert.equal(f.calls(), 0);
   }
 });

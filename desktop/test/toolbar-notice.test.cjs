@@ -21,8 +21,9 @@ function fixture(action = 'screenshot-file') {
   let time = 0, next = 0, receive, fail = false, result = true;
   const source = fs.readFileSync(path.join(__dirname, '..', 'toolbar.js'), 'utf8');
   vm.runInNewContext(source, {
-    document: { getElementById: id => elements.get(id), querySelectorAll: () => [elements.get('save')] },
-    window: { desktopToolbar: { onState: callback => { receive = callback; },
+    document: { documentElement: {}, getElementById: id => elements.get(id),
+      querySelectorAll: selector => selector === '[data-action], [data-menu]' ? [elements.get('save')] : [] },
+    window: { StandTermDesktopI18n: require('../i18n.js'), desktopToolbar: { onState: callback => { receive = callback; },
       invoke: action => {
         calls.push(action);
         return fail ? Promise.reject(new Error('Fixture failure')) : Promise.resolve(result);

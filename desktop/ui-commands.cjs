@@ -2,14 +2,15 @@
 
 const { BrowserWindow, Menu } = require('electron');
 const { allowedNavigation } = require('./policy.cjs');
+const { create } = require('./i18n.js');
 
 const UI_ACTIONS = Object.freeze({
-  settings: 'Settings...', newTab: 'New terminal tab', closeTab: 'Close terminal tab',
-  closeAll: 'Close all terminal tabs...', files: 'Files...', pip: 'Terminal to PiP',
-  agentPanel: 'Show / hide Agent Panel', pauseAgent: 'Pause Agent for current terminal',
+  settings: 'desktop.menu.settings', newTab: 'desktop.menu.new_tab', closeTab: 'desktop.menu.close_tab',
+  closeAll: 'desktop.menu.close_all', files: 'desktop.menu.files', pip: 'desktop.menu.pip',
+  agentPanel: 'desktop.menu.agent_panel', pauseAgent: 'desktop.menu.pause_agent',
 });
 
-function createUiCommands(win, contents, origin) {
+function createUiCommands(win, contents, origin, t = create('en').t) {
   let refreshing = false;
   const current = () => !win.isDestroyed() && !contents.isDestroyed() && allowedNavigation(contents.getURL(), origin);
   const focused = () => current() && BrowserWindow.getFocusedWindow() === win;
@@ -54,7 +55,7 @@ function createUiCommands(win, contents, origin) {
   win.on('blur', () => { void refresh(); });
   return {
     run, refresh, edit,
-    item: action => ({ id: `ui-${action}`, label: UI_ACTIONS[action], enabled: false, click: () => run(action) }),
+    item: action => ({ id: `ui-${action}`, label: t(UI_ACTIONS[action]), enabled: false, click: () => run(action) }),
   };
 }
 

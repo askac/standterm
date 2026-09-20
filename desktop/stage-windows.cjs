@@ -35,6 +35,7 @@ const shellFiles = [
   'test/external-links-smoke.cjs',
   'capture-settings.cjs', 'ui-commands.cjs', 'toolbar.cjs', 'toolbar-preload.cjs',
   'toolbar.html', 'toolbar.js', 'toolbar.css',
+  'language.cjs', 'messages.js', 'i18n.js',
   'test/toolbar-smoke.cjs',
   'browser-access.cjs',
   'context-paste.cjs',

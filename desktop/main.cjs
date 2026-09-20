@@ -25,6 +25,7 @@ const { createUiCommands } = require('./ui-commands.cjs');
 const { installToolbar } = require('./toolbar.cjs');
 const { createBrowserAccess } = require('./browser-access.cjs');
 const { installContextPaste } = require('./context-paste.cjs');
+const { createLanguage } = require('./language.cjs');
 
 let maintenance;
 try { maintenance = installerRequest(process.argv); } catch (error) {
@@ -78,6 +79,8 @@ else if (app.isPackaged) {
   fs.mkdirSync(profile, { recursive: true });
   app.setPath('userData', profile);
 }
+const language = createLanguage(path.join(app.getPath('userData'), 'language.json'));
+const { t } = language;
 let child;
 let desktopSession;
 const expectedBackendExits = new WeakSet();
@@ -229,9 +232,9 @@ function createTray() {
   tray = new Tray(icon);
   tray.setToolTip('StandTerm Desktop');
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Open StandTerm', click: showWindow },
+    { label: t('desktop.menu.open'), click: showWindow },
     { type: 'separator' },
-    { label: 'Quit StandTerm', click: () => app.quit() },
+    { label: t('desktop.menu.quit'), click: () => app.quit() },
   ]));
   tray.on('click', showWindow);
   return icon;
@@ -326,7 +329,7 @@ async function start() {
     sandbox: true, webSecurity: true, webviewTag: false, allowRunningInsecureContent: false, devTools: true,
   } });
   const contents = coreView.webContents;
-  const commands = createUiCommands(win, contents, handoff.origin);
+  const commands = createUiCommands(win, contents, handoff.origin, t);
   let toolbar;
   const updateTitle = () => {
     if (!win.isDestroyed()) win.setTitle(`${captureTitle ? `[${captureTitle}] ` : ''}${MODES[mode]} - ${pageTitle}`);
@@ -340,7 +343,7 @@ async function start() {
       if (error) console.error(message);
     } } : {}),
   });
-  toolbar = installToolbar(win, coreView, capture, commands);
+  toolbar = installToolbar(win, coreView, capture, commands, language.locale);
   installContextPaste(win, contents, handoff.origin, toolbar.notify);
   const browserAccess = createBrowserAccess({ origin: handoff.origin, session: desktopSession, launcherToken,
     available: () => !win.isDestroyed() && !contents.isDestroyed() && allowedNavigation(contents.getURL(), handoff.origin),
@@ -387,40 +390,36 @@ async function start() {
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { id: 'standterm', label: 'StandTerm', submenu: [
       commands.item('settings'),
-      ...(coreManager ? [{ label: 'Core source (Advanced)...', click: () => {
+      { id: 'desktop-language', label: t('desktop.language.menu'), click: () => { void language.choose(dialog, win); } },
+      ...(coreManager ? [{ label: t('desktop.menu.core_source'), click: () => {
         void coreManager.showManager().catch(error => dialog.showErrorBox('Core management unavailable', error.message));
       } }] : []),
-      { label: 'Capture Settings...', click: () => capture.configure() },
+      { label: t('desktop.menu.capture_settings'), click: () => capture.configure() },
       browserAccess.menu,
       { type: 'separator' },
       commands.item('newTab'), commands.item('closeTab'), commands.item('closeAll'),
       commands.item('files'), commands.item('pip'),
       { type: 'separator' },
-      { id: 'desktop-about', label: 'About StandTerm Desktop', click: () => dialog.showMessageBox(win, {
-        type: 'info', title: 'About StandTerm Desktop', message: `StandTerm Desktop ${app.getVersion()}`,
-        detail: aboutDetails, buttons: ['OK'], noLink: true,
+      { id: 'desktop-about', label: t('desktop.menu.about'), click: () => dialog.showMessageBox(win, {
+        type: 'info', title: t('desktop.menu.about'), message: `StandTerm Desktop ${app.getVersion()}`,
+        detail: aboutDetails, buttons: [t('desktop.common.ok')], noLink: true,
       }) },
-      { label: 'Show window', click: showWindow },
+      { label: t('desktop.menu.show'), click: showWindow },
       ...(process.platform === 'darwin' ? [{ role: 'services' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }] : []),
-      { label: 'Quit StandTerm', accelerator: 'CommandOrControl+Q', click: () => app.quit() },
+      { label: t('desktop.menu.quit'), accelerator: 'CommandOrControl+Q', click: () => app.quit() },
     ] },
-    { id: 'edit', role: 'editMenu' },
+    { id: 'edit', role: 'editMenu', label: t('desktop.toolbar.menu_edit') },
     agentMenu({
+      t,
       uiItems: [commands.item('agentPanel'), commands.item('pauseAgent'), { type: 'separator' }],
       showHelp: () => dialog.showMessageBox(win, {
-        type: 'info', title: 'StandTerm Agent', message: 'Give your agent a StandTerm prompt',
-        detail: 'Select the tab where your agent runs. Use Agent Panel to enable access and choose permissions '
-          + 'on each tab it may operate.\n\n'
-          + 'For an SSH agent, start Agent Tunnel on its SSH tab. Agent connection appears after setup succeeds. '
-          + 'For a local agent, use Authorize agent on each intended tab.\n\n'
-          + 'Open Agent connection, choose Copy Prompt, and paste it into your agent with the intended task. '
-          + 'Follow the environment shown in that dialog.\n\n'
-          + 'Skills do not need to be installed first. The prompt leads to the bundled skills and helpers; '
-          + 'Agent Info also provides installation instructions when persistent skills are wanted.',
-        buttons: ['OK'], noLink: true,
+        type: 'info', title: 'StandTerm Agent', message: t('desktop.agent.help_title'),
+        detail: ['desktop.agent.help_permissions', 'desktop.agent.help_environment',
+          'desktop.agent.help_connection', 'desktop.agent.help_skills'].map(key => t(key)).join('\n\n'),
+        buttons: [t('desktop.common.ok')], noLink: true,
       }),
     }),
-    { id: 'view', label: 'View', submenu: [{ role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' },
+    { id: 'view', label: t('desktop.toolbar.menu_view'), submenu: [{ role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' },
       { type: 'separator' },
       ...capture.menu().submenu,
     ] },

@@ -78,6 +78,7 @@ def main(argv=None):
         )
 
     run_step('Check generated UI catalog', [sys.executable, 'scripts/build_ui_messages.py', '--check'])
+    run_step('Check generated Desktop catalog', [sys.executable, 'scripts/build_ui_messages.py', '--desktop', '--check'])
 
     for test_path in HEADLESS_SMOKE_TESTS:
         run_step(test_path, [sys.executable, test_path])
