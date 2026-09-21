@@ -33,7 +33,8 @@ The candidate exposed a copy regression: the Desktop permission handlers denied
 buttons always reported failure. The source fix permits sanitized writes only
 for the owned, focused, visible Core main frame at its backend origin. Clipboard
 reads retain their native confirmation and target guards. The existing candidate
-installer does not contain this fix until rebuilt.
+installer from commit `3886155` does not contain this fix. The subsequent
+`98e490d` candidate includes the copy fix and compact local/SSH connection dialogs.
 
 Validation: all 167 Desktop unit tests pass, including foreground write access
 and foreign-frame/background denial. A separate Windows Electron 44.2.0 window
@@ -44,13 +45,22 @@ acceptance. The attempted Linux headless runtime probe exited before producing
 results; Windows provided the native permission evidence.
 
 The operator requests a single language setting and asks about live switching.
-The following is the proposed next implementation phase, not completed behavior:
+Desktop synchronization is now implemented ahead of full Core live translation,
+at the operator's request. The language is read from the saved Core preference
+through the existing version-1 UI snapshot; unsaved dropdown changes do not apply.
+Native confirmations already open retain their labels, and diagnostics update on
+open/refresh. Validation on 2026-09-21 passes all 168 Desktop unit tests
+and real Windows Electron smoke with both Windows and WSL Core backends. The
+smoke saves both languages through Settings and verifies native menu/toolbar
+updates, the startup cache, unchanged terminal identity and no Core page reload.
+These source changes are newer than the `98e490d` installer and require a rebuild. Older Core versions keep the cached language. Full Core live
+translation remains planned; its current text still changes on the next page load.
 
 | Order | Change | Effort | Required acceptance |
 | --- | --- | --- | --- |
 | 1 | Apply the saved Core language without reloading the page. Replace the fixed translator with a current-locale lookup and refresh labels from structured state. | Medium | Switch both ways with connected terminals, an active Agent grant, Files and floating windows; preserve input, selection, drafts and pending operations. |
-| 2 | Make Desktop follow the current Core page's language and remove the separate Desktop language menu. | Medium | Validate the exact owned sender/frame/origin and the two supported locale values; rebuild menus and refresh toolbar, tray and diagnostics without restarting Core or recording. |
-| 3 | Keep `language.json` as the last synchronized language for startup/setup/recovery before Core is available. | Small | Retain the cached value for older Core versions lacking synchronization; use English when no valid cache exists. Preserve the agreed installer common-language/English fallback. |
+| 2 — Implemented | Make Desktop follow the current Core page's language and remove the separate Desktop language menu. | Medium | Validate the exact owned sender/frame/origin and the two supported locale values; rebuild menus and refresh toolbar, tray and diagnostics without restarting Core or recording. |
+| 3 — Implemented | Keep `language.json` as the last synchronized language for startup/setup/recovery before Core is available. | Small | Retain the cached value for older Core versions lacking synchronization; use English when no valid cache exists. Preserve the agreed installer common-language/English fallback. |
 
 Core's setting remains scoped to its browser profile; this does not synchronize
 unrelated browsers, hosts or backend modes. A browser connection does not acquire
@@ -69,15 +79,13 @@ scriptless diagnostics. A complete Desktop rollout has moderate implementation
 cost and broader acceptance cost than the toolbar pilot. The estimates above
 are relative scope assessments, not measured delivery times.
 
-The shipped pilot stores the Desktop language in `language.json` under the existing profile's `userData`,
-with English as default and only `en` / `zh-TW` initially. Apply a change on the
-next launch; changing language should not itself restart StandTerm or stop a
-recording. Keep the existing Core browser preference independent. This covers
-setup and recovery before Core starts, at the cost of two language preferences.
-It is a product choice, not a security requirement. A validated
-two-value advisory preference from Core is also feasible, but needs startup,
-origin and older-Core fallback rules. The follow-up above supersedes the independent
-preference design once implemented. Automatic OS-language selection is deferred.
+The independent Desktop language selector is removed. Core Settings is the
+source of the saved preference; Desktop follows supported values and caches the
+last one in `language.json` for pre-Core startup/setup/recovery. Missing or invalid
+cache uses English. Poll results from navigated/replaced frames, loading pages,
+foreign origins or closed windows are discarded. Cache-write failures keep the
+active language and are logged once per changed value without repeatedly writing.
+Automatic OS-language selection and full Core live translation remain deferred.
 
 Ship the Desktop catalog with the shell. Do not depend on the selected bundled
 or Git Core supplying compatible renderer scripts. Reuse the existing TSV
@@ -109,8 +117,8 @@ Keep these implementation boundaries:
 [desktop_ui_copy_review.tsv](desktop_ui_copy_review.tsv) is a prioritized seed
 inventory, not a claim that every Desktop string has been extracted. It uses
 the same nine columns as the browser table. After the remaining shell notices,
-301 rows are `translation-reviewed` with English and Traditional Chinese text.
-Four retired Capture/setup fragments or renamed messages are marked `remove`;
+293 rows are `translation-reviewed` with English and Traditional Chinese text.
+Twelve retired Capture/setup/language-dialog messages are marked `remove`;
 no seed rows remain `proposed`. This does not claim translation of raw errors or
 the external installer UI. Some `current_en` cells are exact fragments or normalize
 dynamic values to named placeholders; `context` identifies these cases.

@@ -43,17 +43,19 @@ function createStatusWindow(owner, snapshot, { copyUrl, i18n = create('en') }) {
       for (const name of ['will-navigate', 'will-frame-navigate', 'will-redirect', 'will-attach-webview']) {
         win.webContents.on(name, event => event.preventDefault());
       }
-      win.setMenu(Menu.buildFromTemplate([{ label: t('desktop.toolbar.menu_view'), submenu: [
-        { label: t('desktop.diagnostics.refresh'), accelerator: 'CommandOrControl+R', click: () => refresh().catch(() => {}) },
-        { label: t('desktop.diagnostics.copy_backend_url'), click: copyUrl },
-        { role: 'close' },
-      ] }]));
       const owned = win;
       const close = () => { if (!owned.isDestroyed()) owned.destroy(); };
       owner.once('closed', close);
       owned.once('closed', () => owner.removeListener('closed', close));
     }
     async function refresh() {
+      win.setTitle(t('desktop.diagnostics.window_title'));
+      win.setMenu(Menu.buildFromTemplate([{ label: t('desktop.toolbar.menu_view'), submenu: [
+        { label: t('desktop.diagnostics.refresh'), accelerator: 'CommandOrControl+R', click: () => refresh().catch(() => {}) },
+        { label: t('desktop.diagnostics.copy_backend_url'), click: copyUrl },
+        { role: 'close' },
+      ] }]));
+
       const { rows, events } = snapshot();
       await win.loadURL('data:text/html,' + encodeURIComponent(statusHtml(rows, events, i18n)));
     }

@@ -11891,6 +11891,7 @@
                     const ready = !!(socket && socket.connected);
                     return {
                         version: 1, ready, terminalId: state?.id || null,
+                        uiLanguage: loadPrefs().uiLanguage,
                         actions: {
                             settings: ready, newTab: ready,
                             closeTab: ready && terminals.size > 1,

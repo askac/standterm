@@ -91,6 +91,7 @@ test('translated diagnostic windows refresh through the same isolated scriptless
       isDestroyed() { return this.destroyed; }
       destroy() { this.destroyed = true; this.emit('closed'); }
       setMenu(menu) { this.menu = menu; }
+      setTitle(title) { this.title = title; }
       async loadURL(url) { this.urls.push(url); }
       show() {}
       focus() {}

@@ -10,10 +10,20 @@ Desktop copy and localization are planned in the
 [review plan](../docs/desktop_ui_review_plan.md), with a separate
 [translation review table](../docs/desktop_ui_copy_review.tsv).
 
-Choose **StandTerm > Desktop language...** to select English or Traditional
-Chinese (Taiwan) for the next launch. The preference belongs to the Desktop
-profile; Core keeps its own language setting. Saving a choice does not restart
-StandTerm or interrupt recording. Coverage includes custom menus, toolbar labels,
+Choose English or Traditional Chinese (Taiwan) in Core **Settings**. After Save,
+Desktop follows that stored preference through its existing Core status polling;
+the separate Desktop language menu is removed. Menus, toolbar and capture status
+update without restarting Core or interrupting recording. Core's page text retains
+its existing next-load language behavior. Open native confirmations keep their
+original labels; subsequent dialogs use the synchronized language. Diagnostics
+updates when opened or refreshed.
+
+Desktop caches the last synchronized language in the mode profile's `language.json`
+for startup, setup and recovery before Core is ready. Older Core versions without
+the language snapshot field retain that cache; missing or invalid cache uses English.
+A cache write failure is logged once per changed preference and does not stop the
+active language update. This does not synchronize unrelated browser profiles or
+backend modes. Coverage includes custom menus, toolbar labels,
 Agent help, Browser Access, Diagnostics, About, external-browser confirmations
 and Capture dialogs/status, environment preparation, Core source/recovery, port
 selection, Files download notices and native paste confirmation.

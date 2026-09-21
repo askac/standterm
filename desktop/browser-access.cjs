@@ -69,13 +69,13 @@ function createBrowserAccess({ origin, session, launcherToken, available, confir
   return {
     run,
     dispose: () => { launcherToken = ''; },
-    menu: { label: t('desktop.browser_access.menu'), submenu: [
+    get menu() { return { label: t('desktop.browser_access.menu'), submenu: [
       { label: t('desktop.browser_access.open'), click: () => run('open') },
       { label: t('desktop.browser_access.copy_authorization'), click: () => run('copy-auth') },
       { type: 'separator' },
       { label: t('desktop.browser_access.copy_url'), click: () => run('copy-url') },
       { label: t('desktop.browser_access.copy_token'), click: () => run('copy-token') },
-    ] },
+    ] }; },
   };
 }
 

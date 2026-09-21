@@ -231,13 +231,17 @@ function createTray() {
   const icon = nativeImage.createFromBitmap(pixels, { width: size, height: size });
   tray = new Tray(icon);
   tray.setToolTip('StandTerm Desktop');
-  tray.setContextMenu(Menu.buildFromTemplate([
+  updateTrayMenu();
+  tray.on('click', showWindow);
+  return icon;
+}
+
+function updateTrayMenu() {
+  tray?.setContextMenu(Menu.buildFromTemplate([
     { label: t('desktop.menu.open'), click: showWindow },
     { type: 'separator' },
     { label: t('desktop.menu.quit'), click: () => app.quit() },
   ]));
-  tray.on('click', showWindow);
-  return icon;
 }
 
 async function start() {
@@ -328,7 +332,15 @@ async function start() {
     sandbox: true, webSecurity: true, webviewTag: false, allowRunningInsecureContent: false, devTools: true,
   } });
   const contents = coreView.webContents;
-  const commands = createUiCommands(win, contents, handoff.origin, t);
+  const commands = createUiCommands(win, contents, handoff.origin, t, locale => {
+    const result = language.sync(locale);
+    if (result.persisted === false) diagnostics.write('language_cache_failed');
+    if (!result.changed) return;
+    rebuildMenu();
+    updateTrayMenu();
+    toolbar.send({ locale: language.locale });
+    capture.update();
+  });
   let toolbar;
   const updateTitle = () => {
     if (!win.isDestroyed()) win.setTitle(`${captureTitle ? `[${captureTitle}] ` : ''}${MODES[mode]} - ${pageTitle}`);
@@ -362,18 +374,18 @@ async function start() {
     updateTitle();
   });
   const connectionInfo = agentConnectionInfo({ origin: handoff.origin, instanceId: handoff.instance_id, mode });
-  const coreVersion = handoff.core_version || t('desktop.about.unknown_version');
-  const coreBuild = prepared?.source === 'git' ? prepared.coreSource
+  const coreVersion = () => handoff.core_version || t('desktop.about.unknown_version');
+  const coreBuild = () => prepared?.source === 'git' ? prepared.coreSource
     : handoff.core_bundle_id || t('desktop.about.unmanaged_source');
-  const pythonVersion = handoff.python_version || t('desktop.about.unknown_version');
-  const buildLabel = t(prepared?.source === 'git' ? 'desktop.about.git_revision' : 'desktop.about.bundle_sha256');
-  const aboutDetails = t('desktop.about.details', { core_version: coreVersion, build_label: buildLabel,
-    core_build: coreBuild, backend: MODES[mode], python_version: pythonVersion,
+  const pythonVersion = () => handoff.python_version || t('desktop.about.unknown_version');
+  const buildLabel = () => t(prepared?.source === 'git' ? 'desktop.about.git_revision' : 'desktop.about.bundle_sha256');
+  const aboutDetails = () => t('desktop.about.details', { core_version: coreVersion(), build_label: buildLabel(),
+    core_build: coreBuild(), backend: MODES[mode], python_version: pythonVersion(),
     electron_version: process.versions.electron, chromium_version: process.versions.chrome,
     node_version: process.versions.node, platform: process.platform, arch: process.arch });
   const openStatus = createStatusWindow(win, () => ({ rows: [
     [t('desktop.diagnostics.desktop_version'), app.getVersion()], [t('desktop.diagnostics.backend_mode'), MODES[mode]],
-    [t('desktop.diagnostics.core_version'), coreVersion], [buildLabel, coreBuild], [t('desktop.diagnostics.python_version'), pythonVersion],
+    [t('desktop.diagnostics.core_version'), coreVersion()], [buildLabel(), coreBuild()], [t('desktop.diagnostics.python_version'), pythonVersion()],
     [t('desktop.diagnostics.backend_url'), handoff.origin], [t('desktop.diagnostics.instance_id'), handoff.instance_id],
     [t('desktop.diagnostics.platform'), `${process.platform} / ${process.arch}`],
     [t('desktop.diagnostics.engines'), `${process.versions.electron} / ${process.versions.chrome} / ${process.versions.node}`],
@@ -386,64 +398,66 @@ async function start() {
   ], events: diagnostics.snapshot() }), {
     copyUrl: () => clipboard.writeText(connectionInfo.base_url), i18n: language,
   });
-  Menu.setApplicationMenu(Menu.buildFromTemplate([
-    { id: 'standterm', label: 'StandTerm', submenu: [
-      commands.item('settings'),
-      { id: 'desktop-language', label: t('desktop.language.menu'), click: () => { void language.choose(dialog, win); } },
-      ...(coreManager ? [{ label: t('desktop.menu.core_source'), click: () => {
-        void coreManager.showManager().catch(error => dialog.showErrorBox(t('desktop.startup.management_unavailable'), error.message));
-      } }] : []),
-      { label: t('desktop.menu.capture_settings'), click: () => capture.configure() },
-      browserAccess.menu,
-      { type: 'separator' },
-      commands.item('newTab'), commands.item('closeTab'), commands.item('closeAll'),
-      commands.item('files'), commands.item('pip'),
-      { type: 'separator' },
-      { id: 'desktop-about', label: t('desktop.menu.about'), click: () => dialog.showMessageBox(win, {
-        type: 'info', title: t('desktop.menu.about'), message: t('desktop.about.desktop_version', { version: app.getVersion() }),
-        detail: aboutDetails, buttons: [t('desktop.common.ok')], noLink: true,
-      }) },
-      { label: t('desktop.menu.show'), click: showWindow },
-      ...(process.platform === 'darwin' ? [{ role: 'services' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }] : []),
-      { label: t('desktop.menu.quit'), accelerator: 'CommandOrControl+Q', click: () => app.quit() },
-    ] },
-    { id: 'edit', role: 'editMenu', label: t('desktop.toolbar.menu_edit') },
-    agentMenu({
-      t,
-      uiItems: [commands.item('agentPanel'), commands.item('pauseAgent'), { type: 'separator' }],
-      showHelp: () => dialog.showMessageBox(win, {
-        type: 'info', title: 'StandTerm Agent', message: t('desktop.agent.help_title'),
-        detail: ['desktop.agent.help_permissions', 'desktop.agent.help_environment',
-          'desktop.agent.help_connection', 'desktop.agent.help_skills'].map(key => t(key)).join('\n\n'),
-        buttons: [t('desktop.common.ok')], noLink: true,
+  function rebuildMenu() {
+    Menu.setApplicationMenu(Menu.buildFromTemplate([
+      { id: 'standterm', label: 'StandTerm', submenu: [
+        commands.item('settings'),
+        ...(coreManager ? [{ label: t('desktop.menu.core_source'), click: () => {
+          void coreManager.showManager().catch(error => dialog.showErrorBox(t('desktop.startup.management_unavailable'), error.message));
+        } }] : []),
+        { label: t('desktop.menu.capture_settings'), click: () => capture.configure() },
+        browserAccess.menu,
+        { type: 'separator' },
+        commands.item('newTab'), commands.item('closeTab'), commands.item('closeAll'),
+        commands.item('files'), commands.item('pip'),
+        { type: 'separator' },
+        { id: 'desktop-about', label: t('desktop.menu.about'), click: () => dialog.showMessageBox(win, {
+          type: 'info', title: t('desktop.menu.about'), message: t('desktop.about.desktop_version', { version: app.getVersion() }),
+          detail: aboutDetails(), buttons: [t('desktop.common.ok')], noLink: true,
+        }) },
+        { label: t('desktop.menu.show'), click: showWindow },
+        ...(process.platform === 'darwin' ? [{ role: 'services' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }] : []),
+        { label: t('desktop.menu.quit'), accelerator: 'CommandOrControl+Q', click: () => app.quit() },
+      ] },
+      { id: 'edit', role: 'editMenu', label: t('desktop.toolbar.menu_edit') },
+      agentMenu({
+        t,
+        uiItems: [commands.item('agentPanel'), commands.item('pauseAgent'), { type: 'separator' }],
+        showHelp: () => dialog.showMessageBox(win, {
+          type: 'info', title: 'StandTerm Agent', message: t('desktop.agent.help_title'),
+          detail: ['desktop.agent.help_permissions', 'desktop.agent.help_environment',
+            'desktop.agent.help_connection', 'desktop.agent.help_skills'].map(key => t(key)).join('\n\n'),
+          buttons: [t('desktop.common.ok')], noLink: true,
+        }),
       }),
-    }),
-    { id: 'view', label: t('desktop.toolbar.menu_view'), submenu: [{ role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' },
-      { type: 'separator' },
-      ...capture.menu().submenu,
-    ] },
-    diagnosticsMenu({ origin: handoff.origin, mode, instanceId: handoff.instance_id,
-      t,
-      version: app.getVersion(), coreVersion: handoff.core_version, logger: diagnostics, persistent: !smoke,
-      copyText: text => clipboard.writeText(text),
-      openStatus: () => openStatus().catch(() => {
-        if (!win.isDestroyed()) dialog.showMessageBox(win, { type: 'warning', message: t('desktop.diagnostics.open_failed') });
+      { id: 'view', label: t('desktop.toolbar.menu_view'), submenu: [{ role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' },
+        { type: 'separator' },
+        ...capture.menu().submenu,
+      ] },
+      diagnosticsMenu({ origin: handoff.origin, mode, instanceId: handoff.instance_id,
+        t,
+        version: app.getVersion(), coreVersion: handoff.core_version, logger: diagnostics, persistent: !smoke,
+        copyText: text => clipboard.writeText(text),
+        openStatus: () => openStatus().catch(() => {
+          if (!win.isDestroyed()) dialog.showMessageBox(win, { type: 'warning', message: t('desktop.diagnostics.open_failed') });
+        }),
+        openLogs: async () => {
+          const error = await shell.openPath(diagnostics.directory);
+          if (error) await dialog.showMessageBox(win, { type: 'warning', message: t('desktop.diagnostics.folder_failed'), detail: diagnostics.directory });
+        },
+        openTools: async () => {
+          const opened = await openDeveloperTools(contents, async () => {
+            const answer = await dialog.showMessageBox(win, { type: 'warning', title: t('desktop.diagnostics.devtools_title'),
+              message: t('desktop.diagnostics.devtools_message'), detail: t('desktop.diagnostics.devtools_detail'),
+              buttons: [t('desktop.common.cancel'), t('desktop.diagnostics.devtools_open')], defaultId: 0, cancelId: 0, noLink: true });
+            return answer.response === 1;
+          });
+          if (opened) diagnostics.write('devtools_opened');
+        },
       }),
-      openLogs: async () => {
-        const error = await shell.openPath(diagnostics.directory);
-        if (error) await dialog.showMessageBox(win, { type: 'warning', message: t('desktop.diagnostics.folder_failed'), detail: diagnostics.directory });
-      },
-      openTools: async () => {
-        const opened = await openDeveloperTools(contents, async () => {
-          const answer = await dialog.showMessageBox(win, { type: 'warning', title: t('desktop.diagnostics.devtools_title'),
-            message: t('desktop.diagnostics.devtools_message'), detail: t('desktop.diagnostics.devtools_detail'),
-            buttons: [t('desktop.common.cancel'), t('desktop.diagnostics.devtools_open')], defaultId: 0, cancelId: 0, noLink: true });
-          return answer.response === 1;
-        });
-        if (opened) diagnostics.write('devtools_opened');
-      },
-    }),
-  ]));
+    ]));
+  }
+  rebuildMenu();
   const openExternal = createExternalOpener({ origin: handoff.origin, owner: contents,
     confirm: async url => {
       const answer = await dialog.showMessageBox(win, { type: 'question', title: t('desktop.external_browser.title'),

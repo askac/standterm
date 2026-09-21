@@ -10,8 +10,12 @@ const UI_ACTIONS = Object.freeze({
   agentPanel: 'desktop.menu.agent_panel', pauseAgent: 'desktop.menu.pause_agent',
 });
 
-function createUiCommands(win, contents, origin, t = create('en').t) {
+function createUiCommands(win, contents, origin, t = create('en').t, onLocale = () => {}) {
   let refreshing = false;
+  let navigation = 0;
+  contents.on('did-start-navigation', (_event, _url, _inPlace, mainFrame) => {
+    if (mainFrame) navigation++;
+  });
   const current = () => !win.isDestroyed() && !contents.isDestroyed() && allowedNavigation(contents.getURL(), origin);
   const focused = () => current() && BrowserWindow.getFocusedWindow() === win;
   function edit(action) {
@@ -22,9 +26,12 @@ function createUiCommands(win, contents, origin, t = create('en').t) {
     return true;
   }
   async function snapshot() {
-    if (!current()) return null;
+    if (!current() || contents.isLoadingMainFrame()) return null;
+    const epoch = navigation;
+    const frame = contents.mainFrame;
     try {
       const state = await contents.executeJavaScript('window.standtermUi?.version === 1 ? window.standtermUi.snapshot() : null');
+      if (!current() || contents.isLoadingMainFrame() || navigation !== epoch || contents.mainFrame !== frame) return null;
       return state?.version === 1 && state.ready === true && typeof state.actions === 'object' ? state : null;
     } catch { return null; }
   }
@@ -43,6 +50,7 @@ function createUiCommands(win, contents, origin, t = create('en').t) {
     refreshing = true;
     try {
       const state = await snapshot();
+      if (['en', 'zh-TW'].includes(state?.uiLanguage)) onLocale(state.uiLanguage);
       for (const action of Object.keys(UI_ACTIONS)) {
         const item = Menu.getApplicationMenu()?.getMenuItemById(`ui-${action}`);
         if (item) item.enabled = !!state?.actions?.[action] && (action === 'settings' || focused());

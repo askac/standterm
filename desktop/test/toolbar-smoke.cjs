@@ -164,6 +164,26 @@ async function run(win, contents, browserAccess) {
     if (layout.reducedMotion) assert.equal(layout.transition, '0s');
     console.log(`macOS toolbar renderer: native menu, background five/ten-second notices and wide layout passed; ${JSON.stringify(layout)}`);
   }
+  const originalLanguage = await evaluate('window.standtermUi.snapshot().uiLanguage');
+  const originalTerminal = await evaluate('window.standtermUi.snapshot().terminalId');
+  await evaluate('window.desktopLocaleSmokeSentinel = true');
+  assert.ok(!Menu.getApplicationMenu().getMenuItemById('desktop-language'));
+  for (const locale of [originalLanguage === 'en' ? 'zh-TW' : 'en', originalLanguage]) {
+    const { t } = require('../i18n.js').create(locale);
+    await until(() => Menu.getApplicationMenu().getMenuItemById('ui-settings').enabled, 'localized Settings enabled');
+    Menu.getApplicationMenu().getMenuItemById('ui-settings').click();
+    await until(() => evaluate("document.getElementById('settings-modal').classList.contains('open')"), 'language Settings opened');
+    await evaluate(`document.getElementById('pref-uiLanguage').value = ${JSON.stringify(locale)}`);
+    assert.notEqual(await evaluate('window.standtermUi.snapshot().uiLanguage'), locale, 'unsaved dropdown must not change Desktop');
+    await evaluate("document.getElementById('settings-save').click()");
+    await until(async () => await win.webContents.executeJavaScript('document.documentElement.lang') === locale, 'Desktop locale synchronized');
+    assert.equal(Menu.getApplicationMenu().getMenuItemById('ui-settings').label, t('desktop.menu.settings'));
+    assert.equal(browserAccess.menu.label, t('desktop.browser_access.menu'));
+    assert.equal(await evaluate('window.desktopLocaleSmokeSentinel'), true, 'locale synchronization reloaded Core');
+    assert.equal(await evaluate('window.standtermUi.snapshot().terminalId'), originalTerminal);
+    assert.deepEqual(JSON.parse(await fs.readFile(path.join(app.getPath('userData'), 'language.json'), 'utf8')), { version: 1, locale });
+  }
+  console.log('Desktop locale smoke: saved Core Settings update native menus, toolbar and startup cache without reloading Core.');
   console.log(`Desktop toolbar smoke: isolated SVG toolbar, focus guards, native Settings/tab actions and compact layout passed (${directory}).`);
 }
 
