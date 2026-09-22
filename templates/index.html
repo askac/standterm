@@ -1458,7 +1458,7 @@
         <button id="agent-status-mint-3x-btn" class="status-action agent-status-mint" title="Create a token with 3× idle time for the active terminal">Create token 3&times;</button>
         <div id="terminal-tools">
             <button id="agent-access-mint-btn" class="status-action" type="button" title="Authorize Direct input access and create a standard token for the current tab" data-i18n="agent.access.grant">Authorize agent</button>
-            <button id="agent-connect-btn" class="status-action" type="button" title="Copy the agent prompt for the current tab's environment" data-i18n="agent.connection.title" data-i18n-title="agent.connection.tooltip">Agent connection</button>
+            <button id="agent-connect-btn" class="status-action" type="button" title="View Agent connection info for the current tab's environment" data-i18n="agent.connection.title" data-i18n-title="agent.connection.tooltip">Agent connection</button>
             <button id="agent-toggle-btn" class="status-action" type="button" title="Show Agent panel">Show Agent Panel</button>
             <button id="agent-tunnel-btn" class="status-action" type="button" title="Set up Agent access from this SSH host" data-i18n-title="agent.tunnel.tooltip" data-i18n="agent.tunnel.title" hidden>Agent Tunnel</button>
             <button id="ssh-tunnels-btn" class="status-action" type="button" title="Manage TCP forwarding for this SSH tab" data-i18n-title="ssh.tunnels.tooltip" data-i18n="ssh.tunnels.action" hidden>Tunnels</button>
@@ -1481,11 +1481,11 @@
     </section>
     <dialog id="agent-connect-dialog" aria-labelledby="agent-connect-title">
         <h3 id="agent-connect-title" data-i18n="agent.connection.title">Agent connection</h3>
-        <p data-i18n="agent.connection.summary">Copy the connection instructions and give them to the agent in the current tab’s environment.</p>
+        <p data-i18n="agent.connection.summary">Copy the Agent Info URL and give it to the agent in the current tab’s environment.</p>
         <div class="agent-connect-url">
             <label for="agent-connect-url" data-i18n="agent.connection.url">Agent Info URL</label>
             <input id="agent-connect-url" readonly aria-label="Agent Info URL" data-i18n-aria-label="agent.connection.url">
-            <button id="agent-connect-copy" type="button" disabled data-i18n="agent.connection.copy">Copy Prompt</button>
+            <button id="agent-connect-copy-url" type="button" disabled data-i18n="common.copy_url">Copy URL</button>
         </div>
         <p id="agent-connect-message" role="status"></p>
         <details id="agent-connect-details">
@@ -1501,7 +1501,7 @@
             <div class="agent-tunnel-actions">
                 <button id="agent-connect-open-panel" type="button" data-i18n="agent.panel.open">Open Agent Panel</button>
                 <button id="agent-connect-refresh" type="button" data-i18n="common.refresh">Refresh Status</button>
-                <button id="agent-connect-copy-url" type="button" disabled data-i18n="common.copy_url">Copy URL</button>
+                <button id="agent-connect-copy" type="button" disabled data-i18n="agent.connection.copy">Copy Prompt</button>
             </div>
         </details>
         <div class="agent-tunnel-actions">
@@ -1510,12 +1510,12 @@
     </dialog>
     <dialog id="agent-tunnel-dialog" aria-labelledby="agent-tunnel-title">
         <h3 id="agent-tunnel-title" data-i18n="agent.tunnel.title">Agent Tunnel</h3>
-        <p id="agent-tunnel-introduction" data-i18n="agent.connection.summary" hidden>Copy the connection instructions and give them to the agent in the current tab’s environment.</p>
+        <p id="agent-tunnel-introduction" data-i18n="agent.connection.summary" hidden>Copy the Agent Info URL and give it to the agent in the current tab’s environment.</p>
         <div id="agent-tunnel-connection" hidden>
             <div class="agent-connect-url">
                 <label for="agent-tunnel-url" data-i18n="agent.connection.url">Agent Info URL</label>
                 <input id="agent-tunnel-url" readonly aria-label="Agent Info URL" data-i18n-aria-label="agent.connection.url">
-                <button id="agent-tunnel-copy" type="button" data-i18n="agent.connection.copy" hidden>Copy Prompt</button>
+                <button id="agent-tunnel-copy-url" type="button" data-i18n="common.copy_url" disabled>Copy URL</button>
             </div>
         </div>
         <p id="agent-tunnel-message" role="status"></p>
@@ -1538,7 +1538,7 @@
             <p id="agent-tunnel-activity" class="agent-connect-activity" aria-live="polite"></p>
             <textarea id="agent-tunnel-info" readonly aria-label="Agent connection prompt" data-i18n-aria-label="agent.connection.prompt" hidden></textarea>
             <div class="agent-tunnel-actions">
-                <button id="agent-tunnel-copy-url" type="button" data-i18n="common.copy_url" disabled>Copy URL</button>
+                <button id="agent-tunnel-copy" type="button" data-i18n="agent.connection.copy" hidden>Copy Prompt</button>
                 <button id="agent-tunnel-manage" type="button" data-i18n="agent.tunnel.manage" hidden>Manage Tunnel</button>
                 <button id="agent-tunnel-refresh" type="button" data-i18n="common.refresh">Refresh Status</button>
                 <button id="agent-tunnel-check" type="button" data-i18n="agent.tunnel.check" aria-describedby="agent-tunnel-check-hint" disabled>Check Tunnel</button>

@@ -888,17 +888,18 @@ def test_agent_language_preview_preserves_access_and_applies_on_next_page(browse
             configurable: true, value: {writeText: async text => {window.copiedAgentText = text;}}
         })''')
         page.click('#agent-connect-btn')
-        page.wait_for_selector('#agent-connect-copy:not([disabled])')
+        page.wait_for_selector('#agent-connect-copy-url:not([disabled])')
         check(page.get_by_role('dialog', name='Agent 連線').is_visible(), 'connection dialog accessible name was not localized')
         check(page.locator('#agent-connect-url').get_attribute('aria-label') == 'Agent 資訊網址',
               'connection URL accessible name was not localized')
         check(page.locator('#agent-connect-info').get_attribute('aria-label') == 'Agent 連線指引',
               'connection prompt accessible name was not localized')
-        check(page.inner_text('#agent-connect-copy') == '複製連線指引', 'connection copy action was not localized')
         check('main: 等待 Agent' in page.text_content('#agent-connect-activity'),
               'localized connection activity did not distinguish a grant from Agent activity')
         prompt = page.input_value('#agent-connect-info')
         check('Run discover, then hello' in prompt, 'display language translated the machine-facing connection prompt')
+        page.click('#agent-connect-details summary')
+        check(page.inner_text('#agent-connect-copy') == '複製連線指引', 'connection copy action was not localized')
         page.click('#agent-connect-copy')
         page.wait_for_function('text => window.copiedAgentText === text', arg=prompt)
         check('已複製' in page.inner_text('#agent-connect-message'), 'clipboard result was not localized')
@@ -4497,10 +4498,10 @@ def test_core_agent_connect_info_can_be_copied_and_confirmed(browser, access_url
             configurable: true, value: {writeText: async text => {window.copiedAgentText = text;}}
         })''')
         page.click('#agent-connect-btn')
-        page.wait_for_selector('#agent-connect-copy:not([disabled])')
+        page.wait_for_selector('#agent-connect-copy-url:not([disabled])')
         check(not page.locator('#agent-connect-details').evaluate('element => element.open'),
               'Connection details were not collapsed by default')
-        for selector in ['#agent-connect-info', '#agent-connect-activity', '#agent-connect-copy-url',
+        for selector in ['#agent-connect-info', '#agent-connect-activity', '#agent-connect-copy',
                          '#agent-connect-refresh', '#agent-connect-open-panel']:
             check(page.locator(selector).is_hidden(), 'Secondary connection content remained visible: ' + selector)
         check(page.locator('#agent-connect-message').is_hidden(), 'Ready state repeated the introduction')
@@ -4514,14 +4515,14 @@ def test_core_agent_connect_info_can_be_copied_and_confirmed(browser, access_url
         check(page.locator('#agent-tunnel-btn').is_hidden(), 'Local shell offered an SSH tunnel')
         check(page.locator('#agent-remote-info-btn').count() == 0, 'A separate remote Agent Info button remains')
         check(page.inner_text('#agent-connect-btn') == ('Agent 連線' if zh else 'Agent connection'), 'Info button did not identify the Agent connection workflow')
-        check(page.inner_text('#agent-connect-copy') == ('複製連線指引' if zh else 'Copy Prompt'), 'Local info did not offer a prompt')
-        page.click('#agent-connect-copy')
-        page.wait_for_function('text => window.copiedAgentText === text', arg=info_text)
+        page.click('#agent-connect-copy-url')
+        page.wait_for_function('url => window.copiedAgentText === url', arg=agentinfo_url)
         page.locator('#agent-connect-details summary').focus()
         page.keyboard.press('Enter')
         check(page.locator('#agent-connect-info').is_visible(), 'Keyboard disclosure did not reveal the prompt')
-        page.click('#agent-connect-copy-url')
-        page.wait_for_function('url => window.copiedAgentText === url', arg=agentinfo_url)
+        check(page.inner_text('#agent-connect-copy') == ('複製連線指引' if zh else 'Copy Prompt'), 'Local info did not offer a prompt')
+        page.click('#agent-connect-copy')
+        page.wait_for_function('text => window.copiedAgentText === text', arg=info_text)
         page.focus('#agent-connect-url')
         page.evaluate("() => { window.dispatchEvent(new Event('blur')); window.dispatchEvent(new Event('focus')); }")
         page.wait_for_timeout(150)
@@ -4550,11 +4551,14 @@ def test_core_agent_connect_info_can_be_copied_and_confirmed(browser, access_url
                                arg='最近一次通過驗證的請求' if zh else 'last authenticated request')
         page.click('#agent-connect-details summary')
         page.evaluate("() => { navigator.clipboard.writeText = async () => { throw new Error('Denied'); }; }")
-        page.click('#agent-connect-copy')
+        page.click('#agent-connect-copy-url')
         page.wait_for_function("text => document.getElementById('agent-connect-message').innerText.includes(text)",
                                arg='手動複製' if zh else 'copy it manually')
         check(page.locator('#agent-connect-message').is_visible(), 'Copy failure was hidden in collapsed details')
-        check(page.locator('#agent-connect-info').is_visible(), 'Copy failure did not reveal the selected prompt')
+        selection = page.locator('#agent-connect-url').evaluate('field => field.value.slice(field.selectionStart, field.selectionEnd)')
+        check(selection == agentinfo_url, 'Clipboard fallback did not select the URL')
+        page.click('#agent-connect-details summary')
+        page.click('#agent-connect-copy')
         selection = page.locator('#agent-connect-info').evaluate('field => field.value.slice(field.selectionStart, field.selectionEnd)')
         check(selection == page.input_value('#agent-connect-info'), 'Clipboard fallback did not select the prompt')
         page.click('#agent-connect-close')
@@ -4687,15 +4691,18 @@ def test_remote_agent_info_tracks_ssh_carrier_and_rejects_late_replies(browser, 
         check(page.inner_text('#agent-tunnel-title') == title, 'Remote shortcut opened the wrong view')
         check(page.locator('#agent-tunnel-setup').is_hidden(), 'Remote info repeated setup controls')
         check(page.locator('#agent-tunnel-copy').is_hidden(), 'Remote shortcut offered a stale cached prompt')
+        check(page.locator('#agent-tunnel-copy-url').is_disabled(), 'Remote shortcut offered a stale cached URL')
         page.evaluate('payload => window.terminalTest.completeAgentTunnelRequestForTest(1, payload)', first)
         check(page.locator('#agent-tunnel-info').is_hidden(), 'Remote info did not collapse the full prompt')
         for selector in ['#agent-tunnel-manage', '#agent-tunnel-refresh', '#agent-tunnel-check',
-                         '#agent-tunnel-copy-url', '#agent-tunnel-carrier']:
+                         '#agent-tunnel-copy', '#agent-tunnel-carrier']:
             check(page.locator(selector).is_hidden(), 'Remote secondary content remained visible: ' + selector)
         check(page.locator('#agent-tunnel-message').is_hidden(), 'Remote ready state repeated the introduction')
+        page.click('#agent-tunnel-copy-url')
+        page.wait_for_function('url => window.copiedAgentText === url', arg=first['agentinfo_url'])
+        page.click('#agent-tunnel-details summary')
         page.click('#agent-tunnel-copy')
         page.wait_for_function('text => window.copiedAgentText === text', arg=prompt)
-        page.click('#agent-tunnel-details summary')
         page.click('#agent-tunnel-manage')
         check(page.locator('#agent-tunnel-setup').is_visible(), 'Manage did not reveal tunnel controls')
         page.click('#agent-tunnel-refresh')
@@ -4710,6 +4717,7 @@ def test_remote_agent_info_tracks_ssh_carrier_and_rejects_late_replies(browser, 
         check(page.input_value('#agent-tunnel-info') == second['connect_info'], 'Old carrier stop cleared the new tunnel')
         page.evaluate("() => window.terminalTest.applyAgentTunnelStateForTest({terminal_id: 'second', carrier_id: 'host-b', status: 'stopped'})")
         check(page.locator('#agent-tunnel-copy').is_hidden(), 'Stop retained a usable prompt')
+        check(page.locator('#agent-tunnel-copy-url').is_disabled(), 'Stop retained a usable URL')
         check(page.locator('#agent-connect-btn').is_hidden(), 'Stop retained the remote shortcut')
         page.click('#agent-tunnel-apply')
         page.evaluate('''() => window.terminalTest.applyTerminalListForTest({terminals: [
@@ -4727,7 +4735,7 @@ def test_remote_agent_info_tracks_ssh_carrier_and_rejects_late_replies(browser, 
         page.click('.terminal-tab[data-terminal-id="main"]')
         check(page.locator('#agent-connect-btn').is_visible(), 'Returning to a local tab did not restore Agent Info')
         page.click('#agent-connect-btn')
-        page.wait_for_selector('#agent-connect-copy:not([disabled])')
+        page.wait_for_selector('#agent-connect-copy-url:not([disabled])')
         check(page.locator('#agent-tunnel-dialog').is_hidden(), 'Local tab opened SSH info')
         check('Core host environment' in page.input_value('#agent-connect-info'), 'Local tab retained the SSH prompt')
         page.click('#agent-connect-close')
