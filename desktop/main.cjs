@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, WebContentsView, Menu, Tray, nativeImage, dialog, session, shell, clipboard } = require('electron');
+const { app, BrowserWindow, WebContentsView, Menu, Tray, nativeImage, dialog, session, shell, clipboard, screen } = require('electron');
 const { spawn } = require('node:child_process');
 const http = require('node:http');
 const path = require('node:path');
@@ -26,6 +26,8 @@ const { installToolbar } = require('./toolbar.cjs');
 const { createBrowserAccess } = require('./browser-access.cjs');
 const { installContextPaste } = require('./context-paste.cjs');
 const { createLanguage } = require('./language.cjs');
+const { loadWindowState, trackWindowState } = require('./window-state.cjs');
+const { createStartupWindow } = require('./startup-window.cjs');
 
 let maintenance;
 try { maintenance = installerRequest(process.argv); } catch (error) {
@@ -85,6 +87,8 @@ let child;
 let desktopSession;
 const expectedBackendExits = new WeakSet();
 let win;
+let windowState;
+let startupWindow;
 let tray;
 let capture;
 let captureTitle = '';
@@ -103,10 +107,16 @@ const diagnostics = createDiagnostics(path.join(app.getPath('userData'), 'diagno
 });
 
 function showWindow() {
+  if (booting && startupWindow) { startupWindow.focus(); focusSetup(); return; }
   if (!win || win.isDestroyed()) { focusSetup(); return; }
   if (win.isMinimized()) win.restore();
   win.show();
   win.focus();
+}
+
+function closeStartupWindow() {
+  startupWindow?.close();
+  startupWindow = null;
 }
 
 function launchBackend(preparedCommand, port = 0) {
@@ -245,6 +255,9 @@ function updateTrayMenu() {
 }
 
 async function start() {
+  startupWindow = createStartupWindow(MODES[mode], language);
+  await startupWindow.ready;
+  if (quitting) return;
   diagnostics.write('setup_start');
   if (app.isPackaged && !smoke) {
     coreStore = await installedStore(app.getPath('userData'), process.resourcesPath, app.getVersion());
@@ -314,9 +327,10 @@ async function start() {
   if (!smoke) {
     try { icon = createTray(); } catch { tray = null; }
   }
+  const windowStatePath = path.join(app.getPath('userData'), `window-${mode}.json`);
+  const savedWindow = loadWindowState(windowStatePath, screen);
   win = new BrowserWindow({
-    title: MODES[mode], width: 1280, height: 850,
-    minWidth: 640, minHeight: 480, show: false, icon,
+    title: MODES[mode], ...savedWindow.options, show: false, icon,
     webPreferences: {
       partition: 'standterm-desktop-toolbar', preload: path.join(__dirname, 'toolbar-preload.cjs'),
       // The trusted status strip must keep timers/notices current when unfocused.
@@ -327,6 +341,8 @@ async function start() {
       allowRunningInsecureContent: false, devTools: true,
     },
   });
+  windowState = trackWindowState(win, windowStatePath, savedWindow,
+    () => diagnostics.write('window_state_save_failed'));
   const coreView = new WebContentsView({ webPreferences: {
     session: desktopSession, nodeIntegration: false, contextIsolation: true,
     sandbox: true, webSecurity: true, webviewTag: false, allowRunningInsecureContent: false, devTools: true,
@@ -523,10 +539,15 @@ async function start() {
   await contents.loadURL(`${handoff.origin}/${smoke ? '?debug=1' : ''}`);
   if (child.exitCode !== null || child.signalCode !== null) throw new Error('The owned Core exited during startup.');
   diagnostics.write('window_ready', { port: Number(new URL(handoff.origin).port) });
+  // Apply outer bounds after native frame/menu initialization, before maximizing.
+  const { x, y, width, height } = savedWindow.options;
+  win.setBounds({ x, y, width, height });
+  if (savedWindow.maximized) win.maximize();
   booting = false;
+  showWindow();
+  closeStartupWindow();
   if (smoke) {
     // WebContentsView visibility follows its owner; exercise a real visible UI.
-    showWindow();
     contents.focus();
     await require('./smoke.cjs').run(win, handoff.origin, contents, browserAccess);
     if (captureSmoke) {
@@ -535,8 +556,6 @@ async function start() {
     }
     console.log('Desktop smoke: authenticated terminal, sandbox and navigation checks passed.');
     app.quit();
-  } else {
-    showWindow();
   }
 }
 
@@ -547,6 +566,7 @@ async function stopBackend() {
 
 async function handleCoreFailure(error) {
   if (failurePending || quitting) return;
+  closeStartupWindow();
   failurePending = true;
   booting = true;
   diagnostics.write('core_failed', { code: error.code });
@@ -590,6 +610,8 @@ app.on('before-quit', event => {
       if (!allowed) { restartRequest = null; quitting = false; return; }
     }
     cancelSetup();
+    windowState?.save();
+    closeStartupWindow();
     await finishBackendAndBrowser();
     if (restartRequest) {
       if (restartRequest.action) await coreStore.queue(restartRequest.action);
@@ -613,6 +635,7 @@ if (!app.requestSingleInstanceLock()) {
   diagnostics.write('startup');
   app.on('second-instance', showWindow);
   app.whenReady().then(start).catch(error => {
+    closeStartupWindow();
     diagnostics.write('startup_failed', { code: error.code });
     if (error.code === 'SETUP_CANCELED') { app.quit(); return; }
     void handleCoreFailure(error);

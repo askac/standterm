@@ -5,7 +5,7 @@ const path = require('node:path');
 const { create } = require('./i18n.js');
 const EVENTS = new Set(['startup', 'setup_start', 'setup_ready', 'backend_launch', 'backend_ready',
   'backend_exit', 'backend_spawn_failed', 'backend_verify_retry', 'backend_verified',
-  'host_port_rejected', 'port_change', 'window_ready', 'startup_failed', 'core_failed', 'shutdown', 'devtools_opened', 'capture_failed']);
+  'host_port_rejected', 'port_change', 'window_ready', 'window_state_save_failed', 'startup_failed', 'core_failed', 'shutdown', 'devtools_opened', 'capture_failed']);
 const CODES = new Set(['EACCES', 'EADDRINUSE', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT',
   'ENOENT', 'EPIPE', 'HOST_PORT_UNAVAILABLE', 'PORT_IN_USE', 'SETUP_CANCELED',
   'git_required', 'git_dirty', 'git_diverged', 'git_source_changed', 'invalid_git_workspace',

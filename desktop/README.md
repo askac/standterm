@@ -18,6 +18,17 @@ its existing next-load language behavior. Open native confirmations keep their
 original labels; subsequent dialogs use the synchronized language. Diagnostics
 updates when opened or refreshed.
 
+Desktop remembers the main window's normal position, size and maximized state
+in `window-<mode>.json` in its profile. Windows and WSL modes keep separate state.
+Restored bounds fit the current display's work area; a removed display falls back
+to the primary display. Minimized, hidden and fullscreen states are not restored.
+Invalid state or a failed write does not prevent startup or shutdown.
+
+A small startup window appears before Core preparation or WSL startup begins.
+It uses the cached Desktop language and closes when the main window is ready or
+startup fails. Launching the same mode again focuses startup or its setup window
+while Core is still starting.
+
 Desktop caches the last synchronized language in the mode profile's `language.json`
 for startup, setup and recovery before Core is ready. Older Core versions without
 the language snapshot field retain that cache; missing or invalid cache uses English.

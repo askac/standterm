@@ -36,6 +36,7 @@ const shellFiles = [
   'capture-settings.cjs', 'ui-commands.cjs', 'toolbar.cjs', 'toolbar-preload.cjs',
   'toolbar.html', 'toolbar.js', 'toolbar.css',
   'language.cjs', 'messages.js', 'i18n.js',
+  'window-state.cjs', 'startup-window.cjs',
   'test/toolbar-smoke.cjs',
   'browser-access.cjs',
   'context-paste.cjs',
