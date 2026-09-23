@@ -29,8 +29,9 @@ It uses the cached Desktop language and closes when the main window is ready or
 startup fails. Launching the same mode again focuses startup or its setup window
 while Core is still starting.
 
-WSL Core offers **SSH network source (this connection)** when WSL interoperability
-and `powershell.exe` on its PATH are available. **Windows (preview)** opens the
+WSL Core offers **Advanced → Use Windows networking (preview)** when WSL interoperability
+and `powershell.exe` on its PATH are available. Advanced is collapsed by default;
+leaving the checkbox unchecked uses Core networking. Enabling it opens the
 first SSH hop through a temporary Windows PowerShell TCP helper. It needs Windows
 PowerShell policy to allow that helper and Windows DNS/routing/firewall to permit
 the target connection. No Windows SSH server, Python, administrator access, new

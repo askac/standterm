@@ -553,6 +553,11 @@
         .ssh-save-options label { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
         .ssh-save-options label[hidden] { display: none; }
         #controls .ssh-save-options input { display: inline-block; width: auto; margin: 0; padding: 0; }
+        #ssh-network-origin-field { margin: 10px 0; color: #bbb; font-size: 12px; }
+        #ssh-network-origin-field summary { cursor: pointer; }
+        #ssh-network-origin-field label { display: flex; align-items: center; gap: 8px; margin-top: 10px; cursor: pointer; }
+        #controls #ssh-network-origin { width: auto; margin: 0; padding: 0; }
+        #ssh-network-origin-hint { margin: 8px 0 0; line-height: 1.5; }
         .ssh-session-picker { position: relative; margin-bottom: 15px; }
         #controls #ssh-session-picker-toggle { width: 100%; padding: 9px 10px; background: #333; border: 1px solid #555; color: #ddd; border-radius: 4px; font-weight: normal; text-align: left; }
         #controls #ssh-session-picker-toggle::after { content: "\25BE"; float: right; color: #888; }
@@ -1378,14 +1383,6 @@
                 <label data-mode="uart"><input type="radio" name="connection_type" value="uart">UART</label>
             </div>
             <div id="ssh-fields">
-                <div id="ssh-network-origin-field" hidden>
-                    <label for="ssh-network-origin" data-i18n="connection.network_origin">SSH network source (this connection)</label>
-                    <select id="ssh-network-origin" aria-describedby="ssh-network-origin-hint">
-                        <option value="core" data-i18n="connection.network_core">Core (WSL)</option>
-                        <option value="windows" data-i18n="connection.network_windows">Windows (preview)</option>
-                    </select>
-                    <p id="ssh-network-origin-hint" data-i18n="connection.network_hint">First hop only; not saved in profiles. With Windows selected, localhost means the Windows host.</p>
-                </div>
                 <section class="ssh-preparation-pane" id="ssh-direct-pane">
                     <button type="button" id="ssh-direct-heading" class="ssh-preparation-heading" aria-expanded="true" aria-controls="ssh-direct-body"><span class="ssh-pane-selection">●</span><span data-i18n="connection.direct">Direct connect</span><small id="ssh-direct-summary"></small></button>
                     <div class="ssh-preparation-body" id="ssh-direct-body">
@@ -1418,6 +1415,11 @@
                         <button type="button" id="ssh-edit-route" data-i18n="connection.edit_route">Edit route...</button>
                     </div>
                 </section>
+                <details id="ssh-network-origin-field" hidden>
+                    <summary data-i18n="connection.advanced">Advanced</summary>
+                    <label for="ssh-network-origin"><input type="checkbox" id="ssh-network-origin" aria-describedby="ssh-network-origin-hint"><span data-i18n="connection.use_windows_network">Use Windows networking (preview)</span></label>
+                    <p id="ssh-network-origin-hint" data-i18n="connection.network_hint">First hop only; not saved in profiles. With Windows selected, localhost means the Windows host.</p>
+                </details>
                 <div class="ssh-save-options">
                     <label><input type="checkbox" id="ssh-save-history" checked><span data-i18n="connection.save_history">Save history</span></label>
                     <label><input type="checkbox" id="ssh-save-session"><span data-i18n="connection.save_profile">Save connection profile</span></label>
@@ -5795,7 +5797,10 @@
                     .some(option => option.value === 'windows');
                 document.getElementById('ssh-network-origin-field').hidden = !windowsNetworkAvailable;
                 sshNetworkOrigin.disabled = !windowsNetworkAvailable;
-                if (!windowsNetworkAvailable) sshNetworkOrigin.value = 'core';
+                if (!windowsNetworkAvailable) {
+                    sshNetworkOrigin.checked = false;
+                    document.getElementById('ssh-network-origin-field').open = false;
+                }
                 localShellFields.style.display = (
                     normalized === 'local_shell' && localShellKindSelect.options.length > 0
                 ) ? 'block' : 'none';
@@ -8306,7 +8311,7 @@
                     terminal_id: activeTerminalId
                 };
                 if (connectionType === 'ssh') {
-                    if (!sshNetworkOrigin.disabled && sshNetworkOrigin.value === 'windows') formData.network_origin = 'windows';
+                    if (!sshNetworkOrigin.disabled && sshNetworkOrigin.checked) formData.network_origin = 'windows';
                     if (sshPreparationMode === 'route') {
                         const entry = currentSshRouteEntry();
                         if (!entry) throw new Error(t('browser.chrome.choose_route'));
@@ -8343,7 +8348,8 @@
             }
 
             function resetSshFormFields() {
-                sshNetworkOrigin.value = 'core';
+                sshNetworkOrigin.checked = false;
+                document.getElementById('ssh-network-origin-field').open = false;
                 Object.entries(CONNECTION_FIELD_IDS.ssh).forEach(([fieldName, id]) => {
                     clearConnectionFieldEdited('ssh', fieldName);
                     const input = document.getElementById(id);

@@ -27,13 +27,23 @@ def test_selection_and_route_scope(browser, url, locale):
         routes.show_ssh(page)
         set_available(page, True)
         assert page.locator('#ssh-network-origin-field').is_visible()
-        assert page.input_value('#ssh-network-origin') == 'core'
+        assert page.locator('#ssh-network-origin').is_hidden()
+        assert not page.is_checked('#ssh-network-origin')
+        assert page.locator('#ssh-network-origin-field summary').inner_text() == (
+            '進階' if locale == 'zh-TW' else 'Advanced')
+        collapsed_height = page.locator('#controls').bounding_box()['height']
+        page.locator('#ssh-network-origin-field summary').click()
+        assert page.locator('#ssh-network-origin').is_visible()
+        assert page.locator('#controls').bounding_box()['height'] > collapsed_height
         assert page.locator('label[for="ssh-network-origin"]').inner_text() == (
-            'SSH 網路來源（本次連線）' if locale == 'zh-TW' else 'SSH network source (this connection)')
+            '使用 Windows 網路（試用）' if locale == 'zh-TW' else 'Use Windows networking (preview)')
         page.fill('#host', 'target.test'); page.fill('#username', 'operator')
         direct = page.evaluate('() => window.terminalTest.prepareSshConnectionForTest()')
         assert 'network_origin' not in direct
-        page.select_option('#ssh-network-origin', 'windows')
+        page.check('#ssh-network-origin')
+        page.locator('#ssh-network-origin-field summary').click()
+        assert page.locator('#ssh-network-origin').is_hidden()
+        assert page.is_checked('#ssh-network-origin')
         direct = page.evaluate('() => window.terminalTest.prepareSshConnectionForTest()')
         assert direct['network_origin'] == 'windows'
         page.evaluate('''() => window.terminalTest.setSshSessionState({version:2, revision:0,
@@ -53,7 +63,14 @@ def test_selection_and_route_scope(browser, url, locale):
         set_available(page, False)
         assert page.locator('#ssh-network-origin-field').is_hidden()
         assert page.locator('#ssh-network-origin').is_disabled()
-        assert page.input_value('#ssh-network-origin') == 'core'
+        assert not page.is_checked('#ssh-network-origin')
+        route = page.evaluate('() => window.terminalTest.prepareSshConnectionForTest()')
+        assert 'network_origin' not in route
+        set_available(page, True)
+        assert page.locator('#ssh-network-origin').is_hidden()
+        page.locator('#ssh-network-origin-field summary').click()
+        page.check('#ssh-network-origin')
+        page.uncheck('#ssh-network-origin')
         route = page.evaluate('() => window.terminalTest.prepareSshConnectionForTest()')
         assert 'network_origin' not in route
     finally:
@@ -66,7 +83,8 @@ def test_trust_retry_keeps_the_selected_network(browser, url):
         routes.show_ssh(page)
         set_available(page, True)
         page.fill('#host', 'target.test'); page.fill('#username', 'operator')
-        page.select_option('#ssh-network-origin', 'windows')
+        page.locator('#ssh-network-origin-field summary').click()
+        page.check('#ssh-network-origin')
         page.evaluate('''() => {
             window.terminalTest.captureSshStartsForTest();
             window.terminalTest.clearEmitted();
@@ -94,7 +112,11 @@ def test_trust_retry_keeps_the_selected_network(browser, url):
         page.click('#actionYesBtn')
         # The synthetic retry hides the form; still exercise its change handler
         # before delivering the deliberately delayed trust result.
-        page.select_option('#ssh-network-origin', 'core', force=True)
+        page.evaluate('''() => {
+            const input = document.getElementById('ssh-network-origin');
+            input.checked = false;
+            input.dispatchEvent(new Event('change', {bubbles: true}));
+        }''')
         page.evaluate('data => window.terminalTest.handleSshOutput(data)',
                       {**response, 'attempt_id': starts[1]['attempt_id'], 'action_id': 'trust-second'})
         page.wait_for_timeout(200)
