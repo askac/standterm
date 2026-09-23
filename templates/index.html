@@ -1378,6 +1378,14 @@
                 <label data-mode="uart"><input type="radio" name="connection_type" value="uart">UART</label>
             </div>
             <div id="ssh-fields">
+                <div id="ssh-network-origin-field" hidden>
+                    <label for="ssh-network-origin" data-i18n="connection.network_origin">SSH network source (this connection)</label>
+                    <select id="ssh-network-origin" aria-describedby="ssh-network-origin-hint">
+                        <option value="core" data-i18n="connection.network_core">Core (WSL)</option>
+                        <option value="windows" data-i18n="connection.network_windows">Windows (preview)</option>
+                    </select>
+                    <p id="ssh-network-origin-hint" data-i18n="connection.network_hint">First hop only; not saved in profiles. With Windows selected, localhost means the Windows host.</p>
+                </div>
                 <section class="ssh-preparation-pane" id="ssh-direct-pane">
                     <button type="button" id="ssh-direct-heading" class="ssh-preparation-heading" aria-expanded="true" aria-controls="ssh-direct-body"><span class="ssh-pane-selection">●</span><span data-i18n="connection.direct">Direct connect</span><small id="ssh-direct-summary"></small></button>
                     <div class="ssh-preparation-body" id="ssh-direct-body">
@@ -2373,6 +2381,7 @@
             const modeSelector = document.getElementById('modeSelector');
             const sshFields = document.getElementById('ssh-fields');
             const sshHostInput = document.getElementById('host');
+            const sshNetworkOrigin = document.getElementById('ssh-network-origin');
             const sshPortInput = document.getElementById('port');
             const sshUsernameInput = document.getElementById('username');
             const sshPasswordInput = document.getElementById('password');
@@ -5782,6 +5791,11 @@
                 });
                 modeSelector.classList.toggle('locked', !!forcedConnectionType || getActiveModeCount() <= 1);
                 sshFields.style.display = normalized === 'ssh' ? 'block' : 'none';
+                const windowsNetworkAvailable = getConnectionFieldOptions('ssh', 'network_origin')
+                    .some(option => option.value === 'windows');
+                document.getElementById('ssh-network-origin-field').hidden = !windowsNetworkAvailable;
+                sshNetworkOrigin.disabled = !windowsNetworkAvailable;
+                if (!windowsNetworkAvailable) sshNetworkOrigin.value = 'core';
                 localShellFields.style.display = (
                     normalized === 'local_shell' && localShellKindSelect.options.length > 0
                 ) ? 'block' : 'none';
@@ -8292,6 +8306,7 @@
                     terminal_id: activeTerminalId
                 };
                 if (connectionType === 'ssh') {
+                    if (!sshNetworkOrigin.disabled && sshNetworkOrigin.value === 'windows') formData.network_origin = 'windows';
                     if (sshPreparationMode === 'route') {
                         const entry = currentSshRouteEntry();
                         if (!entry) throw new Error(t('browser.chrome.choose_route'));
@@ -8328,6 +8343,7 @@
             }
 
             function resetSshFormFields() {
+                sshNetworkOrigin.value = 'core';
                 Object.entries(CONNECTION_FIELD_IDS.ssh).forEach(([fieldName, id]) => {
                     clearConnectionFieldEdited('ssh', fieldName);
                     const input = document.getElementById(id);
@@ -8407,7 +8423,7 @@
 
             function sshConnectionDiagnostic(value) {
                 const result = {};
-                for (const key of ['connection_type', 'terminal_id', 'attempt_id', 'node_id', 'host', 'port', 'username', 'host_key_alias', 'use_browser_key']) {
+                for (const key of ['connection_type', 'terminal_id', 'attempt_id', 'node_id', 'host', 'port', 'username', 'host_key_alias', 'use_browser_key', 'network_origin']) {
                     if (['string', 'number', 'boolean'].includes(typeof value[key])) result[key] = value[key];
                 }
                 if (Array.isArray(value.route)) result.route = value.route.map(sshConnectionDiagnostic);
@@ -8498,6 +8514,7 @@
                 input.addEventListener('input', invalidateSshRetry);
                 input.addEventListener('input', () => { directHostIdentity.invalidate(); directKeyControl.update(); applyQuickConnectKeySelection(); renderSshPreparation(); });
             });
+            sshNetworkOrigin.addEventListener('change', invalidateSshRetry);
             sshSessionPickerToggle.onclick = () => {
                 const opening = !sshSessionPickerPanel.classList.contains('open');
                 sshSessionPickerPanel.classList.toggle('open', opening);

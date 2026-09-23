@@ -29,6 +29,27 @@ It uses the cached Desktop language and closes when the main window is ready or
 startup fails. Launching the same mode again focuses startup or its setup window
 while Core is still starting.
 
+WSL Core offers **SSH network source (this connection)** when WSL interoperability
+and `powershell.exe` on its PATH are available. **Windows (preview)** opens the
+first SSH hop through a temporary Windows PowerShell TCP helper. It needs Windows
+PowerShell policy to allow that helper and Windows DNS/routing/firewall to permit
+the target connection. No Windows SSH server, Python, administrator access, new
+listener or firewall rule is required by the relay. The target still needs SSH.
+
+SSH authentication, browser keys, host-key storage and SFTP remain in Core.
+Windows `localhost` means the Windows host and never inherits Core's localhost
+automatic trust or key setup. Use a host key alias when different hosts share
+an address across the two networks. The choice applies to the current connection
+and its retries, is not saved in profiles, and never silently falls back to Core.
+Later jump hosts, SSH forwarding targets and local forwarding listeners keep
+their existing semantics; selecting Windows does not move those listeners.
+This preview is available in WSL browser launches too, under the same conditions.
+
+`tests/windows_network_smoke.py` checks the real Windows binary relay and process
+cleanup (Windows Node is only a test fixture dependency).
+`tests/ssh_windows_network_smoke.py` additionally needs a local WSL `sshd` binary
+to create disposable SSH servers for trust, jump, SFTP and forwarding checks.
+
 Desktop caches the last synchronized language in the mode profile's `language.json`
 for startup, setup and recovery before Core is ready. Older Core versions without
 the language snapshot field retain that cache; missing or invalid cache uses English.
