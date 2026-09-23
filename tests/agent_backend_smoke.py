@@ -4538,6 +4538,7 @@ def test_browser_ssh_sign_request_store_uses_monotonic_deadlines():
 def make_sftp_test_bridge(session_token, terminal_id=standterm.TERMINAL_ID_MAIN):
     bridge = object.__new__(standterm.SSHBridge)
     standterm.TerminalBridge.__init__(bridge, session_token, terminal_id)
+    bridge.network_origin = 'core'
     bridge._sftp_endpoint = {
         'user': 'tester',
         'host': 'host.example',
@@ -6858,7 +6859,9 @@ def test_backend_start_form_schema_is_declared_and_typed():
                 standterm.SETTING_UART_DEFAULT_BAUD_RATE: 230400,
             },
         )
-        options = standterm.TERMINAL_BACKEND_REGISTRY.build_policy_options(context=context)
+        # Keep the base schema deterministic; optional Windows fields have dedicated coverage.
+        with patch('terminal_backends.ssh.windows_network_executable', return_value=None):
+            options = standterm.TERMINAL_BACKEND_REGISTRY.build_policy_options(context=context)
     finally:
         standterm.is_wsl = original_is_wsl
 

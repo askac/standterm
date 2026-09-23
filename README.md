@@ -9,6 +9,11 @@ to the StandTerm server process across page reloads.
 [Download and install StandTerm Desktop](#desktop-downloads-evaluation), or use
 the [browser-based Core quick start](#quick-start).
 
+The current source is **Core 2.14.0**, paired with Desktop 0.5.3. It adds English
+and Traditional Chinese interface text, simplified Agent connection controls,
+and optional Windows networking for SSH from WSL. The published downloads below
+retain their original versions until new packages are uploaded.
+
 **Core 2.13.0** is a [source release](https://github.com/askac/standterm/releases/tag/v2.13.0).
 It adds SSH routes with up to three jump hosts, ordered node editing and per-site
 login cards. Direct connections and route nodes share browser-key controls;
