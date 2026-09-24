@@ -11,6 +11,7 @@ from .base import (
 )
 from .local_shell import LocalFileTransferError, LocalShellBackendPlugin, LocalShellBridge
 from .ssh import SFTPTransferError, SSHBackendPlugin, SSHBridge
+from .telnet import TelnetBackendPlugin, TelnetBridge
 from .uart import UARTBackendPlugin, UARTBridge
 
 __all__ = [
@@ -20,6 +21,8 @@ __all__ = [
     'SSHBackendPlugin',
     'SSHBridge',
     'SFTPTransferError',
+    'TelnetBackendPlugin',
+    'TelnetBridge',
     'BackendAction',
     'BackendActionStore',
     'BackendPolicyContext',

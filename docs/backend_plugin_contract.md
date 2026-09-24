@@ -19,10 +19,11 @@ per backend:
 }
 ```
 
-`connection_type` is a normalized identifier such as `ssh`, `local_shell`, or
-`uart`. `allowed` is the current client-side availability result after local
-access and browser authorization checks. SSH, Local Shell, and UART all require
-a local client, browser authorization, or an explicit remote-access override
+`connection_type` is a normalized identifier such as `ssh`, `telnet`,
+`local_shell`, or `uart`. `allowed` is the current client-side availability
+result after local access and browser authorization checks. All built-in
+backends require a local client or browser authorization; SSH, Local Shell, and
+UART also support explicit remote-access overrides
 when the browser reaches StandTerm over a non-loopback address. Plugins may
 expose additional connection-specific metadata, but new start form metadata
 should be declared in `start_fields`.
@@ -79,6 +80,12 @@ UART declares:
 
 - `serial_port`: required string text field.
 - `baud_rate`: required integer select field.
+
+Telnet declares `host`, `port` (default 23), and `encoding` (`utf-8`, `big5`,
+`latin-1`). WSL also declares `network_origin` when the existing Windows TCP
+helper is available. The browser hides that Advanced option elsewhere. Telnet
+handles IAC option negotiation and byte escaping before decoding display text;
+there is no local Telnet executable dependency.
 
 UART detected port listing is still carried by the legacy `available_ports`
 policy key because the current UI uses a detected-port selector with a manual
@@ -158,6 +165,13 @@ Unsupported values or an unavailable Windows helper are rejected without fallbac
 Authentication and host-key checks remain in Core; Windows loopback targets do
 not qualify for Core localhost trust/key-setup shortcuts. The selected origin is
 retained in retries and Windows-backed SFTP endpoint metadata.
+
+Browser SSH profiles and history retain the first-hop preference as entry-level
+`networkOrigin` (`core` by default), including settings import/export. The browser
+shows the collapsed Advanced option only when the policy offers Windows networking.
+On other Core environments it omits `network_origin` from the start payload, using
+Core networking while preserving the stored preference. Nodes never store this
+preference; changing a shared node does not change another entry's network choice.
 
 When adding a backend, implement `build_policy_option()`,
 `get_start_form_schema()`, `validate_start_payload()`, `create_bridge()`, and

@@ -72,6 +72,8 @@ from terminal_backends import (
     SFTPTransferError,
     SSHBackendPlugin,
     SSHBridge,
+    TelnetBackendPlugin,
+    TelnetBridge,
     TerminalBackendPlugin,
     TerminalBackendRegistry,
     TerminalBridge,
@@ -225,6 +227,7 @@ CONNECTION_TYPES = (
     CONNECTION_TYPE_SSH,
     CONNECTION_TYPE_LOCAL_SHELL,
     CONNECTION_TYPE_UART,
+    'telnet',
 )
 RESERVED_BACKEND_PAYLOAD_KEYS = {
     'connection_type',
@@ -579,7 +582,7 @@ def normalize_connection_type(value):
 def connection_type_cli_value(value):
     normalized = normalize_connection_type(value)
     if not normalized:
-        raise argparse.ArgumentTypeError('expected ssh, local-shell, or uart')
+        raise argparse.ArgumentTypeError('expected ssh, local-shell, uart, or telnet')
     return normalized
 
 def parse_cli_args(argv):
@@ -1096,7 +1099,7 @@ def validate_runtime_setting_update(setting_key, value):
         if not normalized:
             return None, {
                 'error_code': 'settings_invalid_value',
-                'message': 'Default connection must be ssh, local_shell, or uart.',
+                'message': 'Default connection must be ssh, local_shell, uart, or telnet.',
             }
         if TERMINAL_BACKEND_REGISTRY.get(normalized) is None:
             return None, {
@@ -2461,6 +2464,11 @@ TERMINAL_BACKEND_REGISTRY = TerminalBackendRegistry([
         key_setup_ttl_seconds=LOCALHOST_KEY_SETUP_TTL_SECONDS,
         token_urlsafe=secrets.token_urlsafe,
         time_func=time.time,
+    ),
+    TelnetBackendPlugin(
+        is_allowed_for_client=lambda client_ip, browser_authorized=False: (
+            is_local_client_ip(client_ip) or browser_authorized
+        ),
     ),
     LocalShellBackendPlugin(
         bridge_cls=LocalShellBridge,
@@ -6050,6 +6058,8 @@ def is_terminal_bridge_allowed_for_sid(bridge, sid):
     browser_authorized = socket_browser_authorized.get(sid, False)
     if bridge.connection_type == CONNECTION_TYPE_SSH:
         return is_ssh_allowed_for_client(client_ip, browser_authorized=browser_authorized)
+    if bridge.connection_type == 'telnet':
+        return is_local_client_ip(client_ip) or browser_authorized
     if bridge.connection_type == CONNECTION_TYPE_LOCAL_SHELL:
         return is_local_shell_allowed_for_client(client_ip, browser_authorized=browser_authorized)
     if bridge.connection_type == CONNECTION_TYPE_UART:
@@ -6204,10 +6214,10 @@ def validate_start_ssh_payload(data, client_ip, browser_authorized=False):
 
     connection_type = normalize_connection_type(data.get('connection_type', DEFAULT_CONNECTION_TYPE))
     if not connection_type:
-        return None, 'Connection type must be ssh, local_shell, or uart.'
+        return None, 'Connection type must be ssh, local_shell, uart, or telnet.'
     plugin = TERMINAL_BACKEND_REGISTRY.get(connection_type)
     if not plugin:
-        return None, 'Connection type must be ssh, local_shell, or uart.'
+        return None, 'Connection type must be ssh, local_shell, uart, or telnet.'
     if FORCE_CONNECTION_TYPE and connection_type != FORCE_CONNECTION_TYPE:
         return None, f'Connection type is locked to {FORCE_CONNECTION_TYPE}.'
 
@@ -10413,7 +10423,7 @@ def start_terminal_backend(sid, session_token, payload, start_token):
     if not plugin:
         emit_connection_error(
             sid,
-            'Connection type must be ssh, local_shell, or uart.',
+            'Connection type must be ssh, local_shell, uart, or telnet.',
             error_code='invalid_start_ssh_payload',
             terminal_id=terminal_id,
             attempt_id=payload.get('attempt_id'),

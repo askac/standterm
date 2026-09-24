@@ -553,11 +553,12 @@
         .ssh-save-options label { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
         .ssh-save-options label[hidden] { display: none; }
         #controls .ssh-save-options input { display: inline-block; width: auto; margin: 0; padding: 0; }
-        #ssh-network-origin-field { margin: 10px 0; color: #bbb; font-size: 12px; }
-        #ssh-network-origin-field summary { cursor: pointer; }
-        #ssh-network-origin-field label { display: flex; align-items: center; gap: 8px; margin-top: 10px; cursor: pointer; }
-        #controls #ssh-network-origin { width: auto; margin: 0; padding: 0; }
-        #ssh-network-origin-hint { margin: 8px 0 0; line-height: 1.5; }
+        #ssh-network-origin-field, #telnet-network-origin-field { margin: 10px 0; color: #bbb; font-size: 12px; }
+        #ssh-network-origin-field summary, #telnet-network-origin-field summary { cursor: pointer; }
+        #ssh-network-origin-field label, #telnet-network-origin-field label { display: flex; align-items: center; gap: 8px; margin-top: 10px; cursor: pointer; }
+        #controls #ssh-network-origin, #controls #telnet-network-origin { width: auto; margin: 0; padding: 0; }
+        #ssh-network-origin-hint, #telnet-network-origin-field p { margin: 8px 0 0; line-height: 1.5; }
+        #telnet-fields > p { color: #aaa; font-size: 12px; line-height: 1.5; }
         .ssh-session-picker { position: relative; margin-bottom: 15px; }
         #controls #ssh-session-picker-toggle { width: 100%; padding: 9px 10px; background: #333; border: 1px solid #555; color: #ddd; border-radius: 4px; font-weight: normal; text-align: left; }
         #controls #ssh-session-picker-toggle::after { content: "\25BE"; float: right; color: #888; }
@@ -1381,6 +1382,7 @@
                 <label data-mode="ssh"><input type="radio" name="connection_type" value="ssh">SSH</label>
                 <label data-mode="local_shell" title="Runs on the StandTerm host." data-i18n-title="connection.local_shell_hint"><input type="radio" name="connection_type" value="local_shell"><span data-i18n="connection.local_shell">Local Shell</span></label>
                 <label data-mode="uart"><input type="radio" name="connection_type" value="uart">UART</label>
+                <label data-mode="telnet"><input type="radio" name="connection_type" value="telnet">Telnet</label>
             </div>
             <div id="ssh-fields">
                 <section class="ssh-preparation-pane" id="ssh-direct-pane">
@@ -1418,7 +1420,7 @@
                 <details id="ssh-network-origin-field" hidden>
                     <summary data-i18n="connection.advanced">Advanced</summary>
                     <label for="ssh-network-origin"><input type="checkbox" id="ssh-network-origin" aria-describedby="ssh-network-origin-hint"><span data-i18n="connection.use_windows_network">Use Windows networking (preview)</span></label>
-                    <p id="ssh-network-origin-hint" data-i18n="connection.network_hint">First hop only; not saved in profiles. With Windows selected, localhost means the Windows host.</p>
+                    <p id="ssh-network-origin-hint" data-i18n="connection.network_hint">First hop only. Saved with the SSH profile. With Windows selected, localhost means the Windows host.</p>
                 </details>
                 <div class="ssh-save-options">
                     <label><input type="checkbox" id="ssh-save-history" checked><span data-i18n="connection.save_history">Save history</span></label>
@@ -1435,6 +1437,20 @@
                 <input type="text" id="uart-port" aria-label="UART port" data-i18n-aria-label="connection.uart_port" list="uart-port-list" placeholder="COM3 or /dev/ttyUSB0" data-i18n-placeholder="connection.uart_example">
                 <datalist id="uart-port-list"></datalist>
                 <select id="uart-baud" aria-label="Baud rate" data-i18n-aria-label="connection.baud"></select>
+            </div>
+            <div id="telnet-fields" style="display: none;">
+                <div style="display: flex; gap: 10px;">
+                    <input type="text" id="telnet-host" aria-label="Host" data-i18n-aria-label="connection.host" placeholder="Host" data-i18n-placeholder="connection.host" style="flex: 3;">
+                    <input type="text" id="telnet-port" aria-label="Port" data-i18n-aria-label="connection.port" placeholder="Port" data-i18n-placeholder="connection.port" value="23" style="flex: 1;">
+                </div>
+                <label for="telnet-encoding" data-i18n="connection.telnet_encoding">Encoding</label>
+                <select id="telnet-encoding"><option value="utf-8">UTF-8</option><option value="big5">Big5</option><option value="latin-1">Latin-1</option></select>
+                <details id="telnet-network-origin-field" hidden>
+                    <summary data-i18n="connection.advanced">Advanced</summary>
+                    <label for="telnet-network-origin"><input type="checkbox" id="telnet-network-origin"><span data-i18n="connection.use_windows_network">Use Windows networking (preview)</span></label>
+                    <p data-i18n="connection.telnet_network_hint">With Windows selected, localhost means the Windows host.</p>
+                </details>
+                <p data-i18n="connection.telnet_plaintext">Telnet sends credentials in plaintext. Use a trusted network or tunnel.</p>
             </div>
             <button id="connectBtn">Connect to SSH</button>
         </div>
@@ -1727,7 +1743,8 @@
         const CONNECTION_LABELS = {
             ssh: 'SSH',
             local_shell: 'Local Shell',
-            uart: 'UART'
+            uart: 'UART',
+            telnet: 'Telnet'
         };
         const AGENT_MODE_DISABLED = 'disabled';
         const AGENT_MODE_OBSERVE = 'observe';
@@ -2413,6 +2430,8 @@
             const localShellFields = document.getElementById('local-shell-fields');
             const localShellKindSelect = document.getElementById('local-shell-kind');
             const uartFields = document.getElementById('uart-fields');
+            const telnetFields = document.getElementById('telnet-fields');
+            const telnetNetworkOrigin = document.getElementById('telnet-network-origin');
             const uartPortSelect = document.getElementById('uart-port-select');
             const uartPortInput = document.getElementById('uart-port');
             const uartPortList = document.getElementById('uart-port-list');
@@ -4898,9 +4917,30 @@
                 return [...state.profiles, ...state.history].find(entry => entry.id === selectedSshRouteEntry) || null;
             }
 
+            function isWindowsNetworkAvailable() {
+                return getConnectionFieldOptions('ssh', 'network_origin').some(option => option.value === 'windows');
+            }
+
+            function renderSshNetworkOrigin() {
+                const available = isWindowsNetworkAvailable();
+                const field = document.getElementById('ssh-network-origin-field');
+                field.hidden = !available;
+                sshNetworkOrigin.disabled = !available;
+            }
+
+            function applySshNetworkOrigin(entry) {
+                sshNetworkOrigin.checked = entry?.networkOrigin === 'windows';
+                document.getElementById('ssh-network-origin-field').open = false;
+                renderSshNetworkOrigin();
+            }
+
             function selectSshPreparationMode(mode) {
                 if (!['direct', 'route'].includes(mode)) return;
-                if (sshPreparationMode !== mode) invalidateSshRetry();
+                if (sshPreparationMode !== mode) {
+                    invalidateSshRetry();
+                    const entry = mode === 'route' ? currentSshRouteEntry() : currentSshEntry();
+                    if (entry) applySshNetworkOrigin(entry);
+                }
                 sshPreparationMode = mode;
                 closeSshSessionPicker();
                 renderSshPreparation();
@@ -5018,6 +5058,7 @@
 
             async function prepareSshConnection(formData, interactiveLogin = false, commit = false) {
                 const formRevision = sshConnectionFormRevision;
+                const networkOrigin = sshNetworkOrigin.checked ? 'windows' : 'core';
                 const terminal = getActiveTerminalState();
                 const fromRoute = sshPreparationMode === 'route';
                 const routeDraft = fromRoute ? sshRouteDraft : null;
@@ -5081,12 +5122,14 @@
                 assertCurrent();
                 if (commit && saveSession) {
                     const nextState = SshRoutes.clone(source);
-                    let entry = selected;
+                    let entry = nextState.profiles.find(item => item.id === selected?.id)
+                        || nextState.history.find(item => item.id === selected?.id);
                     if (!fromRoute) {
                         const matching = nextState.profiles.filter(profile => {
                             const candidate = SshRoutes.checkedPath(nextState, profile);
                             return candidate.length === 1 && getSshTargetKey(candidate[0].endpoint) === getSshTargetKey(target.endpoint)
-                                && candidate[0].hostKeyAlias === target.hostKeyAlias;
+                                && candidate[0].hostKeyAlias === target.hostKeyAlias
+                                && (profile.id === selected?.id || (profile.networkOrigin || 'core') === networkOrigin);
                         });
                         entry = matching.find(profile => profile.id === selected?.id) || (matching.length === 1 ? matching[0] : null);
                         if (!entry) {
@@ -5096,6 +5139,7 @@
                         }
                         entry.startNodeId = SshRoutes.copyPath(nextState, path);
                     }
+                    entry.networkOrigin = networkOrigin;
                     const used = new Set(nextState.nodes.map(node => node.authentication.keyRef?.keyId));
                     const keyChanges = temporaryKeys.filter(record => used.has(record.keyId)).map(record => ({ type: 'put', record }));
                     const operation = SshRoutes.save(openSshSessionsDb, nextState, keyChanges);
@@ -5215,6 +5259,7 @@
                 const entry = entryType === 'profile' ? findSshProfile(entryId) : findSshHistory(entryId);
                 if (!entry) return;
                 const path = SshRoutes.resolve(sshSessionState, entry.startNodeId).path;
+                applySshNetworkOrigin(entry);
                 if (path.length !== 1) {
                     selectedSshRouteEntry = entry.id;
                     selectSshPreparationMode('route');
@@ -5224,6 +5269,7 @@
                 invalidateSshRetry();
                 selectSshPreparationMode('direct');
                 selectedSshPickerEntry = { type: entryType, id: entry.id };
+                applySshNetworkOrigin(entry);
                 sshHostInput.value = entry.host;
                 sshPortInput.value = entry.port;
                 sshUsernameInput.value = entry.username;
@@ -5285,8 +5331,10 @@
                 const state = getActiveTerminalState();
                 const fromConnection = state?.connectionType === 'ssh' && (state.connected || state.connecting);
                 const target = fromConnection ? normalizeSshTarget(state.sshTarget || {}) : getCurrentSshTarget();
-                return { target, fromConnection, key: JSON.stringify([
-                    state?.instanceId, fromConnection, fromConnection ? state.connectedAt : null, target
+                const networkOrigin = fromConnection ? state.sshTarget?.network_origin || 'core'
+                    : sshNetworkOrigin.checked ? 'windows' : 'core';
+                return { target, networkOrigin, fromConnection, key: JSON.stringify([
+                    state?.instanceId, fromConnection, fromConnection ? state.connectedAt : null, target, networkOrigin
                 ]) };
             }
 
@@ -5346,7 +5394,8 @@
                         const node = { id: SshRoutes.id(), nextNodeId: null, hostKeyAlias: '',
                             endpoint: target || { host: '', port: '22', username: '' }, authentication: { method: 'password' } };
                         entry = { id: SshRoutes.id(), name: '', startNodeId: node.id,
-                            sortOrder: snapshot.state.profiles.length, keyId: null, keyTarget: null };
+                            sortOrder: snapshot.state.profiles.length, keyId: null, keyTarget: null,
+                            networkOrigin: getSshProfileEditorContext().networkOrigin };
                         snapshot.state.nodes.push(node);
                         snapshot.state.profiles.push(entry);
                     }
@@ -5363,6 +5412,8 @@
                         onBusy: delta => { draft.pending += delta; renderSshProfileManager(); },
                         onChange: () => renderSshProfileManager()
                     });
+                    draft.network = SshRoutes.networkFields({ parent: sshProfileNode, origin: entry.networkOrigin,
+                        available: isWindowsNetworkAvailable(), translate: t });
                 } catch (err) {
                     if (isCurrentSshProfileEditor(version)) throw err;
                 } finally {
@@ -5384,6 +5435,7 @@
                 if (current.isNew) Object.assign(state.nodes.find(item => item.id === current.node.id), node);
                 else if (JSON.stringify(node) !== JSON.stringify(current.node)) entry.startNodeId = SshRoutes.copyPath(state, [node]);
                 entry.name = sshProfileNameInput.value.trim();
+                entry.networkOrigin = current.network.read();
                 return { state, entryId: entry.id, temporaryKeys: [...current.newKeys.values()] };
             }
 
@@ -5438,6 +5490,7 @@
                     baseState: inline?.baseState || snapshot.state,
                     temporaryKeys: prepared?.temporaryKeys || [],
                     mode: 'manage', keys: snapshot.keys, keyAllowed: isBrowserSshKeyAllowedByPolicy(),
+                    windowsNetworkAvailable: isWindowsNetworkAvailable(),
                     createKey: createTemporarySshKey, copyPublicKey: value => copyToClipboard(value),
                     hostIdentity: { request: requestSshHostIdentity, terminalId },
                     onDone: (draft, entryId, temporaryKeys) => persistSshProfileRoute(draft, entryId, temporaryKeys, version)
@@ -5551,7 +5604,7 @@
 
             async function recordSuccessfulSshConnection(draft) {
                 if (draft.saveHistory === false) return;
-                const history = { ...normalizeSshTarget(draft), routePath: draft.routePath ? SshRoutes.clone(draft.routePath) : null };
+                const history = { ...normalizeSshTarget(draft), networkOrigin: draft.payload?.network_origin || 'core', routePath: draft.routePath ? SshRoutes.clone(draft.routePath) : null };
                 if (!history.host || !history.username) return;
                 const temporaryIds = new Set((draft.temporaryKeys || []).map(record => record.keyId));
                 history.routePath?.forEach(node => {
@@ -5572,12 +5625,13 @@
                         for (const target of batch) {
                             const path = target.routePath;
                             const key = path ? SshRoutes.routeKey(path) : getSshTargetKey(target);
-                            const matches = entry => path ? SshRoutes.routeKey(SshRoutes.checkedPath(nextState, entry)) === key
-                                : SshRoutes.checkedPath(nextState, entry).length === 1 && getSshTargetKey(entry) === key;
+                            const matches = entry => (entry.networkOrigin || 'core') === target.networkOrigin && (path
+                                ? SshRoutes.routeKey(SshRoutes.checkedPath(nextState, entry)) === key
+                                : SshRoutes.checkedPath(nextState, entry).length === 1 && getSshTargetKey(entry) === key);
                             const previous = nextState.history.find(matches);
                             nextState.history = nextState.history.filter(entry => !matches(entry));
                             nextState.history.unshift({ id: previous?.id || createSshSessionId('history'),
-                                ...normalizeSshTarget(target), ...(path ? { startNodeId: SshRoutes.copyPath(nextState, path) } : {}),
+                                ...normalizeSshTarget(target), networkOrigin: target.networkOrigin, ...(path ? { startNodeId: SshRoutes.copyPath(nextState, path) } : {}),
                                 lastUsedAt: new Date().toISOString() });
                             nextState.history = nextState.history.slice(0, SSH_HISTORY_LIMIT);
                         }
@@ -5793,18 +5847,17 @@
                 });
                 modeSelector.classList.toggle('locked', !!forcedConnectionType || getActiveModeCount() <= 1);
                 sshFields.style.display = normalized === 'ssh' ? 'block' : 'none';
-                const windowsNetworkAvailable = getConnectionFieldOptions('ssh', 'network_origin')
-                    .some(option => option.value === 'windows');
-                document.getElementById('ssh-network-origin-field').hidden = !windowsNetworkAvailable;
-                sshNetworkOrigin.disabled = !windowsNetworkAvailable;
-                if (!windowsNetworkAvailable) {
-                    sshNetworkOrigin.checked = false;
-                    document.getElementById('ssh-network-origin-field').open = false;
-                }
+                renderSshNetworkOrigin();
                 localShellFields.style.display = (
                     normalized === 'local_shell' && localShellKindSelect.options.length > 0
                 ) ? 'block' : 'none';
                 uartFields.style.display = normalized === 'uart' ? 'block' : 'none';
+                telnetFields.style.display = normalized === 'telnet' ? 'block' : 'none';
+                const telnetWindowsAvailable = getConnectionFieldOptions('telnet', 'network_origin')
+                    .some(option => option.value === 'windows');
+                document.getElementById('telnet-network-origin-field').hidden = !telnetWindowsAvailable;
+                telnetNetworkOrigin.disabled = !telnetWindowsAvailable;
+                if (!telnetWindowsAvailable) telnetNetworkOrigin.checked = false;
                 if (normalized === 'uart') requestFreshUartPorts('select_uart');
                 updateBrowserAuthUi();
                 connectBtn.innerText = getConnectButtonText();
@@ -6952,7 +7005,8 @@
                     state.connecting = false;
                     state.error = false;
                     state.connectionType = normalizeConnectionType(item.connection_type);
-                    if (item.ssh_target) state.sshTarget = normalizeSshTarget(item.ssh_target);
+                    if (item.ssh_target) state.sshTarget = { ...normalizeSshTarget(item.ssh_target),
+                        network_origin: item.ssh_target.network_origin || 'core' };
                     if (state.connectionType !== 'ssh') state.sshTarget = null;
                     state.sftpAvailable = typeof item.files_available === 'boolean'
                         ? item.files_available
@@ -8311,7 +8365,7 @@
                     terminal_id: activeTerminalId
                 };
                 if (connectionType === 'ssh') {
-                    if (!sshNetworkOrigin.disabled && sshNetworkOrigin.checked) formData.network_origin = 'windows';
+                    if (sshNetworkOrigin.checked && isWindowsNetworkAvailable()) formData.network_origin = 'windows';
                     if (sshPreparationMode === 'route') {
                         const entry = currentSshRouteEntry();
                         if (!entry) throw new Error(t('browser.chrome.choose_route'));
@@ -8343,6 +8397,11 @@
                 } else if (connectionType === 'uart') {
                     formData.serial_port = getSelectedUartPort();
                     formData.baud_rate = uartBaudSelect.value;
+                } else if (connectionType === 'telnet') {
+                    formData.host = document.getElementById('telnet-host').value.trim();
+                    formData.port = document.getElementById('telnet-port').value;
+                    formData.encoding = document.getElementById('telnet-encoding').value;
+                    if (!telnetNetworkOrigin.disabled && telnetNetworkOrigin.checked) formData.network_origin = 'windows';
                 }
                 return formData;
             }
@@ -8382,7 +8441,8 @@
                 state.connecting = true;
                 state.error = false;
                 state.connectionType = formData.connection_type;
-                state.sshTarget = state.connectionType === 'ssh' ? normalizeSshTarget(formData) : null;
+                state.sshTarget = state.connectionType === 'ssh'
+                    ? { ...normalizeSshTarget(formData), network_origin: formData.network_origin || 'core' } : null;
                 state.label = formData.connection_type === 'ssh' && formData.profile_name
                     ? getSshProfileTabLabel(formData.profile_name)
                     : (CONNECTION_LABELS[state.connectionType] || t('browser.chrome.terminal'));
@@ -8485,6 +8545,7 @@
                 invalidateSshRetry();
                 selectedSshRouteEntry = event.target.value || null;
                 sshRouteDraft = null;
+                applySshNetworkOrigin(currentSshRouteEntry());
                 renderCurrentSshRoute();
             };
             document.getElementById('ssh-edit-route').onclick = async () => {
@@ -8499,6 +8560,8 @@
                     SshRoutes.edit({ translate: t, state: sshRouteDraft?.state || snapshot.state, entryId: currentSshRouteEntry()?.id,
                         temporaryKeys: sshRouteDraft?.temporaryKeys || [], saveRoute: sshRouteDraft?.saveRoute || false,
                         target: getCurrentSshTarget(),
+                        windowsNetworkAvailable: isWindowsNetworkAvailable(),
+                        networkOrigin: sshNetworkOrigin.checked ? 'windows' : 'core',
                         keys: snapshot.keys, keyAllowed: isBrowserSshKeyAllowedByPolicy(),
                         createKey: createTemporarySshKey,
                         copyPublicKey: value => copyToClipboard(value),
@@ -8510,6 +8573,7 @@
                             sshRouteDraft = { state, entryId, temporaryKeys, saveRoute };
                             selectedSshRouteEntry = entryId;
                             selectSshPreparationMode('route');
+                            applySshNetworkOrigin(currentSshRouteEntry());
                             renderSshSessionState();
                             setSshSessionMessage(t('connection.route_ready'));
                         }
@@ -8520,7 +8584,10 @@
                 input.addEventListener('input', invalidateSshRetry);
                 input.addEventListener('input', () => { directHostIdentity.invalidate(); directKeyControl.update(); applyQuickConnectKeySelection(); renderSshPreparation(); });
             });
-            sshNetworkOrigin.addEventListener('change', invalidateSshRetry);
+            sshNetworkOrigin.addEventListener('change', () => {
+                invalidateSshRetry();
+                renderSshNetworkOrigin();
+            });
             sshSessionPickerToggle.onclick = () => {
                 const opening = !sshSessionPickerPanel.classList.contains('open');
                 sshSessionPickerPanel.classList.toggle('open', opening);
@@ -9138,7 +9205,8 @@
                         state.connecting = false;
                         state.error = false;
                         state.connectionType = normalizeConnectionType(data.connection_type);
-                        if (data.ssh_target) state.sshTarget = normalizeSshTarget(data.ssh_target);
+                        if (data.ssh_target) state.sshTarget = { ...normalizeSshTarget(data.ssh_target),
+                            network_origin: data.ssh_target.network_origin || 'core' };
                         if (state.connectionType !== 'ssh') state.sshTarget = null;
                         state.sftpAvailable = typeof data.files_available === 'boolean'
                             ? data.files_available

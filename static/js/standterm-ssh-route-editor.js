@@ -55,7 +55,28 @@
         }) };
     };
 
+    routes.networkFields = function({ parent, origin = 'core', available = false, translate }) {
+        const details = document.createElement('details');
+        details.className = 'ssh-network-settings';
+        const summary = document.createElement('summary');
+        summary.textContent = translate('connection.advanced');
+        const label = document.createElement('label');
+        label.className = 'ssh-key-toggle';
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.checked = origin === 'windows';
+        label.append(input, document.createTextNode(translate('connection.use_windows_network')));
+        const hint = document.createElement('p');
+        hint.textContent = translate('connection.network_hint');
+        details.hidden = !available;
+        input.disabled = !available;
+        details.append(summary, label, hint);
+        parent.append(details);
+        return { read: () => input.checked ? 'windows' : 'core', element: details };
+    };
+
     routes.edit = function({ state, entryId, target, onDone, keys = [], temporaryKeys = [], saveRoute = false, keyAllowed = false,
+        windowsNetworkAvailable = false, networkOrigin,
         createKey, copyPublicKey, hostIdentity, mode = 'prepare', entryName = '', baseState = state, translate }) {
         const t = (key, fallback, params = {}) => {
             const translated = typeof translate === 'function' ? translate(key, params) : key;
@@ -86,6 +107,9 @@
         const title = document.createElement('h3');
         title.textContent = t('ssh.editor.title', 'SSH route');
         const name = document.createElement('input');
+        if (networkOrigin !== undefined) entry.networkOrigin = networkOrigin;
+        const network = routes.networkFields({ parent: dialog, origin: entry.networkOrigin,
+            available: windowsNetworkAvailable, translate: key => t(key, key) });
         name.value = entry.name || '';
         name.placeholder = t('ssh.editor.entry_name', 'Entry name');
         name.maxLength = 64;
@@ -156,6 +180,7 @@
                 if (JSON.stringify(updated) !== JSON.stringify(current)) replaceDraftNode(index, updated);
             });
             entry.name = name.value.trim();
+            entry.networkOrigin = network.read();
             routes.project(draft);
         }
 
@@ -461,14 +486,14 @@
             const used = new Set(draft.nodes.map(node => node.authentication.keyRef?.keyId));
             saving = true;
             updateSaveState();
-            rows.inert = heading.inert = advanced.inert = true;
+            rows.inert = heading.inert = advanced.inert = network.element.inert = true;
             status.textContent = managed ? t('ssh.editor.saving', 'Saving route…') : '';
             try {
                 await onDone(draft, entry.id, [...newKeys.values()].filter(record => used.has(record.keyId)), saveRouteInput.checked);
                 dialog.close();
             } finally {
                 saving = false;
-                rows.inert = heading.inert = advanced.inert = false;
+                rows.inert = heading.inert = advanced.inert = network.element.inert = false;
                 updateSaveState();
             }
         });
@@ -498,7 +523,7 @@
             + ' ' + (managed
                 ? t('ssh.editor.manage_help', 'Save route stores all nodes and selected keys. Changes apply to the next connection.')
                 : t('ssh.editor.prepare_help', 'Done updates the connection draft without saving. Connect saves only when Save route is selected.'));
-        dialog.append(title, help, heading, advanced, scopeNotice, rows, preview, status, actions);
+        dialog.append(title, help, heading, network.element, advanced, scopeNotice, rows, preview, status, actions);
         dialog.addEventListener('cancel', event => { if (saving) event.preventDefault(); });
         dialog.addEventListener('close', () => dialog.remove());
         document.body.append(dialog);

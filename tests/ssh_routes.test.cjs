@@ -104,3 +104,24 @@ test('standalone node credentials survive copying but never rebind or export', (
     const lastEntry = imported.profiles.at(-1);
     assert.deepEqual(routes.checkedPath(imported, lastEntry)[0].authentication, { method: 'browser-key', keyRef: null });
 });
+
+
+test('network preference belongs to entries and survives cross-platform exports', () => {
+    const state = graph({ A: 'B', B: null }, ['A', 'A']);
+    state.profiles[0].networkOrigin = 'windows';
+    state.history.push({ ...state.profiles[0], id: 'history-windows' });
+    const exported = routes.exportState(state);
+    assert.equal(exported.profiles[0].networkOrigin, 'windows');
+    assert.equal(exported.profiles[1].networkOrigin, 'core');
+    assert.equal(exported.history[0].networkOrigin, 'windows');
+    assert.ok(exported.nodes.every(node => !Object.hasOwn(node, 'networkOrigin')));
+    const empty = { version: 2, revision: 0, nodes: [], profiles: [], history: [] };
+    const imported = routes.importState(empty, JSON.parse(JSON.stringify(exported)));
+    imported.profiles[0].name = 'Renamed on another platform';
+    const returned = routes.exportState(imported);
+    assert.deepEqual(returned.profiles.map(entry => entry.networkOrigin), ['windows', 'core']);
+    assert.equal(returned.history[0].networkOrigin, 'windows');
+    const invalid = routes.clone(exported);
+    invalid.profiles[0].networkOrigin = 'unknown';
+    assert.throws(() => routes.importState(empty, invalid), /Invalid SSH network origin/);
+});
