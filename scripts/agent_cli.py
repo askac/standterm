@@ -227,7 +227,7 @@ def apply_handoff(args):
         args.url = payload.get('url')
     if not args.token:
         args.token = payload.get('token')
-    if args.terminal in (None, 'main') and isinstance(payload.get('terminal_id'), str):
+    if args.terminal is None and isinstance(payload.get('terminal_id'), str):
         args.terminal = payload['terminal_id']
     if not args.terminal:
         args.terminal = 'main'

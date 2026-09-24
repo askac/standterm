@@ -23,7 +23,9 @@ from collections import deque
 from pathlib import Path, PurePosixPath
 from functools import partial
 from agent_tunnel import AgentTunnel, tunnel_ingress
+from ssh_tunnels import UserTunnel, parse_tunnel_spec, USER_TUNNEL_MAX_ACTIVE, USER_TUNNEL_MAX_RECORDS
 from core_version import CORE_VERSION
+from terminal_capabilities import build_capability_response
 from flask import Flask, Response, render_template, request, abort, make_response, redirect, send_file, jsonify, stream_with_context
 from flask_socketio import SocketIO, ConnectionRefusedError
 from external_agent_dispatch import ExternalAgentCommandDispatcher
@@ -323,6 +325,7 @@ AGENT_EVENT_SUGGESTION_REQUEST = 'agent_suggestion_request'
 AGENT_EVENT_PROVIDER_RUN_REQUEST = 'agent_provider_run_request'
 AGENT_EVENT_ACTION_APPROVE = 'agent_action_approve'
 AGENT_EVENT_ACTION_REJECT = 'agent_action_reject'
+AGENT_EVENT_ACTION_CANCEL = 'agent_action_cancel'
 AGENT_EVENT_VIEWPORT_SNAPSHOT = 'agent_viewport_snapshot'
 AGENT_EVENT_VIEWPORT_RENDER_REQUEST = 'agent_viewport_render_request'
 AGENT_EVENT_VIEWPORT_RENDER_RESULT = 'agent_viewport_render_result'
@@ -411,6 +414,7 @@ AGENT_ERROR_EXTERNAL_AGENT_ORIGIN_BLOCKED = 'agent_external_origin_blocked'
 AGENT_ERROR_EXTERNAL_AGENT_DISABLED = 'agent_external_disabled'
 AGENT_ERROR_HUMAN_INPUT_ACTIVE = 'agent_human_input_active'
 AGENT_ERROR_FILE_COPY_BUSY = 'file_copy_busy'
+AGENT_ERROR_FILE_COPY_CANCELLED = 'file_copy_cancelled_by_operator'
 AGENT_ERROR_FILE_COPY_PUBLISH_OUTCOME_UNKNOWN = 'file_copy_publish_outcome_unknown'
 AGENT_REASON_DETACHED = 'agent_detached'
 AGENT_REASON_DISABLED = 'agent_disabled'
@@ -514,6 +518,7 @@ AGENT_AUDIT_CONTEXT_BUILT = 'context_built'
 AGENT_AUDIT_PROPOSAL_CREATED = 'proposal_created'
 AGENT_AUDIT_ACTION_APPROVE = 'action_approve'
 AGENT_AUDIT_ACTION_REJECT = 'action_reject'
+AGENT_AUDIT_ACTION_CANCEL = 'action_cancel'
 AGENT_AUDIT_ACTION_RESULT = 'action_result'
 AGENT_AUDIT_DIRECT_WRITE = 'direct_write'
 AGENT_AUDIT_TERMINAL_CLEANUP = 'terminal_cleanup'
@@ -2518,6 +2523,8 @@ bridges = {}
 pending_terminal_starts = {}
 pending_terminal_bridges = {}
 pending_terminal_start_context = {}
+# Deadlines are epoch seconds; None is reserved for a private Desktop login
+# whose lifetime is the owned backend process, not a browser idle timeout.
 active_sessions = {}
 socket_session_tokens = {}
 socket_client_ips = {}
@@ -3634,6 +3641,8 @@ class ExternalAgentAttachStore:
 
 external_agent_attach_store = ExternalAgentAttachStore()
 agent_tunnels = {}
+user_ssh_tunnels = {}
+user_ssh_tunnels_lock = threading.RLock()
 
 def get_agent_session_id(session_token):
     if not session_token:
@@ -4378,6 +4387,7 @@ def build_external_agent_send_capture_payload(bridge, state, before_output_seq,
                                               strip_ansi=False):
     wait_ms = parse_external_agent_send_capture_wait_ms(wait_ms)
     settle_ms = parse_external_agent_send_capture_settle_ms(settle_ms)
+    deadline = time.monotonic() + wait_ms / 1000.0
     context_error = get_external_agent_capture_context_error(state)
     if context_error:
         return None, context_error
@@ -4386,7 +4396,6 @@ def build_external_agent_send_capture_payload(bridge, state, before_output_seq,
         since_output_seq=before_output_seq,
         limit=limit,
     )
-    deadline = time.monotonic() + wait_ms / 1000.0
     timed_out = False
 
     while not tail['events'] and not tail['gap']['detected']:
@@ -4413,8 +4422,9 @@ def build_external_agent_send_capture_payload(bridge, state, before_output_seq,
             context_error = get_external_agent_capture_context_error(state)
             if context_error:
                 return None, context_error
-            remaining = settle_deadline - time.monotonic()
+            remaining = min(settle_deadline, deadline) - time.monotonic()
             if remaining <= 0:
+                timed_out = settle_deadline > deadline
                 break
             with bridge.output_condition:
                 bridge.output_condition.wait(timeout=min(remaining, 0.25))
@@ -4427,7 +4437,7 @@ def build_external_agent_send_capture_payload(bridge, state, before_output_seq,
                 tail = latest
                 last_output_seq = latest['output_seq']
                 settle_deadline = time.monotonic() + settle_ms / 1000.0
-        settled = True
+        settled = not timed_out
 
     context_error = get_external_agent_capture_context_error(state)
     if context_error:
@@ -5551,7 +5561,9 @@ def is_valid_launcher_shutdown_token(token):
 def is_valid_session(session_token):
     if not isinstance(session_token, str):
         return False
-    expires_at = active_sessions.get(session_token)
+    expires_at = active_sessions.get(session_token, 0)
+    if expires_at is None:
+        return True
     if not expires_at:
         return False
     if time.time() > expires_at:
@@ -5567,7 +5579,7 @@ def cleanup_expired_sessions():
     expired_tokens = [
         session_token
         for session_token, expires_at in list(active_sessions.items())
-        if now > expires_at
+        if expires_at is not None and now > expires_at
     ]
     for session_token in expired_tokens:
         active_sessions.pop(session_token, None)
@@ -5618,7 +5630,7 @@ def build_access_required_response():
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>StandTerm Access Required</title>
+  <title>StandTerm access required</title>
   <style>
     body {
       font-family: system-ui, sans-serif;
@@ -5683,19 +5695,21 @@ def build_access_required_response():
 </head>
 <body>
   <main>
-    <h1>StandTerm access required</h1>
-    <p>Enter the access token printed by the launcher, or open the full Access URL.</p>
+    <h1 data-i18n="browser.access.required">StandTerm access required</h1>
+    <p data-i18n="browser.access.instructions">Enter the launcher’s access token, or open its full Access URL.</p>
     <form id="access-login-form" method="post" action="/login" autocomplete="off">
-      <label for="access-token">Access token</label>
+      <label for="access-token" data-i18n="browser.recovery.token_label">Access token</label>
       <input id="access-token" name="token" type="password" autofocus required>
-      <button type="submit">Unlock</button>
+      <button type="submit" data-i18n="browser.recovery.submit">Use access token</button>
     </form>
-    <div id="access-recovery-divider" class="divider">or</div>
-    <button id="access-recovery-button" class="secondary" type="button">Recover live session with device</button>
+    <div id="access-recovery-divider" class="divider" data-i18n="common.or">or</div>
+    <button id="access-recovery-button" class="secondary" type="button" data-i18n="browser.recovery.device">Verify with device</button>
     <p id="access-login-status" class="hint" role="status"></p>
-    <p class="hint">Device recovery uses Windows Hello, Touch ID, or another platform passkey previously registered for this hostname. It only restores a session still running in this StandTerm process.</p>
-    <p class="hint">For Windows browsers connecting to a WSL IP over HTTPS, the browser may also require trusting the StandTerm local CA.</p>
+    <p class="hint" data-i18n="browser.recovery.hint">Use a device registered for this hostname and enabled for a still-valid session, or enter the current launcher’s access token. After StandTerm restarts, use the current access token.</p>
+    <p class="hint" data-i18n="browser.access.ca_hint">For Windows browsers connecting to a WSL IP over HTTPS, the browser may also require trusting the StandTerm local CA.</p>
   </main>
+  <script src="/static/js/standterm-messages.js"></script>
+  <script src="/static/js/standterm-i18n.js"></script>
   <script>
     (() => {
       const form = document.getElementById('access-login-form');
@@ -5704,6 +5718,30 @@ def build_access_required_response():
       const recoveryButton = document.getElementById('access-recovery-button');
       const recoveryDivider = document.getElementById('access-recovery-divider');
       if (!form || !tokenInput) return;
+
+      let requestedLocale = 'en';
+      try {
+        const stored = JSON.parse(localStorage.getItem('terminal.pref.v1'));
+        if (stored && typeof stored === 'object' && !Array.isArray(stored)) {
+          requestedLocale = stored.uiLanguage;
+        }
+      } catch (exc) {
+        // Invalid or unavailable preferences retain the English access form.
+      }
+      let uiText = null;
+      if (window.StandTermI18n && window.StandTermMessages) {
+        uiText = window.StandTermI18n.create(window.StandTermMessages, requestedLocale);
+      }
+      const t = (key, fallback) => {
+        if (!uiText) return fallback;
+        const translated = uiText.t(key);
+        return translated === key ? fallback : translated;
+      };
+      document.querySelectorAll('[data-i18n]').forEach(element => {
+        element.textContent = t(element.dataset.i18n, element.textContent);
+      });
+      document.documentElement.lang = uiText ? uiText.locale : 'en';
+      document.title = t('browser.access.required', 'StandTerm access required');
 
       const base64urlToBytes = value => {
         const padding = '='.repeat((4 - (value.length % 4)) % 4);
@@ -5746,7 +5784,13 @@ def build_access_required_response():
       const readJsonResponse = async response => {
         const payload = await response.json().catch(() => ({}));
         if (!response.ok || payload.status !== 'ok') {
-          throw new Error(payload.message || 'Platform recovery failed.');
+          let message = payload.message || t('browser.recovery.failed', 'Device recovery failed.');
+          if (payload.error_code === 'session_recovery_not_configured') {
+            message = t('browser.recovery.not_configured', message);
+          } else if (payload.error_code === 'session_recovery_no_live_session') {
+            message = t('browser.recovery.no_live_session', message);
+          }
+          throw new Error(message);
         }
         return payload;
       };
@@ -5758,7 +5802,7 @@ def build_access_required_response():
 
       if (recoveryButton) recoveryButton.addEventListener('click', async () => {
         recoveryButton.disabled = true;
-        if (statusEl) statusEl.textContent = 'Waiting for device verification...';
+        if (statusEl) statusEl.textContent = t('browser.recovery.verifying_device', 'Waiting for device verification…');
         try {
           const optionsResponse = await fetch('/session-recovery/authenticate/options', {
             method: 'POST',
@@ -5786,9 +5830,10 @@ def build_access_required_response():
           appUrl.searchParams.delete('token');
           window.location.replace(`${appUrl.pathname}${appUrl.search}${appUrl.hash}` || '/');
         } catch (exc) {
-          if (statusEl) statusEl.textContent = exc && exc.message
-            ? exc.message
-            : 'Platform recovery was cancelled or failed.';
+          if (statusEl) statusEl.textContent = exc && exc.name === 'NotAllowedError'
+            ? t('browser.recovery.device_cancelled', 'Device verification was cancelled or no matching passkey is available.')
+            : (exc && exc.message ? exc.message
+              : t('browser.recovery.cancelled_or_failed', 'Device verification was cancelled or failed.'));
           recoveryButton.disabled = false;
         }
       });
@@ -5798,7 +5843,7 @@ def build_access_required_response():
         const token = tokenInput.value || '';
         const body = new URLSearchParams();
         body.set('token', token);
-        if (statusEl) statusEl.textContent = 'Unlocking...';
+        if (statusEl) statusEl.textContent = t('browser.recovery.checking', 'Checking access token…');
         try {
           const response = await fetch('/login', {
             method: 'POST',
@@ -5809,7 +5854,7 @@ def build_access_required_response():
             body,
           });
           if (!response.ok) {
-            if (statusEl) statusEl.textContent = 'Access token was not accepted.';
+            if (statusEl) statusEl.textContent = t('browser.recovery.token_rejected', 'Access token was not accepted.');
             return;
           }
           const appUrl = new URL(window.location.href);
@@ -5820,7 +5865,7 @@ def build_access_required_response():
             headers: { 'Accept': 'text/html' },
           });
           if (!appResponse.ok) {
-            throw new Error('Unable to load StandTerm.');
+            throw new Error(t('browser.access.load_failed', 'Unable to load StandTerm.'));
           }
           const html = await appResponse.text();
           window.standtermPendingAccessToken = token;
@@ -5829,7 +5874,7 @@ def build_access_required_response():
           document.write(html);
           document.close();
         } catch (exc) {
-          if (statusEl) statusEl.textContent = 'Unable to unlock. Check the connection and try again.';
+          if (statusEl) statusEl.textContent = t('browser.access.unlock_failed', 'Cannot restore access. Check the connection and try again.');
         }
       });
     })();
@@ -5848,6 +5893,10 @@ def close_bridge(bridge):
     if not bridge:
         return
     bridge.closing = True
+    with user_ssh_tunnels_lock:
+        user_tunnels = [record['tunnel'] for record in user_ssh_tunnels.values() if record['bridge'] is bridge]
+    for user_tunnel in user_tunnels:
+        user_tunnel.stop()
     tunnel = getattr(bridge, 'agent_tunnel', None)
     if tunnel:
         tunnel.close()
@@ -6041,6 +6090,8 @@ def build_terminal_list(session_token, sid=None):
             'buffered_events': len(bridge.replay_buffer),
             'files_available': bool(bridge.files_available()),
         }
+        if isinstance(bridge, SSHBridge):
+            terminal_info['ssh_target'] = bridge.metadata().get('ssh_target')
         terminals.append(terminal_info)
     return terminals
 
@@ -6211,11 +6262,26 @@ def parse_terminal_size(data):
         return None
     return cols, rows
 
+def create_desktop_session():
+    # Called only by the owned Desktop launcher, never by an HTTP login route.
+    # The private pipe conveys the cookie; process exit destroys the authority.
+    session_token = secrets.token_urlsafe(32)
+    active_sessions[session_token] = None
+    ensure_session_cleanup_task()
+    return session_token
+
+def session_cookie_max_age(session_token):
+    return None if active_sessions.get(session_token, 0) is None else SESSION_COOKIE_MAX_AGE
+
+def refresh_session_deadline(session_token):
+    if session_cookie_max_age(session_token) is not None:
+        active_sessions[session_token] = time.time() + SESSION_COOKIE_MAX_AGE
+
 def set_session_cookie(response, session_token):
     response.set_cookie(
         SESSION_COOKIE_NAME,
         session_token,
-        max_age=SESSION_COOKIE_MAX_AGE,
+        max_age=session_cookie_max_age(session_token),
         httponly=True,
         samesite='Strict',
         secure=HTTPS_ENABLED,
@@ -6246,16 +6312,16 @@ def build_session_redirect_response():
     return add_common_headers(response)
 
 def build_existing_session_response(session_token):
-    active_sessions[session_token] = time.time() + SESSION_COOKIE_MAX_AGE
+    refresh_session_deadline(session_token)
     response = set_session_cookie(build_index_response(), session_token)
     return add_common_headers(response)
 
 def renew_session_response(session_token):
-    active_sessions[session_token] = time.time() + SESSION_COOKIE_MAX_AGE
+    refresh_session_deadline(session_token)
     response = jsonify({
         'status': 'ok',
         'session_expires_at': active_sessions[session_token],
-        'session_max_age_seconds': SESSION_COOKIE_MAX_AGE,
+        'session_max_age_seconds': session_cookie_max_age(session_token),
         'renew_interval_seconds': SESSION_RENEW_INTERVAL_SECONDS,
     })
     set_session_cookie(response, session_token)
@@ -6437,7 +6503,7 @@ def session_recovery_authenticate_complete():
             'message': 'No live StandTerm session is available for this platform credential. Enter the current access token.',
         }, status_code=409)
 
-    active_sessions[recovered_session_token] = time.time() + SESSION_COOKIE_MAX_AGE
+    refresh_session_deadline(recovered_session_token)
     response = jsonify({
         'status': 'ok',
         'result': 'recovered',
@@ -7642,6 +7708,89 @@ def agent_tunnel_status(tunnel):
         'connect_info': build_agent_connect_info(
             info, list(info['terminal_handoffs']), runtime_label='SSH host ' + json.dumps(ssh_context)),
     }
+
+
+def user_ssh_tunnel_authorized(record):
+    bridge = record['bridge']
+    return (socket_session_tokens.get(record['sid']) == record['session_token']
+            and get_bridge(record['session_token'], record['terminal_id']) is bridge
+            and not bridge.closing and bridge.ssh is not None
+            and bridge.ssh.get_transport() is record['transport']
+            and is_terminal_bridge_allowed_for_sid(bridge, record['sid']))
+
+
+def emit_user_ssh_tunnel(record):
+    if not user_ssh_tunnel_authorized(record):
+        return
+    with user_ssh_tunnels_lock:
+        if user_ssh_tunnels.get(record['tunnel'].id) is not record:
+            return
+    socketio.emit('ssh_tunnel_state', {
+        'terminal_id': record['terminal_id'], 'connection_id': record['tunnel'].forwarding.id,
+        'tunnel': record['tunnel'].snapshot(),
+    }, room=record['sid'])
+
+
+@socketio.on('ssh_tunnel')
+def on_user_ssh_tunnel(data):
+    # This adapter requires browser-session authentication. Do not register it
+    # in the external-agent command table without a separate authorization flow.
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    if not session_token or not terminal_id:
+        return {'status': 'failed', 'message': 'Invalid SSH terminal.'}
+    bridge = get_allowed_bridge(session_token, terminal_id, request.sid)
+    transport = bridge.ssh.get_transport() if isinstance(bridge, SSHBridge) and bridge.ssh else None
+    if not transport or not transport.is_authenticated() or bridge.closing:
+        return {'status': 'failed', 'message': 'Tunnels require a connected SSH terminal.'}
+    operation = data.get('operation')
+    if operation == 'status':
+        with user_ssh_tunnels_lock:
+            records = [record for record in user_ssh_tunnels.values()
+                       if record['bridge'] is bridge and record['sid'] == request.sid and record['transport'] is transport]
+        return {'status': 'ok', 'terminal_id': terminal_id,
+                'tunnels': [record['tunnel'].snapshot() for record in records],
+                'connection_id': UserTunnel.connection_id(transport),
+                'ssh_endpoint': bridge.sftp_endpoint()}
+    if operation == 'stop':
+        tunnel_id = data.get('tunnel_id')
+        if not isinstance(tunnel_id, str) or len(tunnel_id) > 128:
+            return {'status': 'failed', 'message': 'Invalid tunnel.'}
+        with user_ssh_tunnels_lock:
+            record = user_ssh_tunnels.get(tunnel_id)
+            if not record or record['bridge'] is not bridge or record['sid'] != request.sid or record['transport'] is not transport:
+                return {'status': 'failed', 'message': 'This tunnel is unavailable to this viewer.'}
+        record['tunnel'].stop()
+        return {'status': 'ok', 'tunnel': record['tunnel'].snapshot()}
+    if operation != 'start':
+        return {'status': 'failed', 'message': 'Invalid tunnel operation.'}
+    try:
+        spec = parse_tunnel_spec(data.get('spec'))
+    except ValueError as exc:
+        return {'status': 'failed', 'message': str(exc)}
+    record = {'session_token': session_token, 'sid': request.sid, 'terminal_id': terminal_id,
+              'bridge': bridge, 'transport': transport}
+    tunnel = UserTunnel(transport, spec, authorized=lambda: user_ssh_tunnel_authorized(record),
+                        changed=lambda: emit_user_ssh_tunnel(record))
+    record['tunnel'] = tunnel
+    with user_ssh_tunnels_lock:
+        if not user_ssh_tunnel_authorized(record):
+            return {'status': 'failed', 'message': 'The SSH connection or viewer changed during setup.'}
+        active = [item for item in user_ssh_tunnels.values() if not item['tunnel'].closed.is_set()]
+        if len(active) >= USER_TUNNEL_MAX_RECORDS or sum(item['bridge'] is bridge for item in active) >= USER_TUNNEL_MAX_ACTIVE:
+            return {'status': 'failed', 'message': 'The active tunnel limit was reached. Stop an unused tunnel first.'}
+        finished = sorted((item for item in user_ssh_tunnels.values() if item['tunnel'].closed.is_set()),
+                          key=lambda item: item['tunnel'].created_at)
+        while len(user_ssh_tunnels) >= USER_TUNNEL_MAX_RECORDS and finished:
+            user_ssh_tunnels.pop(finished.pop(0)['tunnel'].id, None)
+        # Reserve the pending owner before any network I/O or background work.
+        user_ssh_tunnels[tunnel.id] = record
+    try:
+        socketio.start_background_task(tunnel.start)
+    except Exception:
+        tunnel.setup_done.set()
+        tunnel.stop('The tunnel worker could not be started.')
+    return {'status': 'ok', 'tunnel': tunnel.snapshot()}
 
 
 @socketio.on('agent_tunnel')
@@ -10072,6 +10221,61 @@ def on_agent_action_reject(data):
         emit_agent_state(request.sid, state)
 
 
+@socketio.on(AGENT_EVENT_ACTION_CANCEL)
+def on_agent_action_cancel(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    if not session_token or not terminal_id or not isinstance(data, dict):
+        return
+    action_id = data.get('action_id')
+    proposal_id = data.get('proposal_id')
+    if not isinstance(action_id, str) and not isinstance(proposal_id, str):
+        emit_agent_error(request.sid, terminal_id, AGENT_ERROR_ACTION_NOT_FOUND)
+        return
+    with agent_lock:
+        state = get_agent_state(session_token, terminal_id, request.sid)
+        if not state:
+            emit_agent_error(request.sid, terminal_id, AGENT_ERROR_NOT_ATTACHED)
+            return
+        action, error_code = validate_agent_action_decision(state, data)
+        if error_code:
+            emit_agent_decision_error(request.sid, terminal_id, state, action, error_code)
+            return
+        if action.get('action_type') != AGENT_ACTION_FILE_COPY:
+            emit_agent_action_failure(request.sid, action, AGENT_ERROR_ACTION_NOT_ALLOWED)
+            emit_agent_state(request.sid, state)
+            return
+        if action.get('status') not in {AGENT_STATUS_APPROVED, AGENT_STATUS_RUNNING}:
+            emit_agent_action_result(
+                request.sid,
+                action,
+                action.get('status') or AGENT_STATUS_FAILED,
+            )
+            emit_agent_state(request.sid, state)
+            return
+        if not transition_agent_file_copy_action(
+            state,
+            action,
+            AGENT_FILE_COPY_EVENT_CANCEL,
+            error_code=AGENT_ERROR_FILE_COPY_CANCELLED,
+        ):
+            emit_agent_action_result(
+                request.sid,
+                action,
+                action.get('status') or AGENT_STATUS_FAILED,
+            )
+            emit_agent_state(request.sid, state)
+            return
+        record_agent_audit_event(state, AGENT_AUDIT_ACTION_CANCEL, action=action)
+        emit_agent_action_result(
+            request.sid,
+            action,
+            AGENT_STATUS_FAILED,
+            error_code=AGENT_ERROR_FILE_COPY_CANCELLED,
+        )
+        emit_agent_state(request.sid, state)
+
+
 @socketio.on(AGENT_EVENT_VIEWPORT_SNAPSHOT)
 def on_agent_viewport_snapshot(data):
     session_token = socket_session_tokens.get(request.sid)
@@ -10638,13 +10842,16 @@ def on_files_copy_request(data):
             source_bridge,
             source_file_id,
         )
-        source_file = prepare_current_bridge_file(source_bridge, source_file)
         upload = prepare_bridge_upload(
             destination_bridge,
             destination_directory,
             destination_filename,
             conflict_mode,
         )
+        # Ask about an existing destination before waiting for a busy source's
+        # transfer lock. Revalidate the source after the user chooses an action.
+        if upload.get('status') != 'conflict':
+            source_file = prepare_current_bridge_file(source_bridge, source_file)
         validate_distinct_file_copy_target(
             source_bridge,
             destination_bridge,
@@ -11258,6 +11465,23 @@ def on_ssh_login_response(data):
             return
         bridge.resolve_login_input(request.sid, data)
 
+@socketio.on('terminal_capability_query')
+def on_terminal_capability_query(data):
+    session_token = socket_session_tokens.get(request.sid)
+    terminal_id = validate_terminal_id_payload(data)
+    if not session_token or not terminal_id:
+        return
+    bridge = get_allowed_bridge(session_token, terminal_id, request.sid)
+    if not bridge or request.sid not in bridge.attached_sids:
+        return
+    response = build_capability_response(data.get('kind'), data.get('names'))
+    if response:
+        query_identity = (data.get('kind'), data.get('names') if data.get('kind') == 'terminfo' else None)
+        bridge.write_capability_response(data.get('capability_epoch'), data.get('output_seq'),
+                                         data.get('query_index'), response,
+                                         query_identity=query_identity)
+
+
 @socketio.on('ssh_input')
 def on_ssh_input(data):
     session_token = socket_session_tokens.get(request.sid)
@@ -11352,6 +11576,10 @@ def on_disconnect(reason=None):
     agent_viewer_ids.pop(request.sid, None)
     if session_token:
         cancel_terminal_starts(session_token, sid=request.sid)
+        with user_ssh_tunnels_lock:
+            user_tunnels = [record['tunnel'] for record in user_ssh_tunnels.values() if record['sid'] == request.sid]
+        for user_tunnel in user_tunnels:
+            user_tunnel.stop()
         for tunnel in list(agent_tunnels.values()):
             if tunnel.sid == request.sid:
                 tunnel.close()

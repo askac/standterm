@@ -17,5 +17,5 @@ button:disabled { opacity: .4; cursor: default; }
 #capture-tools { border-left: 1px solid #555; padding-left: 6px; margin-left: auto; }
 svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; vertical-align: middle; }
 #record svg, #stop svg { fill: #ed6666; stroke: #ed6666; }
-@media (max-width: 750px) { button { padding: 0 5px; } }
+@media (max-width: 750px) { button { padding: 0 3px; } }
 @media (prefers-reduced-motion: reduce) { #notice-area { transition: none; } }

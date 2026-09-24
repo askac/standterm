@@ -17,6 +17,10 @@ const archive = path.join(resources, 'app.asar');
 const manifest = JSON.parse(fs.readFileSync(path.join(resources, 'bundle', 'manifest.json'), 'utf8'));
 const stagedManifest = JSON.parse(fs.readFileSync(path.join(stage, 'bundle', 'manifest.json'), 'utf8'));
 assert.deepEqual(manifest, stagedManifest);
+for (const file of ['bootstrap.py', 'windows_job.py', 'runtime.py', 'runtime_cleanup.py', 'core_manager.py', 'backend.py']) {
+  assert.deepEqual(fs.readFileSync(path.join(resources, 'bundle', file)),
+    fs.readFileSync(path.join(stage, 'bundle', file)), `Bootstrap helper mismatch: ${file}`);
+}
 validateCoreFiles(path.join(resources, 'bundle', 'core'), Object.keys(manifest.files));
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 for (const [file, expected] of Object.entries(manifest.files)) {
@@ -34,7 +38,7 @@ for (const name of names) {
 for (const file of ['main.cjs', 'agent-menu.cjs', 'browser-session.cjs', 'diagnostics.cjs', 'diagnostics-window.cjs',
   'external-links.cjs', 'floating-windows.cjs', 'test/external-links-smoke.cjs', 'browser-access.cjs', 'context-paste.cjs',
   'capture-settings.cjs', 'ui-commands.cjs', 'toolbar.cjs', 'toolbar-preload.cjs',
-  'toolbar.html', 'toolbar.js', 'toolbar.css', 'test/toolbar-smoke.cjs', 'release-identity.json']) {
+  'toolbar.html', 'toolbar.js', 'toolbar.css', 'language.cjs', 'messages.js', 'i18n.js', 'test/toolbar-smoke.cjs', 'release-identity.json']) {
   assert.ok(names.includes('/' + file), `Missing ${file}`);
 }
 const metadata = JSON.parse(asar.extractFile(archive, 'package.json'));

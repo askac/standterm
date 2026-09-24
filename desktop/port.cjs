@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const net = require('node:net');
+const { create } = require('./i18n.js');
 
 const validPort = value => Number.isInteger(value) && value >= 1 && value <= 65535;
 const HOST_PORT_ATTEMPTS = 20;
@@ -42,14 +43,14 @@ function parsePortConflict(line, requestedPort) {
   });
 }
 
-async function startWithPort({ settingsPath, launch, verify, stop, confirm, notify, checkHost }) {
+async function startWithPort({ settingsPath, launch, verify, stop, confirm, notify, checkHost, t = create('en').t }) {
   let savedPort;
   try {
     const settings = JSON.parse(await fs.readFile(settingsPath, 'utf8'));
     if (settings.version !== 1 || !validPort(settings.port)) throw new Error('Invalid port settings.');
     savedPort = settings.port;
   } catch (error) {
-    if (error.code !== 'ENOENT') await notify('Could not read the saved desktop port. Selecting an automatic port.');
+    if (error.code !== 'ENOENT') await notify(t('desktop.port.saved_read_failed'));
   }
   let port = savedPort ?? 0;
   let remember = true;
@@ -68,7 +69,7 @@ async function startWithPort({ settingsPath, launch, verify, stop, confirm, noti
     } catch (error) {
       await stop();
       if (checkHost && error.code === 'HOST_PORT_UNAVAILABLE') {
-        if (++hostAttempts >= HOST_PORT_ATTEMPTS) throw new Error('No usable Windows/WSL loopback port was found. The saved port was not changed.');
+        if (++hostAttempts >= HOST_PORT_ATTEMPTS) throw new Error(t('desktop.port.no_host_port'));
         if (port && !pendingChange) pendingChange = { port, reason: error.reason };
         // Core still selects candidates using its service exclusions and real
         // binding. Do not replace that policy with an unchecked host-only port.
@@ -76,10 +77,10 @@ async function startWithPort({ settingsPath, launch, verify, stop, confirm, noti
         continue;
       }
       if (error.code !== 'PORT_IN_USE') throw error;
-      if (error.suggestedPort === null) throw new Error(`Port ${port} is in use and no automatic port is available.`);
+      if (error.suggestedPort === null) throw new Error(t('desktop.port.no_candidate', { port }));
       const choice = await confirm(port, error.suggestedPort);
       if (!['once', 'remember'].includes(choice)) {
-        throw Object.assign(new Error('Desktop startup canceled. The saved port was not changed.'), { code: 'SETUP_CANCELED' });
+        throw Object.assign(new Error(t('desktop.port.startup_canceled')), { code: 'SETUP_CANCELED' });
       }
       port = error.suggestedPort;
       remember = choice === 'remember';
@@ -91,7 +92,7 @@ async function startWithPort({ settingsPath, launch, verify, stop, confirm, noti
       catch (error) { await stop(); throw error; }
       if (!['once', 'remember'].includes(choice)) {
         await stop();
-        throw Object.assign(new Error('Desktop startup canceled. The saved port was not changed.'), { code: 'SETUP_CANCELED' });
+        throw Object.assign(new Error(t('desktop.port.startup_canceled')), { code: 'SETUP_CANCELED' });
       }
       remember = choice === 'remember';
     }
@@ -104,7 +105,7 @@ async function startWithPort({ settingsPath, launch, verify, stop, confirm, noti
         await fs.writeFile(temporary, JSON.stringify({ version: 1, port }, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
         await fs.rename(temporary, settingsPath);
       } catch {
-        await notify(`Port ${port} is active, but could not be saved. This launch will continue.`);
+        await notify(t('desktop.port.save_failed', { port }));
       } finally {
         await fs.unlink(temporary).catch(() => {});
       }

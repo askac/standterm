@@ -1,7 +1,13 @@
 (function() {
     'use strict';
 
-    window.StandTermSshHostIdentity = function({ parent, read, request, editorId, nodeId }) {
+    window.StandTermSshHostIdentity = function({ parent, read, request, editorId, nodeId, translate }) {
+        const t = (key, fallback, params = {}) => {
+            const translated = typeof translate === 'function' ? translate(key, params) : key;
+            if (translated !== key) return translated;
+            return fallback.replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g,
+                (placeholder, name) => Object.hasOwn(params, name) ? String(params[name]) : placeholder);
+        };
         const status = document.createElement('p');
         status.className = 'ssh-host-identity-status';
         status.setAttribute('role', 'status');
@@ -20,19 +26,19 @@
             container.append(value);
             return value;
         };
-        const refresh = button('Check saved fingerprint', () => perform('inspect'));
-        const forget = button('Forget saved fingerprint…', () => perform('prepare_forget'));
+        const refresh = button(t('ssh.host_identity.check', 'Check saved fingerprint'), () => perform('inspect'));
+        const forget = button(t('ssh.host_identity.forget', 'Forget saved fingerprint…'), () => perform('prepare_forget'));
         function invalidate() {
             revision += 1;
             pendingAction = null;
             confirmation.replaceChildren();
-            status.textContent = 'Check the saved fingerprint for this host identity.';
+            status.textContent = t('ssh.host_identity.hint', 'Check the saved fingerprint for this host identity.');
             refresh.disabled = false;
             forget.hidden = true;
         }
         function show(result) {
             const fingerprints = Array.isArray(result.fingerprints) ? result.fingerprints : [];
-            status.textContent = `${result.identity}\n${fingerprints.length ? fingerprints.join('\n') : 'No saved fingerprint.'}\nThe server will be verified when connecting.`;
+            status.textContent = `${result.identity}\n${fingerprints.length ? fingerprints.join('\n') : t('ssh.host_identity.no_fingerprint', 'No saved fingerprint.')}\n${t('ssh.host_identity.verify_on_connect', 'The server will be verified when connecting.')}`;
             forget.hidden = !fingerprints.length;
         }
         async function perform(operation, action = null) {
@@ -45,22 +51,22 @@
             refresh.disabled = true;
             forget.disabled = true;
             confirmation.replaceChildren();
-            status.textContent = 'Checking host identity…';
+            status.textContent = t('ssh.host_identity.checking', 'Checking host identity…');
             try {
                 const result = await request(payload);
                 if (!parent.isConnected || revision !== token || JSON.stringify(read()) !== snapshot) return;
                 if (!result || result.request_id !== payload.request_id || result.editor_id !== editorId || result.node_id !== nodeId) {
-                    throw new Error('SSH host identity reply is stale. Check again.');
+                    throw new Error(t('ssh.host_identity.stale', 'SSH host identity reply is stale. Check again.'));
                 }
-                if (result.status === 'failed') throw new Error(result.message || 'SSH host identity is unavailable.');
+                if (result.status === 'failed') throw new Error(result.message || t('ssh.host_identity.unavailable', 'SSH host identity is unavailable.'));
                 if (result.status === 'confirm') {
                     pendingAction = result.action_id;
                     status.textContent = result.message;
                     const question = document.createElement('p');
                     question.textContent = result.question;
                     confirmation.append(question);
-                    button('Forget now', () => { if (pendingAction === result.action_id) perform('confirm', pendingAction); }, confirmation);
-                    const cancel = button('Keep fingerprint', () => { if (pendingAction === result.action_id) perform('cancel', pendingAction); }, confirmation);
+                    button(t('ssh.host_identity.forget_now', 'Forget now'), () => { if (pendingAction === result.action_id) perform('confirm', pendingAction); }, confirmation);
+                    const cancel = button(t('ssh.host_identity.keep', 'Keep fingerprint'), () => { if (pendingAction === result.action_id) perform('cancel', pendingAction); }, confirmation);
                     cancel.focus();
                 } else {
                     pendingAction = null;
@@ -68,7 +74,7 @@
                     else show(result);
                 }
             } catch (err) {
-                if (parent.isConnected && revision === token) status.textContent = err.message || 'SSH host identity is unavailable.';
+                if (parent.isConnected && revision === token) status.textContent = err.message || t('ssh.host_identity.unavailable', 'SSH host identity is unavailable.');
             } finally {
                 if (revision === token) { refresh.disabled = false; forget.disabled = false; }
             }

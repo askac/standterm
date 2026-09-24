@@ -12,6 +12,7 @@ import re
 import stat
 import struct
 from types import SimpleNamespace
+from unittest.mock import patch
 import zlib
 from pathlib import Path
 
@@ -249,6 +250,82 @@ def test_session_renew_rejects_missing_or_expired_session():
     assert session_token not in standterm.active_sessions
 
 
+def make_desktop_flask_client():
+    client = standterm.app.test_client()
+    client.set_cookie(standterm.SESSION_COOKIE_NAME, standterm.create_desktop_session())
+    return client
+
+
+def test_desktop_session_survives_idle_cleanup_and_renewal():
+    desktop_client = make_desktop_flask_client()
+    desktop_token = flask_session_cookie_value(desktop_client)
+    desktop_bridge = add_dummy_bridge(desktop_token)
+    browser_client = make_flask_client()
+    browser_token = flask_session_cookie_value(browser_client)
+    browser_bridge = add_dummy_bridge(browser_token)
+    future = standterm.time.time() + 30 * 24 * 60 * 60
+
+    with patch.object(standterm.time, 'time', return_value=future):
+        assert standterm.is_valid_session(desktop_token)
+        standterm.cleanup_expired_sessions()
+        assert standterm.get_bridge(desktop_token, standterm.TERMINAL_ID_MAIN) is desktop_bridge
+        assert not desktop_bridge.closing
+        assert browser_bridge.closing
+        assert browser_token not in standterm.active_sessions
+        assert browser_client.post('/session/renew').status_code == 403
+        for response in (desktop_client.get('/'), desktop_client.post('/session/renew')):
+            assert response.status_code == 200
+            cookie = response.headers['Set-Cookie']
+            assert 'Max-Age=' not in cookie and 'Expires=' not in cookie
+            assert 'HttpOnly' in cookie and 'SameSite=Strict' in cookie
+        payload = response.get_json()
+        assert payload['session_expires_at'] is None
+        assert payload['session_max_age_seconds'] is None
+        assert payload['renew_interval_seconds'] == standterm.SESSION_RENEW_INTERVAL_SECONDS
+        assert standterm.active_sessions[desktop_token] is None
+
+
+def test_desktop_session_still_requires_private_cookie_and_live_process():
+    client = make_desktop_flask_client()
+    token = flask_session_cookie_value(client)
+    unknown = standterm.app.test_client()
+    assert unknown.get('/?desktop=1').status_code == 401
+    assert unknown.post('/session/renew', headers={'X-StandTerm-Desktop': '1'}).status_code == 403
+    ordinary_login = unknown.post('/login', data={'token': standterm.ACCESS_TOKEN, 'desktop': '1'})
+    assert ordinary_login.status_code == 302
+    assert f'Max-Age={standterm.SESSION_COOKIE_MAX_AGE}' in ordinary_login.headers['Set-Cookie']
+    assert standterm.active_sessions[flask_session_cookie_value(unknown)] is not None
+
+    standterm.active_sessions.pop(token)
+    assert not standterm.is_valid_session(token)
+    assert client.post('/session/renew').status_code == 403
+    assert client.get('/').status_code == 401
+    assert token not in standterm.active_sessions
+
+
+def test_desktop_session_does_not_bypass_external_agent_mint_or_expiry():
+    flask_client = make_desktop_flask_client()
+    token = flask_session_cookie_value(flask_client)
+    client = make_socket_client(flask_client)
+    try:
+        add_dummy_bridge(token)
+        sid = current_sid_for_session(token)
+        external_token, _record, error = standterm.mint_external_agent_attach_token(
+            token, standterm.TERMINAL_ID_MAIN, sid)
+        assert error is not None and external_token is None
+        client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+        external_token, _record, error = standterm.mint_external_agent_attach_token(
+            token, standterm.TERMINAL_ID_MAIN, sid, idle_timeout_seconds=-1)
+        assert error is None
+        result = standterm.process_external_agent_command({
+            'op': 'state', 'token': external_token, 'terminal_id': standterm.TERMINAL_ID_MAIN,
+        })
+        assert result['error_code'] == standterm.AGENT_ERROR_EXTERNAL_AGENT_EXPIRED
+        assert standterm.is_valid_session(token)
+    finally:
+        client.disconnect()
+
+
 def test_session_recovery_context_requires_hostname_and_secure_origin():
     assert build_webauthn_context('http://localhost:5000/') == {
         'rp_id': 'localhost',
@@ -391,10 +468,7 @@ def test_session_recovery_unauthenticated_options_offer_only_armed_credentials()
 
 
 def test_session_recovery_complete_restores_bound_live_session_cookie():
-    owner_client = make_flask_client()
-    owner_session = flask_session_cookie_value(owner_client)
     service = standterm.session_recovery_service
-    service.bind('localhost', 'credential-id', owner_session)
     original_finish = service.finish_authentication
     service.finish_authentication = lambda *_args, **_kwargs: {
         'credential_id': 'credential-id',
@@ -402,15 +476,26 @@ def test_session_recovery_complete_restores_bound_live_session_cookie():
         'backed_up': False,
     }
     try:
-        recovery_client = standterm.app.test_client()
-        response = recovery_client.post(
-            '/session-recovery/authenticate/complete',
-            base_url='http://localhost',
-            json={'ceremony_id': 'test', 'credential': {}},
-        )
-        assert response.status_code == 200
-        assert response.get_json()['result'] == 'recovered'
-        assert flask_session_cookie_value(recovery_client) == owner_session
+        for owner_client in (make_flask_client(), make_desktop_flask_client()):
+            owner_session = flask_session_cookie_value(owner_client)
+            process_lifetime = standterm.active_sessions[owner_session] is None
+            service.bind('localhost', 'credential-id', owner_session)
+            recovery_client = standterm.app.test_client()
+            response = recovery_client.post(
+                '/session-recovery/authenticate/complete',
+                base_url='http://localhost',
+                json={'ceremony_id': 'test', 'credential': {}},
+            )
+            assert response.status_code == 200
+            assert response.get_json()['result'] == 'recovered'
+            assert flask_session_cookie_value(recovery_client) == owner_session
+            cookie = response.headers['Set-Cookie']
+            if process_lifetime:
+                assert standterm.active_sessions[owner_session] is None
+                assert 'Max-Age=' not in cookie and 'Expires=' not in cookie
+            else:
+                assert standterm.active_sessions[owner_session] > standterm.time.time()
+                assert f'Max-Age={standterm.SESSION_COOKIE_MAX_AGE}' in cookie
     finally:
         service.finish_authentication = original_finish
 
@@ -1885,6 +1970,20 @@ def test_external_agent_observe_cannot_send():
     assert result['error_code'] == standterm.AGENT_ERROR_MODE_NOT_WRITABLE
     assert bridge.writes == []
 
+    started_at = time.monotonic()
+    captured_result = standterm.process_external_agent_command({
+        'op': 'send-wait',
+        'token': token,
+        'terminal_id': standterm.TERMINAL_ID_MAIN,
+        'kind': 'text',
+        'text': 'blocked\n',
+        'wait_ms': standterm.AGENT_EXTERNAL_TAIL_MAX_WAIT_MS,
+    })
+    assert captured_result['status'] == standterm.AGENT_STATUS_FAILED
+    assert captured_result['error_code'] == standterm.AGENT_ERROR_MODE_NOT_WRITABLE
+    assert time.monotonic() - started_at < 0.5
+    assert bridge.writes == []
+
     client.disconnect()
 
 
@@ -2221,6 +2320,67 @@ def test_external_agent_send_wait_times_out_without_output():
     assert result['capture']['events'] == []
 
     client.disconnect()
+
+
+def test_external_agent_send_capture_bounds_settle_and_preserves_written_result():
+    cases = (
+        ('settled', [0.01], False),
+        ('continuous', [0.01 + index * 0.02 for index in range(20)], True),
+        ('late', [0.09], True),
+    )
+    for name, output_times, timed_out in cases:
+        client = make_client()
+        session_token = current_session_token()
+        bridge = add_dummy_bridge(session_token)
+        sid = current_sid_for_session(session_token)
+        client.emit(standterm.AGENT_EVENT_ATTACH, {'terminal_id': standterm.TERMINAL_ID_MAIN})
+        client.emit(standterm.AGENT_EVENT_MODE_SET, {
+            'terminal_id': standterm.TERMINAL_ID_MAIN,
+            'mode': 'direct',
+        })
+        token, _record, error_code = standterm.mint_external_agent_attach_token(
+            session_token, standterm.TERMINAL_ID_MAIN, sid,
+        )
+        assert error_code is None
+        clock = [0.0]
+        pending = list(output_times)
+        emitted = []
+
+        def wait_for_output(timeout):
+            wake_at = clock[0] + timeout
+            if pending and pending[0] <= wake_at:
+                clock[0] = pending.pop(0)
+                text = f'{name}-{len(emitted)}\n'
+                emitted.append(text)
+                bridge.emit_output({'message_type': 'terminal', 'data': text})
+            else:
+                clock[0] = wake_at
+
+        try:
+            with patch.object(standterm.time, 'monotonic', side_effect=lambda: clock[0]), \
+                    patch.object(bridge.output_condition, 'wait', side_effect=wait_for_output):
+                result = standterm.process_external_agent_command({
+                    'op': 'send-wait',
+                    'token': token,
+                    'terminal_id': standterm.TERMINAL_ID_MAIN,
+                    'data': 'run-once\n',
+                    'wait_ms': 100,
+                    'settle_ms': 30,
+                })
+            assert clock[0] <= 0.1 + 1e-9, name
+            assert result['status'] == standterm.AGENT_STATUS_COMPLETED
+            assert result['bytes_written'] == len('run-once\n')
+            assert bridge.writes == ['run-once\n']
+            capture = result['capture']
+            assert capture['status'] == ('timeout' if timed_out else 'ok'), name
+            assert capture['timed_out'] is timed_out, name
+            assert capture['settled'] is not timed_out, name
+            assert [event['data'] for event in capture['events']] == emitted
+            assert emitted
+            if timed_out:
+                assert abs(clock[0] - 0.1) < 1e-9, name
+        finally:
+            client.disconnect()
 
 
 def test_external_agent_approval_send_capture_is_pending_without_capture():
@@ -2908,7 +3068,7 @@ def test_external_agent_per_terminal_handoffs_are_isolated_and_cli_resolvable():
     flask_client = make_flask_client()
     client = make_socket_client(flask_client)
     session_token = current_session_token()
-    terminal_ids = ('term-2', 'term-3')
+    terminal_ids = ('main', 'term-2', 'term-3')
     bridges_by_terminal = {}
     for terminal_id in terminal_ids:
         bridge = DummyBridge(session_token, terminal_id)
@@ -3007,8 +3167,24 @@ def test_external_agent_per_terminal_handoffs_are_isolated_and_cli_resolvable():
             for thread in threads:
                 thread.join()
             assert all(result['status'] == standterm.AGENT_STATUS_COMPLETED for result in results.values())
+            assert bridges_by_terminal['main'].writes == ['main-input\n']
             assert bridges_by_terminal['term-2'].writes == ['term-2-input\n']
             assert bridges_by_terminal['term-3'].writes == ['term-3-input\n']
+
+            def post_cli_command(_url, payload, **_kwargs):
+                result = standterm.process_external_agent_command(payload)
+                return 200, result
+
+            output = io.StringIO()
+            with patch.object(sys, 'argv', [
+                'agent_cli.py', '--handoff', str(standterm.EXTERNAL_AGENT_HANDOFF_PATH),
+                '--terminal', 'main', 'send', '--text', 'wrong-target\n',
+            ]), patch.object(agent_cli, 'post_json', side_effect=post_cli_command), \
+                    contextlib.redirect_stdout(output):
+                assert agent_cli.main() == 1
+            assert json.loads(output.getvalue())['error_code'] == standterm.AGENT_ERROR_TERMINAL_MISMATCH
+            for terminal_id in terminal_ids:
+                assert bridges_by_terminal[terminal_id].writes == [f'{terminal_id}-input\n']
 
             mismatch = standterm.process_external_agent_command({
                 'op': 'screen',
@@ -3826,11 +4002,12 @@ def test_access_window_copy_token_requires_current_status():
 def test_browser_authorization_gate_ui_contract():
     template = (Path(__file__).resolve().parents[1] / 'templates' / 'index.html').read_text(encoding='utf-8')
 
-    assert 'YOU SHALL NOT PASS!!' in template
-    assert 'First time? Please use an Auth URL.' in template
+    assert 'YOU SHALL NOT PASS!!' not in template
+    assert 'Browser authorization required' in template
+    assert 'Paste a browser authorization URL to continue.' in template
     assert 'Session ID: {{ launcher_instance_id }}' in template
     assert 'id="browser-auth-url-input"' in template
-    assert 'Download authorization file manually' in template
+    assert 'Download authorization file' in template
     assert 'id="browser-auth-help-modal"' in template
     assert "authorizationUrl.searchParams.get('authorize')" in template
     assert "const serverUnavailable = serverConnectionState === 'unavailable';" in template
@@ -4361,12 +4538,14 @@ def test_browser_ssh_sign_request_store_uses_monotonic_deadlines():
 def make_sftp_test_bridge(session_token, terminal_id=standterm.TERMINAL_ID_MAIN):
     bridge = object.__new__(standterm.SSHBridge)
     standterm.TerminalBridge.__init__(bridge, session_token, terminal_id)
+    bridge.network_origin = 'core'
     bridge._sftp_endpoint = {
         'user': 'tester',
         'host': 'host.example',
         'port': 22,
         'route': 'direct',
     }
+    bridge.auth_method = None
     bridge._sftp_lock = threading.Lock()
     bridge._sftp_file_refs_lock = threading.Lock()
     bridge._sftp_file_refs = {}
@@ -4374,6 +4553,22 @@ def make_sftp_test_bridge(session_token, terminal_id=standterm.TERMINAL_ID_MAIN)
     bridge.ssh = None
     bridge.close = lambda: None
     return bridge
+
+
+def test_ssh_target_metadata_is_structured_and_access_scoped():
+    session = 'target-metadata-test'
+    bridge = make_sftp_test_bridge(session)
+    bridge._sftp_endpoint.update(password='not-public', route='not-an-endpoint')
+    expected = {'host': 'host.example', 'port': 22, 'username': 'tester'}
+    assert bridge.metadata()['ssh_target'] == expected
+    standterm.bridges[session] = {bridge.terminal_id: bridge}
+    try:
+        with patch.object(standterm, 'is_terminal_bridge_allowed_for_sid', return_value=True):
+            assert standterm.build_terminal_list(session, sid='allowed')[0]['ssh_target'] == expected
+        with patch.object(standterm, 'is_terminal_bridge_allowed_for_sid', return_value=False):
+            assert standterm.build_terminal_list(session, sid='denied') == []
+    finally:
+        standterm.bridges.pop(session)
 
 
 def make_local_file_test_bridge(session_token, terminal_id):
@@ -4568,6 +4763,61 @@ def test_external_agent_file_copy_requires_approval_and_streams_between_ssh_brid
     assert completed['result']['source_preserved'] is True
     assert completed['result']['destination_path'] == '/srv/output/payload (1).bin'
 
+    stop_started = threading.Event()
+    stop_gate = threading.Event()
+    stop_finished = threading.Event()
+
+    def stopped_upload(stream, _upload, expected_size, before_read_callback=None,
+                       progress_callback=None, pre_commit_callback=None,
+                       report_publish_outcome_unknown=False):
+        assert report_publish_outcome_unknown is True
+        stop_started.set()
+        assert stop_gate.wait(2), 'stopped file copy gate was not released'
+        try:
+            before_read_callback(0, expected_size)
+        finally:
+            stop_finished.set()
+        raise AssertionError('operator stop should prevent the next file read')
+
+    destination_bridge.upload_sftp_stream = stopped_upload
+    stopped_pending = standterm.process_external_agent_command({
+        'op': 'file-copy',
+        'token': source_token,
+        'terminal_id': source_terminal_id,
+        'source_path': '/srv/input/../payload.bin',
+        'destination_token': destination_token,
+        'destination_terminal_id': destination_terminal_id,
+        'destination_path': '/srv/output/payload.bin',
+        'conflict_mode': 'keep_both',
+    })
+    stopped_action = last_payload(client, standterm.AGENT_EVENT_ACTION_REQUEST)
+    client.emit(standterm.AGENT_EVENT_ACTION_APPROVE, {
+        'terminal_id': source_terminal_id,
+        'action_id': stopped_action['action_id'],
+        'proposal_id': stopped_action['proposal_id'],
+    })
+    assert stopped_pending['status'] == standterm.AGENT_STATUS_PENDING_APPROVAL
+    assert stop_started.wait(1), 'file copy did not start before operator stop'
+    client.emit(standterm.AGENT_EVENT_ACTION_CANCEL, {
+        'terminal_id': source_terminal_id,
+        'action_id': stopped_action['action_id'],
+        'proposal_id': stopped_action['proposal_id'],
+    })
+    stopped_result = last_payload(client, standterm.AGENT_EVENT_ACTION_RESULT)
+    assert stopped_result['status'] == standterm.AGENT_STATUS_FAILED
+    assert stopped_result['error_code'] == standterm.AGENT_ERROR_FILE_COPY_CANCELLED
+    stop_gate.set()
+    assert stop_finished.wait(1), 'stopped file copy worker did not exit'
+    stopped = standterm.process_external_agent_command({
+        'op': 'action-status',
+        'token': source_token,
+        'terminal_id': source_terminal_id,
+        'action_id': stopped_action['action_id'],
+    })
+    assert stopped['status'] == standterm.AGENT_STATUS_FAILED
+    assert stopped['error_code'] == standterm.AGENT_ERROR_FILE_COPY_CANCELLED
+
+    destination_bridge.upload_sftp_stream = upload_stream
     rejected_pending = standterm.process_external_agent_command({
         'op': 'file-copy',
         'token': source_token,
@@ -5458,6 +5708,127 @@ def test_files_copy_request_runs_human_local_copy_without_agent_approval():
         assert hardlink_path.stat().st_ino == source_path.stat().st_ino
         assert hardlink_path.read_bytes() == b'human-copy'
         assert len(standterm.files_copy_jobs) == job_count
+    client.disconnect()
+
+
+def test_files_copy_conflict_precedes_reads_and_progress_precedes_completion():
+    client = make_client()
+    session_token = current_session_token()
+    sid = current_sid_for_session(session_token)
+    source = make_local_file_test_bridge(session_token, 'copy-source')
+    destination = make_local_file_test_bridge(session_token, 'copy-destination')
+    for bridge in (source, destination):
+        bridge.attach(sid)
+        standterm.set_bridge(session_token, bridge.terminal_id, bridge)
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        (root / 'source').mkdir()
+        (root / 'destination').mkdir()
+        content = bytes(range(256)) * (16 * 1024)
+        (root / 'source' / 'large.bin').write_bytes(content)
+        existing = root / 'destination' / 'large.bin'
+        existing.write_bytes(b'original')
+        entry = source.browse_local_files(str(root / 'source'))['files'][0]
+        payload = {
+            'request_id': 'large-conflict', 'source_terminal_id': source.terminal_id,
+            'source_file_id': entry['file_id'], 'destination_terminal_id': destination.terminal_id,
+            'destination_directory': str(existing.parent), 'destination_filename': existing.name,
+            'conflict_mode': 'ask',
+        }
+        client.get_received()
+        with patch.object(source, 'download_local_chunks', side_effect=AssertionError('Read before conflict choice')) as read:
+            client.emit(standterm.FILES_COPY_REQUEST_EVENT, payload)
+            assert last_payload(client, standterm.FILES_COPY_RESULT_EVENT)['status'] == 'conflict'
+            read.assert_not_called()
+        assert not standterm.files_copy_jobs
+        assert existing.read_bytes() == b'original'
+        original_download = source.download_local_chunks
+        for mode in ('keep_both', 'replace'):
+            paused, resume = threading.Event(), threading.Event()
+
+            def paced_download(snapshot):
+                transferred = 0
+                for chunk in original_download(snapshot):
+                    yield chunk
+                    transferred += len(chunk)
+                    if transferred == len(content) // 2:
+                        paused.set()
+                        assert resume.wait(5), 'Copy test did not release the source stream'
+
+            request_id = f'large-{mode}'
+            client.get_received()
+            with patch.object(source, 'download_local_chunks', side_effect=paced_download):
+                try:
+                    client.emit(standterm.FILES_COPY_REQUEST_EVENT, {
+                        **payload, 'request_id': request_id, 'conflict_mode': mode,
+                    })
+                    assert paused.wait(5), 'Copy did not reach the transfer midpoint'
+                    events = [event['args'][0] for event in client.get_received()
+                              if event['name'] == standterm.FILES_COPY_RESULT_EVENT]
+                    assert any(event['status'] == 'running' and 0 < event['bytes_copied'] < len(content)
+                               for event in events), 'Progress was not delivered during transfer'
+                    assert not any(event['status'] in ('completed', 'conflict') for event in events)
+                    assert existing.read_bytes() == b'original'
+                finally:
+                    resume.set()
+                wait_until(lambda: any(job['request_id'] == request_id and job['status'] == 'completed'
+                                       for job in standterm.files_copy_jobs.values()), 'Large copy did not complete')
+            job = next(job for job in standterm.files_copy_jobs.values() if job['request_id'] == request_id)
+            assert Path(job['result']['destination_path']).read_bytes() == content
+            assert (job['result']['destination_path'] == str(existing)) == (mode == 'replace')
+    client.disconnect()
+
+
+def test_files_copy_conflict_does_not_wait_for_busy_ssh_source():
+    client = make_client()
+    session_token = current_session_token()
+    sid = current_sid_for_session(session_token)
+    source = make_sftp_test_bridge(session_token, 'busy-source')
+    destination = make_local_file_test_bridge(session_token, 'conflict-destination')
+    for bridge in (source, destination):
+        bridge.attach(sid)
+        standterm.set_bridge(session_token, bridge.terminal_id, bridge)
+    snapshot = {
+        'directory': '/source', 'filename': 'large.bin', 'path': '/source/large.bin',
+        'size': 4 * 1024 * 1024, 'mtime': 25, 'endpoint': source.sftp_endpoint(),
+    }
+    file_id = source._register_sftp_file_reference(snapshot)
+    source._open_sftp = lambda: SimpleNamespace(
+        normalize=lambda path: path,
+        stat=lambda path: SimpleNamespace(st_mode=stat.S_IFDIR | 0o755),
+        lstat=lambda path: SimpleNamespace(st_mode=stat.S_IFREG | 0o644, st_size=snapshot['size'], st_mtime=25),
+        close=lambda: None,
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        existing = Path(directory) / 'large.bin'
+        existing.write_bytes(b'original')
+        payload = {
+            'request_id': 'busy-source-conflict', 'source_terminal_id': source.terminal_id,
+            'source_file_id': file_id, 'destination_terminal_id': destination.terminal_id,
+            'destination_directory': directory, 'destination_filename': existing.name, 'conflict_mode': 'ask',
+        }
+        # An ongoing SSH download holds this same lock until its stream closes.
+        source._sftp_lock.acquire()
+        worker = threading.Thread(target=lambda: client.emit(standterm.FILES_COPY_REQUEST_EVENT, payload), daemon=True)
+        client.get_received()
+        worker.start()
+        try:
+            worker.join(1)
+            assert not worker.is_alive(), 'Conflict checking waited for the busy SSH source'
+            assert last_payload(client, standterm.FILES_COPY_RESULT_EVENT)['status'] == 'conflict'
+            assert not standterm.files_copy_jobs
+            assert existing.read_bytes() == b'original'
+        finally:
+            source._sftp_lock.release()
+            worker.join(5)
+        with patch.object(source, 'prepare_sftp_file', side_effect=standterm.SFTPTransferError(
+                'sftp_file_changed', 'Source changed while choosing a conflict action.')):
+            client.emit(standterm.FILES_COPY_REQUEST_EVENT, {
+                **payload, 'request_id': 'busy-source-replace', 'conflict_mode': 'replace',
+            })
+            assert last_payload(client, standterm.FILES_COPY_RESULT_EVENT)['error_code'] == 'sftp_file_changed'
+            assert existing.read_bytes() == b'original'
+            assert not standterm.files_copy_jobs
     client.disconnect()
 
 
@@ -6488,7 +6859,9 @@ def test_backend_start_form_schema_is_declared_and_typed():
                 standterm.SETTING_UART_DEFAULT_BAUD_RATE: 230400,
             },
         )
-        options = standterm.TERMINAL_BACKEND_REGISTRY.build_policy_options(context=context)
+        # Keep the base schema deterministic; optional Windows fields have dedicated coverage.
+        with patch('terminal_backends.ssh.windows_network_executable', return_value=None):
+            options = standterm.TERMINAL_BACKEND_REGISTRY.build_policy_options(context=context)
     finally:
         standterm.is_wsl = original_is_wsl
 
@@ -7989,6 +8362,35 @@ def test_terminal_bridge_tracks_shared_session_metadata():
     assert metadata['terminal_quiet_ms'] >= 0
 
 
+def test_capability_queries_are_authorized_and_not_human_input():
+    client = make_client()
+    session_token = current_session_token()
+    bridge = add_dummy_bridge(session_token)
+    sid = current_sid_for_session(session_token)
+    bridge.attach(sid)
+    bridge.emit_output({'message_type': 'terminal', 'data': '\x1b[>q'})
+    query = {'terminal_id': standterm.TERMINAL_ID_MAIN, 'kind': 'version',
+             'capability_epoch': bridge.capability_epoch, 'output_seq': 1, 'query_index': 0}
+    with patch.object(standterm, 'note_agent_human_input_for_terminal') as human_input:
+        client.emit('terminal_capability_query', query)
+        client.emit('terminal_capability_query', query)
+        human_input.assert_not_called()
+    assert len(bridge.writes) == 1
+    assert 'StandTerm(' in bridge.writes[0]
+    assert not standterm.agent_user_input_metadata_store.get_recent(session_token, standterm.TERMINAL_ID_MAIN)
+    client.emit('terminal_capability_query', dict(query, kind='input', names='whoami\n', query_index=1))
+    client.emit('terminal_capability_query', dict(query, capability_epoch='old-bridge', query_index=1))
+    with patch.object(standterm, 'is_terminal_bridge_allowed_for_sid', return_value=False):
+        client.emit('terminal_capability_query', dict(query, query_index=1))
+    bridge.detach(sid)
+    client.emit('terminal_capability_query', dict(query, query_index=1))
+    assert len(bridge.writes) == 1
+    client.emit('ssh_input', {'terminal_id': standterm.TERMINAL_ID_MAIN, 'data': 'real input'})
+    assert bridge.writes[-1] == 'real input'
+    assert len(standterm.agent_user_input_metadata_store.get_recent(session_token, standterm.TERMINAL_ID_MAIN)) == 1
+    client.disconnect()
+
+
 def test_ssh_input_records_agent_metadata_after_validation():
     client = make_client()
     session_token = current_session_token()
@@ -8307,6 +8709,9 @@ def main():
         test_access_required_page_rejects_invalid_login_token,
         test_session_renew_extends_existing_cookie_session,
         test_session_renew_rejects_missing_or_expired_session,
+        test_desktop_session_survives_idle_cleanup_and_renewal,
+        test_desktop_session_still_requires_private_cookie_and_live_process,
+        test_desktop_session_does_not_bypass_external_agent_mint_or_expiry,
         test_session_recovery_context_requires_hostname_and_secure_origin,
         test_native_loopback_access_host_uses_localhost_for_webauthn,
         test_session_recovery_registration_options_require_live_session_and_hostname,
@@ -8351,6 +8756,7 @@ def main():
         test_external_agent_direct_send_capture_returns_tail_after_write,
         test_external_agent_send_wait_strip_ansi_formats_capture_only_when_requested,
         test_external_agent_send_wait_times_out_without_output,
+        test_external_agent_send_capture_bounds_settle_and_preserves_written_result,
         test_external_agent_approval_send_capture_is_pending_without_capture,
         test_external_agent_send_capture_reports_pause_as_nested_capture_error,
         test_human_input_lease_blocks_external_agent_send,
@@ -8401,6 +8807,8 @@ def main():
         test_external_agent_file_copy_supports_local_shell_endpoints,
         test_local_shell_files_supports_browse_transfer_rename_and_delete,
         test_files_copy_request_runs_human_local_copy_without_agent_approval,
+        test_files_copy_conflict_precedes_reads_and_progress_precedes_completion,
+        test_files_copy_conflict_does_not_wait_for_busy_ssh_source,
         test_files_copy_request_rejects_same_ssh_endpoint_path,
         test_files_copy_start_failure_keeps_correlated_terminal_result,
         test_files_copy_cancel_request_stops_before_commit_barrier,
@@ -8453,7 +8861,9 @@ def main():
         test_transcript_store_sanitizes_terminal_output,
         test_transcript_retains_batched_terminal_output_and_utf8_boundaries,
         test_terminal_bridge_tracks_shared_session_metadata,
+        test_ssh_target_metadata_is_structured_and_access_scoped,
         test_ssh_input_records_agent_metadata_after_validation,
+        test_capability_queries_are_authorized_and_not_human_input,
         test_agent_input_metadata_bounds_and_sanitized_preview,
         test_privacy_state_blocks_agent_context_and_redacts_input_metadata,
         test_ssh_input_does_not_record_invalid_or_oversized_metadata,

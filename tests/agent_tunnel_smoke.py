@@ -31,7 +31,7 @@ paramiko = standterm.get_paramiko()
 
 
 @contextlib.contextmanager
-def ssh_server(gateway_ports='no'):
+def ssh_server(gateway_ports='no', forwarding='remote'):
     executable = shutil.which('sshd') or '/usr/sbin/sshd'
     if not Path(executable).is_file():
         raise unittest.SkipTest('OpenSSH server is required for transport integration.')
@@ -51,7 +51,7 @@ def ssh_server(gateway_ports='no'):
             'PidFile ' + str(root / 'pid'),
             'StrictModes no', 'UsePAM no', 'PasswordAuthentication no',
             'KbdInteractiveAuthentication no', 'PermitRootLogin prohibit-password',
-            'AllowTcpForwarding remote', 'GatewayPorts ' + gateway_ports,
+            'AllowTcpForwarding ' + forwarding, 'GatewayPorts ' + gateway_ports,
             'Subsystem sftp internal-sftp', 'LogLevel ERROR',
         ])
         (root / 'sshd_config').write_text(config + '\n')
@@ -258,6 +258,32 @@ class AgentTunnelTests(unittest.TestCase):
             self.assertGreater(by_terminal['main']['last_request_at'], 0)
             self.assertIsNone(by_terminal['second']['last_request_at'])
             self.assertNotIn('agt_', json.dumps(status))
+
+    def test_apply_retains_valid_grants_and_renews_only_invalid_grants(self):
+        with ssh_server() as ssh:
+            tunnel = self.open_tunnel(ssh)
+            verified_at = tunnel.verified_at
+            original = {key: grant['token'] for key, grant in tunnel.grants.items()}
+            with standterm.external_agent_lock:
+                expiries = {key: standterm.external_agent_attach_store._tokens[
+                    grant['record']['token_hash']]['expires_at'] for key, grant in tunnel.grants.items()}
+            with patch.object(tunnel, '_exec', wraps=tunnel._exec) as remote_exec:
+                result = self.client.emit('agent_tunnel', {'terminal_id': 'carrier', 'operation': 'apply'}, callback=True)
+                self.assertEqual(result['status'], 'ready', result)
+                self.assertEqual(result['verified_at'], verified_at)
+                self.assertEqual({key: grant['token'] for key, grant in tunnel.grants.items()}, original)
+                with standterm.external_agent_lock:
+                    for key, grant in tunnel.grants.items():
+                        self.assertEqual(standterm.external_agent_attach_store._tokens[
+                            grant['record']['token_hash']]['expires_at'], expiries[key])
+                    standterm.external_agent_attach_store._tokens[
+                        tunnel.grants['main']['record']['token_hash']]['expires_at'] = time.time() - 1
+                renewed = self.client.emit('agent_tunnel', {'terminal_id': 'carrier', 'operation': 'apply'}, callback=True)
+                self.assertEqual(renewed['status'], 'ready', renewed)
+                self.assertEqual(renewed['verified_at'], verified_at)
+                self.assertNotEqual(tunnel.grants['main']['token'], original['main'])
+                self.assertEqual(tunnel.grants['second']['token'], original['second'])
+                remote_exec.assert_not_called()
 
     def test_tunnel_check_rejects_a_missing_remote_listener(self):
         with ssh_server() as ssh:

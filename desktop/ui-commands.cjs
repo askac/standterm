@@ -2,15 +2,20 @@
 
 const { BrowserWindow, Menu } = require('electron');
 const { allowedNavigation } = require('./policy.cjs');
+const { create } = require('./i18n.js');
 
 const UI_ACTIONS = Object.freeze({
-  settings: 'Settings...', newTab: 'New terminal tab', closeTab: 'Close terminal tab',
-  closeAll: 'Close all terminal tabs...', files: 'Files...', pip: 'Terminal to PiP',
-  agentPanel: 'Show / hide Agent Panel', pauseAgent: 'Pause Agent for current terminal',
+  settings: 'desktop.menu.settings', newTab: 'desktop.menu.new_tab', closeTab: 'desktop.menu.close_tab',
+  closeAll: 'desktop.menu.close_all', files: 'desktop.menu.files', pip: 'desktop.menu.pip',
+  agentPanel: 'desktop.menu.agent_panel', pauseAgent: 'desktop.menu.pause_agent',
 });
 
-function createUiCommands(win, contents, origin) {
+function createUiCommands(win, contents, origin, t = create('en').t, onLocale = () => {}) {
   let refreshing = false;
+  let navigation = 0;
+  contents.on('did-start-navigation', (_event, _url, _inPlace, mainFrame) => {
+    if (mainFrame) navigation++;
+  });
   const current = () => !win.isDestroyed() && !contents.isDestroyed() && allowedNavigation(contents.getURL(), origin);
   const focused = () => current() && BrowserWindow.getFocusedWindow() === win;
   function edit(action) {
@@ -21,9 +26,12 @@ function createUiCommands(win, contents, origin) {
     return true;
   }
   async function snapshot() {
-    if (!current()) return null;
+    if (!current() || contents.isLoadingMainFrame()) return null;
+    const epoch = navigation;
+    const frame = contents.mainFrame;
     try {
       const state = await contents.executeJavaScript('window.standtermUi?.version === 1 ? window.standtermUi.snapshot() : null');
+      if (!current() || contents.isLoadingMainFrame() || navigation !== epoch || contents.mainFrame !== frame) return null;
       return state?.version === 1 && state.ready === true && typeof state.actions === 'object' ? state : null;
     } catch { return null; }
   }
@@ -42,6 +50,7 @@ function createUiCommands(win, contents, origin) {
     refreshing = true;
     try {
       const state = await snapshot();
+      if (['en', 'zh-TW'].includes(state?.uiLanguage)) onLocale(state.uiLanguage);
       for (const action of Object.keys(UI_ACTIONS)) {
         const item = Menu.getApplicationMenu()?.getMenuItemById(`ui-${action}`);
         if (item) item.enabled = !!state?.actions?.[action] && (action === 'settings' || focused());
@@ -54,7 +63,7 @@ function createUiCommands(win, contents, origin) {
   win.on('blur', () => { void refresh(); });
   return {
     run, refresh, edit,
-    item: action => ({ id: `ui-${action}`, label: UI_ACTIONS[action], enabled: false, click: () => run(action) }),
+    item: action => ({ id: `ui-${action}`, label: t(UI_ACTIONS[action]), enabled: false, click: () => run(action) }),
   };
 }
 

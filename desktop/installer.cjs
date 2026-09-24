@@ -3,6 +3,8 @@
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 const { shortcutPlan, applyShortcuts } = require('./installer-shortcuts.cjs');
+const { createLanguage } = require('./language.cjs');
+const { create } = require('./i18n.js');
 
 function installerRequest(argv) {
   const flags = argv.filter(value => value.startsWith('--installer-'));
@@ -91,6 +93,9 @@ async function runInstaller(request) {
   const { app, dialog, shell } = require('electron');
   const { preparePackagedBackend, cleanupManagedVenvs, stopSetup, confirmSetupQuit, modeProfile } = require('./setup.cjs');
   const { installedStore } = require('./core-source.cjs');
+  const modes = request.action === 'prepare' ? request.modes : ['windows', 'wsl'];
+  const locales = modes.map(mode => createLanguage(path.join(modeProfile(mode), 'language.json')).locale);
+  const { t } = create(locales.every(locale => locale === locales[0]) ? locales[0] : 'en');
   let exiting = false;
   const watcher = watchInstaller(request.parent, () => {
     void stopSetup().finally(() => { exiting = true; app.exit(2); });
@@ -118,23 +123,23 @@ async function runInstaller(request) {
         const detached = results.flatMap(result => result.results || []).filter(item => item.status === 'detached').length;
         const retained = results.flatMap(result => result.results || [result]).filter(item => item.status === 'retained').length;
         const unknown = results.filter(result => result.status === 'unknown').length;
-        await dialog.showMessageBox({ type: 'info', title: 'StandTerm environment cleanup',
-          message: `${detached} confirmed move(s); ${retained} retained entry/entries; ${unknown} unconfirmed environment(s).`,
-          detail: 'In-use, legacy, unverified and unavailable environments are retained. Only Windows and the configured WSL distribution were checked.\n\n'
-            + 'Recovery folders (disk space is not freed):\n%LOCALAPPDATA%\\StandTermDesktop\\venv-recovery\n'
-            + '~/.local/share/standterm-desktop/venv-recovery\n\nIf a result is unconfirmed, inspect these folders; some moves may already have completed. '
-            + 'Core, settings, captures, system Python and WSL distributions are untouched.',
-          buttons: ['Continue uninstall'] });
+        await dialog.showMessageBox({ type: 'info', title: t('desktop.installer.cleanup_title'),
+          message: t('desktop.installer.cleanup_summary', { detached, retained, unknown }),
+          detail: t('desktop.installer.cleanup_detail', {
+            windows_path: '%LOCALAPPDATA%\\StandTermDesktop\\venv-recovery',
+            wsl_path: '~/.local/share/standterm-desktop/venv-recovery',
+          }),
+          buttons: [t('desktop.installer.continue_uninstall')] });
       },
     });
     ensureAlive();
     return 0;
   } catch (error) {
     await stopSetup();
-    if (watcher.alive()) await dialog.showMessageBox({ type: 'error', title: 'StandTerm setup did not complete',
+    if (watcher.alive()) await dialog.showMessageBox({ type: 'error', title: t('desktop.installer.setup_failed_title'),
       message: error.message,
-      detail: 'Prepared environments and application files are retained. Run the installer again to retry. No terminal backend was started.',
-      buttons: ['Return to installer'] });
+      detail: t('desktop.installer.setup_failed_detail'),
+      buttons: [t('desktop.installer.return_to_installer')] });
     return error.code === 'SETUP_CANCELED' ? 2 : 1;
   } finally { exiting = true; watcher.stop(); }
 }

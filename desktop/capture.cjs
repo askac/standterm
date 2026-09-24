@@ -7,6 +7,7 @@ const { pathToFileURL } = require('node:url');
 const { randomUUID } = require('node:crypto');
 const { CaptureFile, MAX_CHUNK_BYTES } = require('./capture-file.cjs');
 const { CaptureSettings, captureName } = require('./capture-settings.cjs');
+const { create } = require('./i18n.js');
 
 const RECORDER_URL = pathToFileURL(path.join(__dirname, 'recorder.html')).href;
 const RECORDER_SCRIPT_URL = pathToFileURL(path.join(__dirname, 'recorder.js')).href;
@@ -22,13 +23,14 @@ async function bounded(promise) {
 }
 
 class DesktopCapture {
-  constructor(win, { contents = win.webContents, onChange = () => {}, onDiagnostic = () => {}, notify = null } = {}) {
+  constructor(win, { contents = win.webContents, onChange = () => {}, onDiagnostic = () => {}, notify = null, t = create('en').t } = {}) {
     this.win = win;
     this.contents = contents;
     this.onChange = onChange;
     this.onDiagnostic = onDiagnostic;
+    this.t = t;
     this.notify = notify || ((message, error = false) => dialog.showMessageBox(win, {
-      type: error ? 'error' : 'info', title: 'StandTerm Capture', message,
+      type: error ? 'error' : 'info', title: this.t('desktop.capture.title'), message,
     }));
     this.state = 'idle';
     this.job = null;
@@ -46,28 +48,28 @@ class DesktopCapture {
     const menu = Menu.getApplicationMenu();
     const elapsed = this.job?.startedAt ? Math.floor(((this.job.pausedAt || Date.now()) - this.job.startedAt - (this.job.pausedMs || 0)) / 1000) : 0;
     const clock = `${Math.floor(elapsed / 60).toString().padStart(2, '0')}:${(elapsed % 60).toString().padStart(2, '0')}`;
-    const label = this.state === 'paused' ? `Recording paused ${clock}` : this.state === 'recording' ? `Recording ${clock}`
-      : this.state === 'idle' ? 'Not recording' : `${this.state === 'starting' ? 'Starting' : 'Saving'} recording...`;
+    const label = this.t(this.state === 'paused' ? 'desktop.capture.status_paused' : this.state === 'recording' ? 'desktop.capture.status_recording'
+      : this.state === 'idle' ? 'desktop.capture.status_idle' : this.state === 'starting' ? 'desktop.capture.status_starting' : 'desktop.capture.status_saving', { time: clock });
     const status = menu?.getMenuItemById('capture-status');
     if (status) status.label = label;
     const start = menu?.getMenuItemById('capture-start');
     if (start) start.enabled = !this.active;
     const stop = menu?.getMenuItemById('capture-stop');
     if (stop) stop.enabled = ['recording', 'paused'].includes(this.state);
-    this.onChange(this.active ? `${this.state === 'paused' ? 'PAUSED' : 'REC'} ${clock}` : '', {
+    this.onChange(this.active ? this.t(this.state === 'paused' ? 'desktop.capture.title_paused' : 'desktop.capture.title_recording', { time: clock }) : '', {
       state: this.state, label, screenshotBusy: this.screenshotBusy,
     });
   }
 
   menu() {
-    return { label: 'Capture', submenu: [
-      { label: 'Copy screenshot', accelerator: 'CommandOrControl+Alt+S', click: () => this.screenshot('clipboard') },
-      { label: 'Save screenshot (PNG)', click: () => this.screenshot('file') },
+    return { label: this.t('desktop.capture.menu'), submenu: [
+      { label: this.t('desktop.toolbar.screenshot_copy'), accelerator: 'CommandOrControl+Alt+S', click: () => this.screenshot('clipboard') },
+      { label: this.t('desktop.toolbar.screenshot_save'), click: () => this.screenshot('file') },
       { type: 'separator' },
-      { id: 'capture-start', label: 'Start recording (WebM)', click: () => this.start() },
-      { id: 'capture-stop', label: 'Stop and save recording', accelerator: 'CommandOrControl+Alt+R',
+      { id: 'capture-start', label: this.t('desktop.toolbar.record_start'), click: () => this.start() },
+      { id: 'capture-stop', label: this.t('desktop.toolbar.record_stop'), accelerator: 'CommandOrControl+Alt+R',
         enabled: false, click: () => this.stop() },
-      { id: 'capture-status', label: 'Not recording', enabled: false },
+      { id: 'capture-status', label: this.t('desktop.capture.status_idle'), enabled: false },
     ] };
   }
 
@@ -78,7 +80,7 @@ class DesktopCapture {
         if (!(await fs.stat(directory)).isDirectory()) throw new Error('Not a folder.');
         await fs.access(directory, fs.constants.W_OK);
       } catch {
-        await this.notify('The saved capture folder is unavailable. Choose a writable folder again.', true);
+        await this.notify(this.t('desktop.capture.folder_unavailable'), true);
         directory = null;
       }
     }
@@ -90,14 +92,14 @@ class DesktopCapture {
     if (this.folderSelection) { await this.folderSelection; return this.settings.get(extension); }
     this.folderSelection = (async () => {
       const result = await dialog.showOpenDialog(this.win, {
-        title: extension === 'png' ? 'Choose screenshot folder' : 'Choose recording folder',
-        message: 'Future captures save here automatically. Change this in StandTerm > Capture Settings.',
+        title: this.t(extension === 'png' ? 'desktop.capture.choose_screenshot_folder' : 'desktop.capture.choose_recording_folder'),
+        message: this.t('desktop.capture.folder_policy'),
         defaultPath: this.settings.get(extension) || this.directory,
-        properties: ['openDirectory', 'createDirectory'], buttonLabel: 'Use this folder',
+        properties: ['openDirectory', 'createDirectory'], buttonLabel: this.t('desktop.capture.use_folder'),
       });
       if (result.canceled || !result.filePaths?.[0]) return null;
       const directory = result.filePaths[0];
-      if (!(await fs.stat(directory)).isDirectory()) throw new Error('Choose a folder.');
+      if (!(await fs.stat(directory)).isDirectory()) throw new Error(this.t('desktop.capture.folder_required'));
       await fs.access(directory, fs.constants.W_OK);
       this.settings.set(extension, directory);
       return directory;
@@ -108,9 +110,13 @@ class DesktopCapture {
   async configure() {
     try {
       const { response } = await dialog.showMessageBox(this.win, {
-        title: 'Capture Settings', message: 'Desktop capture folders',
-        detail: `Screenshots: ${this.settings.get('png') || 'Choose on first save'}\nRecordings: ${this.settings.get('webm') || 'Choose on first recording'}\n\nPNG screenshots and silent WebM recordings are saved automatically.`,
-        buttons: ['Done', 'Screenshot folder...', 'Recording folder...', 'Open screenshot folder', 'Open recording folder'],
+        title: this.t('desktop.capture.settings_title'), message: this.t('desktop.capture.settings_message'),
+        detail: this.t('desktop.capture.settings_detail', {
+          screenshot_folder: this.settings.get('png') || this.t('desktop.capture.first_screenshot'),
+          recording_folder: this.settings.get('webm') || this.t('desktop.capture.first_recording'),
+        }),
+        buttons: ['done', 'change_screenshot_folder', 'change_recording_folder', 'open_screenshot_folder', 'open_recording_folder']
+          .map(key => this.t(`desktop.capture.${key}`)),
         defaultId: 0, cancelId: 0, noLink: true,
       });
       if (response === 1 || response === 2) await this.chooseDirectory(response === 1 ? 'png' : 'webm');
@@ -118,7 +124,7 @@ class DesktopCapture {
         const directory = this.settings.get(response === 3 ? 'png' : 'webm');
         if (!directory) return;
         const error = await shell.openPath(directory);
-        if (error) throw new Error('Could not open the capture folder.');
+        if (error) throw new Error(this.t('desktop.capture.open_folder_failed'));
       }
     } catch (error) { await this.notify(error.message, true); }
   }
@@ -130,7 +136,7 @@ class DesktopCapture {
     let output;
     try {
       if (this.win.isDestroyed() || !this.win.isVisible() || this.win.isMinimized()) {
-        throw new Error('Show the StandTerm window before capturing it.');
+        throw new Error(this.t('desktop.capture.show_window_capture'));
       }
       // Capture before opening a dialog so the saved image is the requested view.
       let image;
@@ -143,12 +149,12 @@ class DesktopCapture {
           this.onDiagnostic({ width, height, visible: this.win.isVisible(),
             minimized: this.win.isMinimized(), focused: this.win.isFocused() });
         }
-        throw new Error('The terminal view could not be captured. Bring StandTerm to the foreground and retry. Window state is available in Diagnostics.', { cause: error });
+        throw new Error(this.t('desktop.capture.capture_failed'), { cause: error });
       }
       const png = image.toPNG();
       if (kind === 'clipboard') {
         await clipboard.write([new ClipboardItem({ 'image/png': new Blob([png], { type: 'image/png' }) })]);
-        await this.notify('Screenshot copied to the clipboard.');
+        await this.notify(this.t('desktop.capture.screenshot_copied'));
         return { copied: true };
       }
       destination = destination || await this.chooseFile('png');
@@ -158,11 +164,11 @@ class DesktopCapture {
         await output.write(png.subarray(offset, offset + MAX_CHUNK_BYTES));
       }
       await output.finish();
-      await this.notify(`Screenshot saved to:\n${destination}`);
+      await this.notify(this.t('desktop.capture.screenshot_saved', { path: destination }));
       return { destination };
     } catch (error) {
       await output?.close().catch(() => {});
-      await this.notify(`${error.message}${output?.partial ? `\nUnfinished file retained at:\n${output.partial}` : ''}`, true);
+      await this.notify(`${error.message}${output?.partial ? '\n' + this.t('desktop.capture.partial_file', { path: output.partial }) : ''}`, true);
       return { error: true };
     } finally { this.screenshotBusy = false; this.update(); }
   }
@@ -180,11 +186,11 @@ class DesktopCapture {
     this.job = job;
     try {
       destination = destination || await this.chooseFile('webm');
-      if (!destination) { this.job = null; this.state = 'idle'; this.update(); return null; }
+      if (!destination) { job.result = { canceled: true }; this.job = null; this.state = 'idle'; this.update(); return null; }
       if (this.win.isDestroyed() || !this.win.isVisible() || this.win.isMinimized()) {
-        throw new Error('Show the StandTerm window before recording it.');
+        throw new Error(this.t('desktop.capture.show_window_recording'));
       }
-      if (this.win.isFullScreen()) throw new Error('Leave fullscreen before recording so the recording indicator remains visible.');
+      if (this.win.isFullScreen()) throw new Error(this.t('desktop.capture.leave_fullscreen'));
       job.output = await CaptureFile.create(destination);
       const isolated = session.fromPartition(this.recorderPartition);
       const trustedRecorder = contents => contents === job.recorder?.webContents
@@ -240,8 +246,7 @@ class DesktopCapture {
       return { destination, mimeType: job.mimeType };
     } catch (error) {
       job.error = error;
-      await this.finish(job, false);
-      return { error: true };
+      return this.finish(job, false);
     }
   }
 
@@ -267,9 +272,12 @@ class DesktopCapture {
   }
 
   async stop() {
-    if (this.state === 'starting') await this.starting;
-    if (!this.job) return null;
+    if (this.state === 'starting') {
+      const started = await this.starting;
+      if (started?.error) return started;
+    }
     if (this.stopping) return this.stopping;
+    if (!this.job) return null;
     const job = this.job;
     this.state = 'stopping';
     clearInterval(job.timer);
@@ -314,28 +322,55 @@ class DesktopCapture {
       if (publish) destination = await job.output.finish();
     } catch (error) { job.error = error; }
     await job.output?.close().catch(error => { job.error = job.error || error; });
+    const result = job.result = job.error
+      ? { error: true, message: job.error.message || String(job.error), partial: job.output?.partial, destination: job.output?.destination }
+      : { destination, bytes: job.output.bytes, mimeType: job.mimeType };
     try {
-      if (job.error) {
-        await this.notify(`${job.error.message || String(job.error)}${job.output?.partial ? `\nUnfinished recording retained at:\n${job.output.partial}` : ''}`, true);
-        return { error: true, partial: job.output?.partial };
-      }
-      await this.notify(`Recording saved to:\n${destination}`);
-      return { destination, bytes: job.output.bytes, mimeType: job.mimeType };
+      await this.notify(result.error ? this.recordingError(result) : this.t('desktop.capture.recording_saved', { path: destination }), !!result.error);
+    } catch { /* Notification failure must not change the file outcome or repeat publication. */
     } finally {
       if (this.job === job) { this.job = null; this.state = 'idle'; this.update(); }
     }
+    return result;
+  }
+
+  recordingError(result) {
+    return (result.message || this.t('desktop.capture.save_unconfirmed'))
+      + (result.partial ? '\n' + this.t('desktop.capture.partial_recording', { path: result.partial }) : '')
+      + (result.destination ? '\n' + this.t('desktop.capture.requested_destination', { path: result.destination }) : '');
   }
 
   async confirmStop(action) {
+    if (!['close', 'quit'].includes(action) || this.confirming) return false;
     if (!this.active) return true;
-    const { response } = await dialog.showMessageBox(this.win, {
-      type: 'question', title: 'StandTerm recording is active',
-      message: `Stop and save the recording before ${action}?`,
-      buttons: ['Keep recording', 'Stop and save'], defaultId: 0, cancelId: 0,
-    });
-    if (response !== 1) return false;
-    await this.stop();
-    return true;
+    const job = this.job;
+    this.confirming = true;
+    try {
+      const { response } = await dialog.showMessageBox(this.win, {
+        type: 'question', title: this.t('desktop.capture.confirm_title'),
+        message: this.t(action === 'close' ? 'desktop.capture.confirm_close' : 'desktop.capture.confirm_quit'),
+        buttons: [this.t('desktop.capture.keep_recording'), this.t('desktop.toolbar.record_stop')], defaultId: 0, cancelId: 0,
+      });
+      if (response !== 1 || this.win.isDestroyed() || (this.job && this.job !== job)) return false;
+      let result;
+      try { result = job?.result || await this.stop() || job?.result; }
+      catch (error) {
+        result = { error: true, message: error.message || String(error), partial: job?.output?.partial, destination: job?.output?.destination };
+      }
+      if (this.job && this.job !== job) return false;
+      if (result?.canceled === true || (!result?.error && typeof result?.destination === 'string')) return true;
+      if (!this.win.isDestroyed()) {
+        if (this.win.isMinimized()) this.win.restore();
+        this.win.show(); this.win.focus();
+        await dialog.showMessageBox(this.win, {
+          type: 'error', title: this.t('desktop.capture.save_failed_title'), message: this.t('desktop.capture.save_failed_message'),
+          detail: this.t('desktop.capture.save_failed_detail', { error: this.recordingError(result || {}) }),
+          buttons: [this.t('desktop.common.ok')], defaultId: 0, cancelId: 0, noLink: true,
+        });
+      }
+      return false;
+    } catch { return false; }
+    finally { this.confirming = false; }
   }
 }
 

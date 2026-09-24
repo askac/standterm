@@ -1,0 +1,28 @@
+key	en	zh-TW	zh-CN	ja	ko	de	fr	es	status	context
+desktop.toolbar.application_menu	Application menu	應用程式選單	应用程序菜单	アプリケーションメニュー	애플리케이션 메뉴	Anwendungsmenü	Menu de l’application	Menú de la aplicación	draft	Desktop navigation accessible name.
+desktop.toolbar.clipboard_actions	Clipboard actions	剪貼簿操作	剪贴板操作	クリップボード操作	클립보드 작업	Zwischenablageaktionen	Actions du presse-papiers	Acciones del portapapeles	draft	Desktop clipboard toolbar accessible name.
+desktop.toolbar.copy_label	Copy selected text	複製選取文字	复制所选文本	選択したテキストをコピー	선택한 텍스트 복사	Ausgewählten Text kopieren	Copier le texte sélectionné	Copiar texto seleccionado	draft	Native clipboard action.
+desktop.toolbar.screenshot_copy	Copy screenshot to clipboard	複製截圖至剪貼簿	将屏幕截图复制到剪贴板	スクリーンショットをクリップボードにコピー	스크린샷을 클립보드에 복사	Screenshot in die Zwischenablage kopieren	Copier la capture d’écran dans le presse-papiers	Copiar captura de pantalla al portapapeles	draft	Screenshot clipboard action.
+desktop.menu.settings	Settings...	設定…	设置…	設定…	설정…	Einstellungen …	Paramètres…	Configuración…	draft	Desktop menu action.
+desktop.menu.new_tab	New terminal tab	新增終端分頁	新建终端标签页	新しいターミナルタブ	새 터미널 탭	Neuer Terminal-Tab	Nouvel onglet de terminal	Nueva pestaña de terminal	draft	Desktop menu action.
+desktop.menu.close_tab	Close terminal tab	關閉終端分頁	关闭终端标签页	ターミナルタブを閉じる	터미널 탭 닫기	Terminal-Tab schließen	Fermer l’onglet de terminal	Cerrar pestaña de terminal	draft	Desktop menu action.
+desktop.menu.close_all	Close all terminal tabs...	關閉所有終端分頁…	关闭所有终端标签页…	すべてのターミナルタブを閉じる…	모든 터미널 탭 닫기…	Alle Terminal-Tabs schließen …	Fermer tous les onglets de terminal…	Cerrar todas las pestañas de terminal…	draft	Desktop menu action.
+desktop.menu.files	Files...	檔案…	文件…	ファイル…	파일…	Dateien …	Fichiers…	Archivos…	draft	Desktop menu action.
+desktop.menu.pip	Open terminal in PiP	以子母畫面開啟終端	在画中画中打开终端	ピクチャーインピクチャーでターミナルを開く	PiP로 터미널 열기	Terminal im Bild-im-Bild-Modus öffnen	Ouvrir le terminal en incrustation	Abrir terminal en PiP	draft	Desktop menu action.
+desktop.menu.agent_panel	Show / hide Agent Panel	顯示／隱藏 Agent 面板	显示/隐藏 Agent 面板	Agent パネルを表示／非表示	Agent 패널 표시/숨기기	Agent-Panel ein-/ausblenden	Afficher/masquer le panneau Agent	Mostrar/ocultar el panel del Agent	draft	Desktop menu action; preserve Agent token.
+desktop.menu.pause_agent	Pause Agent for current terminal	暫停目前終端的 Agent	暂停当前终端的 Agent	現在のターミナルの Agent を一時停止	현재 터미널의 Agent 일시 중지	Agent für das aktuelle Terminal pausieren	Mettre l’Agent en pause pour le terminal actuel	Pausar el Agent para el terminal actual	draft	Desktop menu action; preserve Agent token.
+desktop.toolbar.menu_standterm	StandTerm	StandTerm	StandTerm	StandTerm	StandTerm	StandTerm	StandTerm	StandTerm	draft	Product name.
+desktop.toolbar.menu_edit	Edit	編輯	编辑	編集	편집	Bearbeiten	Modifier	Editar	draft	Desktop menu caption.
+desktop.toolbar.menu_agent	Agent	Agent	Agent	Agent	Agent	Agent	Agent	Agent	draft	Agent token is preserved.
+desktop.toolbar.menu_view	View	檢視	查看	表示	보기	Ansicht	Affichage	Ver	draft	Desktop menu caption.
+desktop.toolbar.menu_diagnostics	Diagnostics	診斷	诊断	診断	진단	Diagnose	Diagnostics	Diagnóstico	draft	Desktop menu caption.
+desktop.menu.open	Open StandTerm	開啟 StandTerm	打开 StandTerm	StandTerm を開く	StandTerm 열기	StandTerm öffnen	Ouvrir StandTerm	Abrir StandTerm	draft	Product name preserved.
+desktop.menu.show	Show window	顯示視窗	显示窗口	ウィンドウを表示	창 표시	Fenster anzeigen	Afficher la fenêtre	Mostrar ventana	draft	Desktop tray menu action.
+desktop.menu.quit	Quit StandTerm	結束 StandTerm	退出 StandTerm	StandTerm を終了	StandTerm 종료	StandTerm beenden	Quitter StandTerm	Salir de StandTerm	draft	Product name preserved.
+desktop.menu.about	About StandTerm Desktop	關於 StandTerm Desktop	关于 StandTerm Desktop	StandTerm Desktop について	StandTerm Desktop 정보	Über StandTerm Desktop	À propos de StandTerm Desktop	Acerca de StandTerm Desktop	draft	Product name preserved.
+desktop.browser_access.menu	Browser access	瀏覽器存取	浏览器访问	ブラウザーアクセス	브라우저 액세스	Browserzugriff	Accès au navigateur	Acceso del navegador	draft	Desktop submenu title.
+desktop.capture.menu	Capture	畫面擷取	捕获	キャプチャ	캡처	Aufnahme	Capture	Captura	draft	Desktop submenu title.
+desktop.diagnostics.devtools_menu	Developer Tools…	開發人員工具…	开发者工具…	開発者ツール…	개발자 도구…	Entwicklertools …	Outils de développement…	Herramientas de desarrollo…	draft	Desktop menu action.
+agent.connection.summary	Copy the Agent Info URL and give it to the agent in the current tab’s environment.	複製 Agent 資訊網址，貼給目前分頁環境中的 Agent。	复制 Agent 信息网址，提供给当前标签页环境中的 Agent。	Agent 情報 URL をコピーし、現在のタブの環境で実行している Agent に渡します。	Agent 정보 URL을 복사해 현재 탭 환경의 Agent에게 전달합니다.	Agent-Info-URL kopieren und dem Agent in der Umgebung des aktuellen Tabs geben.	Copier l’URL des informations Agent et la transmettre à l’Agent dans l’environnement de l’onglet actuel.	Copia la URL de información de Agent y dásela al Agent en el entorno de la pestaña actual.	draft	Primary action copies only the Agent Info URL; preserve Agent token.
+agent.connection.read_more	Read more	閱讀更多	阅读更多	続きを読む	더 보기	Mehr erfahren	En savoir plus	Leer más	draft	Core common action.
+agent.connection.copy	Copy Prompt	複製連線指引	复制连接指引	接続手順をコピー	연결 지침 복사	Verbindungsanleitung kopieren	Copier les instructions de connexion	Copiar instrucciones de conexión	draft	Copies full connection instructions, including the environment and URL; not a generic hint.

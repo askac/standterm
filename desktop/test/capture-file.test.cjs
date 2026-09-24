@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
+const vm = require('node:vm');
 const { CaptureFile, MAX_CHUNK_BYTES } = require('../capture-file.cjs');
 
 test('capture publishes exact bytes without overwriting existing files', async () => {
@@ -20,6 +21,27 @@ test('capture publishes exact bytes without overwriting existing files', async (
   await assert.rejects(fs.stat(partial), { code: 'ENOENT' });
   await assert.rejects(CaptureFile.create(target), /already exists/);
   assert.equal(await fs.readFile(target, 'utf8'), 'firstsecond');
+});
+
+test('failed partial cleanup retains both published and partial paths without another publication', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'standterm-capture-unlink-'));
+  const target = path.join(directory, 'test.webm');
+  let links = 0;
+  const api = { exports: {} };
+  vm.runInNewContext(await fs.readFile(path.join(__dirname, '..', 'capture-file.cjs'), 'utf8'), {
+    Uint8Array, module: api,
+    require: name => name === 'node:fs/promises' ? { ...fs,
+      link: async (...args) => { links++; return fs.link(...args); },
+      unlink: async () => { throw new Error('Fixture partial cleanup failure'); },
+    } : require(name),
+  });
+  const output = await api.exports.CaptureFile.create(target);
+  await output.write(Buffer.from('recording bytes'));
+  await assert.rejects(output.finish(), /Fixture partial cleanup failure/);
+  assert.equal(await fs.readFile(target, 'utf8'), 'recording bytes');
+  assert.equal(await fs.readFile(output.partial, 'utf8'), 'recording bytes');
+  assert.equal(links, 1);
+  assert.equal(output.handle, null);
 });
 
 test('capture retains partial output on a publish race or empty recording', async () => {

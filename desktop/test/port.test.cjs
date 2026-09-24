@@ -184,3 +184,60 @@ test('host probing uses typed socket errors and allows an existing relay only af
   }
   await assert.rejects(checkHostPort(0));
 });
+
+test('both port languages preserve save timing and cancel or use-once decisions', async context => {
+  const { create } = require('../i18n.js');
+  for (const locale of ['en', 'zh-TW']) for (const choice of ['cancel', 'once', 'remember']) {
+    const { options, read } = await fixture(context, { version: 1, port: 51000 });
+    options.t = create(locale).t;
+    const launch = options.launch;
+    options.launch = async port => { if (port === 51000) throw conflict(port); return launch(port); };
+    options.confirm = async () => choice;
+    options.verify = async () => assert.equal((await read()).port, 51000);
+    if (choice === 'cancel') await assert.rejects(startWithPort(options), {
+      code: 'SETUP_CANCELED', message: options.t('desktop.port.startup_canceled'),
+    });
+    else await startWithPort(options);
+    assert.equal((await read()).port, choice === 'remember' ? 51001 : 51000);
+  }
+});
+
+test('localized port warnings distinguish read fallback and verified-port persistence failure', async context => {
+  const { create } = require('../i18n.js');
+  for (const locale of ['en', 'zh-TW']) {
+    const { options } = await fixture(context, { version: 1, port: false });
+    const messages = [];
+    options.t = create(locale).t;
+    options.notify = async message => messages.push(message);
+    await startWithPort(options);
+    assert.deepEqual(messages, [options.t('desktop.port.saved_read_failed')]);
+    await fs.unlink(options.settingsPath);
+    await fs.mkdir(options.settingsPath);
+    messages.length = 0;
+    let verified = false;
+    options.verify = async () => { verified = true; };
+    options.notify = async message => {
+      if (messages.length) assert.equal(verified, true);
+      messages.push(message);
+    };
+    await startWithPort(options);
+    assert.deepEqual(messages, [options.t('desktop.port.saved_read_failed'), options.t('desktop.port.save_failed', { port: 45678 })]);
+  }
+});
+
+test('localized exhausted-port errors retain the saved port and existing retry bound', async context => {
+  const { create } = require('../i18n.js');
+  for (const locale of ['en', 'zh-TW']) {
+    const { options, read } = await fixture(context, { version: 1, port: 51000 });
+    options.t = create(locale).t;
+    options.launch = async port => { throw Object.assign(conflict(port), { suggestedPort: null }); };
+    await assert.rejects(startWithPort(options), { message: options.t('desktop.port.no_candidate', { port: 51000 }) });
+    let attempts = 0;
+    options.checkHost = async port => { throw hostConflict(port); };
+    options.launch = async () => ({ origin: 'http://127.0.0.1:51001' });
+    options.stop = async () => { attempts++; };
+    await assert.rejects(startWithPort(options), { message: options.t('desktop.port.no_host_port') });
+    assert.equal(attempts, 20);
+    assert.equal((await read()).port, 51000);
+  }
+});

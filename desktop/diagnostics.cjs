@@ -2,9 +2,10 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { create } = require('./i18n.js');
 const EVENTS = new Set(['startup', 'setup_start', 'setup_ready', 'backend_launch', 'backend_ready',
   'backend_exit', 'backend_spawn_failed', 'backend_verify_retry', 'backend_verified',
-  'host_port_rejected', 'port_change', 'window_ready', 'startup_failed', 'core_failed', 'shutdown', 'devtools_opened', 'capture_failed']);
+  'host_port_rejected', 'port_change', 'window_ready', 'window_state_save_failed', 'startup_failed', 'core_failed', 'shutdown', 'devtools_opened', 'capture_failed']);
 const CODES = new Set(['EACCES', 'EADDRINUSE', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT',
   'ENOENT', 'EPIPE', 'HOST_PORT_UNAVAILABLE', 'PORT_IN_USE', 'SETUP_CANCELED',
   'git_required', 'git_dirty', 'git_diverged', 'git_source_changed', 'invalid_git_workspace',
@@ -56,20 +57,20 @@ function agentConnectionInfo({ origin, mode, instanceId }) {
 }
 
 function diagnosticsMenu({ origin, mode, instanceId, version, coreVersion, logger, openLogs, openTools, openStatus,
-  copyText, persistent = false }) {
+  copyText, persistent = false, t = create('en').t }) {
   const info = agentConnectionInfo({ origin, mode, instanceId });
-  return { id: 'diagnostics', label: 'Diagnostics', submenu: [
-    { id: 'diagnostics-status', label: 'Status and recent events...', click: openStatus },
-    { id: 'diagnostics-version', label: `StandTerm Desktop ${version}`, enabled: false },
-    { id: 'diagnostics-core-version', label: `Core version: ${coreVersion || 'Unknown (older Core)'}`, enabled: false },
-    { id: 'diagnostics-backend', label: `Backend: ${mode === 'wsl' ? 'WSL' : 'Native'}`, enabled: false },
-    { id: 'diagnostics-origin', label: `URL: ${origin}`, enabled: false },
-    { id: 'diagnostics-copy-origin', label: 'Copy backend URL', click: () => copyText(info.base_url) },
-    { label: persistent ? 'Web settings: saved per origin (same as Core)' : 'Web settings: temporary test profile', enabled: false },
+  return { id: 'diagnostics', label: t('desktop.toolbar.menu_diagnostics'), submenu: [
+    { id: 'diagnostics-status', label: t('desktop.diagnostics.show_status'), click: openStatus },
+    { id: 'diagnostics-version', label: t('desktop.about.desktop_version', { version }), enabled: false },
+    { id: 'diagnostics-core-version', label: t('desktop.about.core_version', { version: coreVersion || t('desktop.about.unknown_version') }), enabled: false },
+    { id: 'diagnostics-backend', label: t('desktop.about.backend', { backend: mode === 'wsl' ? 'WSL' : t('desktop.diagnostics.native_backend') }), enabled: false },
+    { id: 'diagnostics-origin', label: t('desktop.diagnostics.origin', { origin }), enabled: false },
+    { id: 'diagnostics-copy-origin', label: t('desktop.diagnostics.copy_backend_url'), click: () => copyText(info.base_url) },
+    { label: t(persistent ? 'desktop.diagnostics.web_settings_persistent' : 'desktop.diagnostics.web_settings_temporary'), enabled: false },
     { type: 'separator' },
-    { id: 'diagnostics-logs', label: 'Open diagnostics log folder', click: openLogs },
-    { label: logger.available ? 'Logs exclude credentials and terminal content' : 'Diagnostic log could not be written', enabled: false },
-    { id: 'diagnostics-devtools', label: 'Developer Tools...', click: openTools },
+    { id: 'diagnostics-logs', label: t('desktop.diagnostics.open_logs'), click: openLogs },
+    { label: t(logger.available ? 'desktop.diagnostics.logs_filtered' : 'desktop.diagnostics.log_unwritable'), enabled: false },
+    { id: 'diagnostics-devtools', label: t('desktop.diagnostics.devtools_menu'), click: openTools },
   ] };
 }
 

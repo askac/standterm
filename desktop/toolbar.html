@@ -7,27 +7,29 @@
   <link rel="stylesheet" href="toolbar.css">
 </head>
 <body>
-  <nav id="menus" aria-label="Application menu">
-    <button data-menu="standterm">StandTerm</button><button data-menu="edit">Edit</button><button data-menu="agent-menu">Agent</button><button data-menu="view">View</button><button data-menu="diagnostics">Diagnostics</button>
+  <nav id="menus" data-i18n-aria-label="desktop.toolbar.application_menu" aria-label="Application menu">
+    <button data-menu="standterm" data-i18n="desktop.toolbar.menu_standterm">StandTerm</button><button data-menu="edit" data-i18n="desktop.toolbar.menu_edit">Edit</button><button data-menu="agent-menu" data-i18n="desktop.toolbar.menu_agent">Agent</button><button data-menu="view" data-i18n="desktop.toolbar.menu_view">View</button><button data-menu="diagnostics" data-i18n="desktop.toolbar.menu_diagnostics">Diagnostics</button>
   </nav>
-  <div id="edit-tools" role="toolbar" aria-label="Clipboard actions">
+  <div id="edit-tools" data-i18n-aria-label="desktop.toolbar.clipboard_actions" role="toolbar" aria-label="Clipboard actions">
     <!-- Original StandTerm geometric SVG artwork; no third-party icon paths. -->
-    <button id="edit-copy" data-action="copy-text" title="Copy selected text (not Ctrl+C)" aria-label="Copy selected text"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 16H4V3h11v3"/><rect x="8" y="7" width="12" height="14" rx="1"/></svg></button>
-    <button id="edit-paste" data-action="paste-text" title="Paste clipboard text" aria-label="Paste clipboard text"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5H4v16h16V5h-4M8 12h8M8 16h6"/><rect x="8" y="3" width="8" height="4" rx="1"/></svg></button>
+    <button id="edit-copy" data-i18n-aria-label="desktop.toolbar.copy_label" data-i18n-title="desktop.toolbar.copy_hint" data-action="copy-text" title="Copy selected text (not Ctrl+C)" aria-label="Copy selected text"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 16H4V3h11v3"/><rect x="8" y="7" width="12" height="14" rx="1"/></svg></button>
+    <button id="edit-paste" data-i18n-aria-label="desktop.toolbar.paste" data-i18n-title="desktop.toolbar.paste" data-action="paste-text" title="Paste clipboard text" aria-label="Paste clipboard text"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5H4v16h16V5h-4M8 12h8M8 16h6"/><rect x="8" y="3" width="8" height="4" rx="1"/></svg></button>
   </div>
   <span id="notice-area" role="status" aria-live="polite" aria-atomic="true">
     <span id="notice-indicator" aria-hidden="true"></span>
     <span id="notice"></span>
   </span>
   <span id="recording-status" role="status"></span>
-  <div id="capture-tools" role="toolbar" aria-label="Capture the StandTerm terminal view">
+  <div id="capture-tools" data-i18n-aria-label="desktop.toolbar.capture_scope" role="toolbar" aria-label="Capture the terminal view">
     <!-- Original StandTerm geometric SVG artwork; no third-party icon paths. -->
-    <button id="save" data-action="screenshot-file" title="Save screenshot (PNG)" aria-label="Save screenshot (PNG)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4H3v15h9M3 14l4-4 5 5 2-2M18 9v12m-4-4 4 4 4-4"/><circle cx="11" cy="8" r="1"/></svg></button>
-    <button id="copy" data-action="screenshot-clipboard" title="Copy screenshot to clipboard" aria-label="Copy screenshot to clipboard"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5H3v14h7M3 14l4-4 3 3M14 7h-3v15h11V7h-3"/><rect x="14" y="5" width="5" height="4" rx="1"/></svg></button>
-    <button id="record" data-action="record" title="Start silent recording (WebM)" aria-label="Start silent recording (WebM)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/></svg></button>
-    <button id="pause" data-action="pause-recording" title="Pause recording" aria-label="Pause recording" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path id="pause-shape" d="M8 5v14M16 5v14"/></svg></button>
-    <button id="stop" data-action="stop-recording" title="Stop and save recording" aria-label="Stop and save recording" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="1"/></svg></button>
+    <button id="save" data-i18n-aria-label="desktop.toolbar.screenshot_save" data-i18n-title="desktop.toolbar.screenshot_save" data-action="screenshot-file" title="Save screenshot (PNG)" aria-label="Save screenshot (PNG)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4H3v15h9M3 14l4-4 5 5 2-2M18 9v12m-4-4 4 4 4-4"/><circle cx="11" cy="8" r="1"/></svg></button>
+    <button id="copy" data-i18n-aria-label="desktop.toolbar.screenshot_copy" data-i18n-title="desktop.toolbar.screenshot_copy" data-action="screenshot-clipboard" title="Copy screenshot to clipboard" aria-label="Copy screenshot to clipboard"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5H3v14h7M3 14l4-4 3 3M14 7h-3v15h11V7h-3"/><rect x="14" y="5" width="5" height="4" rx="1"/></svg></button>
+    <button id="record" data-i18n-aria-label="desktop.toolbar.record_start" data-i18n-title="desktop.toolbar.record_start" data-action="record" title="Start recording (WebM, no audio)" aria-label="Start recording (WebM, no audio)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/></svg></button>
+    <button id="pause" data-i18n-aria-label="desktop.toolbar.record_pause" data-i18n-title="desktop.toolbar.record_pause" data-action="pause-recording" title="Pause recording" aria-label="Pause recording" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path id="pause-shape" d="M8 5v14M16 5v14"/></svg></button>
+    <button id="stop" data-i18n-aria-label="desktop.toolbar.record_stop" data-i18n-title="desktop.toolbar.record_stop" data-action="stop-recording" title="Stop and save recording" aria-label="Stop and save recording" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="1"/></svg></button>
   </div>
+  <script src="messages.js"></script>
+  <script src="i18n.js"></script>
   <script src="toolbar.js"></script>
 </body>
 </html>

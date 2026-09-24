@@ -6,6 +6,86 @@ source-run workflow, an unsigned Windows x64 evaluation installer and a native
 Apple Silicon macOS evaluation app/DMG. It is not
 a production release or a replacement for `run.sh` / `run.bat`.
 
+The 0.5.3 evaluation bundles Core 2.14.0, adds startup feedback and window
+state restoration, and includes the optional Windows SSH network source for WSL
+under the collapsed Advanced connection settings.
+
+Desktop copy and localization are planned in the
+[review plan](../docs/desktop_ui_review_plan.md), with a separate
+[translation review table](../docs/desktop_ui_copy_review.tsv).
+
+Choose English or Traditional Chinese (Taiwan) in Core **Settings**. After Save,
+Desktop follows that stored preference through its existing Core status polling;
+the separate Desktop language menu is removed. Menus, toolbar and capture status
+update without restarting Core or interrupting recording. Core's page text retains
+its existing next-load language behavior. Open native confirmations keep their
+original labels; subsequent dialogs use the synchronized language. Diagnostics
+updates when opened or refreshed.
+
+Desktop remembers the main window's normal position, size and maximized state
+in `window-<mode>.json` in its profile. Windows and WSL modes keep separate state.
+Restored bounds fit the current display's work area; a removed display falls back
+to the primary display. Minimized, hidden and fullscreen states are not restored.
+Invalid state or a failed write does not prevent startup or shutdown.
+
+A small startup window appears before Core preparation or WSL startup begins.
+It uses the cached Desktop language and closes when the main window is ready or
+startup fails. Launching the same mode again focuses startup or its setup window
+while Core is still starting.
+
+WSL Core offers **Advanced → Use Windows networking (preview)** when WSL interoperability
+and `powershell.exe` on its PATH are available. Advanced is collapsed by default;
+leaving the checkbox unchecked uses Core networking. Enabling it opens the
+first SSH hop through a temporary Windows PowerShell TCP helper. It needs Windows
+PowerShell policy to allow that helper and Windows DNS/routing/firewall to permit
+the target connection. No Windows SSH server, Python, administrator access, new
+listener or firewall rule is required by the relay. The target still needs SSH.
+
+SSH authentication, browser keys, host-key storage and SFTP remain in Core.
+Windows `localhost` means the Windows host and never inherits Core's localhost
+automatic trust or key setup. Use a host key alias when different hosts share
+an address across the two networks. The choice applies to the current connection
+and its retries, is not saved in profiles, and never silently falls back to Core.
+Later jump hosts, SSH forwarding targets and local forwarding listeners keep
+their existing semantics; selecting Windows does not move those listeners.
+This preview is available in WSL browser launches too, under the same conditions.
+
+`tests/windows_network_smoke.py` checks the real Windows binary relay and process
+cleanup (Windows Node is only a test fixture dependency).
+`tests/ssh_windows_network_smoke.py` additionally needs a local WSL `sshd` binary
+to create disposable SSH servers for trust, jump, SFTP and forwarding checks.
+
+Desktop caches the last synchronized language in the mode profile's `language.json`
+for startup, setup and recovery before Core is ready. Older Core versions without
+the language snapshot field retain that cache; missing or invalid cache uses English.
+A cache write failure is logged once per changed preference and does not stop the
+active language update. This does not synchronize unrelated browser profiles or
+backend modes. Coverage includes custom menus, toolbar labels,
+Agent help, Browser Access, Diagnostics, About, external-browser confirmations
+and Capture dialogs/status, environment preparation, Core source/recovery, port
+selection, Files download notices and native paste confirmation.
+Installer preparation and cleanup confirmations use the relevant mode profile's
+language. Installer-wide summary/error dialogs use the common language of the
+selected modes, or English when they differ. Uninstall considers both Windows
+and WSL; missing or invalid preferences use the usual English fallback. This
+does not write a shared preference. Raw technical errors, early startup/legacy
+installer messages and the external installer UI remain English; native role
+labels follow the platform.
+
+Edit reviewed messages in the table, then generate the independent shell
+catalog with `python scripts/build_ui_messages.py --desktop` from the repository
+root. Add `--check` to detect a stale catalog without writing. The regular
+headless smoke runner checks both Desktop and Core catalogs. The toolbar DOM
+check, `desktop/test/toolbar-i18n-browser-smoke.py`, uses the existing Playwright
+development environment and mocked native IPC; it does not qualify native
+menus, dialogs or installers.
+`desktop/test/diagnostics-i18n-browser-smoke.py` checks the actual diagnostics
+HTML in both languages, including escaped display data and unchanged event JSON.
+It needs Node 22.12+; use `--node <executable>` to select a prepared runtime.
+`desktop/test/setup-i18n-browser-smoke.py` uses the same option and checks the
+actual setup initialization, progress and cancellation scripts in both languages
+for Windows, macOS and WSL. Setup processes and native dialogs are mocked.
+
 ## macOS Apple Silicon evaluation
 
 The arm64 DMG contains `StandTermDesktop.app`, Electron and the verified Core
@@ -24,7 +104,7 @@ The published [Windows **0.5.1 / Core 2.13.0-dev** evaluation](https://github.co
 includes ordered SSH jump routes, per-site login cards, shared Direct/node key
 controls and opt-in
 profile/route saving on Connect. It retains its original development identity.
-The current source declares Core **2.13.0**; matching installers require a fresh
+The current source declares Core **2.14.0**; matching installers require a fresh
 build and validation. A new Mac installer remains separate; the 0.5.0 candidates
 remain local.
 
@@ -80,13 +160,15 @@ Build on an Apple Silicon Mac with Node 22.12+ and the checkout's macOS venv:
 ```sh
 cd desktop
 npm ci
-npm run stage:mac -- --core-ref v2.13.0
+npm run stage:mac -- --core-ref HEAD
 # Change to the absolute stage directory printed above, then:
 npm ci
 npm run make:mac
 ```
 
-Staging shares the tracked-file allowlist used by Windows, excludes internal
+Use a clean checkout of the intended release commit: `HEAD` selects that Core
+revision, while the Desktop shell comes from the working tree. Staging shares
+the tracked-file allowlist used by Windows, excludes internal
 documents and Git state, and generates the native icon with macOS `sips` and
 `iconutil`. macOS outputs are in the stage's `out.noindex/` directory so local
 development app copies stay out of Spotlight results. The current build uses
@@ -461,9 +543,9 @@ layout is shared with Core Web and does not change approval policy or payloads.
 Use the direct capture buttons in the Desktop toolbar. Capture shortcuts are
 also available under **View**; there is no separate Capture dropdown:
 
-- **Copy screenshot** (Ctrl/Cmd+Alt+S): PNG to the OS clipboard.
+- **Copy screenshot to clipboard** (Ctrl/Cmd+Alt+S): PNG to the OS clipboard.
 - **Save screenshot (PNG)**: save directly to the configured screenshot folder.
-- **Start recording (WebM)**: record directly to the configured recording folder.
+- **Start recording (WebM, no audio)**: record directly to the configured recording folder.
 - **Pause / resume recording**: suspend capture without finishing the file.
 - **Stop and save recording** (Ctrl/Cmd+Alt+R): finalize the silent WebM.
 
@@ -475,7 +557,12 @@ while recording records the newly visible tab as well.
 
 The native title and Desktop toolbar show recording status and elapsed active
 recording time. The stop button remains available while paused. Closing
-or quitting asks whether to keep recording or stop and save. Hiding, minimizing,
+or quitting asks whether to keep the window open or stop and save. If saving
+fails or its result cannot be confirmed, Desktop cancels that close/quit,
+keeps the window open and shows an error dialog with the original error and
+available unfinished-file and requested-destination paths. Dismissing the error
+does not retry saving; a later explicit close/quit is allowed once recording is
+inactive. Hiding, minimizing,
 reloading or entering fullscreen stops and saves automatically, because hidden
 pages can stop producing frames or hide the indicator. Leave fullscreen before
 starting a recording; maximizing is supported.
@@ -493,7 +580,9 @@ varies between players because this prototype does not rewrite container indexes
 Successful output is published without overwriting existing files or copying the
 video a second time. This currently requires a filesystem with hard-link support
 (for example NTFS or ext4); choose a local supported drive rather than FAT/exFAT.
-If publication fails, the error reports the retained partial file. Unix files
+If publication fails, the error reports the retained partial file. If publication
+succeeds but removing the partial link fails, both paths may exist; a requested
+destination in an error does not imply a confirmed save. Unix files
 are created with mode `0600`; Windows access follows the destination directory's
 ACL. Screenshot files use the same no-overwrite publication policy.
 
@@ -548,6 +637,9 @@ places Copy/Paste after the title in the window's Desktop toolbar. Menu labels a
 not selectable; terminal text, text fields and status notices remain selectable.
 
 **Copy selected text** uses native Copy, never the terminal Ctrl+C interrupt.
+Core's copy buttons may write sanitized clipboard content only from the focused,
+visible main Core page at the owned backend origin. This does not grant clipboard
+reads, child-frame access, or access to other windows sharing the session.
 **Paste clipboard text** restores the Core editing target and uses native Paste;
 text fields keep normal editing behavior. Windows/Linux Ctrl+V remains the terminal
 control code; use Ctrl+Shift+V for keyboard paste (Cmd+V on macOS).
@@ -695,6 +787,15 @@ the credential-free Desktop startup URL. Other clients still need normal
 StandTerm authentication. External-agent discovery files retain their existing
 permission model and are separate from desktop-login credentials.
 
+The owned Desktop login lasts until its backend process exits; it does not use
+Core's 12-hour browser idle deadline or ask for a token after a long sleep.
+Page reloads and renewal keep its HttpOnly cookie session-only. Closing Desktop
+invalidates that process's login, and a new process rejects the old cookie.
+This does not disable authentication for other browsers, prolong External Agent
+tokens, bypass minting, or change human-input and per-copy approval gates.
+An older user-selected Git Core without this Desktop-session capability retains
+its original expiry behavior; select an updated Core to obtain this policy.
+
 The authenticated Core UI has Node integration disabled, context isolation, renderer sandboxing
 and web security enabled, and no preload or IPC bridge. Network requests are
 limited to the owned loopback HTTP/WebSocket origin and local data/blob images.
@@ -711,6 +812,10 @@ The URL itself can contain private information, so review it before approval.
 Non-HTTP(S), credential-bearing URLs, loopback links and POST popups are rejected;
 pending confirmations are coalesced and owner lifetime is checked again after
 approval. Owned Files download tickets retain their existing download path.
+Completed Files downloads show the actual saved path in a native dialog with a
+**Show in folder** button. The folder belongs to the Desktop computer, including
+when Core runs in WSL or the source is an SSH host. Cancelled downloads do not
+show a completion notice; interrupted downloads offer a retry hint.
 An OS browser-launch failure displays an error. Normal Web preview/popup behavior
 is unchanged. This follows the restrictive handling required by
 [Electron's external-link security guidance](https://www.electronjs.org/docs/latest/tutorial/security#15-do-not-use-shellopenexternal-with-untrusted-content).
@@ -776,7 +881,8 @@ Floating-window regression also checks real child creation, private session and
 sandbox inheritance, rapid mixed clicks, denied navigation/nesting, close/restore,
 PiP-to-Files transition, reload cleanup and visible failure alerts. Where Local
 Files is supported, it browses a synthetic fixture and verifies downloaded binary
-bytes without opening a save dialog or another child window.
+bytes without opening a save dialog or another child window. Native dialog and
+folder-reveal spies verify the actual saved path without opening Explorer/Finder.
 
 Capture smoke additionally saves a PNG, checks clipboard image packaging without
 touching the user's clipboard, records and decodes WebM with a source-page pixel
@@ -787,8 +893,11 @@ Generated capture samples are retained under ignored `desktop/dist/`; unit-test
 scratch files in the OS temporary directory are disposable and reproducible.
 
 `desktop/test/backend_smoke.py`, run through the selected project venv, separately
-checks the private handshake, unauthenticated HTTP rejection, HttpOnly cookie
-behavior, pipe-EOF exit, port closure and runtime artifact cleanup.
+checks the private handshake, unauthenticated HTTP rejection, process-lifetime
+HttpOnly cookies, renewal, stale-cookie rejection by a new process, pipe-EOF
+exit, port closure and runtime artifact cleanup. Core's backend smoke simulates
+30 days without renewal, checks ordinary browser expiry in the same process,
+and verifies that Desktop login does not bypass external-agent minting or expiry.
 
 `desktop/test/bootstrap_smoke.py` checks manifest tampering, traversal/link
 rejection, existing-data preservation and retry after dependency failure.

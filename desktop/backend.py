@@ -88,8 +88,13 @@ def main():
         return
     standterm.DEFAULT_PORT = actual_port
     origin = f'http://127.0.0.1:{actual_port}'
-    session_token = secrets.token_urlsafe(32)
-    standterm.active_sessions[session_token] = time.time() + standterm.SESSION_COOKIE_MAX_AGE
+    create_desktop_session = getattr(standterm, 'create_desktop_session', None)
+    if callable(create_desktop_session):
+        session_token = create_desktop_session()
+    else:
+        # Older user-selected Git Core keeps its original authentication policy.
+        session_token = secrets.token_urlsafe(32)
+        standterm.active_sessions[session_token] = time.time() + standterm.SESSION_COOKIE_MAX_AGE
     standterm.ensure_session_cleanup_task()
     standterm.write_external_agentinfo_files(base_url=origin)
 

@@ -25,3 +25,10 @@ jobs:
 
       - name: Run headless smoke tests
         run: tools/.venv_linux/bin/python scripts/run_smoke_tests.py
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Check UI translation lookup
+        run: node tests/ui_i18n_smoke.cjs

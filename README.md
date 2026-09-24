@@ -9,41 +9,48 @@ to the StandTerm server process across page reloads.
 [Download and install StandTerm Desktop](#desktop-downloads-evaluation), or use
 the [browser-based Core quick start](#quick-start).
 
+The current source is **[Core 2.14.0](https://github.com/askac/standterm/releases/tag/v2.14.0)**,
+paired with Desktop 0.5.3. It adds English
+and Traditional Chinese interface text, simplified Agent connection controls,
+and optional Windows networking for SSH from WSL. Both Desktop packages below
+contain Core 2.14.0 and use the same reviewed source.
+
 **Core 2.13.0** is a [source release](https://github.com/askac/standterm/releases/tag/v2.13.0).
 It adds SSH routes with up to three jump hosts, ordered node editing and per-site
 login cards. Direct connections and route nodes share browser-key controls;
 new keys stay temporary unless saving is selected when connecting. Existing
 SSH Agent Tunnel, current-tab Agent Info and host fingerprint controls remain available.
 IME input-line anchoring remains an [experimental PoC](docs/ime_anchor_poc.md).
-The Windows Desktop 0.5.1 evaluation below contains Core 2.13.0-dev with these
-features. The macOS Desktop 0.4.3 evaluation predates them.
+These features are included in both current Desktop packages.
 
 ![StandTerm Desktop with terminal rendering tests, local and SSH tabs, and a floating PowerShell terminal](standterm_desktop.png)
 
-*Desktop preview. The controls shown are available in the Windows 0.5.1
-evaluation; the macOS 0.4.3 evaluation predates them.*
+*Desktop preview from the Windows 0.5.1 evaluation; current interface text and
+controls may differ.*
 
 ## Desktop Downloads (Evaluation)
 
-[Windows Desktop 0.5.1 / Core 2.13.0-dev](https://github.com/askac/standterm/releases/tag/desktop-v0.5.1-2.13.0-dev)
-and [macOS Desktop 0.4.3](https://github.com/askac/standterm/releases/tag/desktop-v0.4.3)
-are evaluation pre-releases. The Windows package retains its tested development
-Core identity; it was built before the formal Core 2.13.0 source release.
+[Desktop 0.5.3 / Core 2.14.0](https://github.com/askac/standterm/releases/tag/desktop-v0.5.3-2.14.0)
+is an evaluation pre-release for Windows x64 and macOS Apple Silicon.
+
+**Known issue:** repeated maximize, restore and reopen cycles can accumulate
+window position and size drift on macOS. A shared-code fix and Windows regression
+checks are pending; window-restoration acceptance is incomplete. The packages
+retain the tested source rather than including an unverified fix.
 
 | Platform | Download | Required before installation |
 | --- | --- | --- |
-| Windows x64, including Windows + WSL | [Desktop 0.5.1 / Core 2.13.0-dev (.exe)](https://github.com/askac/standterm/releases/download/desktop-v0.5.1-2.13.0-dev/StandTerm-Desktop-0.5.1-2.13.0-dev-win32-x64-Setup.exe) | Python 3.10+ with venv/ensurepip in each selected environment; WSL mode also needs an existing WSL distribution. |
-| macOS Apple Silicon | [macOS installer (.dmg)](https://github.com/askac/standterm/releases/download/desktop-v0.4.3/StandTerm-Desktop-0.4.3-mac-arm64.dmg) | Native arm64 Python 3.10+ with venv/ensurepip. Intel/Rosetta is not qualified. |
+| Windows x64, including Windows + WSL | [Desktop 0.5.3 / Core 2.14.0 (.exe)](https://github.com/askac/standterm/releases/download/desktop-v0.5.3-2.14.0/StandTerm-Desktop-0.5.3-2.14.0-win32-x64-Setup.exe) | Python 3.10+ with venv/ensurepip in each selected environment; WSL mode also needs an existing WSL distribution. |
+| macOS Apple Silicon | [Desktop 0.5.3 / Core 2.14.0 (.dmg)](https://github.com/askac/standterm/releases/download/desktop-v0.5.3-2.14.0/StandTerm-Desktop-0.5.3-2.14.0-mac-arm64.dmg) | Native arm64 Python 3.10+ with venv/ensurepip. Intel/Rosetta is not qualified. |
 
 Packages include Electron and Core. **Git, Node.js and npm are not required**;
 Python and its virtual environment are not bundled.
-Windows Desktop 0.5.1 includes an optional advanced Git Core source, which
+Desktop includes an optional advanced Git Core source, which
 requires Git in the selected backend environment, plus bundled Core recovery
-without Git. Those controls are not included in the macOS 0.4.3 installer.
+without Git.
 
 1. Download the package for your platform and verify its checksum:
-   [Windows SHA256SUMS](https://github.com/askac/standterm/releases/download/desktop-v0.5.1-2.13.0-dev/SHA256SUMS)
-   or [macOS SHA256SUMS](https://github.com/askac/standterm/releases/download/desktop-v0.4.3/SHA256SUMS).
+   [SHA256SUMS for both platforms](https://github.com/askac/standterm/releases/download/desktop-v0.5.3-2.14.0/SHA256SUMS).
 2. On Windows, run the installer and choose **Windows only**, **Windows + WSL**
    or **WSL only**. Native Windows mode needs 64-bit Windows Python; installing
    Windows Python does not satisfy WSL mode. On macOS, copy the app to a
@@ -277,6 +284,26 @@ xterm.js 24-bit color support without requiring a less widely installed terminfo
 entry. SSH sessions continue to request the compatible `xterm-256color` PTY;
 remote environment-variable propagation remains controlled by the SSH server.
 
+On POSIX hosts with `infocmp` and `tic`, Local Shell adds RGB flags to a private
+copy of the effective `xterm-256color` terminfo entry. This lets ordinary `tmux`
+clients detect truecolor without changing your tmux configuration or installed
+terminfo database. Explicit `TERMINFO` / `TERMINFO_DIRS` overrides are preserved;
+missing tools or compilation errors retain the normal shell environment. The
+private entry remains in temporary storage for detached processes to use.
+Native Windows shells do not use this overlay.
+
+StandTerm also answers XTVERSION as `StandTerm(<core version>)` and XTGETTCAP
+queries for `TN` / `name`, `Co` / `colors` (256 indexed colors), `RGB` (8 bits
+per component), and `Tc`. These replies do not advertise unsupported clipboard,
+extended-keyboard, or margin capabilities.
+
+Remote tmux 3.4 does not discover RGB from these queries. On such hosts, use
+`tmux -T RGB` (or `tmux -T RGB attach` for an existing session). For tmux 3.2+
+you can instead opt into `set -as terminal-features ',xterm-256color:RGB'` in
+your own tmux configuration and reattach. That setting applies to every client
+using that TERM, including other terminal applications. StandTerm does not
+modify remote configuration or install remote terminfo automatically.
+
 Windows Local Shell uses pywinpty 3.0.5 to avoid the fixed per-read delay in
 the older 2.x backend. The launchers refresh dependencies when `requirements.txt`
 changes; an existing running server must be restarted to use the new dependency.
@@ -296,8 +323,34 @@ states the token status; tab labels include remaining idle seconds, for example
 does not mean an agent is currently executing.
 Revocation, invalidation, or disabling access removes the tint, and connection
 warnings take priority. Background tabs update without opening the Agent panel.
-The tab-row Mint and Mint 3× buttons sit beside Pause Agent when the Agent panel
-is hidden, and always target the active terminal.
+The **🤖 Authorize agent** action is the leftmost action in the right-side tab tools.
+It applies the permission selected in **Settings > General > Agent access** to
+the active terminal, waits for Core to confirm it, and mints a standard token.
+The default is **Direct input + token**. The tab-row Create token and Create
+token 3× buttons remain beside Pause Agent when the Agent panel is hidden, and always target the active
+terminal; compact windows keep those actions in the Agent panel.
+
+**Settings > General > Language (preview)** selects English or Traditional
+Chinese (Taiwan) for the browser interface, including access and device recovery,
+Agent permissions and approvals, connection/profile/route editors, settings,
+tunnels, Files, and terminal popup/PiP controls. Terminal content, copyable
+commands, plugin labels, technical validation errors and raw diagnostics retain
+their original text. Native Desktop menus and windows are outside this coverage.
+The choice
+applies the next time the page opens; saving it does not reload the current
+page or change its connections and grants. Other areas remain in English.
+**Save preferences** stores the General and Appearance preference fields.
+Other settings have separate actions. **Reset preferences** immediately restores
+all browser preference defaults and reloads the page, losing unsaved edits and
+stopping this page's temporary SSH tunnels. Saved SSH profiles, history and keys,
+and the Agent panel position remain stored.
+Server runtime settings use individual **Apply** buttons. Their changes are shared
+across the Core instance and last until Core restarts. Connection defaults do not
+alter existing connections.
+The [copy and translation table](docs/ui_copy_review.tsv) and
+[localization plan](docs/agent_ui_review_plan.md) describe the review workflow;
+the [browser acceptance record](docs/browser_ui_acceptance.md) defines the
+tested scope and retained raw data.
 
 This development build also enables an **experimental IME positioning PoC**:
 the composition overlay follows its starting input line during terminal redraws.
@@ -319,12 +372,25 @@ Useful launcher options:
 STANDTERM_HOST=127.0.0.1 STANDTERM_PORT=5000 ./run.sh
 ```
 
-## Browser-managed SSH Sessions And Keys
+## Browser-managed SSH Profiles And Keys
 
 Quick Connect can load saved SSH profiles and the six most recent successful
-SSH targets. Use **Settings > SSH Sessions** to create, update, reorder, or
-delete profiles and to clear history. Profiles and history stay in the current
-browser and never store passwords. In Direct connect, **Save session** saves the
+SSH targets. Use **Settings > SSH profiles** to create, update, reorder, or
+delete profiles and to clear history. Direct entries expose their single node
+in the first level: host, port, username, **Use key**, public key copy and host
+identity. **Save** stores the name, node and referenced key together. **Add jump
+node…** carries unsaved fields and temporary keys into the full route editor;
+cancelling returns to the unchanged Direct draft. Shared nodes in other entries
+remain unchanged by default.
+
+Multi-node entries show names, ordering and full route summaries in the first
+level. **Save name** only renames the selected entry. **Edit connection…** opens
+all nodes in a separate editor; **Save route** stores all node and referenced
+key changes for the next connection. **New profile** starts an inline draft from
+the current SSH tab's target, or Quick Connect when no SSH tab is connected.
+Switching tabs or connections clears the previous edit selection.
+Profiles and history stay in the current
+browser and never store passwords. In Direct connect, **Save connection profile** saves the
 profile and its referenced browser key when **Connect** is pressed, before SSH
 starts. A failed connection does not undo that explicit save. History records
 only successful connections and does not implicitly save a profile or private key.
@@ -379,7 +445,8 @@ Ed25519 key. Its public key can be copied immediately to `authorized_keys`. A
 compatible saved key does not prove that the remote account has installed it;
 server fingerprints are still checked separately during SSH login.
 
-The editor ends with **Save route**, **Cancel**, and **Done**. Done retains only
+The connection-preparation editor ends with a **Save route** checkbox, **Cancel**,
+and **Done**. Done retains only
 the connection draft. **Connect** saves the route and referenced temporary keys
 together only when Save route is selected; otherwise they remain temporary.
 Cancelling an editor discards changes made since opening it. Temporary private
@@ -479,9 +546,12 @@ returned with the connection failure.
 
 For a connected SSH or supported Local Shell tab, use the folder button in the
 status bar, the terminal context menu, or the folder button in Terminal
-Picture-in-Picture. StandTerm opens a compact Files window in
-Picture-in-Picture. When opened from a terminal PiP, the terminal first returns
-to its tab so the single Document PiP window can switch cleanly to Files.
+Picture-in-Picture. StandTerm uses Document Picture-in-Picture when available,
+or a separate browser popup for terminals and Files when it is unavailable
+(including Safari). Allow popups for StandTerm. The fallback action is labeled
+**Pop out terminal**; an ordinary browser popup is not guaranteed to stay on top.
+When opened from a floating terminal, the terminal returns to its tab before the
+window switches to Files. Closing the floating window restores the terminal.
 
 Files browses one directory at a time and supports manual path navigation,
 drag-and-drop upload, explicit download, rename, and permanent deletion.
@@ -501,6 +571,9 @@ atomic commit barrier has been crossed and cancellation is no longer possible.
 Keep Files open for the final result; closing the system PiP window does not
 cancel the backend transaction. Agent-initiated copies use the same bounded
 transfer core but still require their separate, fresh **Approve copy** decision.
+After approval, progress moves to the cross-tab **Transfer Queue** between Files
+and Settings. It can stop a running copy, and finished entries disappear after
+about ten seconds.
 If the backend cannot determine whether an SSH publish succeeded, inspect the
 destination before retrying; a blind retry may duplicate or replace a file that
 was already published.
@@ -517,13 +590,25 @@ that the backend canonicalizes, validates, and rechecks before publish.
 Downloads, copies, and file actions accept regular files only; symbolic links
 and other non-regular entries are rejected.
 
-**Settings > General > Import & Export** transfers browser preferences, SSH
-profiles and order, SSH history, and persistent UI layout in a versioned JSON
-envelope containing a Base64 ZIP archive. Import merges profiles by stable ID,
-appends new IDs, and deduplicates history. A local keyed profile keeps its local
-host, port, and username so import cannot silently rebind its key. SSH keys, key
-IDs, passwords, browser authorization identity, access tokens, and runtime
-diagnostics are never included or changed by import.
+**Settings > General > Import & Export** transfers browser preferences, Agent
+panel position, SSH profiles/routes and history in a versioned JSON envelope
+containing a Base64 ZIP archive. Import applies the valid preferences and panel
+position supplied by the file, retaining values that were not supplied. Imported
+SSH profiles and nodes receive new IDs; existing profiles and their key bindings
+remain unchanged. Importing the same file again creates additional profiles.
+History appends imported entries after existing entries and retains the first
+six, without deduplication.
+
+SSH keys, key bindings, passwords, browser authorization identity, access tokens
+and runtime diagnostics are excluded from exports. Imported browser-key routes
+need a key selected again; existing browser key records remain intact. Successful
+import reloads the page to apply preferences and stops this page's temporary SSH
+tunnels. The confirmation describes these effects before any import writes.
+
+SSH settings are committed before browser preferences. If a later preference
+write fails, the error reports that SSH settings were already saved. Check the
+stored settings before importing again to avoid duplicate profiles; the import
+does not roll back or retry automatically.
 
 ## Browser Authorization And HTTPS
 
@@ -589,8 +674,8 @@ To enable recovery:
    select **Arm existing passkey** before relying on recovery for that live
    process.
 
-When the session cookie is missing, select **Recover live session with device**
-on the Access Required page or in the in-app recovery prompt. Recovery succeeds
+When the session cookie is missing, select **Verify with device**
+on the Access Required page or in the **Restore StandTerm access** dialog. Recovery succeeds
 only while that session remains active in the same `app.py` process. A backend
 restart, expired session, closed terminal bridge, or disconnected remote host
 cannot be reconstructed by the passkey.
@@ -622,6 +707,56 @@ Python environment.
 UART access follows the same local-client/browser-authorization gate as Local
 Shell unless `STANDTERM_ALLOW_REMOTE_UART=1` is set.
 
+## User SSH Tunnels
+
+After connecting an SSH tab, open **Tunnels** to create temporary TCP forwards
+without reconnecting. Choose a direction, listening port, target host and target
+port; listening port `0` lets the operating system choose an available port.
+Each tunnel shows its assigned port, state, active connections and byte counts
+to and from the target. Remote rows identify the requested listener address;
+they do not verify the SSH server's actual listening interfaces.
+**Stop** stops forwarding and closes its connections while keeping SSH, Files
+and other tunnels available. **Listening** confirms the forward is ready to
+accept connections; target-service failures appear when a client connects.
+If a request times out, its result is unconfirmed. Refresh status before deciding
+whether to retry; the UI does not automatically resend start or stop requests.
+Stopping does not wait for the SSH server to confirm remote listener removal.
+
+| Direction | Listener | Target is reached from |
+| --- | --- | --- |
+| Local (`-L`) | Core host's `127.0.0.1` | Final SSH host |
+| Remote (`-R`) | Requested on final SSH host's `127.0.0.1` | Core host |
+
+For example, local port `8080` to target `127.0.0.1:80` makes the SSH host's web
+service available at `http://127.0.0.1:8080` on the Core host. A remote forward
+with those ports makes the Core host's port `80` available from the SSH host's
+port `8080`. Here, **Core host** means where the Core process runs: WSL when
+started by `run_wsl.bat`, even if the Desktop window runs on Windows. Target
+hostnames are resolved on the side shown in the table. Jump routes use the final
+SSH connection, including routes with three jump hosts.
+
+These controls require an authenticated browser viewer. External-agent commands,
+helpers and skills cannot create, inspect or stop user tunnels. Tunnels stop when
+SSH closes or their creating viewer disconnects, including page reload or loss
+of its Core connection. Closing only the Tunnels dialog keeps them running.
+They are not saved or restored automatically. A tab allows up to eight user
+tunnels, with eight simultaneous connections per tunnel and 32 shared with Agent
+Tunnel on its SSH transport.
+
+User tunnels require SSH TCP forwarding support but no remote StandTerm helper,
+Python or listener-inspection tool. Local listeners bind only to `127.0.0.1`.
+Remote forwards request that address and reject peers with non-loopback source
+addresses; the SSH server controls the actual listening interfaces. A server
+configured with `GatewayPorts yes` can bind more broadly than requested. Use
+`GatewayPorts no` or `clientspecified` when the listener itself must stay on
+loopback. Generic tunnels do not inspect or change server configuration.
+
+The target may be Core or an Agent HTTP endpoint. TCP forwarding grants no API
+access by itself: the endpoint's authentication and tab permissions still apply.
+**Agent Tunnel** remains the managed preset that prepares helpers, grants and
+Agent Info, and verifies the remote listener. Its low privilege comes from its
+scoped HTTP API and grants; generic TCP forwarding does not reproduce that setup.
+
 ## SSH Agent Tunnel
 
 On a connected SSH tab, **Agent Tunnel** can provision remote Agent access
@@ -634,7 +769,7 @@ Python helpers, discovery, and per-tab permissions as a local external agent,
 including normal file-copy approval between two authorized tabs.
 
 The dialog shows the remote **Agent Info URL** with **Copy URL** and **Copy
-Prompt** actions. **Agent Info for Current Tab** appears in the toolbar only after that
+Prompt** actions. **Agent connection** appears in the toolbar only after that
 SSH tab's tunnel is ready, and opens the same prompt and activity information.
 The URL's `127.0.0.1` belongs to the SSH host. Paste the prompt
 to the agent there; it identifies the SSH host and tab and includes the existing skill and discovery
@@ -642,11 +777,16 @@ command and asks the agent to run `hello` for each intended tab. Local token
 minting is not required: Start creates separate grants for Agent-enabled tabs.
 
 **Check Tunnel** checks the remote listener, helper bundle, and connection to
-this Core instance again. The verification timestamp confirms that path works;
+this Core instance again. A failed check stops the tunnel and revokes its grants.
+The verification timestamp records the last successful check;
 each tab separately shows **waiting for agent** until Core receives an
 authenticated request through this tunnel. **Last authenticated request** is a
 historical timestamp, not a continuous connection indicator. **Refresh Status**
 reloads the current grants and activity without renewing their tokens.
+On an active tunnel, **Start / Renew Access** updates grants without repeating
+those checks or reinstalling helpers. It replaces invalid grants; valid tokens
+keep their existing expiry. Use **Check Tunnel** to verify the path
+again. Closing the dialog keeps the tunnel running.
 
 The SSH host needs Python 3.9+, SFTP, remote forwarding, and a way to inspect
 its listener bindings. Core supports Linux `/proc/net`, FreeBSD `netstat` JSON,
@@ -660,7 +800,7 @@ handoffs live in a private temporary directory on the SSH host. The tunnel
 exposes only scoped Agent discovery and commands over HTTP inside SSH.
 
 Disabling or pausing access in Agent Panel immediately restricts remote access.
-**Start / Renew Access**, a new Enable, or an explicit browser Mint can renew
+**Start / Renew Access**, a new Enable, or an explicit browser Create token can renew
 expired or revoked grants. Reading info, checking the tunnel, ordinary mode
 changes, and resume do not renew invalid grants. **Stop Tunnel**, SSH disconnect, or browser viewer disconnect
 revokes this tunnel's grants and pending input without revoking local agents.
@@ -686,18 +826,19 @@ Typical local flow:
 
 1. Launch StandTerm and open the browser.
 2. Connect a terminal.
-3. Open the Agent panel for that terminal.
-4. Mint a standard or 3x-idle external-agent token from the browser Agent UI.
+3. Choose **🤖 Authorize agent** to apply the saved permission and mint a standard
+   token for that terminal in one action. The default is **Direct input + token**.
+4. For another permission or a 3x-idle token, use the browser Agent panel.
    When the Agent panel is hidden, the same actions are available in the status
    bar for the active terminal.
-5. On a local tab, open **Agent Info for Current Tab** in the toolbar. **Copy URL** provides the
+5. On a local tab, open **Agent connection** in the toolbar. **Copy URL** provides the
    local Agent Info URL; **Copy Prompt** includes the skill, discovery
    command, and instructions to run `hello` for each intended tab. Give this to
    the agent running in the Core host environment (WSL when Core runs in WSL).
    The dialog shows each tab's last authenticated request to confirm access.
 
-Reading or copying a prompt does not mint tokens. The single **Agent Info for
-Current Tab** button chooses the environment from the active tab: local tabs
+Reading or copying a prompt does not mint tokens. The single **Agent connection**
+button chooses the environment from the active tab: local tabs
 show Core host information; SSH tabs show that host's information after **Agent
 Tunnel** is ready. The dialog identifies where to run the agent. This choice
 does not narrow access to one tab; permissions still follow Agent Panel.
@@ -802,7 +943,7 @@ stderr.
 any two attached SSH or Local Shell terminals. Both terminals need separately
 minted external-agent tokens from the same browser session. Every copy opens a
 dedicated browser approval card showing the backend-canonical source,
-destination, size, and conflict behavior; Full mode does not bypass this
+destination, size, and conflict behavior; Direct input mode does not bypass this
 per-operation approval. File-copy approval appears even when a different
 terminal tab is active, while ordinary command approvals remain terminal
 scoped. Approved copies expose typed byte progress through the browser card and

@@ -1,6 +1,8 @@
 'use strict';
 
 const byId = id => document.getElementById(id);
+let i18n = window.StandTermDesktopI18n.create('en');
+let appliedLocale;
 let lastNoticeId = 0;
 let noticeTimer;
 function showNotice(message, error = false) {
@@ -23,12 +25,20 @@ function showNotice(message, error = false) {
 for (const button of document.querySelectorAll('[data-action], [data-menu]')) {
   button.addEventListener('click', () => {
     const action = button.dataset.action || `menu:${button.dataset.menu}`;
-    window.desktopToolbar.invoke(action).catch(() => {
-      showNotice('Action unavailable. Please retry.', true);
+    window.desktopToolbar.invoke(action).then(result => {
+      if (result === false) showNotice(i18n.t('desktop.toolbar.action_unavailable'), true);
+    }).catch(() => {
+      showNotice(i18n.t('desktop.toolbar.action_unconfirmed'), true);
     });
   });
 }
 window.desktopToolbar.onState(state => {
+  if (typeof state.locale === 'string' && state.locale !== appliedLocale) {
+    i18n = window.StandTermDesktopI18n.create(state.locale);
+    appliedLocale = state.locale;
+    document.documentElement.lang = i18n.locale;
+    i18n.apply(document);
+  }
   if (typeof state.mac === 'boolean') {
     byId('menus').hidden = state.mac;
   }
@@ -45,7 +55,7 @@ window.desktopToolbar.onState(state => {
   byId('stop').disabled = !stoppable;
   byId('save').disabled = byId('copy').disabled = state.screenshotBusy === true;
   byId('recording-status').textContent = active ? state.label : '';
-  const pauseLabel = state.state === 'paused' ? 'Resume recording' : 'Pause recording';
+  const pauseLabel = i18n.t(state.state === 'paused' ? 'desktop.toolbar.record_resume' : 'desktop.toolbar.record_pause');
   byId('pause').title = pauseLabel;
   byId('pause').setAttribute('aria-label', pauseLabel);
   byId('pause-shape').setAttribute('d', state.state === 'paused' ? 'M7 4l13 8-13 8z' : 'M8 5v14M16 5v14');

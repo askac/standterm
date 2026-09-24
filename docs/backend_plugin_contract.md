@@ -150,6 +150,15 @@ Keep these compatibility surfaces unless there is an explicit migration plan:
   fields.
 - Secret start fields must not expose `default_value`.
 
+SSH may advertise a `network_origin` start field with `core` and `windows` values
+on WSL when Windows interoperability and PowerShell are available. Omission means
+`core`. The `windows` preview applies only to the route's first TCP connection;
+the field belongs to the top-level start payload, never an individual route node.
+Unsupported values or an unavailable Windows helper are rejected without fallback.
+Authentication and host-key checks remain in Core; Windows loopback targets do
+not qualify for Core localhost trust/key-setup shortcuts. The selected origin is
+retained in retries and Windows-backed SFTP endpoint metadata.
+
 When adding a backend, implement `build_policy_option()`,
 `get_start_form_schema()`, `validate_start_payload()`, `create_bridge()`, and
 `connect_bridge()`. Add focused backend and browser smoke tests for the exposed

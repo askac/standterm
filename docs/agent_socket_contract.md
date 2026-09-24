@@ -49,6 +49,7 @@ terminal display text.
 
 The mock Agent panel may send `agent_mode_set`, `agent_suggestion_request`,
 `agent_provider_run_request`, `agent_action_approve`, `agent_action_reject`,
+`agent_action_cancel`,
 `agent_privacy_set`, and `agent_pause`. The approval panel must display only
 the public action metadata returned by the backend, including `escaped_preview`;
 it must not receive or render the raw terminal input payload.
@@ -177,9 +178,13 @@ browser-facing address is retained as `browser_url`.
 Tokenless agentinfo exposes only a structured terminal-id-to-handoff-path index,
 never the token-bearing file contents. A caller can therefore use
 `--agentinfo <path-or-url> --terminal <id>` to resolve the matching local token.
-Omitting `--terminal` preserves the latest-handoff behavior. Per-terminal files
-are written atomically with restrictive permissions and removed when their
-matching token is revoked or its terminal/viewer binding is invalidated. Each
+Omitting `--terminal` preserves the latest-handoff behavior. An explicit
+`--terminal`, including `main`, takes precedence over the handoff terminal.
+An explicit token also takes precedence over the handoff token; the server
+validates that the effective token belongs to the selected terminal before
+allowing a write. Per-terminal files are written atomically with restrictive
+permissions and removed when their matching token is revoked or its
+terminal/viewer binding is invalidated. Each
 server process uses a distinct directory so an old launch is never selected as
 the current instance; graceful shutdown removes the current directory, while
 fresh agentinfo generation prunes handoffs whose tokens expired or became
@@ -820,6 +825,11 @@ that the user requested a copy as authorization. The authorizing viewer shows
 file-copy approval globally even when another terminal tab is active; ordinary
 terminal-input approvals remain scoped to their terminal tab.
 
+After approval, the authorizing viewer moves the copy into a cross-tab Transfer
+Queue. The queue may request cancellation while the action is `approved` or
+`running`. Once the action is `committing`, the destination publish attempt is
+already inside the commit barrier and cannot be cancelled.
+
 The browser Files UI has a separate human-initiated **Copy to…** path. Its final
 **Copy** button is the explicit authorization for that one browser transaction,
 so it does not create an Agent action. It shares the bounded backend stream,
@@ -972,10 +982,17 @@ adds typed observation metadata:
 }
 ```
 
-If no terminal output arrives before `wait_ms`, the send may still be
-`completed`; the timeout is reported only as `capture.status: "timeout"` and
-`capture.timed_out: true`. In approval mode, capture is not executed because no
-bytes have been written yet; the response remains `pending_approval` and
+`wait_ms` bounds the entire capture after the write, including waiting for the
+first output and for `settle_ms` of output silence. New output restarts the
+silence interval but never extends the total capture deadline. If no output
+arrives, or output does not settle within that deadline, the send remains
+`completed`; only capture reports `status: "timeout"`, `timed_out: true`, and
+`settled: false`. Output already captured is retained, with the usual cursor and
+event-limit metadata. A capture timeout does not undo the write and must not
+cause the caller to resend the input automatically.
+
+In approval mode, capture is not executed because no bytes have been written
+yet; the response remains `pending_approval` and
 includes `capture.status: "skipped"` with reason `pending_approval`. Captured
 tail events are display data only and must not be parsed as StandTerm control
 state. `strip_ansi` affects only the captured `events[*].data` formatting and
@@ -1150,6 +1167,20 @@ Payload:
 ```
 
 Rejects a pending action for this exact sid and terminal.
+
+### `agent_action_cancel`
+
+Payload:
+
+```json
+{ "terminal_id": "main", "action_id": "...", "proposal_id": "agp_..." }
+```
+
+Stops an approved or running `file_copy` for this exact sid and source
+terminal. A successful stop transitions the action to `failed` with
+`file_copy_cancelled_by_operator`, which prevents the worker from reading the
+next source chunk or entering the commit barrier. A request received after the
+action reaches `committing` returns the authoritative current action unchanged.
 
 ### `agent_viewport_snapshot`
 

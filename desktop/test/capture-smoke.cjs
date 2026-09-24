@@ -229,7 +229,7 @@ async function run(win, capture, contents = win.webContents) {
   await new Promise(resolve => setTimeout(resolve, 1200));
   dialog.showMessageBox = async () => ({ response: 1 });
   try {
-    assert.equal(await capture.confirmStop('closing the test window'), true);
+    assert.equal(await capture.confirmStop('close'), true);
     assert.equal(capture.active, false);
     assert.ok((await fs.stat(confirmed)).size > 0);
   } finally { dialog.showMessageBox = originalMessage; }

@@ -10,7 +10,11 @@ COMPILE_TARGETS = [
     'app.py',
     'session_recovery.py',
     'server_startup.py',
+    'ssh_forwarding.py',
+    'ssh_tunnels.py',
     'scripts/access_window.py',
+    'scripts/build_ui_messages.py',
+    'tests/ui_messages_smoke.py',
     'tests/access_window_smoke.py',
     'tests/server_startup_smoke.py',
     'scripts/agent_cli.py',
@@ -26,15 +30,23 @@ COMPILE_TARGETS = [
     'tests/static_site_smoke.py',
     'tests/terminal_read_smoke.py',
     'tests/ssh_start_smoke.py',
+    'terminal_backends/windows_network.py',
+    'tests/ssh_network_origin_smoke.py',
     'tests/ssh_login_smoke.py',
     'tests/ssh_node_credentials_smoke.py',
+    'tests/ssh_tunnels_smoke.py',
+    'tests/ssh_tunnels_browser_smoke.py',
+    'tests/ssh_profile_context_browser_smoke.py',
+    'tests/browser_popout_smoke.py',
     'tests/ime_anchor_browser_smoke.py',
 ]
 
 HEADLESS_SMOKE_TESTS = [
+    'tests/ui_messages_smoke.py',
     'tests/access_window_smoke.py',
     'tests/terminal_read_smoke.py',
     'tests/ssh_start_smoke.py',
+    'tests/ssh_network_origin_smoke.py',
     'tests/ssh_login_smoke.py',
     'tests/ssh_node_credentials_smoke.py',
     'tests/server_startup_smoke.py',
@@ -67,6 +79,9 @@ def main(argv=None):
             'Compile Python entry points and smoke tests',
             [sys.executable, '-m', 'py_compile', *COMPILE_TARGETS],
         )
+
+    run_step('Check generated UI catalog', [sys.executable, 'scripts/build_ui_messages.py', '--check'])
+    run_step('Check generated Desktop catalog', [sys.executable, 'scripts/build_ui_messages.py', '--desktop', '--check'])
 
     for test_path in HEADLESS_SMOKE_TESTS:
         run_step(test_path, [sys.executable, test_path])

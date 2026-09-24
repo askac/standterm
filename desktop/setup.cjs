@@ -5,45 +5,25 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { macPythonCandidates, validMacPython, MACOS_HELP } = require('./macos-python.cjs');
+const { macPythonCandidates, validMacPython } = require('./macos-python.cjs');
+const { create } = require('./i18n.js');
+const { createLanguage } = require('./language.cjs');
 
 const SETUP_URL = pathToFileURL(path.join(__dirname, 'setup.html')).href;
-const HELP = 'Install WSL and Python 3.10+ with venv support in the selected distribution first.\n\n'
-  + 'For Ubuntu/Debian, run this yourself in WSL:\nsudo apt install python3 python3-venv\n\n'
-  + 'StandTerm never runs sudo or installs system Python automatically.';
-const WINDOWS_HELP = 'Install 64-bit Python 3.10+ with venv support on Windows first.\n\n'
-  + 'StandTerm can locate python.exe on PATH or let you select it. Microsoft Store aliases and py.exe '
-  + 'are not launched automatically. No system Python installation or administrator access is requested.';
 const PYTHON_PROBE = 'import sys, struct, importlib.util, json; print(json.dumps({"type":"python_info",'
   + '"executable":sys.executable,"platform":sys.platform,"version":list(sys.version_info[:2]),'
   + '"machine":__import__("platform").machine(),"bits":struct.calcsize("P")*8,"venv":bool(importlib.util.find_spec("venv") and importlib.util.find_spec("ensurepip"))}))';
-const ERRORS = {
-  python_required: HELP,
-  venv_failed: `Python could not create the private venv.\n\n${HELP}`,
-  dependencies_failed: 'Dependency installation or verification failed. Check internet access and the runtime setup.log, then retry.',
-  setup_busy: 'This runtime is in use by StandTerm or another setup. Quit that desktop mode before retrying.',
-  modified_runtime: 'The managed Core contains modified files. Setup will not overwrite them.',
-  unsafe_runtime_path: 'The runtime directory is not safe to use. Setup will not overwrite unrelated files or follow directory links.',
-  invalid_bundle: 'The bundled Core failed its integrity check. Reinstall StandTerm Desktop.',
-  setup_canceled: 'Setup was canceled. Restart StandTerm to retry.',
-  setup_timeout: 'Setup timed out. Check internet access and retry.',
-  git_required: 'Git is unavailable in the selected backend environment. Install Git there, or restore the bundled Core.',
-  git_dirty: 'The Git Core has local changes. Keep them or resolve them in its checkout before updating. Nothing was reset or stashed.',
-  git_diverged: 'The Git Core cannot fast-forward to the official branch. Local history is retained. Restore bundled Core or resolve the checkout manually.',
-  git_source_changed: 'The managed Git origin or branch has changed. Expected the official repository and main branch.',
-  invalid_git_workspace: 'The private Git checkout is incomplete or damaged. It is retained. Restore the bundled Core or repair that checkout manually.',
-  git_needs_setup: 'The Git Core requirements changed or its environment is missing. Use Prepare Git environment from Core source (Advanced).',
-  git_failed: 'Git could not complete the operation. Check network access and the runtime setup.log. Prepared files are retained.',
-  invalid_archive: 'The recovery archive failed verification. Reinstall StandTerm Desktop if its installed bundle is also damaged.',
-  setup_failed: 'Setup failed. Check the selected Python environment and available disk space.',
-};
+const ERROR_CODES = ['dependencies_failed', 'setup_busy', 'modified_runtime', 'unsafe_runtime_path',
+  'invalid_bundle', 'setup_canceled', 'setup_timeout', 'git_required', 'git_dirty', 'git_diverged',
+  'git_source_changed', 'invalid_git_workspace', 'git_needs_setup', 'git_failed', 'invalid_archive', 'setup_failed'];
 let window;
+let setupLanguage = create('en');
 let current;
 let canceled = false;
 let closeRequest;
 let setupFinished;
 let executionFinished;
-const canceledError = () => Object.assign(new Error(ERRORS.setup_canceled), { code: 'SETUP_CANCELED' });
+const canceledError = (t = setupLanguage.t) => Object.assign(new Error(t('desktop.setup.error_setup_canceled')), { code: 'SETUP_CANCELED' });
 
 function focusSetup() { if (window && !window.isDestroyed()) { window.show(); window.focus(); } }
 function cancelSetup() { canceled = true; current?.cancelSetup?.(); }
@@ -58,20 +38,20 @@ async function requestSetupCancel() {
   if (!window || window.isDestroyed() || canceled) return true;
   if (closeRequest) return closeRequest;
   const target = window;
+  const { t } = setupLanguage;
   closeRequest = dialog.showMessageBox(target, {
-    type: 'question', title: 'Cancel StandTerm setup?',
-    message: 'The Python environment is still being prepared.',
-    detail: 'Keep this window open or minimize it to continue. Canceling stops the owned installation processes; '
-      + 'prepared files are retained so you can retry on the next launch.',
-    buttons: ['Keep preparing', 'Cancel setup'], defaultId: 0, cancelId: 0, noLink: true,
+    type: 'question', title: t('desktop.setup.cancel_title'),
+    message: t('desktop.setup.cancel_message'),
+    detail: t('desktop.setup.cancel_detail'),
+    buttons: [t('desktop.setup.keep_preparing'), t('desktop.setup.cancel_setup')], defaultId: 0, cancelId: 0, noLink: true,
   }).then(answer => {
     // Setup may finish while the confirmation is open. Do not cancel a
     // completed setup or apply its stale answer to a subsequent window.
     if (window !== target || target.isDestroyed() || answer.response !== 1) return false;
     cancelSetup();
-    target.setTitle('StandTerm Desktop - Canceling setup');
+    target.setTitle(t('desktop.setup.canceling_title'));
     void target.webContents.executeJavaScript(
-      "document.getElementById('stage').textContent = 'Canceling setup. Waiting for installation processes to stop...';",
+      `document.getElementById('stage').textContent = ${JSON.stringify(t('desktop.setup.canceling_status'))}`,
     ).catch(() => {});
     return true;
   }).catch(() => false).finally(() => { closeRequest = null; });
@@ -87,9 +67,9 @@ async function confirmSetupQuit() {
   return true;
 }
 
-function execute(executable, args, { encoding = 'utf8', timeout = 20000, progress = null, stream = false, help = HELP } = {}) {
+function execute(executable, args, { encoding = 'utf8', timeout = 20000, progress = null, stream = false, t = create('en').t, help = t('desktop.setup.help_wsl') } = {}) {
   const running = new Promise((resolve, reject) => {
-    if (canceled) { reject(canceledError()); return; }
+    if (canceled) { reject(canceledError(t)); return; }
     const child = spawn(executable, args, { windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, PYTHON_MANAGER_AUTOMATIC_INSTALL: 'false' } });
     current = child;
@@ -108,8 +88,8 @@ function execute(executable, args, { encoding = 'utf8', timeout = 20000, progres
       // the outer launcher. A new setup cannot race a still-closing process.
       forceTimer = setTimeout(() => { child.kill(); reject(abortError); }, 25000);
     }
-    child.cancelSetup = () => abort(canceledError());
-    const timer = setTimeout(() => abort(new Error(ERRORS.setup_timeout)), timeout);
+    child.cancelSetup = () => abort(canceledError(t));
+    const timer = setTimeout(() => abort(new Error(t('desktop.setup.error_setup_timeout'))), timeout);
     child.on('error', () => { clearTimeout(timer); clearTimeout(forceTimer); reject(new Error(help)); });
     child.stdout.on('data', bytes => {
       output = Buffer.concat([output, bytes]);
@@ -130,13 +110,13 @@ function execute(executable, args, { encoding = 'utf8', timeout = 20000, progres
       clearTimeout(timer);
       clearTimeout(forceTimer);
       if (current === child) current = null;
-      if (canceled) reject(canceledError());
+      if (canceled) reject(canceledError(t));
       else if (abortError) reject(abortError);
       else if (protocolError || (stream && output.length)) reject(new Error('Invalid setup control response.'));
       else if (stream) {
         const result = frames.at(-1);
         if (code !== 0 || !result || result.type === 'error') reject(Object.assign(new Error(
-          ['python_required', 'venv_failed'].includes(result?.code) ? help : ERRORS[result?.code] || help), { code: result?.code }));
+          ERROR_CODES.includes(result?.code) ? t(`desktop.setup.error_${result.code}`) : help), { code: result?.code }));
         else resolve(result);
       } else if (code !== 0) reject(new Error(help));
       else resolve(output.toString(encoding).replace(/^\uFEFF/, '').trim());
@@ -146,63 +126,66 @@ function execute(executable, args, { encoding = 'utf8', timeout = 20000, progres
   return running;
 }
 
-async function windowsPython(saved) {
+async function windowsPython(saved, t) {
+  const help = t('desktop.setup.help_windows');
   const candidates = [];
   if (typeof saved === 'string') candidates.push(saved);
   try {
-    candidates.push(...(await execute('where.exe', ['python.exe'], { help: WINDOWS_HELP })).split(/\r?\n/));
+    candidates.push(...(await execute('where.exe', ['python.exe'], { help, t })).split(/\r?\n/));
   } catch { /* Manual selection remains available when PATH has no Python. */ }
   async function probe(candidate) {
     if (!path.win32.isAbsolute(candidate) || /\\Microsoft\\WindowsApps\\/i.test(candidate)
-        || !/^python(?:3(?:\.\d+)?)?\.exe$/i.test(path.win32.basename(candidate))) throw new Error(WINDOWS_HELP);
-    const result = await execute(candidate, ['-I', '-c', PYTHON_PROBE], { stream: true, help: WINDOWS_HELP });
+        || !/^python(?:3(?:\.\d+)?)?\.exe$/i.test(path.win32.basename(candidate))) throw new Error(help);
+    const result = await execute(candidate, ['-I', '-c', PYTHON_PROBE], { stream: true, help, t });
     if (result.type !== 'python_info' || result.platform !== 'win32' || result.bits !== 64 || !result.venv
         || !Array.isArray(result.version) || result.version[0] !== 3 || result.version[1] < 10
-        || !path.win32.isAbsolute(result.executable)) throw new Error(WINDOWS_HELP);
+        || !path.win32.isAbsolute(result.executable)) throw new Error(help);
     return result.executable;
   }
   for (const candidate of [...new Set(candidates)].slice(0, 5)) {
-    try { return await probe(candidate.trim()); } catch { if (canceled) throw canceledError(); }
+    try { return await probe(candidate.trim()); } catch { if (canceled) throw canceledError(t); }
   }
-  const answer = await dialog.showMessageBox({ type: 'info', title: 'StandTerm Desktop: Python required',
-    message: WINDOWS_HELP, buttons: ['Cancel', 'Select installed python.exe...'], defaultId: 0, cancelId: 0 });
-  if (answer.response !== 1) throw canceledError();
-  const selected = await dialog.showOpenDialog({ title: 'Select an installed 64-bit Python interpreter',
-    properties: ['openFile'], filters: [{ name: 'Python executable', extensions: ['exe'] }] });
-  if (selected.canceled || selected.filePaths.length !== 1) throw canceledError();
+  const answer = await dialog.showMessageBox({ type: 'info', title: t('desktop.setup.python_required_title'),
+    message: help, buttons: [t('desktop.common.cancel'), t('desktop.setup.select_python_windows')], defaultId: 0, cancelId: 0 });
+  if (answer.response !== 1) throw canceledError(t);
+  const selected = await dialog.showOpenDialog({ title: t('desktop.setup.select_python_windows_title'),
+    properties: ['openFile'], filters: [{ name: t('desktop.setup.python_executable'), extensions: ['exe'] }] });
+  if (selected.canceled || selected.filePaths.length !== 1) throw canceledError(t);
   return probe(selected.filePaths[0]);
 }
 
-async function macosPython(saved) {
+async function macosPython(saved, t) {
+  const help = t('desktop.setup.help_macos');
   async function probe(candidate) {
     if (!path.posix.isAbsolute(candidate) || /[\r\n\0]/.test(candidate) || candidate === '/usr/bin/python3') {
-      throw new Error(MACOS_HELP);
+      throw new Error(help);
     }
-    const result = await execute(candidate, ['-I', '-c', PYTHON_PROBE], { stream: true, help: MACOS_HELP });
-    if (!validMacPython(result, process.arch)) throw new Error(MACOS_HELP);
+    const result = await execute(candidate, ['-I', '-c', PYTHON_PROBE], { stream: true, help, t });
+    if (!validMacPython(result, process.arch)) throw new Error(help);
     return result.executable;
   }
   for (const candidate of macPythonCandidates(saved, process.env)) {
-    try { return await probe(candidate); } catch { if (canceled) throw canceledError(); }
+    try { return await probe(candidate); } catch { if (canceled) throw canceledError(t); }
   }
-  const answer = await dialog.showMessageBox({ type: 'info', title: 'StandTerm Desktop: Python required',
-    message: MACOS_HELP, buttons: ['Cancel', 'Select installed Python...'], defaultId: 0, cancelId: 0 });
-  if (answer.response !== 1) throw canceledError();
-  const selected = await dialog.showOpenDialog({ title: 'Select a native macOS Python 3.10+ interpreter',
+  const answer = await dialog.showMessageBox({ type: 'info', title: t('desktop.setup.python_required_title'),
+    message: help, buttons: [t('desktop.common.cancel'), t('desktop.setup.select_python_macos')], defaultId: 0, cancelId: 0 });
+  if (answer.response !== 1) throw canceledError(t);
+  const selected = await dialog.showOpenDialog({ title: t('desktop.setup.select_python_macos_title'),
     properties: ['openFile'] });
-  if (selected.canceled || selected.filePaths.length !== 1) throw canceledError();
+  if (selected.canceled || selected.filePaths.length !== 1) throw canceledError(t);
   return probe(selected.filePaths[0]);
 }
 
-async function setupEnvironment(mode, installer = false) {
+async function setupEnvironment(mode, installer, language) {
+  const { t } = language;
   if (!['windows', 'wsl', 'macos'].includes(mode)) throw new Error('Choose a supported desktop backend.');
   const windows = mode === 'windows';
   const macos = mode === 'macos';
   const native = windows || macos;
-  const help = macos ? MACOS_HELP : windows ? WINDOWS_HELP : HELP;
+  const help = t(`desktop.setup.help_${mode}`);
   const bundle = path.join(process.resourcesPath, 'bundle');
   const metadata = JSON.parse(await fs.readFile(path.join(bundle, 'manifest.json'), 'utf8'));
-  if (!/^[a-f0-9]{64}$/.test(metadata.id)) throw new Error(ERRORS.invalid_bundle);
+  if (!/^[a-f0-9]{64}$/.test(metadata.id)) throw new Error(t('desktop.setup.error_invalid_bundle'));
   const settingsPath = path.join(installer ? modeProfile(mode) : app.getPath('userData'), 'launcher.json');
   let settings;
   try {
@@ -214,7 +197,7 @@ async function setupEnvironment(mode, installer = false) {
   let args;
   let saved;
   if (native) {
-    executable = await (macos ? macosPython(settings?.python) : windowsPython(settings?.python));
+    executable = await (macos ? macosPython(settings?.python, t) : windowsPython(settings?.python, t));
     args = ['-I', path.join(bundle, 'bootstrap.py'), '--bundle', bundle];
     saved = { version: 1, python: executable };
   } else {
@@ -226,48 +209,48 @@ async function setupEnvironment(mode, installer = false) {
         if (legacy.version === 1 && typeof legacy.distro === 'string') settings = legacy;
       } catch { /* A fresh selection is safe if the legacy file is absent/invalid. */ }
     }
-    const distributions = (await execute('wsl.exe', ['--list', '--quiet'], { encoding: 'utf16le' }))
+    const distributions = (await execute('wsl.exe', ['--list', '--quiet'], { encoding: 'utf16le', t, help }))
       .split(/\r?\n/).map(item => item.trim()).filter(Boolean);
-    if (!distributions.length) throw new Error(HELP);
+    if (!distributions.length) throw new Error(help);
     distro = settings?.distro;
     if (installer || !distributions.includes(distro)) {
       const choices = distributions.slice(0, 12);
       const result = await dialog.showMessageBox({
-        type: 'question', title: 'StandTerm Desktop: select WSL',
-        message: 'Select an existing WSL distribution for StandTerm Core.', detail: HELP,
-        buttons: [...choices, 'Cancel'], cancelId: choices.length, defaultId: choices.length,
+        type: 'question', title: t('desktop.setup.select_wsl_title'),
+        message: t('desktop.setup.select_wsl_message'), detail: help,
+        buttons: [...choices, t('desktop.common.cancel')], cancelId: choices.length, defaultId: choices.length,
         noLink: true,
       });
-      if (result.response >= choices.length) throw canceledError();
+      if (result.response >= choices.length) throw canceledError(t);
       distro = choices[result.response];
     }
     const prefix = ['--distribution', distro, '--exec'];
-    const linuxBundle = await execute('wsl.exe', [...prefix, 'wslpath', '-u', bundle]);
-    if (!linuxBundle.startsWith('/') || /[\r\n\0]/.test(linuxBundle)) throw new Error(ERRORS.invalid_bundle);
+    const linuxBundle = await execute('wsl.exe', [...prefix, 'wslpath', '-u', bundle], { t });
+    if (!linuxBundle.startsWith('/') || /[\r\n\0]/.test(linuxBundle)) throw new Error(t('desktop.setup.error_invalid_bundle'));
     executable = 'wsl.exe';
     args = [...prefix, 'python3', '-I', `${linuxBundle}/bootstrap.py`, '--bundle', linuxBundle];
     saved = { version: 1, distro };
   }
-  return { windows, macos, native, help, bundle, metadata, settingsPath, executable, args, saved, distro };
+  return { language, t, windows, macos, native, help, bundle, metadata, settingsPath, executable, args, saved, distro };
 }
 
-async function preparePackagedBackend(mode, { installer = false } = {}) {
-  const environment = await setupEnvironment(mode, installer);
-  const { windows, macos, native, help, metadata, settingsPath, executable, args, saved, distro } = environment;
-  let result = await execute(executable, args, { stream: true, timeout: 60000, help });
+async function preparePackagedBackend(mode, { installer = false,
+  language = createLanguage(path.join(installer ? modeProfile(mode) : app.getPath('userData'), 'language.json')) } = {}) {
+  const environment = await setupEnvironment(mode, installer, language);
+  const { t, windows, macos, native, help, metadata, settingsPath, executable, args, saved, distro } = environment;
+  let result = await execute(executable, args, { stream: true, timeout: 60000, help, t });
   if (result.type === 'needs_setup') {
     const answer = await dialog.showMessageBox({
-      type: 'question', title: 'Prepare StandTerm Core',
-      message: `Create a private StandTerm environment in ${macos ? 'macOS' : windows ? 'Windows' : distro}?`,
-      detail: `Requires Python 3.10+ and venv support ${macos ? 'on native macOS' : windows ? 'on Windows (64-bit)' : 'inside WSL'}.\n\n`
-        + `This copies the bundled Core into ${macos ? '~/Library/Application Support/StandTermDesktop/runtimes/' : windows ? '%LOCALAPPDATA%\\StandTermDesktop\\runtimes\\' : '~/.local/share/standterm-desktop/runtimes/'}, creates its own venv, `
-        + 'and downloads and installs Python dependencies from your configured package index. '
-        + 'Dependencies can execute installation code. Internet access and disk space are required.\n\n'
-        + 'No system Python installation, sudo, Git checkout changes or existing-session interruption. '
-        + 'Failed setup is retained for retry. Uninstall keeps environments by default; optional cleanup moves only verified idle venvs to a recovery folder. Core and user data are retained.',
-      buttons: ['Cancel', 'Create environment and install dependencies'], defaultId: 0, cancelId: 0,
+      type: 'question', title: t('desktop.setup.prepare_title'),
+      message: t('desktop.setup.prepare_message', { platform: macos ? 'macOS' : windows ? 'Windows' : distro }),
+      detail: t('desktop.setup.prepare_detail', {
+        requirements: t(`desktop.setup.requirements_${mode}`),
+        path: macos ? '~/Library/Application Support/StandTermDesktop/runtimes/'
+          : windows ? '%LOCALAPPDATA%\\StandTermDesktop\\runtimes\\' : '~/.local/share/standterm-desktop/runtimes/',
+      }),
+      buttons: [t('desktop.common.cancel'), t('desktop.setup.create_environment')], defaultId: 0, cancelId: 0,
     });
-    if (answer.response !== 1) throw canceledError();
+    if (answer.response !== 1) throw canceledError(t);
     result = await runPreparation(environment, [...args, '--prepare']);
   }
   const runtimePath = windows ? path.win32 : path.posix;
@@ -285,7 +268,8 @@ async function preparePackagedBackend(mode, { installer = false } = {}) {
     '-u', `${result.root}/desktop/backend.py`], cwd: process.resourcesPath };
 }
 
-async function cleanupManagedVenvs(mode) {
+async function cleanupManagedVenvs(mode, { language = createLanguage(path.join(modeProfile(mode), 'language.json')) } = {}) {
+  const { t } = language;
   if (!['windows', 'wsl'].includes(mode)) throw new Error('Environment cleanup is available through the Windows installer only.');
   // Only the configured interpreter/distribution is considered. Never discover
   // other projects or provision a WSL distribution during uninstallation.
@@ -310,26 +294,25 @@ async function cleanupManagedVenvs(mode) {
       return { mode, status: 'retained', reason: 'No configured WSL distribution.' };
     }
     const prefix = ['--distribution', settings.distro, '--exec'];
-    const linuxBundle = await execute('wsl.exe', [...prefix, 'wslpath', '-u', bundle]);
-    if (!linuxBundle.startsWith('/') || /[\r\n\0]/.test(linuxBundle)) throw new Error(ERRORS.invalid_bundle);
+    const linuxBundle = await execute('wsl.exe', [...prefix, 'wslpath', '-u', bundle], { t });
+    if (!linuxBundle.startsWith('/') || /[\r\n\0]/.test(linuxBundle)) throw new Error(t('desktop.setup.error_invalid_bundle'));
     executable = 'wsl.exe';
     args = [...prefix, 'python3', '-I', `${linuxBundle}/runtime_cleanup.py`];
   }
   const inventory = await execute(executable, [...args, '--inventory'], { stream: true, timeout: 60000,
-    help: 'Environment inventory was unavailable. No venv cleanup was started.' });
+    t, help: t('desktop.setup.cleanup_inventory_unavailable') });
   if (inventory.type !== 'cleanup_inventory' || !Array.isArray(inventory.results) || inventory.results.length > 32
       || inventory.results.some(item => !/^[a-f0-9]{64}$/.test(item.id) || typeof item.source !== 'string'
         || !['retained', 'candidate'].includes(item.status))) throw new Error('Invalid cleanup inventory.');
   const candidates = inventory.results.filter(item => item.status === 'candidate');
   if (!candidates.length) return { mode, status: 'checked', results: inventory.results };
-  const answer = await dialog.showMessageBox({ type: 'question', title: 'Confirm environment cleanup',
-    message: `Move these idle venvs to recovery in ${mode === 'windows' ? 'Windows' : `WSL: ${settings.distro}`}?`,
-    detail: candidates.map(item => item.source).join('\n') + '\n\nNo disk space is freed. Core and settings are retained. '
-      + 'Any environment that becomes busy or fails verification will be retained. Cancel keeps all listed venvs.',
-    buttons: ['Keep environments', 'Move listed venvs to recovery'], defaultId: 0, cancelId: 0, noLink: true });
+  const answer = await dialog.showMessageBox({ type: 'question', title: t('desktop.setup.cleanup_title'),
+    message: t('desktop.setup.cleanup_message', { platform: mode === 'windows' ? 'Windows' : `WSL: ${settings.distro}` }),
+    detail: t('desktop.setup.cleanup_detail', { paths: candidates.map(item => item.source).join('\n') }),
+    buttons: [t('desktop.setup.cleanup_keep'), t('desktop.setup.cleanup_move')], defaultId: 0, cancelId: 0, noLink: true });
   if (answer.response !== 1) return { mode, status: 'retained', reason: 'User kept environments.' };
   const result = await execute(executable, [...args, '--detach-idle-venvs', JSON.stringify(candidates.map(item => item.id))],
-    { stream: true, timeout: 60000, help: 'Cleanup did not report completion. Check venv-recovery before retrying.' });
+    { stream: true, timeout: 60000, t, help: t('desktop.setup.cleanup_unconfirmed') });
   if (result.type !== 'cleanup_summary' || !Array.isArray(result.results) || result.results.length > 32
       || result.results.some(item => !/^[a-f0-9]{64}$/.test(item.id) || !['retained', 'detached'].includes(item.status))) {
     throw new Error('Invalid cleanup response.');
@@ -340,11 +323,11 @@ async function cleanupManagedVenvs(mode) {
 module.exports = { preparePackagedBackend, focusSetup, cancelSetup, confirmSetupQuit,
   stopSetup, cleanupManagedVenvs, modeProfile, manageCore };
 
-async function manageCore(mode, action) {
+async function manageCore(mode, action, { language = createLanguage(path.join(app.getPath('userData'), 'language.json')) } = {}) {
   if (!['status', 'enable', 'update', 'prepare', 'check', 'recover'].includes(action)) throw new Error('Invalid Core action.');
   // Select the base interpreter without requiring either Core or venv to work.
-  const environment = await setupEnvironment(mode);
-  const { windows, macos, native, help, executable, args, metadata, settingsPath, saved, distro } = environment;
+  const environment = await setupEnvironment(mode, false, language);
+  const { t, windows, macos, native, help, executable, args, metadata, settingsPath, saved, distro } = environment;
   const runtimePath = windows ? path.win32 : path.posix;
   const scriptIndex = args.indexOf('-I') + 1;
   const bundle = args[args.indexOf('--bundle') + 1];
@@ -352,7 +335,7 @@ async function manageCore(mode, action) {
   managedArgs[scriptIndex] = runtimePath.join(bundle, 'core_manager.py');
   managedArgs.push('--action', action);
   const result = ['status', 'check'].includes(action)
-    ? await execute(executable, managedArgs, { stream: true, timeout: 60000, help })
+    ? await execute(executable, managedArgs, { stream: true, timeout: 60000, help, t })
     : await runPreparation(environment, managedArgs);
   if (action === 'status') {
     if (result.type !== 'core_status' || typeof result.git_available !== 'boolean'
@@ -383,12 +366,13 @@ async function manageCore(mode, action) {
 }
 
 async function runPreparation(environment, args) {
-  const { executable, help, macos, windows, distro } = environment;
+  const { language, t, executable, help, macos, windows, distro } = environment;
+  setupLanguage = language;
   const isolated = session.fromPartition('standterm-setup');
   isolated.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   isolated.setPermissionCheckHandler(() => false);
   isolated.webRequest.onBeforeRequest((details, callback) => callback({ cancel: details.url !== SETUP_URL }));
-  window = new BrowserWindow({ title: 'StandTerm Desktop - Preparing environment',
+  window = new BrowserWindow({ title: t('desktop.setup.progress_title'),
     width: 700, height: 500, resizable: false, autoHideMenuBar: true,
     webPreferences: { session: isolated, sandbox: true, contextIsolation: true, nodeIntegration: false, devTools: false } });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -402,14 +386,28 @@ async function runPreparation(environment, args) {
   setupFinished = new Promise(resolve => { finishSetup = resolve; });
   try {
     await window.loadURL(SETUP_URL);
-    await window.webContents.executeJavaScript(`document.getElementById('requirements').textContent = ${JSON.stringify(
-      macos ? 'Preparing Core for native macOS.' : windows ? 'Preparing Core for native Windows.' : `Preparing Core inside WSL: ${distro}.`)}`);
-    return await execute(executable, args, { stream: true, timeout: 30 * 60 * 1000, help, progress: stage => {
-      const labels = { git: 'Updating the private Git checkout...', copy: 'Copying verified Core files...', venv: 'Creating the private Python environment...',
-        dependencies: 'Installing Python dependencies. This can take several minutes...', verify: 'Verifying the installed dependencies...' };
-      if (labels[stage] && !canceled && !window.isDestroyed()) void window.webContents.executeJavaScript(
-        `document.getElementById('stage').textContent = ${JSON.stringify(labels[stage])}`,
-      ).catch(() => {});
+    await window.webContents.executeJavaScript(`(() => {
+      const copy = ${JSON.stringify({
+        locale: language.locale, title: t('desktop.setup.progress_title'),
+        heading: t('desktop.setup.progress_heading'),
+        requirements: t(`desktop.setup.preparation_${macos ? 'macos' : windows ? 'windows' : 'wsl'}`, { distro }),
+        stage: t('desktop.setup.progress_starting'), detail: t('desktop.setup.progress_detail'),
+        closeHint: t('desktop.setup.progress_close_hint'), scope: t('desktop.setup.progress_scope'),
+        aria: t('desktop.setup.progress_aria'),
+      })};
+      document.documentElement.lang = copy.locale;
+      document.title = copy.title;
+      for (const id of ['heading', 'requirements', 'stage', 'detail', 'closeHint', 'scope']) {
+        document.getElementById(id).textContent = copy[id];
+      }
+      document.querySelector('progress').setAttribute('aria-label', copy.aria);
+    })()`);
+    return await execute(executable, args, { stream: true, timeout: 30 * 60 * 1000, help, t, progress: stage => {
+      if (['git', 'copy', 'venv', 'dependencies', 'verify'].includes(stage) && !canceled && !window.isDestroyed()) {
+        void window.webContents.executeJavaScript(
+          `document.getElementById('stage').textContent = ${JSON.stringify(t(`desktop.setup.stage_${stage}`))}`,
+        ).catch(() => {});
+      }
     } });
   } finally {
     if (!window.isDestroyed()) { window.removeListener('closed', cancelSetup); window.destroy(); }

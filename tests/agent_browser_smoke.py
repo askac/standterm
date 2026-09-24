@@ -142,9 +142,12 @@ def stop_server(proc):
         proc.wait(timeout=5)
 
 
-def new_page(browser, access_url):
-    context = browser.new_context(viewport={'width': 1280, 'height': 800})
+def new_page(browser, access_url, ui_language=None):
+    context = browser.new_context(viewport={'width': 1280, 'height': 800}, locale='en-US')
     page = context.new_page()
+    if ui_language is not None:
+        preferences = json.dumps({'uiLanguage': ui_language})
+        page.add_init_script(f"localStorage.setItem('terminal.pref.v1', JSON.stringify({preferences}));")
     page.goto(debug_url(access_url), wait_until='domcontentloaded')
     # Keep debug-only overlays from covering controls during normal UI tests.
     page.add_style_tag(content='#debug-hud, #payload-log { display: none !important; }')
@@ -162,18 +165,63 @@ def new_page(browser, access_url):
     return context, page
 
 
-def test_access_required_page_accepts_token_login(browser, access_url):
+def test_access_required_page_accepts_token_login(browser, access_url, ui_language='en'):
     parsed = urllib.parse.urlparse(access_url)
     token = urllib.parse.parse_qs(parsed.query)['token'][0]
     base_url = urllib.parse.urlunparse(parsed._replace(query='', fragment=''))
     login_url = debug_url(base_url)
-    context = browser.new_context(viewport={'width': 1280, 'height': 800})
+    context = browser.new_context(viewport={'width': 1280, 'height': 800}, locale='en-US')
     page = context.new_page()
+    page.add_init_script("localStorage.setItem('terminal.pref.v1', JSON.stringify(" + json.dumps({'uiLanguage': ui_language}) + "));")
+    zh = ui_language == 'zh-TW'
+    pending_login = []
+    page.route('**/login', lambda route: pending_login.append(route))
     try:
         page.goto(login_url, wait_until='domcontentloaded')
         page.wait_for_selector('#access-token', timeout=5000)
+        check(page.inner_text('h1') == ('需要 StandTerm 存取權限' if zh else 'StandTerm access required'),
+              'initial gate title did not match its language')
+        check(page.locator('html').get_attribute('lang') == ui_language, 'initial gate did not apply the saved language')
+        check(page.get_by_label('存取權杖' if zh else 'Access token').count() == 1, 'initial token field lacks its accessible label')
+        check(page.inner_text('button[type="submit"]') == ('使用存取權杖' if zh else 'Use access token'),
+              'initial gate confused access-token login with browser authorization')
+        check(page.inner_text('#access-recovery-button') == ('使用裝置驗證' if zh else 'Verify with device'),
+              'initial device verification action did not match its language')
+        instructions = page.inner_text('main > p:first-of-type')
+        check('Access URL' in instructions and ('啟動器' if zh else 'launcher') in instructions,
+              'initial access instructions did not identify the launcher Access URL')
+        hint = page.inner_text('main')
+        for phrase in (['主機名稱', '仍有效的工作階段', '啟用', '重新啟動', '目前的存取權杖'] if zh else
+                       ['registered for this hostname', 'enabled for a still-valid session', 'After StandTerm restarts', 'current access token']):
+            check(phrase in hint, f'initial recovery hint omitted eligibility or restart detail: {phrase}')
+        pending_device = []
+        page.route('**/session-recovery/authenticate/options', lambda route: pending_device.append(route))
+        page.click('#access-recovery-button')
+        device_pending_text = '等待裝置驗證…' if zh else 'Waiting for device verification…'
+        page.wait_for_function('text => document.getElementById("access-login-status").textContent === text', arg=device_pending_text)
+        check(page.locator('#access-recovery-button').is_disabled(), 'device verification allowed repeated submission while pending')
+        check(len(pending_device) == 1, 'device verification did not issue one options request')
+        pending_device.pop().fulfill(status=400, content_type='application/json',
+                                     body=json.dumps({'status': 'error', 'message': 'Device fixture unavailable.'}))
+        page.wait_for_function('() => !document.getElementById("access-recovery-button").disabled')
+        check(page.inner_text('#access-recovery-button') == ('使用裝置驗證' if zh else 'Verify with device'),
+              'failed device verification did not retain its localized reset label')
+        check(page.inner_text('#access-login-status') == 'Device fixture unavailable.',
+              'device error fallback did not preserve the server diagnostic')
+        page.fill('#access-token', 'agt_not_a_launcher_access_token')
+        page.click('button[type="submit"]')
+        pending_text = '正在驗證存取權杖…' if zh else 'Checking access token…'
+        page.wait_for_function('text => document.getElementById("access-login-status").textContent === text', arg=pending_text)
+        check(len(pending_login) == 1, 'initial login did not issue one pending request')
+        pending_login.pop().continue_()
+        rejected_text = '存取權杖未通過驗證。' if zh else 'Access token was not accepted.'
+        page.wait_for_function('text => document.getElementById("access-login-status").textContent === text', arg=rejected_text)
+        check(page.locator('#connectBtn').count() == 0, 'an Agent token bypassed the initial access gate')
         page.fill('#access-token', token)
         page.click('button[type="submit"]')
+        page.wait_for_function('text => document.getElementById("access-login-status").textContent === text', arg=pending_text)
+        check(len(pending_login) == 1, 'initial token retry did not submit one request')
+        pending_login.pop().continue_()
         page.wait_for_function('() => !!window.terminalTest', timeout=10000)
         page.wait_for_function(
             "() => window.terminalTest.getSocketState().connected === true",
@@ -189,9 +237,42 @@ def test_access_required_page_accepts_token_login(browser, access_url):
         close_context(context)
 
 
-def test_browser_authorization_gate_hides_connection_controls(browser, access_url):
-    context = browser.new_context(viewport={'width': 390, 'height': 844})
+def test_initial_access_login_falls_back_without_localization_or_javascript(browser, access_url):
+    parsed = urllib.parse.urlparse(access_url)
+    token = urllib.parse.parse_qs(parsed.query)['token'][0]
+    base_url = urllib.parse.urlunparse(parsed._replace(query='', fragment=''))
+    localization_assets = re.compile(r'/static/js/standterm-(?:i18n|messages)\.js(?:\?.*)?$')
+    for javascript_enabled in [False, True]:
+        context = browser.new_context(viewport={'width': 1280, 'height': 800}, locale='en-US',
+                                      java_script_enabled=javascript_enabled)
+        page = context.new_page()
+        try:
+            if javascript_enabled:
+                page.add_init_script("localStorage.setItem('terminal.pref.v1', JSON.stringify({uiLanguage: 'zh-TW'}));")
+                page.route(localization_assets, lambda route: route.abort())
+            response = page.goto(debug_url(base_url), wait_until='domcontentloaded')
+            check(response.status == 401, 'fallback fixture did not start without an authenticated session')
+            check(page.inner_text('h1') == 'StandTerm access required', 'fallback did not retain the English initial gate')
+            check(page.inner_text('button[type="submit"]') == 'Use access token', 'fallback lost the token submission label')
+            check(page.locator('#access-login-form').get_attribute('method') == 'post', 'fallback changed the login method')
+            check(page.locator('#access-login-form').get_attribute('action') == '/login', 'fallback changed the login endpoint')
+            if javascript_enabled:
+                page.unroute(localization_assets)
+            page.fill('#access-token', token)
+            page.click('button[type="submit"]')
+            page.wait_for_selector('#connectBtn', state='attached', timeout=10000)
+            check(context.request.get(base_url).status == 200, 'fallback login did not establish an authenticated session')
+            check('token=' not in page.url, 'fallback login exposed its access token in the URL')
+        finally:
+            close_context(context)
+
+
+def test_browser_authorization_gate_hides_connection_controls(browser, access_url, ui_language='en'):
+    from settings_transfer_i18n_browser_smoke import message
+    context = browser.new_context(viewport={'width': 390, 'height': 844}, locale='en-US')
     page = context.new_page()
+    page.add_init_script("localStorage.setItem('terminal.pref.v1', JSON.stringify(" + json.dumps({'uiLanguage': ui_language}) + "));")
+    zh = ui_language == 'zh-TW'
     try:
         page.goto(debug_url(access_url), wait_until='domcontentloaded')
         page.wait_for_function('() => !!window.terminalTest', timeout=10000)
@@ -221,7 +302,9 @@ def test_browser_authorization_gate_hides_connection_controls(browser, access_ur
                 return {
                     title: document.querySelector('#controls h2').innerText,
                     sessionId: document.getElementById('launcher-session-id').innerText,
-                    warning: document.getElementById('browser-auth-warning').innerText,
+                    launcherId: LAUNCHER_INSTANCE_ID,
+                    warningPresent: !!document.getElementById('browser-auth-warning'),
+                    authorizationTitle: document.getElementById('browser-auth-title').innerText,
                     message: document.getElementById('browser-auth-message').innerText,
                     connectionDisplay: getComputedStyle(document.getElementById('connection-form')).display,
                     sshVisible: document.getElementById('ssh-fields').getClientRects().length > 0,
@@ -230,25 +313,46 @@ def test_browser_authorization_gate_hides_connection_controls(browser, access_ur
             }"""
         )
         check(state['title'] == 'StandTerm', 'authorization gate does not show the StandTerm product name')
-        check(state['sessionId'].startswith('Session ID: '), 'authorization gate does not show the launcher session ID')
-        check(len(state['sessionId']) > len('Session ID: '), 'authorization gate launcher session ID is empty')
-        check(state['warning'] == 'YOU SHALL NOT PASS!!', 'authorization gate warning is missing')
-        check(state['message'] == 'First time? Please use an Auth URL.', 'authorization gate first-use hint is missing')
+        check(isinstance(state['launcherId'], str) and bool(state['launcherId']), 'authorization gate launcher session ID is empty')
+        check(state['sessionId'] == message(page, 'browser.chrome.session_id', {'id':state['launcherId']}),
+              'authorization gate does not show the complete localized launcher session ID')
+        check(state['warningPresent'] is False, 'authorization gate retained the decorative warning')
+        check(state['authorizationTitle'] == ('需要瀏覽器授權' if zh else 'Browser authorization required'),
+              'browser authorization title did not match its language')
+        check(state['message'] == ('貼上瀏覽器授權網址以繼續。' if zh else 'Paste a browser authorization URL to continue.'),
+              'authorization gate first-use hint is missing')
+        check(page.inner_text('#browser-auth-url-submit') == ('授權瀏覽器' if zh else 'Authorize browser'),
+              'browser authorization submit action did not name its purpose')
         check(state['connectionDisplay'] == 'none', 'authorization gate left connection controls visible')
         check(state['sshVisible'] is False, 'authorization gate left SSH fields visible')
         check(state['actionsInsideControls'] is True, 'authorization gate actions overflow the controls panel')
 
-        page.fill('#browser-auth-url-input', 'https://example.test/?token=abc')
+        original_url = page.url
+        page.fill('#browser-auth-url-input', 'not a URL')
         page.click('#browser-auth-url-submit')
-        check(
-            'one-time authorization code' in page.locator('#browser-auth-url-error').inner_text(),
-            'authorization gate accepted a URL without an authorization grant',
-        )
+        check(page.locator('#browser-auth-url-input').evaluate('input => input.validity.typeMismatch'),
+              'authorization URL input lost native URL validation')
+        check(page.url == original_url and page.inner_text('#browser-auth-url-error') == '',
+              'native validation navigated or invoked the custom URL parser')
+        invalid_inputs = [
+            ('', '請輸入完整的瀏覽器授權網址。' if zh else 'Enter a complete browser authorization URL.'),
+            ('ftp://example.test/?authorize=fixture', '瀏覽器授權網址必須使用 HTTP 或 HTTPS。' if zh else 'Browser authorization URLs must use HTTP or HTTPS.'),
+            (access_url, '此網址缺少一次性瀏覽器授權碼。' if zh else 'This URL has no one-time browser authorization code.'),
+            ('https://example.test/?token=agt_not_browser_authorization', '此網址缺少一次性瀏覽器授權碼。' if zh else 'This URL has no one-time browser authorization code.'),
+        ]
+        for value, expected in invalid_inputs:
+            page.fill('#browser-auth-url-input', value)
+            check(page.inner_text('#browser-auth-url-error') == '', 'editing an authorization URL did not reset its validation error')
+            page.click('#browser-auth-url-submit')
+            check(page.inner_text('#browser-auth-url-error') == expected, 'authorization URL validation used the wrong message')
+            check(page.url == original_url, 'malformed authorization input navigated away from the gate')
+            check(page.evaluate('() => window.terminalTest.getTerminalPolicy().browser_authorization.authorized') is False,
+                  'malformed authorization input changed the grant state')
 
         page.click('#browser-auth-help-btn')
         page.wait_for_selector('#browser-auth-help-modal.open', timeout=5000)
         check(
-            'checks for the file automatically' in page.locator('.browser-auth-help-body').inner_text(),
+            ('自動檢查授權檔' if zh else 'checks for the file automatically') in page.locator('.browser-auth-help-body').inner_text(),
             'manual authorization help does not explain automatic checking',
         )
         page.click('#browser-auth-help-close')
@@ -256,6 +360,16 @@ def test_browser_authorization_gate_hides_connection_controls(browser, access_ur
             page.locator('#browser-auth-help-modal').get_attribute('aria-hidden') == 'true',
             'manual authorization help did not close',
         )
+        parsed = urllib.parse.urlparse(access_url)
+        authorization_url = urllib.parse.urlunparse(parsed._replace(query='authorize=browser-smoke-fixture', fragment=''))
+        page.route(authorization_url, lambda route: route.fulfill(status=204))
+        page.fill('#browser-auth-url-input', authorization_url)
+        with page.expect_request(authorization_url):
+            page.click('#browser-auth-url-submit', no_wait_after=True)
+        check(page.inner_text('#browser-auth-message') == ('正在開啟授權網址…' if zh else 'Opening authorization URL…'),
+              'syntactically valid authorization URL did not show the pending navigation state')
+        check(page.evaluate('() => window.terminalTest.getTerminalPolicy().browser_authorization.authorized') is False,
+              'opening an authorization URL claimed authorization before server confirmation')
     finally:
         close_context(context)
 
@@ -267,9 +381,11 @@ def close_context(context):
         pass
 
 
-def test_server_unavailable_waits_for_reconnect(browser, access_url):
-    context = browser.new_context(viewport={'width': 1280, 'height': 800})
+def test_server_unavailable_waits_for_reconnect(browser, access_url, ui_language='en'):
+    context = browser.new_context(viewport={'width': 1280, 'height': 800}, locale='en-US')
     page = context.new_page()
+    page.add_init_script("localStorage.setItem('terminal.pref.v1', JSON.stringify(" + json.dumps({'uiLanguage': ui_language}) + "));")
+    zh = ui_language == 'zh-TW'
     try:
         page.goto(debug_url(access_url), wait_until='domcontentloaded')
         page.wait_for_function('() => !!window.terminalTest', timeout=10000)
@@ -295,15 +411,21 @@ def test_server_unavailable_waits_for_reconnect(browser, access_url):
                 connectDisabled: document.getElementById('connectBtn').disabled
             })"""
         )
-        check(unavailable['socketStatus'] == 'Server not available (retrying)', 'socket status did not identify server unavailability')
-        check('keep checking and reconnect automatically' in unavailable['message'], 'server unavailable guidance did not explain automatic recovery')
+        check(unavailable['socketStatus'] == ('無法連線至 StandTerm（正在重連）' if zh else 'Cannot reach StandTerm (reconnecting)'),
+              'socket status did not identify server unavailability')
+        check(('此頁面會持續嘗試重新連線' if zh else 'This page will keep trying to reconnect') in unavailable['message'],
+              'server unavailable guidance did not explain automatic recovery')
+        check(('目前啟動器提供的存取權杖' if zh else 'access token from its current launcher') in unavailable['message'],
+              'reconnect guidance did not distinguish the current launcher token after a restart')
         check(unavailable['messageDisplay'] == 'block', 'server unavailable guidance was not visible')
         check(unavailable['connectionFormDisplay'] == 'none', 'connection picker remained visible while the server was unavailable')
         check(unavailable['connectDisabled'] is True, 'terminal connect button remained enabled while the server was unavailable')
         check(page.locator('#server-retry-now').is_visible(), 'Retry Now was not visible with the disconnect warning')
+        check(page.inner_text('#server-retry-now') == ('立即重新連線' if zh else 'Reconnect now'),
+              'reconnect action did not match its language')
         page.click('#server-retry-now')
         check(
-            page.locator('#server-retry-now').inner_text() == 'Retrying...',
+            page.locator('#server-retry-now').inner_text() == ('正在重新連線…' if zh else 'Reconnecting…'),
             'Retry Now did not trigger an immediate reconnect attempt',
         )
         check(
@@ -313,6 +435,9 @@ def test_server_unavailable_waits_for_reconnect(browser, access_url):
             ),
             'Retry Now did not record an explicit reconnect attempt',
         )
+        page.wait_for_function('text => document.getElementById("server-retry-now").innerText === text',
+                               arg='立即重新連線' if zh else 'Reconnect now')
+        check(page.locator('#server-retry-now').is_enabled(), 'pending retry did not reset its control')
 
         context.set_offline(False)
         page.wait_for_function(
@@ -331,6 +456,7 @@ def test_server_unavailable_waits_for_reconnect(browser, access_url):
         check(recovered['messageDisplay'] == 'none', 'server unavailable guidance remained visible after reconnect')
         check(recovered['connectionFormDisplay'] == 'block', 'connection picker did not return after reconnect')
         check(recovered['connectDisabled'] is False, 'terminal connect button did not recover after reconnect')
+        check(page.inner_text('#socketStatus') == ('已連線' if zh else 'Connected'), 'reconnected socket status did not match its language')
     finally:
         close_context(context)
 
@@ -364,11 +490,15 @@ def test_retry_now_resubscribes_after_socket_disconnect(browser, access_url):
         close_context(context)
 
 
-def test_invalid_session_reconnect_prompts_for_current_token(browser, access_url):
+def test_invalid_session_reconnect_prompts_for_current_token(browser, access_url, ui_language='en'):
     parsed = urllib.parse.urlparse(access_url)
     token = urllib.parse.parse_qs(parsed.query)['token'][0]
-    context = browser.new_context(viewport={'width': 1280, 'height': 800})
+    context = browser.new_context(viewport={'width': 1280, 'height': 800}, locale='en-US')
     page = context.new_page()
+    page.add_init_script("localStorage.setItem('terminal.pref.v1', JSON.stringify(" + json.dumps({'uiLanguage': ui_language}) + "));")
+    zh = ui_language == 'zh-TW'
+    pending_login = []
+    page.route('**/login', lambda route: pending_login.append(route))
     try:
         page.goto(debug_url(access_url), wait_until='domcontentloaded')
         page.wait_for_function('() => !!window.terminalTest', timeout=10000)
@@ -397,13 +527,50 @@ def test_invalid_session_reconnect_prompts_for_current_token(browser, access_url
             })"""
         )
         check(recovery['serverState'] == 'session_required', 'invalid session did not use the structured session-required state')
-        check(recovery['title'] == 'Recover StandTerm session', 'session recovery title is incorrect')
-        check('registered device' in recovery['detail'], 'session recovery did not offer device verification')
-        check('restarted server' in recovery['detail'], 'session recovery did not explain the backend restart boundary')
-        check('current StandTerm launcher' in recovery['message'], 'session recovery did not request the current launcher token')
+        check(recovery['title'] == ('恢復 StandTerm 存取' if zh else 'Restore StandTerm access'), 'session recovery title is incorrect')
+        for phrase in (['主機名稱', '仍有效的工作階段', '啟用', '重新啟動', '目前的存取權杖'] if zh else
+                       ['registered for this hostname', 'enabled for a still-valid session', 'After StandTerm restarts', 'current access token']):
+            check(phrase in recovery['detail'], f'recovery hint omitted eligibility or restart detail: {phrase}')
+        check(recovery['message'] == ('請輸入目前 StandTerm 啟動器提供的存取權杖。' if zh else 'Enter the access token from the current StandTerm launcher.'),
+              'session recovery did not request the current launcher token')
+        check(page.get_by_label('存取權杖' if zh else 'Access token', exact=True).count() == 1,
+              'recovery token input lacks its accessible name')
+        check(page.inner_text('#session-recovery-form button[type="submit"]') == ('使用存取權杖' if zh else 'Use access token'),
+              'recovery submit action did not identify launcher access')
+        check(page.inner_text('#session-recovery-platform') == ('使用裝置驗證' if zh else 'Verify with device'),
+              'recovery device action did not match its language')
+        check(page.inner_text('#session-recovery-remembered-token') == ('使用已儲存的存取權杖' if zh else 'Use saved access token'),
+              'saved-token action did not match its language')
+
+        page.click('#session-recovery-remembered-token')
+        saved_pending_text = '正在驗證已儲存的存取權杖…' if zh else 'Checking saved access token…'
+        page.wait_for_function('text => document.getElementById("session-recovery-message").textContent === text', arg=saved_pending_text)
+        check(page.locator('#session-recovery-remembered-token').is_disabled(), 'saved-token request did not disable repeated submission')
+        check(len(pending_login) == 1, 'saved-token recovery did not issue one request')
+        pending_login.pop().fulfill(status=401, body='')
+        rejected_text = '存取權杖未通過驗證。' if zh else 'Access token was not accepted.'
+        page.wait_for_function('text => document.getElementById("session-recovery-message").textContent === text', arg=rejected_text)
+        check(page.locator('#session-recovery-remembered-token').is_enabled(), 'rejected saved token did not reset its control')
+        check(page.inner_text('#session-recovery-remembered-token') == ('使用已儲存的存取權杖' if zh else 'Use saved access token'),
+              'saved-token control lost its localized reset label')
+
+        page.fill('#session-recovery-token', 'agt_not_a_launcher_access_token')
+        page.click('#session-recovery-form button[type="submit"]')
+        pending_text = '正在驗證存取權杖…' if zh else 'Checking access token…'
+        page.wait_for_function('text => document.getElementById("session-recovery-message").textContent === text', arg=pending_text)
+        check(len(pending_login) == 1, 'recovery did not submit one pending token request')
+        pending_login.pop().continue_()
+        rejected_text = '存取權杖未通過驗證。' if zh else 'Access token was not accepted.'
+        page.wait_for_function('text => document.getElementById("session-recovery-message").textContent === text', arg=rejected_text)
+        check(page.locator('#session-recovery-modal.open').is_visible(), 'an Agent token bypassed session recovery')
+        check(page.evaluate('() => window.terminalTest.getSocketState().serverConnectionState') == 'session_required',
+              'rejected token changed the structured recovery state')
 
         page.fill('#session-recovery-token', token)
         page.click('#session-recovery-form button[type="submit"]')
+        page.wait_for_function('text => document.getElementById("session-recovery-message").textContent === text', arg=pending_text)
+        check(len(pending_login) == 1, 'recovery retry did not submit one pending token request')
+        pending_login.pop().continue_()
         page.wait_for_function(
             "() => window.terminalTest.getSocketState().connected === true",
             timeout=10000,
@@ -412,11 +579,22 @@ def test_invalid_session_reconnect_prompts_for_current_token(browser, access_url
             page.evaluate("() => window.terminalTest.getSocketState().serverConnectionState") == 'available',
             'valid current token did not restore the server connection',
         )
+        check(page.locator('#session-recovery-modal.open').count() == 0, 'successful recovery did not close its dialog')
+        check(page.inner_text('#session-recovery-message') == '', 'successful recovery retained a pending or rejected message')
+        check(page.input_value('#session-recovery-token') == '', 'successful recovery retained the entered access token')
     finally:
         close_context(context)
 
 
-def test_platform_passkey_recovers_live_session_without_access_token(browser, access_url):
+def test_browser_access_and_recovery_in_traditional_chinese(browser, access_url):
+    test_access_required_page_accepts_token_login(browser, access_url, ui_language='zh-TW')
+    test_browser_authorization_gate_hides_connection_controls(browser, access_url, ui_language='zh-TW')
+    test_server_unavailable_waits_for_reconnect(browser, access_url, ui_language='zh-TW')
+    test_invalid_session_reconnect_prompts_for_current_token(browser, access_url, ui_language='zh-TW')
+
+
+def test_platform_passkey_recovers_live_session_without_access_token(browser, access_url, ui_language='en'):
+    from settings_transfer_i18n_browser_smoke import message
     parsed = urllib.parse.urlparse(access_url)
     localhost_access_url = urllib.parse.urlunparse(parsed._replace(
         netloc=f'localhost:{parsed.port}',
@@ -426,8 +604,9 @@ def test_platform_passkey_recovers_live_session_without_access_token(browser, ac
         query='',
         fragment='',
     ))
-    context = browser.new_context(viewport={'width': 1280, 'height': 800})
+    context = browser.new_context(viewport={'width': 1280, 'height': 800}, locale='en-US')
     page = context.new_page()
+    page.add_init_script("localStorage.setItem('terminal.pref.v1', JSON.stringify(" + json.dumps({'uiLanguage':ui_language}) + "));")
     cdp = context.new_cdp_session(page)
     try:
         cdp.send('WebAuthn.enable')
@@ -458,12 +637,14 @@ def test_platform_passkey_recovers_live_session_without_access_token(browser, ac
         page.click('#quick-settings')
         page.click('.settings-nav-item[data-tab="server"]')
         page.wait_for_function(
-            "() => document.getElementById('platform-recovery-status').innerText.includes('0 registered')",
+            "expected => document.getElementById('platform-recovery-status').innerText === expected",
+            arg=message(page, 'browser.platform.status', {'configured':0,'armed':0,'rp_id':'localhost'}),
             timeout=5000,
         )
         page.click('#platform-recovery-register')
         page.wait_for_function(
-            "() => document.getElementById('platform-recovery-status').innerText.includes('1 registered, 1 armed')",
+            "expected => document.getElementById('platform-recovery-status').innerText === expected",
+            arg=message(page, 'browser.platform.status', {'configured':1,'armed':1,'rp_id':'localhost'}),
             timeout=10000,
         )
         registered_credentials = cdp.send('WebAuthn.getCredentials', {
@@ -471,7 +652,7 @@ def test_platform_passkey_recovers_live_session_without_access_token(browser, ac
         }).get('credentials', [])
         check(len(registered_credentials) == 1, 'virtual platform authenticator did not retain the recovery credential')
         check(
-            page.locator('#platform-recovery-status').inner_text().endswith('RP ID: localhost'),
+            'localhost' in page.locator('#platform-recovery-status').inner_text(),
             'platform recovery did not bind the passkey to the localhost RP ID',
         )
 
@@ -567,8 +748,8 @@ def attach_agent(page):
     return wait_for_agent(page, "state.mode === 'observe'")
 
 
-def test_toolbar_pause_targets_main_tab_not_panel_override(browser, access_url):
-    context, page = new_page(browser, access_url)
+def test_toolbar_pause_targets_main_tab_not_panel_override(browser, access_url, ui_language='en'):
+    context, page = new_page(browser, access_url, ui_language)
     try:
         attach_agent(page)
         set_agent_mode(page, 'direct', 'direct_active')
@@ -601,6 +782,168 @@ def test_toolbar_pause_targets_main_tab_not_panel_override(browser, access_url):
         close_context(context)
 
 
+def test_agent_mint_quick_action_applies_saved_permission(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        placement = page.evaluate(
+            """() => ({
+                firstTool: document.querySelector('#terminal-tools > :first-child')?.id,
+                text: document.getElementById('agent-access-mint-btn').innerText,
+                disabled: document.getElementById('agent-access-mint-btn').disabled,
+                panelVisible: document.getElementById('agent-panel').classList.contains('visible')
+            })"""
+        )
+        check(placement == {
+            'firstTool': 'agent-access-mint-btn',
+            'text': '🤖 Authorize agent',
+            'disabled': False,
+            'panelVisible': False,
+        }, 'Agent Mint was not the ready leftmost right-side action')
+
+        page.click('#quick-settings')
+        check(page.locator('#pref-agentAccessMintMode').input_value() == 'direct_active',
+              'Agent Mint permission did not default to Full + Mint')
+        page.click('#settings-close')
+
+        clear_emitted(page)
+        page.click('#agent-access-mint-btn')
+        page.wait_for_function(
+            """() => {
+                const state = window.terminalTest.getActiveAgentState();
+                return state?.mode === 'direct_active' && state?.external_token?.status === 'active';
+            }""",
+            timeout=10000,
+        )
+        minted = active_agent_state(page)
+        check(minted['mode'] == 'direct_active', 'one-click Agent Mint did not apply Full permission')
+        check(minted['external_token']['idleTimeoutMultiplier'] == 1,
+              'one-click Agent Mint did not mint the standard token lifetime')
+        check(page.locator('#agent-access-mint-btn').inner_text() == '🤖 Authorize agent',
+              'Agent Mint action did not return to its ready label')
+        mode_events = [
+            entry['args'][0] for entry in get_emitted(page, 'agent_mode_set')
+            if entry['args'] and entry['args'][0].get('terminal_id') == TERMINAL_ID
+        ]
+        check(mode_events == [{'terminal_id': TERMINAL_ID, 'mode': 'direct_active'}],
+              'Agent Mint did not make one structured Full permission request')
+
+        emit_socket(page, 'agent_mode_set', {'terminal_id': TERMINAL_ID, 'mode': 'disabled'})
+        wait_for_agent(page, "state.mode === 'disabled'")
+        page.click('#quick-settings')
+        page.select_option('#pref-agentAccessMintMode', 'approval_pending')
+        page.click('#settings-save')
+        clear_emitted(page)
+        page.click('#agent-access-mint-btn')
+        page.wait_for_function(
+            """() => {
+                const state = window.terminalTest.getActiveAgentState();
+                return state?.mode === 'approval_pending' && state?.external_token?.status === 'active';
+            }""",
+            timeout=10000,
+        )
+        check('Authorize Approval required access' in page.locator('#agent-access-mint-btn').get_attribute('title'),
+              'Agent Mint title did not reflect the saved permission')
+    finally:
+        close_context(context)
+
+
+def test_agent_language_preview_preserves_access_and_applies_on_next_page(browser, access_url):
+    context, page = new_page(browser, access_url, ui_language='zh-TW')
+    token_requests = []
+    page.on('request', lambda request: token_requests.append(request.url)
+            if request.method == 'POST' and urllib.parse.urlparse(request.url).path == '/agent/external/token'
+            else None)
+    try:
+        check(page.locator('html').get_attribute('lang') == 'zh-TW', 'saved language did not set the document language')
+        check(page.inner_text('#agent-access-mint-btn') == '🤖 授權 Agent', 'authorization action was not localized')
+        check(page.inner_text('#agent-connect-btn') == 'Agent 連線', 'connection action was not localized')
+        clear_emitted(page)
+        page.click('#agent-access-mint-btn')
+        wait_for_agent(page, "state.mode === 'direct_active' && state.external_token?.status === 'active'")
+        check(len(token_requests) == 1, 'localized authorization did not create exactly one token')
+        check([entry['args'][0] for entry in get_emitted(page, 'agent_mode_set')] == [
+            {'terminal_id': TERMINAL_ID, 'mode': 'direct_active'}
+        ], 'localized authorization changed the permission protocol value')
+        check('--token' in active_agent_state(page)['external_token']['command'],
+              'localized authorization did not preserve the generated command')
+
+        page.click('#agent-toggle-btn')
+        page.wait_for_selector('#agent-panel.visible')
+        modes = page.locator('[data-agent-mode]').evaluate_all(
+            "buttons => buttons.map(button => ({value: button.dataset.agentMode, label: button.innerText}))"
+        )
+        check(modes == [
+            {'value': 'observe', 'label': '唯讀'},
+            {'value': 'approval_pending', 'label': '需核准'},
+            {'value': 'direct_active', 'label': '直接輸入'},
+        ], 'localized permission labels changed their protocol values')
+        check(page.locator('#agent-mode-controls').get_attribute('aria-label') == 'Agent 權限',
+              'permission selector accessible name was not localized')
+        check(page.inner_text('#agent-external-token-btn') == '更新權杖', 'active token action was not localized')
+        check('檔案複製仍需核准' in page.inner_text('#agent-permission-hint'),
+              'localized direct input omitted file-copy approval')
+        page.click('#agent-panel-close-btn')
+
+        page.evaluate('''() => Object.defineProperty(navigator, 'clipboard', {
+            configurable: true, value: {writeText: async text => {window.copiedAgentText = text;}}
+        })''')
+        page.click('#agent-connect-btn')
+        page.wait_for_selector('#agent-connect-copy-url:not([disabled])')
+        check(page.get_by_role('dialog', name='Agent 連線').is_visible(), 'connection dialog accessible name was not localized')
+        check(page.locator('#agent-connect-url').get_attribute('aria-label') == 'Agent 資訊網址',
+              'connection URL accessible name was not localized')
+        check(page.locator('#agent-connect-info').get_attribute('aria-label') == 'Agent 連線指引',
+              'connection prompt accessible name was not localized')
+        check('main: 等待 Agent' in page.text_content('#agent-connect-activity'),
+              'localized connection activity did not distinguish a grant from Agent activity')
+        prompt = page.input_value('#agent-connect-info')
+        check('Run discover, then hello' in prompt, 'display language translated the machine-facing connection prompt')
+        page.click('#agent-connect-details summary')
+        check(page.inner_text('#agent-connect-copy') == '複製連線指引', 'connection copy action was not localized')
+        page.click('#agent-connect-copy')
+        page.wait_for_function('text => window.copiedAgentText === text', arg=prompt)
+        check('已複製' in page.inner_text('#agent-connect-message'), 'clipboard result was not localized')
+        page.click('#agent-connect-close')
+
+        page.evaluate('() => { window.languagePreviewSentinel = true; }')
+        before = active_agent_state(page)
+        socket_before = page.evaluate('() => window.terminalTest.getSocketState()')
+        requests_before = len(token_requests)
+        page.click('#quick-settings')
+        check(page.input_value('#pref-uiLanguage') == 'zh-TW', 'settings did not show the saved language')
+        check(page.input_value('#pref-agentAccessMintMode') == 'direct_active', 'language changed the saved permission')
+        page.select_option('#pref-uiLanguage', 'en')
+        clear_emitted(page)
+        page.click('#settings-save')
+        page.wait_for_selector('#settings-modal.open', state='hidden')
+        check(page.evaluate("() => JSON.parse(localStorage.getItem('terminal.pref.v1')).uiLanguage") == 'en',
+              'settings did not save the display preference')
+        check(page.evaluate('() => window.languagePreviewSentinel === true'), 'saving language reloaded the active page')
+        check(page.inner_text('#agent-access-mint-btn') == '🤖 授權 Agent', 'language changed before opening another page')
+        check(page.locator('html').get_attribute('lang') == 'zh-TW', 'active document language changed before reopening')
+        after = active_agent_state(page)
+        for field in ['terminal_id', 'connected', 'session_id', 'viewer_id', 'agent_binding_id',
+                      'mode', 'mode_version', 'external_token']:
+            check(after[field] == before[field], f'saving language changed Agent state field {field}')
+        check(page.evaluate('() => window.terminalTest.getSocketState()') == socket_before,
+              'saving language changed the active socket')
+        check(len(token_requests) == requests_before, 'saving language created or renewed a token')
+        check(not any(entry['event'] in {'agent_attach', 'agent_detach', 'agent_mode_set', 'agent_pause', 'start_ssh', 'stop_ssh'}
+                      for entry in get_emitted(page)), 'saving language emitted an access or connection mutation')
+
+        next_page = context.new_page()
+        next_page.goto(debug_url(access_url), wait_until='domcontentloaded')
+        next_page.wait_for_function('() => !!window.terminalTest', timeout=10000)
+        check(next_page.locator('html').get_attribute('lang') == 'en', 'new page did not apply the saved language')
+        check(next_page.inner_text('#agent-access-mint-btn') == '🤖 Authorize agent', 'new page did not show English authorization')
+        check(next_page.inner_text('#agent-connect-btn') == 'Agent connection', 'new page did not show English connection text')
+        check(next_page.locator('#agent-mode-controls').get_attribute('aria-label') == 'Agent permission',
+              'new page did not apply English accessible names')
+        check(page.inner_text('#agent-access-mint-btn') == '🤖 授權 Agent', 'new page changed the existing page language')
+    finally:
+        close_context(context)
+
+
 def test_agent_panel_can_be_dragged(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
@@ -629,8 +972,9 @@ def test_agent_panel_can_be_dragged(browser, access_url):
         close_context(context)
 
 
-def test_terminal_pip_hides_selected_tab_and_keeps_background_tab(browser, access_url):
-    context, page = new_page(browser, access_url)
+def test_terminal_pip_hides_selected_tab_and_keeps_background_tab(browser, access_url, ui_language='en'):
+    from settings_transfer_i18n_browser_smoke import message
+    context, page = new_page(browser, access_url, ui_language)
     try:
         initial = page.evaluate(
             """() => ({
@@ -689,9 +1033,24 @@ def test_terminal_pip_hides_selected_tab_and_keeps_background_tab(browser, acces
         )
         check(pip_status['applicationTitle'] == 'PiP workspace title', 'Terminal PiP did not show the OSC title')
         check(pip_status['applicationTitleHidden'] is False, 'Terminal PiP hid a non-empty OSC title')
-        check(pip_status['mintText'] == 'Mint' and pip_status['mintHidden'] is False, 'Terminal PiP did not show Mint')
-        check(pip_status['mint3xText'] == 'Mint+' and pip_status['mint3xHidden'] is False, 'Terminal PiP did not show Mint+')
-        check(pip_status['agentPanelText'] == 'Show Agent Panel', 'Terminal PiP Agent panel control was incorrect')
+        check(pip_status['mintText'] == message(page, 'agent.token.create') and pip_status['mintHidden'] is False, 'Terminal PiP did not show Create token')
+        check(pip_status['mint3xText'] == message(page, 'agent.token.create_3x') and pip_status['mint3xHidden'] is False, 'Terminal PiP did not show Create token 3x')
+        check(pip_status['agentPanelText'] == message(page, 'agent.panel.show'), 'Terminal PiP Agent panel control was incorrect')
+        compact_pip = page.evaluate("""() => {
+            const doc = documentPictureInPicture.window.document;
+            doc.documentElement.style.width = '480px';
+            doc.documentElement.style.height = '600px';
+            const buttons = [...doc.querySelectorAll('.pip-agent-button')].filter(button => button.getClientRects().length);
+            const metrics = buttons.map(button => {
+                const rect = button.getBoundingClientRect();
+                return {text:button.innerText,left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom};
+            });
+            doc.documentElement.style.width = '';
+            doc.documentElement.style.height = '';
+            return metrics;
+        }""")
+        check(all(0 <= item['left'] < item['right'] <= 480 and 0 <= item['top'] < item['bottom'] <= 600 for item in compact_pip),
+              f'Terminal PiP controls overflow at 480x600: {compact_pip}')
 
         page.click('#quick-settings')
         page.wait_for_selector('#settings-modal.open', timeout=5000)
@@ -765,8 +1124,12 @@ def test_terminal_pip_hides_selected_tab_and_keeps_background_tab(browser, acces
         close_context(context)
 
 
-def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
-    context, page = new_page(browser, access_url)
+def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url, ui_language='en'):
+    from settings_transfer_i18n_browser_smoke import message
+    context, page = new_page(browser, access_url, ui_language)
+
+    def text(key, params=None):
+        return message(page, 'browser.files.' + key, params)
     try:
         page.evaluate(
             """() => window.terminalTest.applyTerminalListForTest({
@@ -806,14 +1169,15 @@ def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
             available_status == {
                 'hidden': False,
                 'disabled': False,
-                'title': 'Open Files',
+                'title': message(page, 'browser.chrome.files_open'),
                 'text': '📁',
             },
             'connected SSH status bar did not expose the SFTP action',
         )
         page.click('#sftp-status-btn')
         page.wait_for_function(
-            "() => documentPictureInPicture.window?.document.querySelector('.sftp-pip-title')?.textContent === 'StandTerm - Files'",
+            "expected => documentPictureInPicture.window?.document.querySelector('.sftp-pip-title')?.textContent === expected",
+            arg=text('title'),
             timeout=5000,
         )
         page.evaluate('() => documentPictureInPicture.window.close()')
@@ -835,13 +1199,13 @@ def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
         )
         check(unavailable_status['hidden'] is False, 'unavailable SFTP status action disappeared')
         check(unavailable_status['disabled'] is True, 'unavailable SFTP status action remained enabled')
-        check(unavailable_status['title'] == 'Files not available', 'unavailable Files status hint was unclear')
+        check(unavailable_status['title'] == message(page, 'browser.chrome.files_unavailable'), 'unavailable Files status hint was unclear')
         check('×' in unavailable_status['text'], 'unavailable SFTP status action omitted its cross mark')
         check(unavailable_status['markColor'] == 'rgb(255, 69, 58)', 'unavailable SFTP cross was not red')
         unavailable_menu = page.evaluate("() => window.terminalTest.showContextMenuForTest('main')")
         check(unavailable_menu['sftpVisible'] is True, 'unavailable SSH context action disappeared')
         check(unavailable_menu['sftpDisabled'] is True, 'unavailable SSH context action remained enabled')
-        check('Files not available' in unavailable_menu['sftpText'], 'unavailable SSH context action hint was unclear')
+        check(message(page, 'browser.chrome.files_unavailable') in unavailable_menu['sftpText'], 'unavailable SSH context action hint was unclear')
 
         page.evaluate("() => window.terminalTest.setSftpAvailabilityForTest('main', null)")
         page.evaluate("() => window.terminalTest.showContextMenuForTest('main')")
@@ -862,7 +1226,7 @@ def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
             pip_action == {
                 'hidden': False,
                 'disabled': False,
-                'title': 'Open Files',
+                'title': message(page, 'browser.chrome.files_open'),
                 'text': '📁',
             },
             'Terminal PiP did not expose the SFTP action',
@@ -870,7 +1234,8 @@ def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
 
         page.evaluate("() => documentPictureInPicture.window.document.querySelector('.pip-sftp-button').click()")
         page.wait_for_function(
-            "() => documentPictureInPicture.window?.document.querySelector('.sftp-pip-title')?.textContent === 'StandTerm - Files'",
+            "expected => documentPictureInPicture.window?.document.querySelector('.sftp-pip-title')?.textContent === expected",
+            arg=text('title'),
             timeout=5000,
         )
         restored = page.evaluate("() => window.terminalTest.getTerminalTabsState()")
@@ -882,8 +1247,12 @@ def test_sftp_status_actions_and_terminal_pip_transition(browser, access_url):
         close_context(context)
 
 
-def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, access_url):
-    context, page = new_page(browser, access_url)
+def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, access_url, ui_language='en'):
+    from settings_transfer_i18n_browser_smoke import message
+    context, page = new_page(browser, access_url, ui_language)
+
+    def text(key, params=None):
+        return message(page, 'browser.files.' + key, params)
     browser_console = []
     page.on('console', lambda message: browser_console.append(message.text))
     try:
@@ -912,7 +1281,7 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
         ssh_menu = page.evaluate("() => window.terminalTest.showContextMenuForTest('main')")
         check(ssh_menu['terminalId'] == 'main', 'SFTP context action targeted the wrong terminal')
         check(ssh_menu['sftpVisible'] is True, 'connected SSH tab did not show SFTP send action')
-        check('Files' in ssh_menu['sftpText'], 'Files context action label was unclear')
+        check(message(page, 'browser.chrome.files_open') in ssh_menu['sftpText'], 'Files context action label was unclear')
         check(page.evaluate('() => !!window.documentPictureInPicture'), 'Document PiP is unavailable in the test browser')
         page.click('#sftp-send-option')
         page.wait_for_function('() => !!window.documentPictureInPicture.window', timeout=5000)
@@ -928,19 +1297,20 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                     .map(button => button.title)
             })"""
         )
-        check(pip_state['title'] == 'StandTerm - Files', 'Files PiP title was missing')
-        check(pip_state['documentTitle'] == 'StandTerm - Files', 'Files document title was missing')
-        check('Nested SSH sessions' in pip_state['hint'], 'SFTP PiP did not explain the direct endpoint boundary')
+        check(pip_state['title'] == text('title'), 'Files PiP title was missing')
+        check(pip_state['documentTitle'] == text('title'), 'Files document title was missing')
+        check(pip_state['hint'] == text('endpoint_hint'), 'SFTP PiP did not explain the direct endpoint boundary')
         check(pip_state['hasDropZone'] is True, 'SFTP PiP did not expose a file drop zone')
         check(pip_state['hasPathInput'] is True, 'SFTP PiP did not expose destination path navigation')
         check(pip_state['innerCloseCount'] == 0, 'Files kept a duplicate close control')
         check(
-            pip_state['navigationTitles'] == ['Home directory', 'Parent directory', 'Refresh files list'],
+            pip_state['navigationTitles'] == [text(key) for key in ['home','parent','refresh']],
             'Files navigation icons did not expose clear descriptions',
         )
 
         page.wait_for_function(
-            "() => documentPictureInPicture.window.document.querySelector('.sftp-transfer-status')?.textContent !== 'Opening Files…'",
+            "expected => documentPictureInPicture.window.document.querySelector('.sftp-transfer-status')?.textContent !== expected",
+            arg=text('opening'),
             timeout=5000,
         )
         rendered = page.evaluate(
@@ -999,6 +1369,7 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                 const typeaheadMatch = pipDocument.activeElement?.dataset.entryName;
                 const files = [...pipDocument.querySelectorAll('.sftp-file-entry')];
                 const reference = files.find(button => button.dataset.entryName === 'reference.txt');
+                pipDocument.documentElement.style.height = '360px';
                 reference.click();
                 const preparing = {
                     disabled: pipDocument.querySelector('.sftp-file-download').disabled,
@@ -1032,25 +1403,47 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                     downloadReady: !pipDocument.querySelector('.sftp-file-download').disabled,
                     selected: reference.classList.contains('selected'),
                     selectedPressed: reference.getAttribute('aria-pressed'),
+                    sourceOverflow: pipDocument.defaultView.getComputedStyle(
+                        pipDocument.querySelector('.sftp-source-pane')).overflowY,
+                    actionBottom: pipDocument.querySelector('.sftp-file-operation-actions')
+                        .getBoundingClientRect().bottom,
+                    viewportHeight: pipDocument.documentElement.clientHeight,
                     status: pipDocument.querySelector('.sftp-transfer-status').innerText
                 };
             }"""
         )
         check(file_ui['fileCount'] == 2, 'SFTP PiP did not list regular files')
-        check(file_ui['columnHeaders'] == ['Name ▲', 'Size', 'Date'], 'Files list did not expose sortable columns')
+        check(file_ui['columnHeaders'] == [text('name') + ' ▲', text('size'), text('date')], 'Files list did not expose sortable columns')
         check(file_ui['initialRows'] == ['docs', 'existing.txt', 'reference.txt'], 'Files Name sort did not keep folders first')
         check(file_ui['sizeDescendingRows'] == ['docs', 'reference.txt', 'existing.txt'], 'Files Size toggle did not sort descending')
         check(file_ui['dateDescendingRows'] == ['docs', 'existing.txt', 'reference.txt'], 'Files Date toggle did not sort descending')
         check(file_ui['typeaheadMatch'] == 'reference.txt', 'Files typeahead did not accumulate a quick prefix')
         check(file_ui['operationVisible'] is True, 'selecting an SFTP file did not open file actions')
-        check(file_ui['actions'] == ['Download', 'Copy to…', 'Rename…', 'Delete…'], 'Files actions were incomplete')
+        check(file_ui['actions'] == [text(key) for key in ['download','copy_to','rename_action','delete_action']], 'Files actions were incomplete')
         check(file_ui['operationPath'] == '/home/tester/reference.txt', 'selected file card omitted the full path')
-        check('9 B (9 bytes)' in file_ui['operationMeta'] and '1970' in file_ui['operationMeta'], 'selected file card omitted exact file metadata')
-        check(file_ui['preparing'] == {'disabled': True, 'text': 'Preparing…'}, 'SFTP Download was enabled before its ticket was ready')
+        check(text('detailed_bytes', {'size':'9 B','bytes':9}) in file_ui['operationMeta'] and '1970' in file_ui['operationMeta'], 'selected file card omitted exact file metadata')
+        check(file_ui['preparing'] == {'disabled': True, 'text': text('preparing')}, 'SFTP Download was enabled before its ticket was ready')
         check(file_ui['downloadReady'] is True, 'SFTP Download was not enabled after its ticket became ready')
         check(file_ui['selected'] is True and file_ui['selectedPressed'] == 'true', 'selected Files row was not highlighted')
+        check(file_ui['sourceOverflow'] == 'auto', 'short Files source pane did not provide a scroll fallback')
+        check(file_ui['actionBottom'] <= file_ui['viewportHeight'], 'short Files window clipped the selected file actions')
+        compact_files = page.evaluate("""() => {
+            const doc = documentPictureInPicture.window.document;
+            doc.documentElement.style.width = '480px';
+            doc.documentElement.style.height = '600px';
+            const metrics = [...doc.querySelectorAll('.sftp-path-controls button, .sftp-file-operation-actions button')]
+                .filter(button => button.getClientRects().length).map(button => {
+                    const rect = button.getBoundingClientRect();
+                    return {text:button.innerText,title:button.title,left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom};
+                });
+            doc.documentElement.style.width = '';
+            return metrics;
+        }""")
+        check(all(0 <= item['left'] < item['right'] <= 480 and 0 <= item['top'] < item['bottom'] <= 600 for item in compact_files),
+              f'Files controls overflow at 480x600: {compact_files}')
+        page.evaluate("() => { documentPictureInPicture.window.document.documentElement.style.height = ''; }")
         check(
-            file_ui['status'] == 'Selected reference.txt. Click Download to save it.',
+            file_ui['status'] == text('download_ready', {'name':'reference.txt'}),
             'selecting a file implied that it had already downloaded',
         )
 
@@ -1097,7 +1490,7 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
         check(browser_download['clicked']['hiddenByStyle'] is True, 'SFTP browser download trigger could become visible')
         check(browser_download['clicked']['ownerIsPipDocument'] is True, 'SFTP browser download did not preserve the PiP user-activation context')
         check(browser_download['remainingLinks'] == 0, 'SFTP browser download trigger was not removed')
-        check(browser_download['buttonDisabled'] is True and browser_download['buttonText'] == 'Downloaded', 'used SFTP download ticket remained actionable')
+        check(browser_download['buttonDisabled'] is True and browser_download['buttonText'] == text('download_started'), 'used SFTP download ticket remained actionable')
         check(any(message.startswith('[sftp] Download ticket requested') for message in browser_console), 'SFTP browser log omitted the ticket request')
         check(any(message.startswith('[sftp] Download ticket ready') for message in browser_console), 'SFTP browser log omitted the ready ticket')
         check(any(message.startswith('[sftp] Download button clicked') for message in browser_console), 'SFTP browser log omitted the explicit click')
@@ -1160,16 +1553,16 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
             }"""
         )
         check(copy_picker['open'] is True and copy_picker['sourceHidden'] is True, 'Copy to did not switch to the destination Files pane')
-        check(copy_picker['title'] == 'Choose destination', 'destination Files pane title was unclear')
+        check(copy_picker['title'] == text('destination_title'), 'destination Files pane title was unclear')
         check(copy_picker['sourcePath'] == '/home/tester/reference.txt', 'destination Files pane omitted the source file path')
-        check('9 B (9 bytes)' in copy_picker['sourceMeta'], 'destination Files pane omitted exact source file metadata')
+        check(text('detailed_bytes', {'size':'9 B','bytes':9}) in copy_picker['sourceMeta'], 'destination Files pane omitted exact source file metadata')
         check(copy_picker['sessions'] == ['term-2'], 'destination Files pane listed an invalid session')
         check(copy_picker['path'] == '/home/local', 'destination Files pane did not browse the selected session')
         check(copy_picker['filename'] == 'reference.txt', 'destination Files pane did not preserve the source name')
         check(copy_picker['endpoint'].startswith('Local Shell'), 'destination Files pane did not identify Local Shell')
         check(copy_picker['innerCloseCount'] == 0, 'destination Files pane kept a duplicate close icon')
-        check(copy_picker['cancelText'] == 'Cancel', 'destination Files pane did not provide one clear pre-copy exit')
-        check('returns to the previous pane' in copy_picker['lifecycle'], 'destination Files pane did not explain pre-copy cancellation')
+        check(copy_picker['cancelText'] == message(page, 'common.cancel'), 'destination Files pane did not provide one clear pre-copy exit')
+        check(copy_picker['lifecycle'] == text('cancel_before_copy'), 'destination Files pane did not explain pre-copy cancellation')
         check(copy_picker['duplicateSummaryCount'] == 0, 'destination Files pane kept a duplicate instruction card')
 
         clear_emitted(page)
@@ -1183,6 +1576,28 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
         check(copy_payload['destination_directory'] == '/home/local', 'Files copy lost the canonical destination view')
         check(copy_payload['destination_filename'] == 'reference.txt', 'Files copy lost the destination filename')
         check('source_path' not in copy_payload, 'Files copy trusted the displayed source path as authority')
+        conflict_ui = page.evaluate(
+            """payload => {
+                const w = documentPictureInPicture.window;
+                w.document.documentElement.style.height = '480px';
+                w.document.documentElement.style.width = '620px';
+                window.terminalTest.handleFilesCopyResultForTest({
+                    request_id: payload.request_id, status: 'conflict',
+                    destination_path: '/home/' + 'nested/'.repeat(100) + 'reference.txt', existing_size: 9
+                });
+                const box = w.document.querySelector('.sftp-destination-pane .sftp-conflict-box');
+                const rect = box.getBoundingClientRect();
+                return { visible: w.getComputedStyle(box).display !== 'none',
+                    top: rect.top, bottom: rect.bottom };
+            }""", copy_payload,
+        )
+        check(conflict_ui['visible'] and 0 <= conflict_ui['top'] < conflict_ui['bottom'] <= 480,
+              'conflict choices were clipped in a short Files window')
+        check(len(get_emitted(page, 'files_copy_request')) == 1,
+              'conflict started another copy before the user chose an action')
+        page.evaluate("() => documentPictureInPicture.window.document.querySelector('.sftp-destination-pane .sftp-conflict-keep').click()")
+        copy_payload = get_emitted(page, 'files_copy_request')[-1]['args'][0]
+        check(copy_payload['conflict_mode'] == 'keep_both', 'Keep Both lost the explicit conflict choice')
         copy_result_ui = page.evaluate(
             """payload => {
                 window.terminalTest.handleFilesCopyResultForTest({
@@ -1191,7 +1606,7 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                     status: 'running',
                     revision: 0,
                     source_size: 9,
-                    bytes_copied: 0,
+                    bytes_copied: 4,
                     total_bytes: 9,
                     destination_path: '/home/local/reference.txt'
                 });
@@ -1204,6 +1619,10 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                 });
                 const statusAfterForeign = documentPictureInPicture.window.document
                     .querySelector('.sftp-destination-pane .sftp-transfer-status').innerText;
+                const feedback = documentPictureInPicture.window.document.querySelector('.sftp-copy-feedback');
+                const progress = feedback.querySelector('.sftp-progress');
+                const progressVisible = progress.getBoundingClientRect().height >= 6
+                    && feedback.getBoundingClientRect().top >= 0 && feedback.getBoundingClientRect().bottom <= 480;
                 window.terminalTest.handleFilesCopyResultForTest({
                     request_id: payload.request_id,
                     copy_id: 'filesc_test',
@@ -1246,6 +1665,7 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                 });
                 return {
                     statusAfterForeign,
+                    progressVisible,
                     publishing,
                     terminalButtonText: documentPictureInPicture.window.document
                         .querySelector('.sftp-copy-cancel').innerText,
@@ -1255,11 +1675,13 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
             }""",
             copy_payload,
         )
-        check(copy_result_ui['statusAfterForeign'].startswith('Copying '), 'Files copy accepted a foreign copy_id with the same request_id')
-        check(copy_result_ui['publishing']['text'] == 'Publishing…', 'commit barrier did not replace the cancel action')
+        check(copy_result_ui['statusAfterForeign'] == text('copy_progress', {'percent':44,'copied':'4 B','total':'9 B'}), 'Files copy accepted a foreign copy_id with the same request_id')
+        check(copy_result_ui['progressVisible'], 'Files copy progress or cancel controls were clipped')
+        page.evaluate("() => { const s = documentPictureInPicture.window.document.documentElement.style; s.height = ''; s.width = ''; }")
+        check(copy_result_ui['publishing']['text'] == text('publishing'), 'commit barrier did not replace the cancel action')
         check(copy_result_ui['publishing']['disabled'] is True, 'commit barrier still allowed cancellation')
-        check('cannot be cancelled' in copy_result_ui['publishing']['lifecycle'], 'commit barrier did not explain its cancellation boundary')
-        check(copy_result_ui['terminalButtonText'] == 'Close', 'completed Files copy did not provide a clear close action')
+        check(copy_result_ui['publishing']['lifecycle'] == text('publishing_started'), 'commit barrier did not explain its cancellation boundary')
+        check(copy_result_ui['terminalButtonText'] == message(page, 'common.close'), 'completed Files copy did not provide a clear close action')
         check(copy_result_ui['progressHidden'] is True, 'Files copy did not accept its bound terminal result')
         back_navigation = page.evaluate(
             """() => {
@@ -1325,9 +1747,9 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
         cancel_requests = get_emitted(page, 'files_copy_cancel_request')
         check(len(cancel_requests) == 1, 'Cancel copy did not emit one typed cancellation request')
         check(cancel_requests[0]['args'][0]['copy_id'] == 'filesc_cancel_test', 'Cancel copy lost the backend copy id')
-        check(cancel_pending_ui['runningText'] == 'Cancel copy', 'running Files copy did not expose cancellation')
-        check(cancel_pending_ui['pendingText'] == 'Cancelling…' and cancel_pending_ui['pendingDisabled'] is True, 'Files copy cancellation could be submitted twice')
-        check('Cancelling before' in cancel_pending_ui['lifecycle'], 'Files copy did not explain pending cancellation')
+        check(cancel_pending_ui['runningText'] == text('cancel_copy'), 'running Files copy did not expose cancellation')
+        check(cancel_pending_ui['pendingText'] == text('cancelling') and cancel_pending_ui['pendingDisabled'] is True, 'Files copy cancellation could be submitted twice')
+        check(cancel_pending_ui['lifecycle'] == text('cancelling_copy'), 'Files copy did not explain pending cancellation')
         cancelled_ui = page.evaluate(
             """payload => {
                 window.terminalTest.handleFilesCopyResultForTest({
@@ -1353,9 +1775,9 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
             }""",
             cancel_copy_payload,
         )
-        check(cancelled_ui['buttonText'] == 'Close', 'cancelled Files copy did not restore a close action')
+        check(cancelled_ui['buttonText'] == message(page, 'common.close'), 'cancelled Files copy did not restore a close action')
         check('cancelled before publishing' in cancelled_ui['status'], 'Files copy did not show the cancellation boundary')
-        check('You can close Files' in cancelled_ui['lifecycle'], 'Files copy did not explain the terminal cancellation state')
+        check(cancelled_ui['lifecycle'] == text('copy_cancelled_lifecycle'), 'Files copy did not explain the terminal cancellation state')
         check(cancelled_ui['closed'] is True, 'cancelled Files copy destination pane did not close')
 
         clear_emitted(page)
@@ -1368,6 +1790,7 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                     type: 'text/plain',
                     lastModified: Date.UTC(2026, 8, 2, 2, 20)
                 }));
+                pipDocument.documentElement.style.height = '360px';
                 input.files = transfer.files;
                 input.dispatchEvent(new Event('change', { bubbles: true }));
                 const card = pipDocument.querySelector('.sftp-selected-file');
@@ -1375,8 +1798,11 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                     visible: card.classList.contains('visible'),
                     path: pipDocument.querySelector('.sftp-selected-file-path').innerText,
                     meta: pipDocument.querySelector('.sftp-selected-file-meta').innerText,
-                    actions: [...card.querySelectorAll('button')].map(button => button.innerText)
+                    actions: [...card.querySelectorAll('button')].map(button => button.innerText),
+                    actionBottom: card.querySelector('.sftp-file-operation-actions').getBoundingClientRect().bottom,
+                    viewportHeight: pipDocument.documentElement.clientHeight
                 };
+                pipDocument.documentElement.style.height = '';
                 pipDocument.querySelector('.sftp-local-copy').click();
                 const request = window.terminalTest.getEmitted()
                     .find(item => item.event === 'sftp_browse_request' && item.args[0].terminal_id === 'main');
@@ -1399,8 +1825,10 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
         )
         check(local_file_picker['visible'] is True, 'selected local file card was not shown')
         check(local_file_picker['path'] == 'local-upload.txt', 'selected local file card omitted the browser file name')
-        check('6 B (6 bytes)' in local_file_picker['meta'] and '2026' in local_file_picker['meta'], 'selected local file card omitted exact metadata')
-        check(local_file_picker['actions'] == ['Send', 'Copy to…'], 'selected local file card actions were unclear')
+        check(text('detailed_bytes', {'size':'6 B','bytes':6}) in local_file_picker['meta'] and '2026' in local_file_picker['meta'], 'selected local file card omitted exact metadata')
+        check(local_file_picker['actions'] == [text('send'), text('copy_to')], 'selected local file card actions were unclear')
+        check(local_file_picker['actionBottom'] <= local_file_picker['viewportHeight'],
+              'short Files window clipped the selected local file actions')
         check(local_file_picker['sessions'] == ['main', 'term-2'], 'local file Copy to omitted an eligible Files destination')
         check(local_file_picker['sourcePath'] == 'local-upload.txt', 'local file destination pane omitted its source card')
         clear_emitted(page)
@@ -1436,7 +1864,7 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
             }"""
         )
         check(rename_initial['confirmDisabled'] is True, 'Rename allowed the unchanged file name')
-        check('already exists' in rename_initial['hint'], 'Rename did not explain the duplicate name')
+        check(rename_initial['hint'] == text('filename_exists'), 'Rename did not explain the duplicate name')
         check(rename_initial['inputFocused'] is True, 'Rename did not focus the file name input')
         rename_duplicate = page.evaluate(
             """() => {
@@ -1519,7 +1947,7 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                 };
             }"""
         )
-        check(first_delete['question'] == 'Do you want to delete this file?', 'first delete warning was unclear')
+        check(first_delete['question'] == text('delete_question'), 'first delete warning was unclear')
         check(first_delete['path'] == '/home/tester/reference.txt', 'delete warning did not show the full remote path')
         check(first_delete['noFocused'] is True, 'first delete warning did not focus No')
         check(first_delete['secondPhaseVisible'] is False, 'second delete actions were visible during the first phase')
@@ -1538,7 +1966,7 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
                 };
             }"""
         )
-        check('cannot be recovered' in second_delete['question'], 'second delete warning did not state permanent loss')
+        check(second_delete['question'] == text('delete_final'), 'second delete warning did not state permanent loss')
         check(second_delete['dontFocused'] is True, 'second delete warning did not focus the safe action')
         check(second_delete['firstPhaseVisible'] is False, 'first delete actions were visible during the second phase')
         original_x = first_delete['yesCenterX']
@@ -1574,7 +2002,7 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
         local_menu = page.evaluate("() => window.terminalTest.showContextMenuForTest('main')")
         check(local_menu['sftpVisible'] is True, 'local shell tab did not expose Files')
         check(local_menu['sftpDisabled'] is False, 'Files was disabled for a capable local shell tab')
-        check('Files' in local_menu['sftpText'], 'local shell Files label was unclear')
+        check(message(page, 'browser.chrome.files_open') in local_menu['sftpText'], 'local shell Files label was unclear')
         page.click('#sftp-send-option')
         page.wait_for_function('() => !!window.documentPictureInPicture.window', timeout=5000)
         reopened_files = page.evaluate(
@@ -1589,7 +2017,7 @@ def test_sftp_send_context_action_is_limited_to_connected_ssh_tabs(browser, acce
             }"""
         )
         check(reopened_files == {
-            'title': 'StandTerm - Files',
+            'title': text('title'),
             'destinationOpen': False,
             'selectedLocalVisible': False,
             'selectedRemoteVisible': False,
@@ -1673,6 +2101,7 @@ def test_restored_terminal_list_allocates_next_new_tab_id(browser, access_url):
 
 
 def test_operator_observation_warning_ui(browser, access_url):
+    from settings_transfer_i18n_browser_smoke import message
     context, page = new_page(browser, access_url)
     try:
         page.click('#agent-toggle-btn')
@@ -1689,12 +2118,14 @@ def test_operator_observation_warning_ui(browser, access_url):
             """() => ({
                 body: document.body.classList.contains('operator-observing'),
                 panel: document.getElementById('agent-panel').classList.contains('operator-observing'),
+                count: window.terminalTest.getOperatorObservationState().eventCount,
                 text: document.getElementById('operator-observation-state').innerText
             })"""
         )
         check(ui_state['body'] is True, 'operator observation did not set body warning class')
         check(ui_state['panel'] is True, 'operator observation did not set panel warning class')
-        check('OBSERVING' in ui_state['text'], 'operator observation status text did not warn')
+        check(ui_state['text'] == message(page, 'browser.chrome.observing', {'count':ui_state['count'] or 0}),
+              'operator observation status did not show the localized warning and exact event count')
         page.evaluate("() => document.getElementById('operator-observation-mark-btn').click()")
         page.wait_for_function(
             "() => window.terminalTest.getOperatorObservationState()?.eventCount >= 1",
@@ -1805,8 +2236,9 @@ def test_privacy_states_block_snapshots_and_agent_runs(browser, access_url):
         close_context(context)
 
 
-def test_agent_panel_status_gates_and_external_hint(browser, access_url):
-    context, page = new_page(browser, access_url)
+def test_agent_panel_status_gates_and_external_hint(browser, access_url, ui_language='en'):
+    from settings_transfer_i18n_browser_smoke import message
+    context, page = new_page(browser, access_url, ui_language)
     try:
         page.click('#agent-toggle-btn')
         page.wait_for_selector('#agent-panel.visible', timeout=5000)
@@ -1832,7 +2264,7 @@ def test_agent_panel_status_gates_and_external_hint(browser, access_url):
         )
         check(panel_state['statusBoxError'] is True, 'agent status row did not mark action error')
         check('agent_privacy_blocked' in panel_state['statusDetail'], 'agent status row did not show error_code')
-        check('private_input' in panel_state['privacyText'], 'privacy gate chip did not show privacy state')
+        check(panel_state['privacyText'] == message(page, 'browser.chrome.privacy', {'value':'private_input'}), 'privacy gate chip did not show privacy state')
         check(panel_state['privacyBlocking'] is True, 'privacy gate chip did not mark blocking state')
 
         set_privacy(page, 'normal')
@@ -1845,7 +2277,9 @@ def test_agent_panel_status_gates_and_external_hint(browser, access_url):
                 blocking: document.getElementById('agent-gate-human').classList.contains('blocking')
             })"""
         )
-        check('locked' in human_gate['text'], 'human input gate chip did not show active lease')
+        human_pattern = re.escape(message(page, 'browser.chrome.human_seconds', {'seconds':123456})).replace('123456', r'\d+')
+        check(human_gate['text'] == message(page, 'browser.chrome.human_locked') or re.fullmatch(human_pattern, human_gate['text']),
+              'human input gate chip did not show active lease')
         check(human_gate['blocking'] is True, 'human input gate chip did not mark blocking state')
 
         emit_socket(page, 'agent_mode_set', {'terminal_id': TERMINAL_ID, 'mode': 'disabled'})
@@ -1860,10 +2294,10 @@ def test_agent_panel_status_gates_and_external_hint(browser, access_url):
                 modeButtonsDisabled: Array.from(document.querySelectorAll('[data-agent-mode]')).every(button => button.disabled)
             })"""
         )
-        check(disabled_external['accessText'] == 'Enable external agent', 'agent access toggle did not offer enable in disabled mode')
+        check(disabled_external['accessText'] == message(page, 'agent.access.enable'), 'agent access toggle did not offer enable in disabled mode')
         check(disabled_external['modeButtonsDisabled'] is True, 'agent permission buttons were not disabled while access was off')
         check(disabled_external['buttonDisabled'] is True, 'external token button stayed enabled in disabled mode')
-        check('Enable external agent' in disabled_external['hint'], 'external token hint did not explain disabled prerequisite')
+        check(disabled_external['hint'] == message(page, 'agent.token.enable_required'), 'external token hint did not explain disabled prerequisite')
         check(disabled_external['commandTag'] == 'TEXTAREA', 'external token command output is not a textarea')
         check(disabled_external['commandOutputOpen'] is False, 'external token command output was not collapsed by default')
 
@@ -1877,10 +2311,11 @@ def test_agent_panel_status_gates_and_external_hint(browser, access_url):
                 modeLabels: Array.from(document.querySelectorAll('[data-agent-mode]')).map(button => button.innerText)
             })"""
         )
-        check(enabled_external['accessText'] == 'Disable external agent', 'agent access toggle did not offer disable after enabling')
-        check(enabled_external['modeLabels'] == ['Observer', 'Approval', 'Full'], 'agent permission buttons did not use user-facing labels')
+        check(enabled_external['accessText'] == message(page, 'agent.access.disable'), 'agent access toggle did not offer disable after enabling')
+        expected_labels = [message(page, button.get_attribute('data-i18n')) for button in page.locator('[data-agent-mode]').all()]
+        check(enabled_external['modeLabels'] == expected_labels, 'agent permission buttons did not use user-facing labels')
         check(enabled_external['buttonDisabled'] is False, 'external token button did not enable in observe mode')
-        check('Mint' in enabled_external['hint'], 'external token hint did not show available state')
+        check(enabled_external['hint'] == message(page, 'agent.token.local_hint'), 'external token hint did not show available state')
 
         panel_mint_state = page.evaluate(
             """() => ({
@@ -1952,7 +2387,7 @@ def test_external_token_tab_indicator_tracks_background_lifecycle(browser, acces
               'Background tab lost its minted-token indicator')
         check(page.locator('.terminal-tab.active.agent-token-active').count() == 0,
               'New tab inherited the other terminal token indicator')
-        check('External agent token active' in page.locator(main_tab).get_attribute('title'),
+        check('Agent token active' in page.locator(main_tab).get_attribute('title'),
               'Active token has no text explanation')
         color = lambda: page.locator(main_tab + ' .tab-state').evaluate(
             'element => getComputedStyle(element).backgroundColor')
@@ -1987,7 +2422,7 @@ def test_external_token_tab_indicator_tracks_background_lifecycle(browser, acces
         token_event('revoked', 60000)
         check(page.locator(main_tab + '.agent-token-active').count() == 0, 'Revoked token stayed bright')
         check(page.locator(main_tab + '.agent-token-expired').count() == 0, 'Revocation was shown as expiry')
-        check('External agent token' not in page.locator(main_tab).get_attribute('title'),
+        check('Agent token' not in page.locator(main_tab).get_attribute('title'),
               'Revoked token tooltip remained stale')
         check(page.locator(main_tab + ' .tab-agent-countdown').is_hidden(),
               'Revoked token retained a countdown label')
@@ -2002,12 +2437,16 @@ def test_external_token_tab_indicator_tracks_background_lifecycle(browser, acces
         page.evaluate('id => window.terminalTest.switchTerminalForTest(id)', TERMINAL_ID)
         set_agent_mode(page, 'direct', 'direct_active')
         page.set_viewport_size({'width': 640, 'height': 600})
-        for selector in ['#new-tab-btn', '#agent-pause-btn', '#agent-status-mint-btn',
-                         '#agent-status-mint-3x-btn', '#agent-toggle-btn', '#quick-settings']:
+        for selector in ['#new-tab-btn', '#agent-pause-btn', '#agent-access-mint-btn',
+                         '#agent-toggle-btn', '#quick-settings']:
             bounds = page.locator(selector).bounding_box()
             check(bounds is not None and bounds['x'] >= 0 and bounds['x'] + bounds['width'] <= 640,
                   f'{selector} is clipped beside the compact tab row')
-        page.click('#agent-status-mint-btn')
+        check(page.locator('#agent-status-mint-btn').is_hidden(),
+              'compact tab row did not hide the redundant standard Mint action')
+        check(page.locator('#agent-status-mint-3x-btn').is_hidden(),
+              'compact tab row did not move the 3x Mint action into the Agent panel')
+        page.click('#agent-access-mint-btn')
         page.wait_for_selector(main_tab + '.agent-token-active', state='attached')
         page.click('#agent-pause-btn')
         wait_for_agent(page, "state.mode === 'paused'")
@@ -2075,7 +2514,7 @@ def test_session_recovery_new_tab_can_renew_external_agent_token(browser, access
                 command: document.getElementById('agent-external-command').value
             })"""
         )
-        check(recovered_token_ui['buttonText'] == 'Mint token', 'new terminal reused stale external token command state')
+        check(recovered_token_ui['buttonText'] == 'Create token', 'new terminal reused stale external token command state')
         check(recovered_token_ui['command'] == '', 'new terminal kept stale external token command text')
         page.evaluate("() => document.getElementById('agent-external-token-btn').click()")
         page.wait_for_function(
@@ -2290,8 +2729,8 @@ def test_background_terminal_render_uses_mirror_canvas_png(browser, access_url):
         close_context(context)
 
 
-def test_paste_review_approve_and_cancel(browser, access_url):
-    context, page = new_page(browser, access_url)
+def test_paste_review_approve_and_cancel(browser, access_url, ui_language='en'):
+    context, page = new_page(browser, access_url, ui_language)
     try:
         attach_agent(page)
 
@@ -2328,8 +2767,8 @@ def test_paste_review_approve_and_cancel(browser, access_url):
         close_context(context)
 
 
-def test_clipboard_paste_targets_and_native_review(browser, access_url):
-    context, page = new_page(browser, access_url)
+def test_clipboard_paste_targets_and_native_review(browser, access_url, ui_language='en'):
+    context, page = new_page(browser, access_url, ui_language)
     try:
         attach_agent(page)
         page.evaluate('() => window.terminalTest.captureTerminalIoForTest()')
@@ -2487,6 +2926,8 @@ def test_approval_payload_and_stale_rejections(browser, access_url):
         attach_agent(page)
         set_agent_mode(page, 'approval', 'approval_pending')
         action = request_agent_action(page, ':\n')
+        check(page.inner_text('#agent-approve-btn') == 'Approve input', 'input approval did not name the proposed input')
+        check(page.inner_text('#agent-reject-btn') == 'Reject', 'input rejection label changed its meaning')
 
         clear_emitted(page)
         page.evaluate("() => document.getElementById('agent-approve-btn').click()")
@@ -2524,8 +2965,9 @@ def test_approval_payload_and_stale_rejections(browser, access_url):
         close_context(context)
 
 
-def test_file_copy_approval_shows_canonical_plan(browser, access_url):
-    context, page = new_page(browser, access_url)
+def test_file_copy_approval_shows_canonical_plan(browser, access_url, ui_language='en'):
+    context, page = new_page(browser, access_url, ui_language=ui_language)
+    zh = ui_language == 'zh-TW'
     try:
         attach_agent(page)
         set_agent_mode(page, 'direct', 'direct_active')
@@ -2570,9 +3012,12 @@ def test_file_copy_approval_shows_canonical_plan(browser, access_url):
                 source: document.getElementById('agent-file-copy-source').innerText,
                 destination: document.getElementById('agent-file-copy-destination').innerText,
                 size: document.getElementById('agent-file-copy-size').innerText,
-                conflict: document.getElementById('agent-file-copy-conflict').innerText,
                 warning: document.getElementById('agent-file-copy-warning').innerText,
                 approve: document.getElementById('agent-approve-btn').innerText,
+                deny: document.getElementById('agent-reject-btn').innerText,
+                previewDisplay: getComputedStyle(document.getElementById('agent-action-preview')).display,
+                metaDisplay: getComputedStyle(document.getElementById('agent-action-meta')).display,
+                actionHeight: document.getElementById('agent-action-box').getBoundingClientRect().height,
                 approveDisabled: document.getElementById('agent-approve-btn').disabled
             })"""
         )
@@ -2580,27 +3025,192 @@ def test_file_copy_approval_shows_canonical_plan(browser, access_url):
         check(details['source'] == 'builder@source.example:22:/srv/releases/image.bin', 'source plan was not exact')
         check(details['destination'] == 'Local Shell (bash):/tmp/image.bin', 'destination plan was not exact')
         check(details['size'] == '1.50 KiB', 'source size was not rendered')
-        check(details['conflict'] == 'replace', 'replace mode was not rendered')
-        check('atomically replace' in details['warning'], 'replace warning was not explicit')
-        check(details['approve'] == 'Approve copy', 'copy approval button was not explicit')
+        check(details['warning'] == ('將覆寫既有檔案（64 B）。' if zh else 'Replace the existing file (64 B).'),
+              'replace warning did not retain the existing destination size and overwrite consequence')
+        check(details['approve'] == ('核准複製' if zh else 'Approve copy'), 'copy approval button was not explicit')
+        check(details['deny'] == ('拒絕' if zh else 'Reject'), 'copy rejection button changed its meaning')
+        check(details['previewDisplay'] == 'none' and details['metaDisplay'] == 'none', 'generic action details expanded the copy prompt')
+        check(details['actionHeight'] < 220, 'copy approval prompt was not compact')
         check(details['approveDisabled'] is False, 'copy approval button was unexpectedly disabled')
+        copy_payload = active_agent_state(page)['pending_action']
+        page.evaluate('payload => window.terminalTest.applyAgentActionPayloadForTest(payload)', {
+            **copy_payload, 'action_revision': 1, 'conflict_mode': 'keep_both',
+            'destination_path': '/tmp/image (2).bin',
+        })
+        check(page.inner_text('#agent-file-copy-destination') == 'Local Shell (bash):/tmp/image (2).bin',
+              'keep-both translation changed the canonical destination filename')
+        check(page.inner_text('#agent-file-copy-warning') == ('複製到顯示的目的地，並保留既有檔案。' if zh else
+              'Copy to the destination shown; keep the existing file.'), 'keep-both warning did not preserve the existing file')
+        page.evaluate('payload => window.terminalTest.applyAgentActionPayloadForTest(payload)', {
+            **copy_payload, 'action_revision': 2, 'status': 'running', 'bytes_copied': 768, 'total_bytes': 1536,
+        })
+        clear_emitted(page)
         page.evaluate(
             """payload => window.terminalTest.applyAgentActionPayloadForTest(payload)""",
             {
                 'action_id': 'copy-action-1',
                 'action_type': 'file_copy',
+                'action_revision': 3,
                 'status': 'failed',
                 'terminal_id': TERMINAL_ID,
                 'error_code': 'file_copy_publish_outcome_unknown',
             },
         )
         status_detail = page.locator('#agent-status-detail').inner_text()
+        unknown_warning = ('無法確認複製結果。目的地可能已變更，請先檢查再重試。' if zh else
+                           'Copy result unknown. The destination may have changed; check it before retrying.')
         check(
-            'destination may have changed; inspect it before retrying' in status_detail,
+            unknown_warning in status_detail and 'file_copy_publish_outcome_unknown' in status_detail,
             'publish outcome warning was not explicit',
         )
+        queue_text = page.inner_text('.transfer-queue-item[data-action-id="copy-action-1"]')
+        check(unknown_warning in queue_text and 'file_copy_publish_outcome_unknown' in queue_text,
+              'transfer queue lost the unknown-result warning or diagnostic code')
+        for width in [1280, 480]:
+            page.set_viewport_size({'width': width, 'height': 700})
+            for selector in ['#agent-status-detail', '.transfer-queue-status']:
+                visible_warning = page.locator(selector).evaluate('''element => ({
+                    wraps: getComputedStyle(element).whiteSpace !== 'nowrap',
+                    fits: element.scrollWidth <= element.clientWidth,
+                    height: element.clientHeight
+                })''')
+                check(visible_warning['wraps'] and visible_warning['fits'] and visible_warning['height'] > 0,
+                      f'unknown-result warning is clipped at {width}px: {selector}')
+        check(not any(entry['event'] in {'agent_action_approve', 'agent_action_cancel', 'agent_suggestion_request', 'ssh_input'}
+                      for entry in get_emitted(page)), 'unknown publication outcome automatically retried an operation')
     finally:
         close_context(context)
+
+
+def test_localized_input_decisions_preserve_exact_proposal(browser, access_url):
+    context, page = new_page(browser, access_url, ui_language='zh-TW')
+    try:
+        attach_agent(page)
+        set_agent_mode(page, 'approval', 'approval_pending')
+        state = active_agent_state(page)
+        for decision in ['approve', 'reject']:
+            action = {
+                'action_id': f'localized-input-{decision}',
+                'proposal_id': f'localized-proposal-{decision}',
+                'action_type': 'terminal_input', 'action_revision': 0,
+                'status': 'pending_approval', 'terminal_id': TERMINAL_ID,
+                'escaped_preview': '<b>Approve copy</b> \\n',
+                'byte_length': 26, 'line_count': 1,
+                'ends_with_newline': False, 'contains_control_chars': False,
+                **{field: state[field] for field in ['session_id', 'viewer_id', 'agent_binding_id', 'mode_version', 'privacy_version']},
+            }
+            result = page.evaluate(
+                """({action, decision}) => {
+                    window.terminalTest.applyAgentActionPayloadForTest(action);
+                    window.terminalTest.clearEmitted();
+                    const approve = document.getElementById('agent-approve-btn');
+                    const reject = document.getElementById('agent-reject-btn');
+                    const preview = document.getElementById('agent-action-preview');
+                    const labels = {approve: approve.innerText, reject: reject.innerText,
+                        preview: preview.innerText, markup: preview.querySelectorAll('b').length};
+                    const button = decision === 'approve' ? approve : reject;
+                    button.click();
+                    button.click();
+                    return {labels, events: window.terminalTest.getEmitted(),
+                        locked: approve.disabled && reject.disabled,
+                        mode: window.terminalTest.getActiveAgentState().mode};
+                }""",
+                {'action': action, 'decision': decision},
+            )
+            check(result['labels']['approve'] == '核准輸入' and result['labels']['reject'] == '拒絕',
+                  'localized input decision labels did not distinguish input from copy')
+            check(result['labels']['preview'] == action['escaped_preview'] and result['labels']['markup'] == 0,
+                  'proposal display text was translated or interpreted as markup')
+            check(len(result['events']) == 1 and result['events'][0]['event'] == f'agent_action_{decision}',
+                  'localized input decision emitted another action or more than one decision')
+            check(result['events'][0]['args'][0] == approval_payload_from_action(action),
+                  'localized input decision changed the exact proposal binding')
+            check(result['locked'] and result['mode'] == 'approval_pending',
+                  'one input decision changed permission or remained repeatable')
+    finally:
+        close_context(context)
+
+
+def test_agent_transfer_stop_states_and_dismissal(browser, access_url, ui_language='en'):
+    context, page = new_page(browser, access_url, ui_language=ui_language)
+    zh = ui_language == 'zh-TW'
+    try:
+        attach_agent(page)
+        state = active_agent_state(page)
+        action = {
+            'action_id': 'localized-transfer-stop', 'proposal_id': 'localized-transfer-proposal',
+            'action_type': 'file_copy', 'action_revision': 1,
+            'status': 'running', 'terminal_id': TERMINAL_ID,
+            'destination_terminal_id': 'fixture-destination',
+            'source_endpoint': {'route': 'local', 'shell': 'bash', 'platform': 'linux'},
+            'destination_endpoint': {'route': 'direct', 'host': 'destination.example', 'user': 'builder', 'port': 22},
+            'source_path': '/fixture/source.bin', 'destination_path': '/fixture/existing.bin',
+            'source_size': 1536, 'total_bytes': 1536, 'bytes_copied': 768,
+            **{field: state[field] for field in ['session_id', 'viewer_id', 'agent_binding_id', 'mode_version', 'privacy_version']},
+        }
+        result = page.evaluate(
+            """action => {
+                const apply = payload => window.terminalTest.applyAgentActionPayloadForTest(payload);
+                const button = () => document.querySelector('.transfer-queue-stop');
+                const status = () => document.querySelector('.transfer-queue-status').innerText;
+                apply(action);
+                window.terminalTest.clearEmitted();
+                const running = button().innerText;
+                button().click();
+                const pending = {text: button().innerText, disabled: button().disabled, status: status()};
+                button().click();
+                const cancellations = window.terminalTest.getEmitted();
+                apply({...action, action_revision: 2, status: 'committing'});
+                window.terminalTest.clearEmitted();
+                const committing = {disabled: button().disabled, title: button().title, status: status()};
+                button().click();
+                committing.events = window.terminalTest.getEmitted();
+                apply({...action, action_revision: 3, status: 'failed', error_code: 'file_copy_cancelled_by_operator'});
+                const stopped = {status: status(), title: button().title, aria: button().getAttribute('aria-label')};
+                const lastAction = window.terminalTest.getActiveAgentState().last_action;
+                window.terminalTest.clearEmitted();
+                button().click();
+                return {running, pending, cancellations, committing, stopped,
+                    dismissed: document.querySelectorAll('.transfer-queue-item').length === 0,
+                    dismissEvents: window.terminalTest.getEmitted(),
+                    lastActionUnchanged: JSON.stringify(lastAction) === JSON.stringify(window.terminalTest.getActiveAgentState().last_action)};
+            }""",
+            action,
+        )
+        check(result['running'] == ('停止' if zh else 'Stop'), 'running transfer did not offer Stop')
+        check(result['pending']['text'] == ('正在停止…' if zh else 'Stopping…') and result['pending']['disabled'],
+              'pending cancellation did not remain distinct from a confirmed stop')
+        check(result['pending']['status'] != ('已停止' if zh else 'Stopped'), 'Stop click claimed backend-confirmed cancellation')
+        check(len(result['cancellations']) == 1 and result['cancellations'][0]['event'] == 'agent_action_cancel',
+              'Stop emitted more than one cancellation or another operation')
+        check(result['cancellations'][0]['args'][0] == approval_payload_from_action(action),
+              'transfer cancellation changed the proposal binding')
+        check(result['committing']['disabled'] and not result['committing']['events'], 'committing transfer remained cancellable')
+        check(result['committing']['title'] == ('正在完成複製，已無法停止。' if zh else 'Finishing the copy; it can no longer be stopped.'),
+              'committing tooltip implied completion or allowed stopping')
+        check(result['stopped']['status'] == ('已停止' if zh else 'Stopped'), 'operator cancellation was not shown as confirmed stopped')
+        check(result['stopped']['title'] == ('隱藏此筆' if zh else 'Dismiss') and 'existing.bin' in result['stopped']['aria'],
+              'finished transfer dismissal lost its meaning or filename')
+        check(result['dismissed'] and not result['dismissEvents'] and result['lastActionUnchanged'],
+              'Dismiss changed the transfer result or emitted a file operation')
+
+        failed = {**action, 'action_id': 'localized-disconnected-copy', 'proposal_id': 'localized-disconnected-proposal'}
+        result = page.evaluate(
+            """action => {
+                window.terminalTest.applyAgentActionPayloadForTest(action);
+                window.terminalTest.applyAgentActionPayloadForTest({...action, action_revision: 2,
+                    status: 'failed', error_code: 'terminal_disconnected'});
+                return document.querySelector('.transfer-queue-status').innerText;
+            }""", failed)
+        check('terminal_disconnected' in result and result != ('已停止' if zh else 'Stopped'),
+              'generic disconnection was misrepresented as confirmed cancellation')
+    finally:
+        close_context(context)
+
+
+def test_agent_copy_and_transfer_states_in_traditional_chinese(browser, access_url):
+    test_file_copy_approval_shows_canonical_plan(browser, access_url, ui_language='zh-TW')
+    test_agent_transfer_stop_states_and_dismissal(browser, access_url, ui_language='zh-TW')
 
 
 def test_file_copy_approval_is_global_and_decision_is_single_shot(browser, access_url):
@@ -2681,16 +3291,32 @@ def test_file_copy_approval_is_global_and_decision_is_single_shot(browser, acces
         )
         progress = page.evaluate(
             """() => ({
-                visible: document.getElementById('agent-action-box').classList.contains('visible'),
-                bytes: document.getElementById('agent-action-bytes').innerText,
-                status: document.getElementById('agent-action-status').innerText,
-                approveDisabled: document.getElementById('agent-approve-btn').disabled
+                actionVisible: document.getElementById('agent-action-box').classList.contains('visible'),
+                queueButtonVisible: !document.getElementById('transfer-queue-btn').hidden,
+                queueVisible: document.getElementById('transfer-queue-panel').classList.contains('visible'),
+                count: document.getElementById('transfer-queue-count').innerText,
+                status: document.querySelector('.transfer-queue-status')?.innerText,
+                progress: document.querySelector('.transfer-queue-progress')?.getAttribute('aria-valuenow'),
+                stop: document.querySelector('.transfer-queue-stop')?.innerText,
+                toolbarOrder: [
+                    document.getElementById('sftp-status-btn').nextElementSibling.id,
+                    document.getElementById('transfer-queue-btn').nextElementSibling.id
+                ]
             })"""
         )
-        check(progress['visible'] is True, 'running file copy progress was hidden')
-        check(progress['bytes'] == '768 B / 1.50 KiB', 'file copy byte progress was incorrect')
-        check(progress['status'] == 'running · 50%', 'file copy percentage was incorrect')
-        check(progress['approveDisabled'] is True, 'running file copy could still be approved')
+        check(progress['actionVisible'] is False, 'running file copy kept the approval prompt open')
+        check(progress['queueButtonVisible'] is True and progress['queueVisible'] is True, 'running transfer queue was hidden')
+        check(progress['count'] == '1', 'transfer queue count was incorrect')
+        check(progress['status'] == '50% · 768 B of 1.50 KiB', 'file copy progress was incorrect')
+        check(progress['progress'] == '50', 'file copy progress bar was incorrect')
+        check(progress['stop'] == 'Stop', 'running transfer could not be stopped')
+        check(progress['toolbarOrder'] == ['transfer-queue-btn', 'quick-settings'], 'transfer queue was not between Files and Settings')
+
+        clear_emitted(page)
+        page.click('.transfer-queue-stop')
+        cancel_events = get_emitted(page, 'agent_action_cancel')
+        check(len(cancel_events) == 1, 'transfer stop did not emit one cancellation')
+        check(cancel_events[0]['args'][0]['terminal_id'] == 'main', 'transfer stop targeted the active tab instead of its source tab')
 
         page.evaluate(
             "payload => window.terminalTest.applyAgentActionPayloadForTest(payload)",
@@ -2705,6 +3331,18 @@ def test_file_copy_approval_is_global_and_decision_is_single_shot(browser, acces
         )
         check(monotonic['last_action']['status'] == 'completed', 'stale progress replaced the completed action')
         check(monotonic['pending_action'] is None, 'stale progress reopened the completed action')
+        completed_queue = page.evaluate(
+            """() => ({
+                status: document.querySelector('.transfer-queue-status')?.innerText,
+                dismiss: document.querySelector('.transfer-queue-stop')?.innerText,
+                buttonVisible: !document.getElementById('transfer-queue-btn').hidden
+            })"""
+        )
+        check(completed_queue['status'] == 'Completed · 1.50 KiB', 'completed transfer result was not retained')
+        check(completed_queue['dismiss'] == '×', 'completed transfer did not offer dismissal')
+        check(completed_queue['buttonVisible'] is True, 'completed transfer disappeared immediately')
+        page.wait_for_selector('#transfer-queue-btn', state='hidden', timeout=12000)
+        check(page.locator('#transfer-queue-panel').get_attribute('aria-hidden') == 'true', 'empty transfer queue stayed open')
         page.click('#agent-panel-close-btn')
         page.evaluate(
             """payload => window.terminalTest.applyAgentActionPayloadForTest(payload)""",
@@ -2756,14 +3394,17 @@ def test_file_copy_approval_keeps_controls_visible_with_long_paths(browser, acce
             geometry = page.evaluate("""() => {
                 const panel = document.getElementById('agent-panel').getBoundingClientRect();
                 const content = document.getElementById('agent-action-content');
-                const buttons = ['agent-approve-btn', 'agent-reject-btn', 'agent-action-pause-btn'].map(id => {
+                const actionBox = document.getElementById('agent-action-box').getBoundingClientRect();
+                const buttons = ['agent-approve-btn', 'agent-reject-btn'].map(id => {
                     const button = document.getElementById(id);
                     const r = button.getBoundingClientRect();
                     return r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth
                         && document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === button;
                 });
                 return { buttons, panel: { top: panel.top, bottom: panel.bottom, height: panel.height },
-                    hits: ['agent-approve-btn', 'agent-reject-btn', 'agent-action-pause-btn'].map(id => {
+                    actionHeight: actionBox.height,
+                    pauseDisplay: getComputedStyle(document.getElementById('agent-action-pause-btn')).display,
+                    hits: ['agent-approve-btn', 'agent-reject-btn'].map(id => {
                         const r = document.getElementById(id).getBoundingClientRect();
                         const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
                         return { id: hit?.id, tag: hit?.tagName };
@@ -2775,10 +3416,12 @@ def test_file_copy_approval_keeps_controls_visible_with_long_paths(browser, acce
             }""")
             check(all(geometry['buttons']), f'long copy details hid or covered an approval control: {geometry}')
             check(geometry['panelFits'], 'approval panel exceeded the viewport')
+            check(geometry['actionHeight'] <= min(320, height * 0.48) + 1, 'copy approval card exceeded its compact limit')
+            check(geometry['pauseDisplay'] == 'none', 'copy approval showed the unrelated pause control')
             check(geometry['scrollable'], 'long copy details were not scrollable')
             check(geometry['noHorizontalOverflow'], 'long paths caused horizontal overflow')
             page.evaluate("document.getElementById('agent-action-content').scrollTop = 999999")
-            check('atomically replace' in page.locator('#agent-file-copy-warning').inner_text(), 'replace warning was lost')
+            check('Replace the existing file (64 B).' == page.locator('#agent-file-copy-warning').inner_text(), 'replace warning was lost')
             page.locator('#agent-approve-btn').click(trial=True)
             page.locator('#agent-reject-btn').click(trial=True)
         clear_emitted(page)
@@ -3417,14 +4060,19 @@ def test_osc_title_updates_fixed_status_column(browser, access_url):
         close_context(context)
 
 
-def test_settings_server_tab_loads_readonly_snapshot(browser, access_url):
-    context, page = new_page(browser, access_url)
+def test_settings_server_tab_loads_readonly_snapshot(browser, access_url, ui_language='en'):
+    context, page = new_page(browser, access_url, ui_language)
     try:
+        def text(key):
+            return page.evaluate("key => StandTermI18n.create(StandTermMessages, document.documentElement.lang).t(key)", key)
+
         page.click('#quick-settings')
         page.wait_for_selector('#settings-modal.open', timeout=5000)
         page.click('.settings-nav-item[data-tab="server"]')
         page.wait_for_function(
-            "() => ['Read-only', 'Writable'].includes(document.getElementById('server-settings-status')?.textContent)",
+            """expected => document.querySelector('#server-settings-mutable-controls .server-setting-input') !== null
+                && document.getElementById('server-settings-status').textContent === expected""",
+            arg=text('settings.server.writable'),
             timeout=5000,
         )
         state = page.evaluate(
@@ -3450,10 +4098,11 @@ def test_settings_server_tab_loads_readonly_snapshot(browser, access_url):
                 connectionCount: document.querySelectorAll('#server-settings-connections li').length
             })"""
         )
-        check(state['version'] == '1', 'settings server tab did not show settings version')
-        check(state['view'] == 'Allowed', 'settings server tab did not show view capability')
-        check(state['low'] == 'Allowed', 'settings server tab did not expose local low-risk writes')
-        check(state['high'] == 'Denied', 'settings server tab exposed high-risk writes')
+        check(state['version'].isdigit() and int(state['version']) >= 1, 'settings server tab did not show settings version')
+        check(page.inner_text('#server-settings-status') == text('settings.server.writable'), 'settings server tab did not localize write capability')
+        check(state['view'] == text('settings.server.allowed'), 'settings server tab did not show view capability')
+        check(state['low'] == text('settings.server.allowed'), 'settings server tab did not expose local low-risk writes')
+        check(state['high'] == text('settings.server.denied'), 'settings server tab exposed high-risk writes')
         check(state['selectedDefault'], 'settings server tab did not populate default connection control')
         check('default_connection_type' in state['mutableKeys'], 'settings server tab did not render core mutable control')
         check('uart.default_baud_rate' in state['mutableKeys'], 'settings server tab did not render UART mutable control')
@@ -3489,16 +4138,19 @@ def test_settings_server_tab_loads_readonly_snapshot(browser, access_url):
         local_shell_payload = get_emitted(page, 'settings_update_request')[-1]['args'][0]
         check(local_shell_payload['setting_key'] == 'local_shell.default_kind', 'Local Shell update did not use typed setting_key')
         check(local_shell_payload['value'] == selected_shell_kind, 'Local Shell update did not send selected shell kind')
+        check(local_shell_payload['expected_version'] == int(state['version']), 'Local Shell update did not bind displayed settings version')
         check(local_shell_payload.get('expected_schema_digest'), 'Local Shell update did not include expected schema digest')
         page.wait_for_function(
-            """target => document.querySelector(
+            """({target, version}) => document.querySelector(
                     '#server-settings-mutable-controls .server-setting-input[data-setting-key="local_shell.default_kind"]'
                 )?.value === target
-                && document.getElementById('local-shell-kind')?.value === target""",
-            arg=selected_shell_kind,
+                && document.getElementById('local-shell-kind')?.value === target
+                && Number(document.getElementById('server-settings-version').textContent) > version""",
+            arg={'target': selected_shell_kind, 'version': int(state['version'])},
             timeout=10000,
         )
         clear_emitted(page)
+        uart_version = int(page.inner_text('#server-settings-version'))
         selected_baud = page.evaluate(
             """() => {
                 const input = document.querySelector(
@@ -3524,13 +4176,15 @@ def test_settings_server_tab_loads_readonly_snapshot(browser, access_url):
         update_payload = get_emitted(page, 'settings_update_request')[-1]['args'][0]
         check(update_payload['setting_key'] == 'uart.default_baud_rate', 'UART update did not use typed setting_key')
         check(int(update_payload['value']) == int(selected_baud), 'UART update did not send selected baud value')
+        check(update_payload['expected_version'] == uart_version, 'UART update did not bind displayed settings version')
         check(update_payload.get('expected_schema_digest'), 'UART update did not include expected schema digest')
     finally:
         close_context(context)
 
 
-def test_connection_diagnostics_are_session_scoped_and_redacted(browser, access_url):
-    context, page = new_page(browser, access_url)
+def test_connection_diagnostics_are_session_scoped_and_redacted(browser, access_url, ui_language='en'):
+    from settings_transfer_i18n_browser_smoke import message
+    context, page = new_page(browser, access_url, ui_language)
     try:
         token = urllib.parse.parse_qs(urllib.parse.urlparse(access_url).query)['token'][0]
         page.evaluate("() => window.dispatchEvent(new Event('offline'))")
@@ -3551,7 +4205,7 @@ def test_connection_diagnostics_are_session_scoped_and_redacted(browser, access_
         check('page.offline' in events, 'diagnostics did not record browser offline event')
         check('Launcher Session ID:' in state['text'], 'diagnostics omitted launcher session ID')
         check(token not in state['text'], 'diagnostics exposed the access token')
-        check('connection events.' in state['status'], 'diagnostics did not show event count')
+        check(state['status'] == message(page, 'browser.diagnostics.count', {'count':len(state['entries'])}), 'diagnostics did not show event count')
 
         page.evaluate(
             """() => {
@@ -3589,16 +4243,20 @@ def test_connection_diagnostics_are_session_scoped_and_redacted(browser, access_
             })"""
         )
         check(cleared['entries'] == [], 'diagnostics clear did not remove stored events')
-        check(cleared['status'] == '0 connection events.', 'diagnostics clear did not update status')
+        check(cleared['status'] == message(page, 'browser.diagnostics.count', {'count':0}), 'diagnostics clear did not update status')
     finally:
         close_context(context)
 
 
-def test_settings_access_recovery_fetches_access_url_on_demand(browser, access_url):
+def test_settings_access_recovery_fetches_access_url_on_demand(browser, access_url, ui_language='en'):
+    from settings_transfer_i18n_browser_smoke import message
     parsed = urllib.parse.urlparse(access_url)
     token = urllib.parse.parse_qs(parsed.query)['token'][0]
-    context, page = new_page(browser, access_url)
+    context, page = new_page(browser, access_url, ui_language)
     try:
+        page.evaluate("""() => Object.defineProperty(navigator, 'clipboard', {
+            configurable:true,value:{writeText:async () => {}}
+        })""")
         page.click('#quick-settings')
         page.wait_for_selector('#settings-modal.open', timeout=5000)
         page.click('.settings-nav-item[data-tab="server"]')
@@ -3629,13 +4287,14 @@ def test_settings_access_recovery_fetches_access_url_on_demand(browser, access_u
                 location: window.location.href
             })"""
         )
-        check('shown for 30 seconds' in revealed['status'], 'access URL reveal did not update status')
+        check(revealed['status'] == message(page, 'browser.server_access.shown'), 'access URL reveal did not update status')
         check(access_url in revealed['text'], 'revealed access URL did not match server access URL')
         check('token=' not in revealed['location'], 'access URL reveal modified browser location')
 
         page.click('#server-access-copy-btn')
         page.wait_for_function(
-            "() => document.getElementById('server-access-status')?.textContent === 'Access URL copied.'",
+            "expected => document.getElementById('server-access-status')?.textContent === expected",
+            arg=message(page, 'browser.server_access.copied'),
             timeout=5000,
         )
     finally:
@@ -3828,8 +4487,9 @@ def test_terminal_payload_text_is_not_control(browser, access_url):
         close_context(context)
 
 
-def test_core_agent_connect_info_can_be_copied_and_confirmed(browser, access_url):
-    context, page = new_page(browser, access_url)
+def test_core_agent_connect_info_can_be_copied_and_confirmed(browser, access_url, ui_language='en'):
+    context, page = new_page(browser, access_url, ui_language)
+    zh = ui_language == 'zh-TW'
     try:
         parsed = urllib.parse.urlparse(access_url)
         agentinfo_url = urllib.parse.urlunparse(parsed._replace(
@@ -3838,20 +4498,29 @@ def test_core_agent_connect_info_can_be_copied_and_confirmed(browser, access_url
             configurable: true, value: {writeText: async text => {window.copiedAgentText = text;}}
         })''')
         page.click('#agent-connect-btn')
-        page.wait_for_selector('#agent-connect-copy:not([disabled])')
+        page.wait_for_selector('#agent-connect-copy-url:not([disabled])')
+        check(not page.locator('#agent-connect-details').evaluate('element => element.open'),
+              'Connection details were not collapsed by default')
+        for selector in ['#agent-connect-info', '#agent-connect-activity', '#agent-connect-copy',
+                         '#agent-connect-refresh', '#agent-connect-open-panel']:
+            check(page.locator(selector).is_hidden(), 'Secondary connection content remained visible: ' + selector)
+        check(page.locator('#agent-connect-message').is_hidden(), 'Ready state repeated the introduction')
         check(page.input_value('#agent-connect-url') == agentinfo_url, 'Core did not expose its Agent Info URL')
         info_text = page.input_value('#agent-connect-info')
         check('Core host environment' in info_text and 'Run discover, then hello' in info_text,
               'Connect Info did not explain where and how to confirm access')
         check('--token' not in info_text and 'agt_' not in info_text, 'Connect Info exposed a token')
         check(page.locator('.terminal-tab.agent-token-active').count() == 0, 'Reading Connect Info minted a token')
-        check('No active grants' in page.inner_text('#agent-connect-activity'), 'Missing authorization was not explained')
+        check(('目前沒有有效授權' if zh else 'No active grants') in page.text_content('#agent-connect-activity'), 'Missing authorization was not explained')
         check(page.locator('#agent-tunnel-btn').is_hidden(), 'Local shell offered an SSH tunnel')
         check(page.locator('#agent-remote-info-btn').count() == 0, 'A separate remote Agent Info button remains')
-        check(page.inner_text('#agent-connect-btn') == 'Agent Info for Current Tab', 'Info button did not identify its tab context')
-        check(page.inner_text('#agent-connect-copy') == 'Copy Prompt', 'Local info did not offer a prompt')
+        check(page.inner_text('#agent-connect-btn') == ('Agent 連線' if zh else 'Agent connection'), 'Info button did not identify the Agent connection workflow')
         page.click('#agent-connect-copy-url')
         page.wait_for_function('url => window.copiedAgentText === url', arg=agentinfo_url)
+        page.locator('#agent-connect-details summary').focus()
+        page.keyboard.press('Enter')
+        check(page.locator('#agent-connect-info').is_visible(), 'Keyboard disclosure did not reveal the prompt')
+        check(page.inner_text('#agent-connect-copy') == ('複製連線指引' if zh else 'Copy Prompt'), 'Local info did not offer a prompt')
         page.click('#agent-connect-copy')
         page.wait_for_function('text => window.copiedAgentText === text', arg=info_text)
         page.focus('#agent-connect-url')
@@ -3866,7 +4535,11 @@ def test_core_agent_connect_info_can_be_copied_and_confirmed(browser, access_url
         page.click('#agent-external-token-btn')
         page.wait_for_selector('.terminal-tab.agent-token-active', state='attached')
         page.click('#agent-connect-btn')
-        page.wait_for_function("() => document.getElementById('agent-connect-activity').innerText.includes('main: waiting for agent')")
+        check(not page.locator('#agent-connect-details').evaluate('element => element.open'),
+              'Reopening connection details retained the expanded view')
+        page.click('#agent-connect-details summary')
+        page.wait_for_function("text => document.getElementById('agent-connect-activity').innerText.includes(text)",
+                               arg='main: ' + ('等待 Agent' if zh else 'waiting for agent'))
         with urllib.request.urlopen(agentinfo_url, timeout=5) as response:
             info = json.load(response)
         hello = subprocess.run([
@@ -3874,19 +4547,34 @@ def test_core_agent_connect_info_can_be_copied_and_confirmed(browser, access_url
             '--terminal', 'main', 'hello',
         ], capture_output=True, text=True, timeout=15)
         check(hello.returncode == 0, 'The copied Agent Info URL could not run the shared hello helper')
-        page.wait_for_function("() => document.getElementById('agent-connect-activity').innerText.includes('last authenticated request')")
+        page.wait_for_function("text => document.getElementById('agent-connect-activity').innerText.includes(text)",
+                               arg='最近一次通過驗證的請求' if zh else 'last authenticated request')
+        page.click('#agent-connect-details summary')
         page.evaluate("() => { navigator.clipboard.writeText = async () => { throw new Error('Denied'); }; }")
         page.click('#agent-connect-copy-url')
-        page.wait_for_function("() => document.getElementById('agent-connect-message').innerText.includes('copy it manually')")
+        page.wait_for_function("text => document.getElementById('agent-connect-message').innerText.includes(text)",
+                               arg='手動複製' if zh else 'copy it manually')
+        check(page.locator('#agent-connect-message').is_visible(), 'Copy failure was hidden in collapsed details')
         selection = page.locator('#agent-connect-url').evaluate('field => field.value.slice(field.selectionStart, field.selectionEnd)')
         check(selection == agentinfo_url, 'Clipboard fallback did not select the URL')
+        page.click('#agent-connect-details summary')
+        page.click('#agent-connect-copy')
+        selection = page.locator('#agent-connect-info').evaluate('field => field.value.slice(field.selectionStart, field.selectionEnd)')
+        check(selection == page.input_value('#agent-connect-info'), 'Clipboard fallback did not select the prompt')
         page.click('#agent-connect-close')
     finally:
         close_context(context)
 
 
-def test_agent_tunnel_uses_panel_permissions_and_keeps_focus(browser, access_url):
-    context, page = new_page(browser, access_url)
+def test_agent_tunnel_uses_panel_permissions_and_keeps_focus(browser, access_url, ui_language='en'):
+    context, page = new_page(browser, access_url, ui_language=ui_language)
+    def ui_text(key, params=None):
+        return page.evaluate("""({key,params}) =>
+            StandTermI18n.create(StandTermMessages, document.documentElement.lang).t(key, params)
+        """, {'key':key,'params':params or {}})
+    token_requests = []
+    page.on('request', lambda request: token_requests.append(request.url)
+            if '/agent/external/token' in request.url else None)
     try:
         attach_agent(page)
         page.evaluate('() => window.terminalTest.captureTerminalIoForTest()')
@@ -3908,8 +4596,10 @@ def test_agent_tunnel_uses_panel_permissions_and_keeps_focus(browser, access_url
         requests = page.evaluate("() => window.terminalTest.getEmitted().filter(e => e.event === 'agent_tunnel')")
         check(len(requests) == 1, 'Apply sent duplicate tunnel operations')
         request = requests[0]['args'][0]
-        check(request['terminal_id'] == 'main' and request['operation'] == 'apply', 'carrier scope is wrong')
+        check(request == {'terminal_id':'main','operation':'apply'}, 'carrier scope is wrong')
         check('targets' not in request, 'Browser supplied a second authorization list')
+        check(not any(event['event'] in {'agent_attach','agent_detach','agent_mode_set','agent_pause'}
+                      for event in get_emitted(page)), 'Tunnel setup changed Agent Panel permissions')
         page.focus('#agent-tunnel-close')
         page.evaluate("() => { window.dispatchEvent(new Event('blur')); window.dispatchEvent(new Event('focus')); }")
         page.wait_for_timeout(150)
@@ -3918,31 +4608,42 @@ def test_agent_tunnel_uses_panel_permissions_and_keeps_focus(browser, access_url
         check(page.locator('#agent-tunnel-info').is_hidden(), 'failed setup advertised usable Connect Info')
         # Backend integration tests cover real SSH; this fixture exercises the ready-state controls.
         remote_url = 'http://127.0.0.1:43210/agentinfo'
+        remote_prompt = 'Run the agent on this SSH host. AgentInfoURL: ' + remote_url
+        verified_at = 1700000000
         page.evaluate('payload => window.terminalTest.applyAgentTunnelStatusForTest(payload)', {
             'status': 'ready', 'carrier_id': 'test-tunnel', 'agentinfo_url': remote_url,
-            'verified_at': time.time(), 'connect_info': 'Run the agent on this SSH host. AgentInfoURL: ' + remote_url,
+            'verified_at': verified_at, 'connect_info': remote_prompt,
             'ssh_context': {'host': '<img src=x>', 'ssh_tab': 'main'},
             'terminal_ids': ['main'], 'terminals': [{'terminal_id': 'main', 'last_request_at': None}],
         })
         check(page.input_value('#agent-tunnel-url') == remote_url, 'Tunnel showed the local Core URL')
         check(page.locator('#agent-connect-btn').is_visible(), 'Ready tunnel did not reveal remote info')
         check(page.locator('#agent-tunnel-carrier img').count() == 0, 'SSH host context was rendered as HTML')
-        check('verified:' in page.inner_text('#agent-tunnel-verification'), 'Tunnel verification time is missing')
-        check('waiting for agent' in page.inner_text('#agent-tunnel-activity'), 'Ready falsely confirmed agent access')
+        verified_time = page.evaluate('({stamp,locale}) => new Date(stamp * 1000).toLocaleString(locale)',
+                                      {'stamp':verified_at,'locale':ui_language})
+        check(page.inner_text('#agent-tunnel-verification') == ui_text('agent.tunnel.verified_at', {'time':verified_time}),
+              'Tunnel verification time was not localized')
+        check(page.inner_text('#agent-tunnel-activity') == 'main: ' + ui_text('agent.connection.waiting'),
+              'Ready falsely confirmed agent access')
         page.evaluate('''() => Object.defineProperty(navigator, 'clipboard', {
             configurable: true, value: {writeText: async text => {window.copiedAgentText = text;}}
         })''')
         page.click('#agent-tunnel-copy-url')
         page.wait_for_function('url => window.copiedAgentText === url', arg=remote_url)
         prompt = page.input_value('#agent-tunnel-info')
+        check(prompt == remote_prompt, 'Display localization changed the remote prompt')
         page.click('#agent-tunnel-copy')
         page.wait_for_function('text => window.copiedAgentText === text', arg=prompt)
         for carrier in ('unrelated-tunnel', 'test-tunnel'):
+            activity_at = 1700000300
             page.evaluate('payload => window.terminalTest.applyAgentConnectionActivityForTest(payload)', {
-                'terminal_id': 'main', 'carrier_id': carrier, 'last_request_at': time.time(),
+                'terminal_id': 'main', 'carrier_id': carrier, 'last_request_at': activity_at,
             })
-            expected = 'waiting for agent' if carrier == 'unrelated-tunnel' else 'last authenticated request'
-            check(expected in page.inner_text('#agent-tunnel-activity'), 'Activity did not match the current SSH tunnel')
+            activity_time = page.evaluate('({stamp,locale}) => new Date(stamp * 1000).toLocaleString(locale)',
+                                          {'stamp':activity_at,'locale':ui_language})
+            expected = ui_text('agent.connection.waiting') if carrier == 'unrelated-tunnel' else ui_text(
+                'agent.connection.request_at', {'time':activity_time})
+            check(page.inner_text('#agent-tunnel-activity') == 'main: ' + expected, 'Activity did not match the current SSH tunnel')
         page.evaluate('() => window.terminalTest.clearEmitted()')
         page.click('#agent-tunnel-check')
         page.wait_for_selector('#agent-tunnel-apply:not([disabled])')
@@ -3952,12 +4653,13 @@ def test_agent_tunnel_uses_panel_permissions_and_keeps_focus(browser, access_url
         check(page.locator('#agent-connect-btn').is_hidden(), 'Failed check retained remote info shortcut')
         page.click('#agent-tunnel-close')
         check(not page.locator('#agent-tunnel-dialog').is_visible(), 'Close did not dismiss tunnel dialog')
+        check(not token_requests, 'Agent Tunnel minted a local Agent token')
     finally:
         close_context(context)
 
 
-def test_remote_agent_info_tracks_ssh_carrier_and_rejects_late_replies(browser, access_url):
-    context, page = new_page(browser, access_url)
+def test_remote_agent_info_tracks_ssh_carrier_and_rejects_late_replies(browser, access_url, ui_language='en'):
+    context, page = new_page(browser, access_url, ui_language=ui_language)
     try:
         page.evaluate('''() => {
             window.terminalTest.holdAgentTunnelRequestsForTest();
@@ -3980,14 +4682,25 @@ def test_remote_agent_info_tracks_ssh_carrier_and_rejects_late_replies(browser, 
         page.click('#agent-tunnel-btn')
         page.evaluate('payload => window.terminalTest.completeAgentTunnelRequestForTest(0, payload)', first)
         prompt = page.input_value('#agent-tunnel-info')
+        check(prompt == first['connect_info'], 'Display localization changed the remote prompt')
         page.click('#agent-tunnel-copy')
         page.wait_for_function('text => window.copiedAgentText === text', arg=prompt)
         page.click('#agent-tunnel-close')
         page.click('#agent-connect-btn')
-        check(page.inner_text('#agent-tunnel-title') == 'Agent Info for Current Tab', 'Remote shortcut opened the wrong view')
+        title = page.evaluate("() => StandTermI18n.create(StandTermMessages, document.documentElement.lang).t('agent.connection.title')")
+        check(page.inner_text('#agent-tunnel-title') == title, 'Remote shortcut opened the wrong view')
         check(page.locator('#agent-tunnel-setup').is_hidden(), 'Remote info repeated setup controls')
         check(page.locator('#agent-tunnel-copy').is_hidden(), 'Remote shortcut offered a stale cached prompt')
+        check(page.locator('#agent-tunnel-copy-url').is_disabled(), 'Remote shortcut offered a stale cached URL')
         page.evaluate('payload => window.terminalTest.completeAgentTunnelRequestForTest(1, payload)', first)
+        check(page.locator('#agent-tunnel-info').is_hidden(), 'Remote info did not collapse the full prompt')
+        for selector in ['#agent-tunnel-manage', '#agent-tunnel-refresh', '#agent-tunnel-check',
+                         '#agent-tunnel-copy', '#agent-tunnel-carrier']:
+            check(page.locator(selector).is_hidden(), 'Remote secondary content remained visible: ' + selector)
+        check(page.locator('#agent-tunnel-message').is_hidden(), 'Remote ready state repeated the introduction')
+        page.click('#agent-tunnel-copy-url')
+        page.wait_for_function('url => window.copiedAgentText === url', arg=first['agentinfo_url'])
+        page.click('#agent-tunnel-details summary')
         page.click('#agent-tunnel-copy')
         page.wait_for_function('text => window.copiedAgentText === text', arg=prompt)
         page.click('#agent-tunnel-manage')
@@ -4004,6 +4717,7 @@ def test_remote_agent_info_tracks_ssh_carrier_and_rejects_late_replies(browser, 
         check(page.input_value('#agent-tunnel-info') == second['connect_info'], 'Old carrier stop cleared the new tunnel')
         page.evaluate("() => window.terminalTest.applyAgentTunnelStateForTest({terminal_id: 'second', carrier_id: 'host-b', status: 'stopped'})")
         check(page.locator('#agent-tunnel-copy').is_hidden(), 'Stop retained a usable prompt')
+        check(page.locator('#agent-tunnel-copy-url').is_disabled(), 'Stop retained a usable URL')
         check(page.locator('#agent-connect-btn').is_hidden(), 'Stop retained the remote shortcut')
         page.click('#agent-tunnel-apply')
         page.evaluate('''() => window.terminalTest.applyTerminalListForTest({terminals: [
@@ -4021,7 +4735,7 @@ def test_remote_agent_info_tracks_ssh_carrier_and_rejects_late_replies(browser, 
         page.click('.terminal-tab[data-terminal-id="main"]')
         check(page.locator('#agent-connect-btn').is_visible(), 'Returning to a local tab did not restore Agent Info')
         page.click('#agent-connect-btn')
-        page.wait_for_selector('#agent-connect-copy:not([disabled])')
+        page.wait_for_selector('#agent-connect-copy-url:not([disabled])')
         check(page.locator('#agent-tunnel-dialog').is_hidden(), 'Local tab opened SSH info')
         check('Core host environment' in page.input_value('#agent-connect-info'), 'Local tab retained the SSH prompt')
         page.click('#agent-connect-close')
@@ -4283,7 +4997,8 @@ def test_ssh_profile_picker_and_settings_save_semantics(browser, access_url):
                 });
                 window.terminalTest.handleSshOutput({
                     terminal_id: terminalId, message_type: 'ssh_connected',
-                    connection_type: 'ssh', terminal_label: 'SSH - Build Server'
+                    connection_type: 'ssh', terminal_label: 'SSH - Build Server',
+                    ssh_target: {host: 'build.example', port: '22', username: 'builder'}
                 });
             }"""
         )
@@ -4349,22 +5064,23 @@ def test_ssh_profile_picker_and_settings_save_semantics(browser, access_url):
 
         page.click('#quick-settings')
         page.click('.settings-nav-item[data-tab="ssh-sessions"]')
+        page.wait_for_function("() => !document.getElementById('ssh-profile-save').disabled")
         preloaded_editor = page.evaluate(
             """() => ({
                 name: document.getElementById('ssh-profile-name').value,
-                host: document.getElementById('ssh-profile-host').value,
+                summary: document.getElementById('ssh-profile-route-summary').textContent,
                 saveDisabled: document.getElementById('ssh-profile-save').disabled
             })"""
         )
         check(
-            preloaded_editor == {'name': 'recent@recent.example', 'host': 'recent.example', 'saveDisabled': True},
-            'SSH Settings did not preload Quick Connect as a create-only draft',
+            preloaded_editor == {'name': 'builder@build.example', 'summary': 'New direct profile: builder@build.example:22', 'saveDisabled': False},
+            'SSH Settings did not preload the active SSH tab as a create-only draft',
         )
         page.click('#ssh-profile-list button[data-profile-id="profile-a"]')
-        page.fill('#ssh-profile-username', 'builder2')
+        page.get_by_label('Target Username', exact=True).fill('builder2')
         page.click('#ssh-profile-save')
         page.wait_for_function(
-            """() => document.getElementById('ssh-profile-status').innerText === 'Saved Build Server.'""",
+            """() => document.getElementById('ssh-profile-status').innerText === 'Saved Build Server. Changes apply to the next connection.'""",
             timeout=5000,
         )
         updated = page.evaluate("() => window.terminalTest.getSshSessionState()")
@@ -4380,17 +5096,20 @@ def test_ssh_profile_picker_and_settings_save_semantics(browser, access_url):
         reordered = page.evaluate("() => window.terminalTest.getSshSessionState()")
         check([profile['id'] for profile in reordered['profiles']] == ['profile-b', 'profile-a'], 'profile move used list index as identity')
 
-        page.fill('#ssh-profile-name', 'Build Server Copy')
-        page.fill('#ssh-profile-port', '2222')
         page.click('#ssh-profile-create')
+        page.fill('#ssh-profile-name', 'Build Server Copy')
+        page.get_by_label('Target Host', exact=True).fill('build.example')
+        page.get_by_label('Target Username', exact=True).fill('builder')
+        page.get_by_label('Target Port', exact=True).fill('2222')
+        page.click('#ssh-profile-save')
         page.wait_for_function(
             """async () => (await window.terminalTest.getSshSessionState()).profiles.length === 3""",
             timeout=5000,
         )
         created = page.evaluate("() => window.terminalTest.getSshSessionState()")
         check(created['profiles'][-1]['name'] == 'Build Server Copy', 'Create did not add a separate profile')
-        check(created['profiles'][-1]['host'] == 'build.example', 'Create did not copy the loaded profile draft')
-        check(created['profiles'][-1]['port'] == '2222', 'Create did not retain edits made after Load')
+        check(created['profiles'][-1]['host'] == 'build.example', 'New session did not save its edited target')
+        check(created['profiles'][-1]['port'] == '2222', 'New session did not retain its port')
         created_profile_id = created['profiles'][-1]['id']
         check(created_profile_id != 'profile-a', 'Create reused the loaded stable ID')
         original_profile = next(profile for profile in created['profiles'] if profile['id'] == 'profile-a')
@@ -4504,20 +5223,9 @@ def test_browser_ssh_key_lifecycle_and_settings_transfer(browser, access_url):
             "() => document.getElementById('ssh-profile-name').value === 'Primary'",
             timeout=5000,
         )
-        page.check('#ssh-profile-key-enabled')
-        page.wait_for_function(
-            "() => document.getElementById('ssh-profile-key-status').innerText.includes('SHA256:')",
-            timeout=10000,
-        )
-        check(
-            page.locator('#ssh-profile-key-public').input_value().startswith('ssh-ed25519 '),
-            'generated browser SSH key did not expose an OpenSSH public key',
-        )
-        page.click('#ssh-profile-save')
-        page.wait_for_function(
-            "() => document.getElementById('ssh-profile-status').innerText === 'Saved Primary.'",
-            timeout=5000,
-        )
+        # Keep coverage of credentials owned by legacy profiles. New node keys
+        # are exercised through the managed route editor in its dedicated suite.
+        page.evaluate("() => window.terminalTest.createBrowserSshKeyForProfileForTest('profile-primary')")
         metadata = page.evaluate(
             "() => window.terminalTest.getBrowserSshKeyMetadataForTest('profile-primary')"
         )
@@ -4682,9 +5390,11 @@ def test_browser_ssh_key_lifecycle_and_settings_transfer(browser, access_url):
         page.click('#quick-settings')
         page.click('.settings-nav-item[data-tab="ssh-sessions"]')
         page.click('#ssh-profile-list button[data-profile-id="profile-primary"]')
-        page.wait_for_function("() => document.getElementById('ssh-profile-key-enabled').checked", timeout=5000)
-        page.fill('#ssh-profile-name', 'Primary Copy')
         page.click('#ssh-profile-create')
+        page.fill('#ssh-profile-name', 'Primary Copy')
+        page.get_by_label('Target Host', exact=True).fill('copy.example')
+        page.get_by_label('Target Username', exact=True).fill('copy')
+        page.click('#ssh-profile-save')
         page.wait_for_function(
             """async () => (await window.terminalTest.getSshSessionState()).profiles
                 .some(profile => profile.name === 'Primary Copy')""",
@@ -4695,7 +5405,6 @@ def test_browser_ssh_key_lifecycle_and_settings_transfer(browser, access_url):
         check(copied['keyId'] is None, 'Create copied a browser key from the loaded profile')
 
         page.click('#ssh-profile-list button[data-profile-id="profile-primary"]')
-        page.wait_for_function("() => document.getElementById('ssh-profile-key-enabled').checked", timeout=5000)
         page.once('dialog', lambda dialog: dialog.accept())
         page.click('#ssh-profile-delete')
         page.wait_for_function(
@@ -4715,13 +5424,17 @@ def main():
     sync_playwright, PlaywrightError, _ = load_playwright()
     tests = [
         test_access_required_page_accepts_token_login,
+        test_initial_access_login_falls_back_without_localization_or_javascript,
         test_browser_authorization_gate_hides_connection_controls,
         test_server_unavailable_waits_for_reconnect,
         test_retry_now_resubscribes_after_socket_disconnect,
         test_invalid_session_reconnect_prompts_for_current_token,
+        test_browser_access_and_recovery_in_traditional_chinese,
         test_platform_passkey_recovers_live_session_without_access_token,
         test_agent_panel_can_be_dragged,
         test_toolbar_pause_targets_main_tab_not_panel_override,
+        test_agent_mint_quick_action_applies_saved_permission,
+        test_agent_language_preview_preserves_access_and_applies_on_next_page,
         test_terminal_pip_hides_selected_tab_and_keeps_background_tab,
         test_sftp_status_actions_and_terminal_pip_transition,
         test_sftp_send_context_action_is_limited_to_connected_ssh_tabs,
@@ -4738,7 +5451,10 @@ def main():
         test_clipboard_paste_targets_and_native_review,
         test_clipboard_paste_encoding_is_consistent,
         test_approval_payload_and_stale_rejections,
+        test_localized_input_decisions_preserve_exact_proposal,
         test_file_copy_approval_shows_canonical_plan,
+        test_agent_transfer_stop_states_and_dismissal,
+        test_agent_copy_and_transfer_states_in_traditional_chinese,
         test_file_copy_approval_is_global_and_decision_is_single_shot,
         test_file_copy_approval_keeps_controls_visible_with_long_paths,
         test_ime_anchor_poc_loads_and_fails_open,

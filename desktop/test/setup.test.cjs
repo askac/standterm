@@ -7,16 +7,20 @@ const path = require('node:path');
 const os = require('node:os');
 const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
+const { create } = require('../i18n.js');
 
 async function fixture({ consent = true, pythonMissing = false, ready = false, native = false,
-  macos = false, machine = 'arm64', wrongVenv = false,
+  macos = false, machine = 'arm64', wrongVenv = false, locale = 'en',
   coreError = null,
   holdPrepare = false, cleanupConfirm = false, closeDecision = async () => ({ response: 0 }) } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'standterm-setup-test-'));
   await fs.mkdir(path.join(root, 'bundle'));
   const id = 'a'.repeat(64);
   await fs.writeFile(path.join(root, 'bundle', 'manifest.json'), JSON.stringify({ id }));
+  const language = create(locale), { t } = language;
+  await fs.writeFile(path.join(root, 'language.json'), JSON.stringify({ version: 1, locale }));
   const calls = [];
+  const dialogs = [], scripts = [];
   let progressWindow;
   let preparedChild;
   let completePrepare;
@@ -29,7 +33,7 @@ async function fixture({ consent = true, pythonMissing = false, ready = false, n
       assert.equal(options.webPreferences.nodeIntegration, false);
       this.webContents = new EventEmitter();
       this.webContents.setWindowOpenHandler = () => {};
-      this.webContents.executeJavaScript = async () => {};
+      this.webContents.executeJavaScript = async script => { scripts.push(script); };
       progressWindow = this;
     }
     async loadURL() {}
@@ -41,13 +45,14 @@ async function fixture({ consent = true, pythonMissing = false, ready = false, n
     app: { getPath: () => root }, BrowserWindow: Window,
     dialog: { showMessageBox: async (...args) => {
       const options = args.at(-1);
-      if (options.title === 'Confirm environment cleanup') {
+      dialogs.push(options);
+      if (options.title === t('desktop.setup.cleanup_title')) {
         assert.equal(options.defaultId, 0);
         assert.equal(options.cancelId, 0);
         assert.match(options.detail, /C:\\Runtime\\tools\\.venv_win/);
         return { response: cleanupConfirm ? 1 : 0 };
       }
-      if (options.title === 'Cancel StandTerm setup?') {
+      if (options.title === t('desktop.setup.cancel_title')) {
         closeDialogs++;
         assert.equal(args[0], progressWindow);
         assert.equal(options.defaultId, 0);
@@ -55,9 +60,9 @@ async function fixture({ consent = true, pythonMissing = false, ready = false, n
         return closeDecision();
       }
       assert.equal(options.cancelId, options.defaultId);
-      if (options.title === 'StandTerm Desktop: select WSL') return { response: 0 };
-      if (options.title === 'StandTerm Desktop: Python required') return { response: 0 };
-      assert.match(options.detail, /Requires Python 3.10\+/);
+      if (options.title === t('desktop.setup.select_wsl_title')) return { response: 0 };
+      if (options.title === t('desktop.setup.python_required_title')) return { response: 0 };
+      assert.ok(options.detail.includes(t(`desktop.setup.requirements_${macos ? 'macos' : native ? 'windows' : 'wsl'}`)));
       return { response: consent ? 1 : 0 };
     } },
     session: { fromPartition: () => ({ setPermissionRequestHandler() {}, setPermissionCheckHandler() {},
@@ -112,12 +117,13 @@ async function fixture({ consent = true, pythonMissing = false, ready = false, n
   };
   const context = vm.createContext({ module: { exports: {} }, __dirname: path.join(__dirname, '..'),
     require: name => name === 'electron' ? electron : name === 'node:child_process' ? { spawn }
-      : name === './macos-python.cjs' ? require('../macos-python.cjs') : require(name),
+      : name.startsWith('./') ? require(path.join(__dirname, '..', name)) : require(name),
     process: { resourcesPath: root, arch: 'arm64', env: {} }, Buffer, setTimeout, clearTimeout });
   vm.runInContext(await fs.readFile(path.join(__dirname, '..', 'setup.cjs'), 'utf8'), context);
   return { run: options => context.module.exports.preparePackagedBackend(macos ? 'macos' : native ? 'windows' : 'wsl', options), root, calls,
     manage: action => context.module.exports.manageCore(macos ? 'macos' : native ? 'windows' : 'wsl', action),
-    cleanup: () => context.module.exports.cleanupManagedVenvs(native ? 'windows' : 'wsl'),
+    cleanup: options => context.module.exports.cleanupManagedVenvs(native ? 'windows' : 'wsl', options),
+    dialogs, scripts, language,
     preparing, window: () => progressWindow, child: () => preparedChild, complete: () => completePrepare(),
     closeDialogs: () => closeDialogs, quit: () => context.module.exports.confirmSetupQuit() };
 }
@@ -287,4 +293,88 @@ test('a cancellation answer arriving after successful setup is ignored', async (
   assert.equal(await quitting, false);
   assert.equal(f.child().cancelRequested, undefined);
   assert.ok(await fs.stat(path.join(f.root, 'launcher.json')));
+});
+
+test('both setup languages preserve consent, backend selection and cancellation codes', async () => {
+  for (const locale of ['en', 'zh-TW']) for (const platform of [{}, { native: true }, { macos: true }]) {
+    for (const consent of [false, true]) {
+      const f = await fixture({ locale, consent, ...platform });
+      const { t } = f.language;
+      if (consent) await f.run({ language: f.language });
+      else await assert.rejects(f.run({ language: f.language }), { code: 'SETUP_CANCELED' });
+      const confirm = f.dialogs.find(item => item.title === t('desktop.setup.prepare_title'));
+      assert.deepEqual(Array.from(confirm.buttons), [t('desktop.common.cancel'), t('desktop.setup.create_environment')]);
+      assert.equal(confirm.defaultId, 0);
+      assert.equal(confirm.cancelId, 0);
+      assert.equal(f.calls.filter(args => args.includes('--prepare')).length, Number(consent));
+      assert.equal(f.calls.some(args => args.includes('--distribution')), !platform.native && !platform.macos);
+      if (consent) assert.ok(f.scripts[0].includes(t('desktop.setup.progress_heading')));
+    }
+  }
+});
+
+test('localized cancellation waits for owned processes and ignores stale confirmations', async () => {
+  for (const locale of ['en', 'zh-TW']) {
+    const f = await fixture({ locale, holdPrepare: true, closeDecision: async () => ({ response: 1 }) });
+    const running = assert.rejects(f.run(), { code: 'SETUP_CANCELED' });
+    await f.preparing;
+    let done = false;
+    const quitting = f.quit().then(result => { done = true; return result; });
+    await new Promise(setImmediate);
+    assert.equal(done, false);
+    assert.equal(f.child().cancelRequested, true);
+    assert.equal(f.window().title, f.language.t('desktop.setup.canceling_title'));
+    assert.ok(f.scripts.at(-1).includes(f.language.t('desktop.setup.canceling_status')));
+    f.child().emit('close', 1);
+    await running;
+    assert.equal(await quitting, true);
+
+    let answer;
+    const stale = await fixture({ locale, holdPrepare: true,
+      closeDecision: () => new Promise(resolve => { answer = resolve; }) });
+    const preparing = stale.run();
+    await stale.preparing;
+    const closing = stale.quit();
+    stale.complete(); await preparing;
+    answer({ response: 1 });
+    assert.equal(await closing, false);
+    assert.equal(stale.child().cancelRequested, undefined);
+  }
+});
+
+test('typed setup errors select translated messages without interpreting payload text', async () => {
+  for (const locale of ['en', 'zh-TW']) for (const code of ['git_dirty', 'invalid_bundle', 'setup_timeout', 'constructor', 'python_required']) {
+    const f = await fixture({ locale, native: true, coreError: code });
+    await assert.rejects(f.manage('update'), error => {
+      assert.equal(error.code, code);
+      assert.equal(error.message, f.language.t(['constructor', 'python_required'].includes(code)
+        ? 'desktop.setup.help_windows' : `desktop.setup.error_${code}`));
+      return true;
+    });
+  }
+});
+
+test('installer preparation and cleanup use the selected mode profile language', async () => {
+  for (const locale of ['en', 'zh-TW']) for (const cleanupConfirm of [false, true]) for (const native of [false, true]) {
+    const f = await fixture({ locale, native, cleanupConfirm });
+    const profile = path.join(f.root, 'StandTermDesktopEvaluation', native ? 'windows' : 'wsl');
+    await fs.mkdir(profile, { recursive: true });
+    await fs.writeFile(path.join(profile, 'language.json'), JSON.stringify({ version: 1, locale }));
+    await fs.writeFile(path.join(f.root, 'language.json'), JSON.stringify({ version: 1, locale: locale === 'en' ? 'zh-TW' : 'en' }));
+    await f.run({ installer: true });
+    const result = await f.cleanup();
+    const { t } = f.language;
+    const confirm = f.dialogs.find(item => item.title === t('desktop.setup.cleanup_title'));
+    assert.deepEqual(Array.from(confirm.buttons), [t('desktop.setup.cleanup_keep'), t('desktop.setup.cleanup_move')]);
+    assert.equal(result.status, cleanupConfirm ? 'checked' : 'retained');
+    assert.equal(f.calls.filter(args => args.includes('--detach-idle-venvs')).length, Number(cleanupConfirm));
+    assert.equal(f.calls.some(args => args.includes('--distribution')), !native);
+  }
+});
+
+test('launch language stays fixed when a different next-launch preference is saved', async () => {
+  const f = await fixture({ locale: 'en' });
+  await fs.writeFile(path.join(f.root, 'language.json'), JSON.stringify({ version: 1, locale: 'zh-TW' }));
+  await f.run({ language: f.language });
+  assert.ok(f.dialogs.some(item => item.title === 'Prepare StandTerm Core'));
 });

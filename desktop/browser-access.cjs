@@ -1,5 +1,7 @@
 'use strict';
 
+const { create } = require('./i18n.js');
+
 function validateAccessUrl(value, origin, authorization = false) {
   if (typeof value !== 'string' || value.length > 8192) throw new Error('Invalid access response.');
   const url = new URL(value);
@@ -12,7 +14,7 @@ function validateAccessUrl(value, origin, authorization = false) {
   return url;
 }
 
-function createBrowserAccess({ origin, session, launcherToken, available, confirm, copy, open, notify }) {
+function createBrowserAccess({ origin, session, launcherToken, available, confirm, copy, open, notify, t = create('en').t }) {
   const base = new URL(origin);
   if (base.origin !== origin || base.protocol !== 'http:' || base.hostname !== '127.0.0.1'
       || !base.port || typeof launcherToken !== 'string' || !launcherToken) throw new Error('Invalid browser access authority.');
@@ -56,24 +58,24 @@ function createBrowserAccess({ origin, session, launcherToken, available, confir
       if (!available()) return false;
       if (action === 'open') await open(url.href);
       else copy(action === 'copy-token' ? url.searchParams.get('token') : url.href);
-      await notify(action === 'open' ? 'Browser authorization opened in the default browser.' : 'Access information copied. Treat it as a password.');
+      await notify(t(action === 'open' ? 'desktop.browser_access.opened' : 'desktop.browser_access.copied'));
       return true;
     } catch {
       // Never forward URL-bearing network errors, access tokens or grants to logs/UI.
-      await notify('Could not prepare browser access. Check that this Desktop backend is still running.', true);
+      await notify(t('desktop.browser_access.failed'), true);
       return false;
     } finally { pending = false; }
   }
   return {
     run,
     dispose: () => { launcherToken = ''; },
-    menu: { label: 'Browser Access', submenu: [
-      { label: 'Open in browser...', click: () => run('open') },
-      { label: 'Copy browser authorization URL...', click: () => run('copy-auth') },
+    get menu() { return { label: t('desktop.browser_access.menu'), submenu: [
+      { label: t('desktop.browser_access.open'), click: () => run('open') },
+      { label: t('desktop.browser_access.copy_authorization'), click: () => run('copy-auth') },
       { type: 'separator' },
-      { label: 'Copy access URL (sensitive)', click: () => run('copy-url') },
-      { label: 'Copy access token (sensitive)', click: () => run('copy-token') },
-    ] },
+      { label: t('desktop.browser_access.copy_url'), click: () => run('copy-url') },
+      { label: t('desktop.browser_access.copy_token'), click: () => run('copy-token') },
+    ] }; },
   };
 }
 

@@ -18,6 +18,7 @@ from .ssh_host_keys import (
     SSHHostKeyStore, fingerprint, host_key_name,
 )
 from runtime_logging import log_message
+from .windows_network import WindowsNetworkSocket, windows_network_executable
 
 
 SSH_PROFILE_NAME_MAX_LENGTH = 64
@@ -138,6 +139,7 @@ class SSHBridge(TerminalBridge):
         self._sftp_endpoint = None
         self.ssh = None
         self.auth_method = None
+        self.network_origin = 'core'
         self._reset_ssh_client()
         self.channel = None
         self._output_decoder = codecs.getincrementaldecoder('utf-8')(errors='ignore')
@@ -146,6 +148,14 @@ class SSHBridge(TerminalBridge):
         metadata = super().metadata(cols=cols, rows=rows)
         if self.auth_method:
             metadata['auth_method'] = self.auth_method
+        if self._sftp_endpoint:
+            metadata['ssh_target'] = {
+                'host': self._sftp_endpoint['host'],
+                'port': self._sftp_endpoint['port'],
+                'username': self._sftp_endpoint['user'],
+            }
+            if self.network_origin == 'windows':
+                metadata['ssh_target']['network_origin'] = 'windows'
         return metadata
 
     def sftp_endpoint(self):
@@ -1202,8 +1212,12 @@ class SSHBridge(TerminalBridge):
                 self._pending_host_key = None
                 if previous is None:
                     # Connect to the network address; the alias is only a trust identity.
-                    sock = self._own_connection_resource(socket.create_connection(
-                        (node['host'], node['port']), timeout=SSH_CONNECT_TIMEOUT_SECONDS))
+                    if self.network_origin == 'windows':
+                        sock = self._own_connection_resource(WindowsNetworkSocket())
+                        sock.connect((node['host'], node['port']), timeout=SSH_CONNECT_TIMEOUT_SECONDS)
+                    else:
+                        sock = self._own_connection_resource(socket.create_connection(
+                            (node['host'], node['port']), timeout=SSH_CONNECT_TIMEOUT_SECONDS))
                 else:
                     self._connection_progress(node, index, len(route), 'forward')
                     sock = self._own_connection_resource(previous.get_transport().open_channel(
@@ -1213,7 +1227,8 @@ class SSHBridge(TerminalBridge):
                 self.ssh = None
                 self._reset_ssh_client(
                     interactive_node=node if interactive_login else None,
-                    local_direct=len(route) == 1 and not node.get('host_key_alias') and self._is_local_target(node['host']))
+                    local_direct=self.network_origin == 'core' and len(route) == 1
+                    and not node.get('host_key_alias') and self._is_local_target(node['host']))
                 client = self._own_connection_resource(self.ssh)
                 key = node.get('browser_key')
                 pkey = None
@@ -1245,6 +1260,8 @@ class SSHBridge(TerminalBridge):
                 'route': json.dumps([[n['host'].lower(), n['port'], n['username'],
                                       n.get('host_key_alias', '')] for n in route], separators=(',', ':')),
             }
+            if self.network_origin == 'windows':
+                self._sftp_endpoint['network_origin'] = 'windows'
             return True, None
         except Exception as exc:
             if isinstance(exc, (HostKeyConfirmationRequired, paramiko_module.BadHostKeyException)):
@@ -1257,8 +1274,16 @@ class SSHBridge(TerminalBridge):
             return False, result
 
     def connect(self, host, port, user, password=None, browser_key=None, cols=80, rows=24,
-                route=None, attempt_id=None, interactive_login=False):
+                route=None, attempt_id=None, interactive_login=False, network_origin='core'):
         self.attempt_id = attempt_id
+        if network_origin not in ('core', 'windows'):
+            return False, {'message': 'Invalid SSH network origin.', 'error_code': 'ssh_network_origin_invalid'}
+        self.network_origin = network_origin
+        if network_origin == 'windows':
+            # Windows localhost is not Core localhost: never offer local keys or automatic trust.
+            route = route or [{'node_id': 'direct', 'host': host, 'port': port, 'username': user,
+                               'password': password or '', 'browser_key': browser_key}]
+            return self._connect_route(route, cols, rows, interactive_login=interactive_login)
         if interactive_login:
             node = route[0]
             if (len(route) == 1 and not node.get('host_key_alias') and self._is_local_target(node['host'])
@@ -1360,6 +1385,8 @@ class SSHBridge(TerminalBridge):
         details.append('Received: ' + fingerprint(key))
         details.append('Verify this fingerprint with the host administrator before trusting it.')
         details.append('This updates the Core account\'s known_hosts file, shared with other SSH clients.')
+        if self.network_origin == 'windows':
+            details.append('The first SSH hop uses Windows networking. Use a host key alias for a different host at the same address.')
         return {
             'message': message,
             'error_code': 'ssh_host_key_changed' if saved else 'ssh_host_key_unknown',
@@ -1630,7 +1657,7 @@ class SSHBackendPlugin(TerminalBackendPlugin):
         default_host = self._get_default_host(context=context)
         default_port = self._get_default_port(context=context)
         default_user = self._get_default_user(context=context)
-        return [
+        fields = [
             BackendStartFieldSchema(
                 name='host',
                 label='Host',
@@ -1669,6 +1696,13 @@ class SSHBackendPlugin(TerminalBackendPlugin):
                 max_bytes=self._max_password_bytes,
             ),
         ]
+        if windows_network_executable():
+            fields.append(BackendStartFieldSchema(
+                name='network_origin', label='Connect from', value_type='string', input_type='select',
+                default_value='core', options=({'value': 'core', 'label': 'Core (WSL)'},
+                                               {'value': 'windows', 'label': 'Windows (preview)'}),
+            ))
+        return fields
 
     def validate_setting_update(self, setting_key, value, current_value=None):
         if setting_key == 'ssh.default_host':
@@ -1733,6 +1767,13 @@ class SSHBackendPlugin(TerminalBackendPlugin):
                 'error_code': 'ssh_remote_unauthorized',
             }
 
+        network_origin = data.get('network_origin', 'core')
+        if network_origin not in ('core', 'windows'):
+            return None, 'Invalid SSH network origin.'
+        if network_origin == 'windows' and not windows_network_executable():
+            return None, {'error_code': 'ssh_windows_network_unavailable',
+                          'message': 'Windows network access requires WSL interoperability and Windows PowerShell on PATH.'}
+
         if 'route' in data:
             route = data['route']
             interactive_login = data.get('interactive_login', False)
@@ -1746,7 +1787,7 @@ class SSHBackendPlugin(TerminalBackendPlugin):
                 return None, f'SSH routes support at most {SSH_MAX_JUMP_HOSTS} jump hosts plus the target.'
             nodes, seen = [], set()
             for index, raw in enumerate(route):
-                if not isinstance(raw, dict) or 'route' in raw:
+                if not isinstance(raw, dict) or 'route' in raw or 'network_origin' in raw:
                     return None, 'SSH route node is invalid.'
                 if not all(field in raw for field in ('host', 'port', 'username')):
                     return None, 'Each SSH route node requires its host, port and username.'
@@ -1769,6 +1810,8 @@ class SSHBackendPlugin(TerminalBackendPlugin):
                                      or self._has_control_chars(name)):
                 return None, 'SSH entry name is invalid.'
             payload.update(route=nodes, attempt_id=attempt_id, profile_name=name or None, interactive_login=interactive_login)
+            if network_origin == 'windows':
+                payload['network_origin'] = network_origin
             return payload, None
 
         host = data.get('host', self._get_default_host(context=context))
@@ -1876,6 +1919,7 @@ class SSHBackendPlugin(TerminalBackendPlugin):
             'profile_name': profile_name or None,
             'browser_key': browser_key,
             'host_key_alias': alias,
+            **({'network_origin': network_origin} if network_origin == 'windows' else {}),
         }, None
 
     def create_bridge(self, session_token, terminal_id, payload):
@@ -1887,6 +1931,8 @@ class SSHBackendPlugin(TerminalBackendPlugin):
 
     def connect_bridge(self, bridge, payload, cols, rows):
         options = {}
+        if payload.get('network_origin') == 'windows':
+            options['network_origin'] = 'windows'
         if payload.get('route'):
             options.update(route=payload['route'], attempt_id=payload['attempt_id'])
             if payload.get('interactive_login'):

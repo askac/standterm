@@ -2,6 +2,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { dialog, shell } = require('electron');
 
 async function run(win, origin, contents = win.webContents) {
   const evaluate = async script => {
@@ -92,12 +93,30 @@ async function run(win, origin, contents = win.webContents) {
         }, 15000).unref();
       });
       let result;
+      const originalDialog = dialog.showMessageBox;
+      const originalReveal = shell.showItemInFolder;
+      const notices = [];
+      const revealed = [];
+      dialog.showMessageBox = async (owner, options) => {
+        notices.push({ owner, options });
+        return { response: 1 };
+      };
+      shell.showItemInFolder = selected => revealed.push(selected);
       try {
         await child.webContents.executeJavaScript("document.querySelector('.sftp-file-download').click()", true);
         result = await completed;
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(notices.length, 1, 'Files download must show one completion notice');
+        assert.equal(notices[0].owner, child, 'notice must appear over the Files window');
+        assert.equal(notices[0].options.message, 'Download complete');
+        assert.equal(notices[0].options.detail, `Saved to:\n${output}`);
+        assert.deepEqual(notices[0].options.buttons, ['Close', 'Show in folder']);
+        assert.deepEqual(revealed, [output], 'reveal must use the actual renamed download path');
       } finally {
         clearTimeout(timer);
         downloadSession.removeListener('will-download', onDownload);
+        dialog.showMessageBox = originalDialog;
+        shell.showItemInFolder = originalReveal;
       }
       console.log(`Floating smoke: download ${result}.`);
       if (result !== 'completed') item?.cancel();

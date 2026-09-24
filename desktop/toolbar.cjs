@@ -3,15 +3,16 @@
 const { ipcMain, Menu, BrowserWindow } = require('electron');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const { normalizeLocale } = require('./i18n.js');
 
 const TOOLBAR_HEIGHT = 36;
 const TOOLBAR_URL = pathToFileURL(path.join(__dirname, 'toolbar.html')).href;
-const TOOLBAR_ASSETS = ['toolbar.html', 'toolbar.js', 'toolbar.css'].map(file => pathToFileURL(path.join(__dirname, file)).href);
+const TOOLBAR_ASSETS = ['toolbar.html', 'toolbar.js', 'toolbar.css', 'messages.js', 'i18n.js'].map(file => pathToFileURL(path.join(__dirname, file)).href);
 const TOOLBAR_MENUS = ['standterm', 'edit', 'agent-menu', 'view', 'diagnostics'];
 
-function installToolbar(win, coreView, capture, commands) {
+function installToolbar(win, coreView, capture, commands, locale = 'en') {
   const contents = win.webContents;
-  let state = { mac: process.platform === 'darwin', state: 'idle', label: '' };
+  let state = { mac: process.platform === 'darwin', state: 'idle', label: '', locale: normalizeLocale(locale) };
   let noticeId = 0;
   const send = value => {
     state = { ...state, ...value };

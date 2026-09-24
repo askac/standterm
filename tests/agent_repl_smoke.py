@@ -378,7 +378,7 @@ def test_cli_and_repl_apply_handoff_defaults(tmp_path=None):
         handoff=str(handoff_path),
         url=None,
         token=None,
-        terminal='main',
+        terminal=None,
         ca_file=None,
     )
     cli.apply_handoff(cli_args)
@@ -391,7 +391,7 @@ def test_cli_and_repl_apply_handoff_defaults(tmp_path=None):
         handoff=str(handoff_path),
         url='http://override',
         token=None,
-        terminal='main',
+        terminal=None,
         ca_file=None,
     )
     repl.apply_handoff(repl_args)
@@ -401,6 +401,32 @@ def test_cli_and_repl_apply_handoff_defaults(tmp_path=None):
     assert repl_args.ca_file == '/tmp/standterm-test-ca.crt'
     if tmp_path is None:
         handoff_path.unlink(missing_ok=True)
+
+
+def test_cli_and_repl_preserve_explicit_terminal_and_token():
+    with tempfile.TemporaryDirectory(prefix='standterm-handoff-selection-smoke-') as temp_dir:
+        handoff_path = Path(temp_dir) / 'handoff.json'
+        handoff_path.write_text(json.dumps({
+            'url': 'http://127.0.0.1:5012',
+            'token': 'agt_handoff',
+            'terminal_id': 'term-2',
+        }), encoding='utf-8')
+        old_argv = sys.argv
+        try:
+            for helper, command in ((cli, ['hello']), (repl, ['--no-initial-screen'])):
+                for terminal in (None, 'main', 'term-3'):
+                    for token in (None, 'agt_override'):
+                        sys.argv = [helper.__file__, '--handoff', str(handoff_path)]
+                        if terminal is not None:
+                            sys.argv.extend(['--terminal', terminal])
+                        if token is not None:
+                            sys.argv.extend(['--token', token])
+                        sys.argv.extend(command)
+                        args = helper.parse_args()
+                        assert args.terminal == (terminal if terminal is not None else 'term-2')
+                        assert args.token == (token or 'agt_handoff')
+        finally:
+            sys.argv = old_argv
 
 
 def test_agentinfo_bootstraps_jsonl_repl_and_type_helpers():
@@ -1416,6 +1442,7 @@ def main():
         test_repl_startup_type_stops_on_fatal_error,
         test_format_token_status_reports_idle_countdown,
         test_cli_and_repl_apply_handoff_defaults,
+        test_cli_and_repl_preserve_explicit_terminal_and_token,
         test_agentinfo_bootstraps_jsonl_repl_and_type_helpers,
         test_cli_plain_send_payload_uses_structured_text,
         test_cli_screen_tail_lines_payload,

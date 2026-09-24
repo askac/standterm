@@ -3,6 +3,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const { create } = require('./i18n.js');
 
 const ACTIONS = ['enable', 'update', 'prepare', 'recover'];
 
@@ -51,18 +52,16 @@ async function installedStore(profile, resources, version) {
   return sourceStore(profile, `${version}:${metadata.id}`);
 }
 
-function coreController({ store, prepareBundled, manage, dialog, openLogs, restart }) {
+function coreController({ store, prepareBundled, manage, dialog, openLogs, restart, t = create('en').t }) {
   let lastAction = null;
   let managing = false;
   async function confirm(action) {
-    const result = await dialog.showMessageBox({ type: 'warning', title: 'Change StandTerm Core',
-      message: action === 'recover' ? 'Restore the Core bundled with this Desktop installation?' : 'Use the advanced Git Core environment?',
-      detail: 'This restarts StandTerm and closes terminal sessions. Python dependencies may be downloaded and installed. '
-        + (action === 'recover' ? 'Core files and data in the previous environment are retained. Recovery does not roll back user data. '
-          : 'Git uses the official askac/standterm repository, main branch. Its files are not checked against the installed bundle hashes. '
-            + 'Local changes are allowed, but updates refuse to overwrite them. The Desktop shell stays installed. ')
-        + 'Authorization and recovery data are local to each Core source; switching may require reauthorization.',
-      buttons: ['Cancel', 'Restart and continue'], defaultId: 0, cancelId: 0, noLink: true });
+    const result = await dialog.showMessageBox({ type: 'warning', title: t('desktop.core_source.change_title'),
+      message: t(action === 'recover' ? 'desktop.core_source.confirm_recover' : 'desktop.core_source.confirm_git'),
+      detail: [t('desktop.core_source.restart_notice'),
+        t(action === 'recover' ? 'desktop.core_source.recovery_retention' : 'desktop.core_source.git_policy'),
+        t('desktop.core_source.reauthorization')].join('\n\n'),
+      buttons: [t('desktop.common.cancel'), t('desktop.core_source.restart_continue')], defaultId: 0, cancelId: 0, noLink: true });
     if (result.response === 1) restart(action);
     return result.response === 1;
   }
@@ -74,22 +73,24 @@ function coreController({ store, prepareBundled, manage, dialog, openLogs, resta
       let status;
       let issue = '';
       try { status = await manage('status'); } catch (error) { issue = error.message; }
-      const actions = [{ id: 'cancel', label: 'Close' }];
+      const actions = [{ id: 'cancel', label: t('desktop.core_source.close') }];
       if (status?.git_available) {
         actions.push({ id: settings.source === 'git' ? 'prepare' : 'enable',
-          label: settings.source === 'git' ? 'Prepare Git environment' : 'Enable Git Core' });
+          label: t(settings.source === 'git' ? 'desktop.core_source.prepare_git' : 'desktop.core_source.enable_git') });
         if (status.workspace === 'present') {
-          if (settings.source !== 'git') actions.push({ id: 'prepare', label: 'Prepare Git environment' });
-          actions.push({ id: 'update', label: 'Update Git Core' });
+          if (settings.source !== 'git') actions.push({ id: 'prepare', label: t('desktop.core_source.prepare_git') });
+          actions.push({ id: 'update', label: t('desktop.core_source.update_git') });
         }
       }
-      actions.push({ id: 'recover', label: 'Restore bundled Core' }, { id: 'logs', label: 'Open Desktop logs' });
-      const answer = await dialog.showMessageBox({ type: 'info', title: 'Core source (Advanced)',
-        message: `Core source: ${settings.source === 'git' ? 'Git' : 'Bundled with Desktop'}`,
-        detail: `Git in this backend environment: ${status?.git_available ? 'Available' : 'Unavailable'}\n`
-          + (status?.commit ? `Commit: ${status.commit}${status.dirty ? ' (local changes)' : ''}\n` : '')
-          + (status ? `Workspace: ${status.workspace}\n` : '') + issue
-          + '\nGit updates are manual. Install Git in the selected Windows, macOS or WSL environment to enable them.',
+      actions.push({ id: 'recover', label: t('desktop.core_source.restore_bundled') }, { id: 'logs', label: t('desktop.core_source.open_logs') });
+      const workspace = ['absent', 'present', 'unavailable', 'invalid'].includes(status?.workspace)
+        ? t(`desktop.core_source.workspace_${status.workspace}`) : status?.workspace;
+      const answer = await dialog.showMessageBox({ type: 'info', title: t('desktop.core_source.manager_title'),
+        message: t('desktop.core_source.source', { source: settings.source === 'git' ? 'Git' : t('desktop.core_source.bundled') }),
+        detail: t(status?.git_available ? 'desktop.core_source.git_available' : 'desktop.core_source.git_unavailable') + '\n'
+          + (status?.commit ? t(status.dirty ? 'desktop.core_source.commit_dirty' : 'desktop.core_source.commit', { commit: status.commit }) + '\n' : '')
+          + (status ? t('desktop.core_source.workspace', { workspace }) + '\n' : '') + issue
+          + '\n' + t('desktop.core_source.manual_updates'),
         buttons: actions.map(item => item.label), defaultId: 0, cancelId: 0, noLink: true });
       const action = actions[answer.response]?.id;
       if (action === 'logs') await openLogs();
@@ -110,9 +111,10 @@ function coreController({ store, prepareBundled, manage, dialog, openLogs, resta
     },
     async failure(error) {
       while (true) {
-        const answer = await dialog.showMessageBox({ type: 'error', title: 'StandTerm Core is unavailable',
-          message: error.message, detail: 'The Desktop shell can retry or restore its installed Core. Existing files are retained.',
-          buttons: ['Quit', 'Retry', 'Restore bundled Core', 'Core source (Advanced)', 'Open Desktop logs'],
+        const answer = await dialog.showMessageBox({ type: 'error', title: t('desktop.core_source.unavailable_title'),
+          message: error.message, detail: t('desktop.core_source.failure_choices'),
+          buttons: [t('desktop.core_source.quit'), t('desktop.core_source.retry'), t('desktop.core_source.restore_bundled'),
+            t('desktop.core_source.manager_title'), t('desktop.core_source.open_logs')],
           defaultId: 0, cancelId: 0, noLink: true });
         if (answer.response === 4) { await openLogs(); continue; }
         if (answer.response === 3) { if (await showManager()) return 'restart'; continue; }

@@ -32,6 +32,7 @@ test('Files downloads are exact-origin tickets, not arbitrary external links', (
 test('floating children deny navigation/nesting and close with opener lifecycle', () => {
   const opener = new EventEmitter();
   opener.webContents = new EventEmitter();
+  opener.webContents.session = new EventEmitter();
   opener.webContents.getURL = () => origin;
   opener.webContents.setWindowOpenHandler = fn => { opener.handler = fn; };
   const downloads = [];
@@ -72,4 +73,35 @@ test('floating children deny navigation/nesting and close with opener lifecycle'
   opener.webContents.emit('did-start-navigation', {}, origin, false, true);
   assert.equal(child.closed, true);
   assert.equal(opener.handler(valid).action, 'allow');
+});
+
+test('Files download notices use the completed native path and owned contents', () => {
+  const opener = new EventEmitter();
+  const contents = opener.webContents = new EventEmitter();
+  contents.session = new EventEmitter();
+  contents.setWindowOpenHandler = () => {};
+  const results = [];
+  installFloatingWindows(opener, origin, undefined, contents, result => results.push(result));
+  const ticket = `${origin}/sftp/download/${'a'.repeat(32)}`;
+  const download = (source, url = ticket) => {
+    const item = new EventEmitter();
+    item.getURL = () => url;
+    item.getSavePath = () => '/chosen folder/renamed.bin';
+    contents.session.emit('will-download', {}, item, source);
+    return item;
+  };
+  download(contents).emit('done', {}, 'completed');
+  assert.deepEqual(results, [{ state: 'completed', path: '/chosen folder/renamed.bin' }]);
+  download(contents).emit('done', {}, 'cancelled');
+  download(new EventEmitter()).emit('done', {}, 'completed');
+  download(contents, 'https://example.com/file').emit('done', {}, 'completed');
+  assert.equal(results.length, 1);
+  download(contents).emit('done', {}, 'interrupted');
+  assert.equal(results.at(-1).state, 'interrupted');
+  const pending = download(contents);
+  opener.emit('closed');
+  pending.emit('done', {}, 'completed');
+  assert.equal(results.length, 2);
+  assert.equal(contents.session.listenerCount('will-download'), 0);
+  assert.equal(pending.listenerCount('done'), 0);
 });

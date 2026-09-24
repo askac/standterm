@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, WebContentsView, Menu, Tray, nativeImage, dialog, session, shell, clipboard } = require('electron');
+const { app, BrowserWindow, WebContentsView, Menu, Tray, nativeImage, dialog, session, shell, clipboard, screen } = require('electron');
 const { spawn } = require('node:child_process');
 const http = require('node:http');
 const path = require('node:path');
@@ -25,6 +25,9 @@ const { createUiCommands } = require('./ui-commands.cjs');
 const { installToolbar } = require('./toolbar.cjs');
 const { createBrowserAccess } = require('./browser-access.cjs');
 const { installContextPaste } = require('./context-paste.cjs');
+const { createLanguage } = require('./language.cjs');
+const { loadWindowState, trackWindowState } = require('./window-state.cjs');
+const { createStartupWindow } = require('./startup-window.cjs');
 
 let maintenance;
 try { maintenance = installerRequest(process.argv); } catch (error) {
@@ -78,10 +81,14 @@ else if (app.isPackaged) {
   fs.mkdirSync(profile, { recursive: true });
   app.setPath('userData', profile);
 }
+const language = createLanguage(path.join(app.getPath('userData'), 'language.json'));
+const { t } = language;
 let child;
 let desktopSession;
 const expectedBackendExits = new WeakSet();
 let win;
+let windowState;
+let startupWindow;
 let tray;
 let capture;
 let captureTitle = '';
@@ -100,10 +107,16 @@ const diagnostics = createDiagnostics(path.join(app.getPath('userData'), 'diagno
 });
 
 function showWindow() {
+  if (booting && startupWindow) { startupWindow.focus(); focusSetup(); return; }
   if (!win || win.isDestroyed()) { focusSetup(); return; }
   if (win.isMinimized()) win.restore();
   win.show();
   win.focus();
+}
+
+function closeStartupWindow() {
+  startupWindow?.close();
+  startupWindow = null;
 }
 
 function launchBackend(preparedCommand, port = 0) {
@@ -228,21 +241,28 @@ function createTray() {
   const icon = nativeImage.createFromBitmap(pixels, { width: size, height: size });
   tray = new Tray(icon);
   tray.setToolTip('StandTerm Desktop');
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Open StandTerm', click: showWindow },
-    { type: 'separator' },
-    { label: 'Quit StandTerm', click: () => app.quit() },
-  ]));
+  updateTrayMenu();
   tray.on('click', showWindow);
   return icon;
 }
 
+function updateTrayMenu() {
+  tray?.setContextMenu(Menu.buildFromTemplate([
+    { label: t('desktop.menu.open'), click: showWindow },
+    { type: 'separator' },
+    { label: t('desktop.menu.quit'), click: () => app.quit() },
+  ]));
+}
+
 async function start() {
+  startupWindow = createStartupWindow(MODES[mode], language);
+  await startupWindow.ready;
+  if (quitting) return;
   diagnostics.write('setup_start');
   if (app.isPackaged && !smoke) {
     coreStore = await installedStore(app.getPath('userData'), process.resourcesPath, app.getVersion());
-    coreManager = coreController({ store: coreStore, prepareBundled: () => preparePackagedBackend(mode),
-      manage: action => manageCore(mode, action), dialog,
+    coreManager = coreController({ store: coreStore, prepareBundled: () => preparePackagedBackend(mode, { language }),
+      manage: action => manageCore(mode, action, { language }), dialog, t,
       openLogs: () => shell.openPath(path.dirname(diagnostics.file)),
       restart: action => { restartRequest = { action }; app.quit(); },
     });
@@ -258,7 +278,7 @@ async function start() {
     fs.writeFileSync(settingsPath, JSON.stringify({ version: 1, port }), { flag: 'wx' });
   }
   const handoff = await startWithPort({
-    settingsPath,
+    settingsPath, t,
     launch: port => launchBackend(prepared, port), verify: verifyBackend, stop: stopBackend,
     checkHost: process.platform === 'win32' && mode === 'wsl' ? async (port, options) => {
       try { await checkHostPort(port, options); }
@@ -267,13 +287,12 @@ async function start() {
     confirm: async (port, candidate, reason) => {
       diagnostics.write('port_change', { port, candidate });
       if (smoke) { testPortChanges++; console.log(`Port smoke: approved replacement ${port} -> ${candidate} (${reason || 'backend_address_in_use'}).`); return 'remember'; }
-      const problem = reason === 'host_permission_denied' ? 'is reserved or denied by Windows'
-        : reason === 'host_address_in_use' ? 'is already in use on Windows' : 'is already in use';
+      const message = reason === 'host_permission_denied' ? 'desktop.port.confirm_permission'
+        : reason === 'host_address_in_use' ? 'desktop.port.confirm_host_in_use' : 'desktop.port.confirm_in_use';
       const answer = await dialog.showMessageBox({ type: 'question', title: MODES[mode],
-        message: `Port ${port} ${problem}. Use port ${candidate}?`,
-        detail: 'No existing service will be stopped or reused. Changing the port changes the browser origin; '
-          + 'browser settings and SSH keys are not migrated. Windows and WSL remember their ports separately.',
-        buttons: ['Cancel', 'Use once', 'Use and remember'], defaultId: 0, cancelId: 0, noLink: true });
+        message: t(message, { port, candidate }), detail: t('desktop.port.change_detail'),
+        buttons: [t('desktop.common.cancel'), t('desktop.port.use_once'), t('desktop.port.use_and_remember')],
+        defaultId: 0, cancelId: 0, noLink: true });
       return ['cancel', 'once', 'remember'][answer.response];
     },
     notify: message => smoke ? console.warn(message) : dialog.showMessageBox({ type: 'warning', title: MODES[mode], message }),
@@ -308,9 +327,10 @@ async function start() {
   if (!smoke) {
     try { icon = createTray(); } catch { tray = null; }
   }
+  const windowStatePath = path.join(app.getPath('userData'), `window-${mode}.json`);
+  const savedWindow = loadWindowState(windowStatePath, screen);
   win = new BrowserWindow({
-    title: MODES[mode], width: 1280, height: 850,
-    minWidth: 640, minHeight: 480, show: false, icon,
+    title: MODES[mode], ...savedWindow.options, show: false, icon,
     webPreferences: {
       partition: 'standterm-desktop-toolbar', preload: path.join(__dirname, 'toolbar-preload.cjs'),
       // The trusted status strip must keep timers/notices current when unfocused.
@@ -321,18 +341,28 @@ async function start() {
       allowRunningInsecureContent: false, devTools: true,
     },
   });
+  windowState = trackWindowState(win, windowStatePath, savedWindow,
+    () => diagnostics.write('window_state_save_failed'));
   const coreView = new WebContentsView({ webPreferences: {
     session: desktopSession, nodeIntegration: false, contextIsolation: true,
     sandbox: true, webSecurity: true, webviewTag: false, allowRunningInsecureContent: false, devTools: true,
   } });
   const contents = coreView.webContents;
-  const commands = createUiCommands(win, contents, handoff.origin);
+  const commands = createUiCommands(win, contents, handoff.origin, t, locale => {
+    const result = language.sync(locale);
+    if (result.persisted === false) diagnostics.write('language_cache_failed');
+    if (!result.changed) return;
+    rebuildMenu();
+    updateTrayMenu();
+    toolbar.send({ locale: language.locale });
+    capture.update();
+  });
   let toolbar;
   const updateTitle = () => {
     if (!win.isDestroyed()) win.setTitle(`${captureTitle ? `[${captureTitle}] ` : ''}${MODES[mode]} - ${pageTitle}`);
   };
   capture = new DesktopCapture(win, {
-    contents,
+    contents, t,
     onDiagnostic: state => diagnostics.write('capture_failed', state),
     onChange: (value, state) => { captureTitle = value; updateTitle(); toolbar?.send(state); },
     notify: async (message, error) => toolbar?.notify(message, error),
@@ -340,15 +370,15 @@ async function start() {
       if (error) console.error(message);
     } } : {}),
   });
-  toolbar = installToolbar(win, coreView, capture, commands);
-  installContextPaste(win, contents, handoff.origin, toolbar.notify);
+  toolbar = installToolbar(win, coreView, capture, commands, language.locale);
+  installContextPaste(win, contents, handoff.origin, toolbar.notify, t);
   const browserAccess = createBrowserAccess({ origin: handoff.origin, session: desktopSession, launcherToken,
+    t,
     available: () => !win.isDestroyed() && !contents.isDestroyed() && allowedNavigation(contents.getURL(), handoff.origin),
     confirm: async () => {
-      const result = await dialog.showMessageBox(win, { type: 'warning', title: 'Authorize another browser',
-        message: 'Allow another browser to access this StandTerm instance?',
-        detail: 'The authorization URL contains sensitive access information. Share it only with your own trusted browser. Opening it may store it in browser history. A new authorization link replaces the previous unused link.',
-        buttons: ['Cancel', 'Continue'], defaultId: 0, cancelId: 0, noLink: true });
+      const result = await dialog.showMessageBox(win, { type: 'warning', title: t('desktop.browser_access.confirm_title'),
+        message: t('desktop.browser_access.confirm_message'), detail: t('desktop.browser_access.confirm_detail'),
+        buttons: [t('desktop.common.cancel'), t('desktop.browser_access.continue')], defaultId: 0, cancelId: 0, noLink: true });
       return result.response === 1;
     },
     copy: value => clipboard.writeText(value), open: value => shell.openExternal(value), notify: toolbar.notify,
@@ -360,106 +390,114 @@ async function start() {
     updateTitle();
   });
   const connectionInfo = agentConnectionInfo({ origin: handoff.origin, instanceId: handoff.instance_id, mode });
-  const coreVersion = handoff.core_version || 'Unknown (older Core)';
-  const coreBuild = prepared?.source === 'git' ? prepared.coreSource
-    : handoff.core_bundle_id || 'Source checkout / no managed bundle identity';
-  const pythonVersion = handoff.python_version || 'Unknown (older Core)';
-  const buildLabel = prepared?.source === 'git' ? 'Core Git revision' : 'Core bundle SHA-256';
-  const aboutDetails = `Core version: ${coreVersion}\n${buildLabel}: ${coreBuild}\n`
-    + `Backend: ${MODES[mode]}\nPython: ${pythonVersion}\n`
-    + `Electron: ${process.versions.electron}\nChromium: ${process.versions.chrome}\nNode.js: ${process.versions.node}\n`
-    + `Platform: ${process.platform} / ${process.arch}\n\nEvaluation build; updates are installed manually.`;
+  const coreVersion = () => handoff.core_version || t('desktop.about.unknown_version');
+  const coreBuild = () => prepared?.source === 'git' ? prepared.coreSource
+    : handoff.core_bundle_id || t('desktop.about.unmanaged_source');
+  const pythonVersion = () => handoff.python_version || t('desktop.about.unknown_version');
+  const buildLabel = () => t(prepared?.source === 'git' ? 'desktop.about.git_revision' : 'desktop.about.bundle_sha256');
+  const aboutDetails = () => t('desktop.about.details', { core_version: coreVersion(), build_label: buildLabel(),
+    core_build: coreBuild(), backend: MODES[mode], python_version: pythonVersion(),
+    electron_version: process.versions.electron, chromium_version: process.versions.chrome,
+    node_version: process.versions.node, platform: process.platform, arch: process.arch });
   const openStatus = createStatusWindow(win, () => ({ rows: [
-    ['Desktop version', app.getVersion()], ['Backend mode', MODES[mode]],
-    ['Core version', coreVersion], [buildLabel, coreBuild], ['Python version', pythonVersion],
-    ['Backend URL', handoff.origin], ['Instance ID', handoff.instance_id],
-    ['Platform', `${process.platform} / ${process.arch}`],
-    ['Electron / Chromium / Node', `${process.versions.electron} / ${process.versions.chrome} / ${process.versions.node}`],
-    ['Backend process', child && child.exitCode === null && child.signalCode === null ? 'Running' : 'Stopped'],
-    ['Renderer process', contents.isCrashed() ? 'Crashed' : 'Running'],
-    ['Browser storage', smoke ? 'Temporary test profile' : 'Persistent per origin; same as Core'],
-    ['Profile directory', app.getPath('userData')], ['Port settings', settingsPath],
-    ['Diagnostic log', diagnostics.file], ['Log writable', diagnostics.available ? 'Yes' : 'No'],
-    ['Security', 'Core sandbox on; Node/preload off; isolated Desktop toolbar; external preview network blocked'],
+    [t('desktop.diagnostics.desktop_version'), app.getVersion()], [t('desktop.diagnostics.backend_mode'), MODES[mode]],
+    [t('desktop.diagnostics.core_version'), coreVersion()], [buildLabel(), coreBuild()], [t('desktop.diagnostics.python_version'), pythonVersion()],
+    [t('desktop.diagnostics.backend_url'), handoff.origin], [t('desktop.diagnostics.instance_id'), handoff.instance_id],
+    [t('desktop.diagnostics.platform'), `${process.platform} / ${process.arch}`],
+    [t('desktop.diagnostics.engines'), `${process.versions.electron} / ${process.versions.chrome} / ${process.versions.node}`],
+    [t('desktop.diagnostics.backend_process'), t(child && child.exitCode === null && child.signalCode === null ? 'desktop.diagnostics.running' : 'desktop.diagnostics.stopped')],
+    [t('desktop.diagnostics.renderer_process'), t(contents.isCrashed() ? 'desktop.diagnostics.crashed' : 'desktop.diagnostics.running')],
+    [t('desktop.diagnostics.browser_storage'), t(smoke ? 'desktop.diagnostics.storage_temporary' : 'desktop.diagnostics.storage_persistent')],
+    [t('desktop.diagnostics.profile_directory'), app.getPath('userData')], [t('desktop.diagnostics.port_settings'), settingsPath],
+    [t('desktop.diagnostics.log_file'), diagnostics.file], [t('desktop.diagnostics.log_writable'), t(diagnostics.available ? 'desktop.diagnostics.log_write_ok' : 'desktop.diagnostics.log_write_failed')],
+    [t('desktop.diagnostics.security'), t('desktop.diagnostics.security_detail')],
   ], events: diagnostics.snapshot() }), {
-    copyUrl: () => clipboard.writeText(connectionInfo.base_url),
+    copyUrl: () => clipboard.writeText(connectionInfo.base_url), i18n: language,
   });
-  Menu.setApplicationMenu(Menu.buildFromTemplate([
-    { id: 'standterm', label: 'StandTerm', submenu: [
-      commands.item('settings'),
-      ...(coreManager ? [{ label: 'Core source (Advanced)...', click: () => {
-        void coreManager.showManager().catch(error => dialog.showErrorBox('Core management unavailable', error.message));
-      } }] : []),
-      { label: 'Capture Settings...', click: () => capture.configure() },
-      browserAccess.menu,
-      { type: 'separator' },
-      commands.item('newTab'), commands.item('closeTab'), commands.item('closeAll'),
-      commands.item('files'), commands.item('pip'),
-      { type: 'separator' },
-      { id: 'desktop-about', label: 'About StandTerm Desktop', click: () => dialog.showMessageBox(win, {
-        type: 'info', title: 'About StandTerm Desktop', message: `StandTerm Desktop ${app.getVersion()}`,
-        detail: aboutDetails, buttons: ['OK'], noLink: true,
-      }) },
-      { label: 'Show window', click: showWindow },
-      ...(process.platform === 'darwin' ? [{ role: 'services' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }] : []),
-      { label: 'Quit StandTerm', accelerator: 'CommandOrControl+Q', click: () => app.quit() },
-    ] },
-    { id: 'edit', role: 'editMenu' },
-    agentMenu({
-      uiItems: [commands.item('agentPanel'), commands.item('pauseAgent'), { type: 'separator' }],
-      showHelp: () => dialog.showMessageBox(win, {
-        type: 'info', title: 'StandTerm Agent', message: 'Give your agent a StandTerm prompt',
-        detail: 'Select the tab where your agent runs. Use Agent Panel to enable access and choose permissions '
-          + 'on each tab it may operate.\n\n'
-          + 'For an SSH agent, start Agent Tunnel on its SSH tab. Agent Info for Current Tab appears after setup succeeds. '
-          + 'For a local agent, mint a token in Agent Panel.\n\n'
-          + 'Open Agent Info for Current Tab, choose Copy Prompt, and paste it into your agent with the intended task. '
-          + 'Follow the environment shown in that dialog.\n\n'
-          + 'Skills do not need to be installed first. The prompt leads to the bundled skills and helpers; '
-          + 'Agent Info also provides installation instructions when persistent skills are wanted.',
-        buttons: ['OK'], noLink: true,
+  function rebuildMenu() {
+    Menu.setApplicationMenu(Menu.buildFromTemplate([
+      { id: 'standterm', label: 'StandTerm', submenu: [
+        commands.item('settings'),
+        ...(coreManager ? [{ label: t('desktop.menu.core_source'), click: () => {
+          void coreManager.showManager().catch(error => dialog.showErrorBox(t('desktop.startup.management_unavailable'), error.message));
+        } }] : []),
+        { label: t('desktop.menu.capture_settings'), click: () => capture.configure() },
+        browserAccess.menu,
+        { type: 'separator' },
+        commands.item('newTab'), commands.item('closeTab'), commands.item('closeAll'),
+        commands.item('files'), commands.item('pip'),
+        { type: 'separator' },
+        { id: 'desktop-about', label: t('desktop.menu.about'), click: () => dialog.showMessageBox(win, {
+          type: 'info', title: t('desktop.menu.about'), message: t('desktop.about.desktop_version', { version: app.getVersion() }),
+          detail: aboutDetails(), buttons: [t('desktop.common.ok')], noLink: true,
+        }) },
+        { label: t('desktop.menu.show'), click: showWindow },
+        ...(process.platform === 'darwin' ? [{ role: 'services' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }] : []),
+        { label: t('desktop.menu.quit'), accelerator: 'CommandOrControl+Q', click: () => app.quit() },
+      ] },
+      { id: 'edit', role: 'editMenu', label: t('desktop.toolbar.menu_edit') },
+      agentMenu({
+        t,
+        uiItems: [commands.item('agentPanel'), commands.item('pauseAgent'), { type: 'separator' }],
+        showHelp: () => dialog.showMessageBox(win, {
+          type: 'info', title: 'StandTerm Agent', message: t('desktop.agent.help_title'),
+          detail: ['desktop.agent.help_permissions', 'desktop.agent.help_environment',
+            'desktop.agent.help_connection', 'desktop.agent.help_skills'].map(key => t(key)).join('\n\n'),
+          buttons: [t('desktop.common.ok')], noLink: true,
+        }),
       }),
-    }),
-    { id: 'view', label: 'View', submenu: [{ role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' },
-      { type: 'separator' },
-      ...capture.menu().submenu,
-    ] },
-    diagnosticsMenu({ origin: handoff.origin, mode, instanceId: handoff.instance_id,
-      version: app.getVersion(), coreVersion: handoff.core_version, logger: diagnostics, persistent: !smoke,
-      copyText: text => clipboard.writeText(text),
-      openStatus: () => openStatus().catch(() => {
-        if (!win.isDestroyed()) dialog.showMessageBox(win, { type: 'warning', message: 'Could not open the diagnostics page.' });
+      { id: 'view', label: t('desktop.toolbar.menu_view'), submenu: [{ role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' },
+        { type: 'separator' },
+        ...capture.menu().submenu,
+      ] },
+      diagnosticsMenu({ origin: handoff.origin, mode, instanceId: handoff.instance_id,
+        t,
+        version: app.getVersion(), coreVersion: handoff.core_version, logger: diagnostics, persistent: !smoke,
+        copyText: text => clipboard.writeText(text),
+        openStatus: () => openStatus().catch(() => {
+          if (!win.isDestroyed()) dialog.showMessageBox(win, { type: 'warning', message: t('desktop.diagnostics.open_failed') });
+        }),
+        openLogs: async () => {
+          const error = await shell.openPath(diagnostics.directory);
+          if (error) await dialog.showMessageBox(win, { type: 'warning', message: t('desktop.diagnostics.folder_failed'), detail: diagnostics.directory });
+        },
+        openTools: async () => {
+          const opened = await openDeveloperTools(contents, async () => {
+            const answer = await dialog.showMessageBox(win, { type: 'warning', title: t('desktop.diagnostics.devtools_title'),
+              message: t('desktop.diagnostics.devtools_message'), detail: t('desktop.diagnostics.devtools_detail'),
+              buttons: [t('desktop.common.cancel'), t('desktop.diagnostics.devtools_open')], defaultId: 0, cancelId: 0, noLink: true });
+            return answer.response === 1;
+          });
+          if (opened) diagnostics.write('devtools_opened');
+        },
       }),
-      openLogs: async () => {
-        const error = await shell.openPath(diagnostics.directory);
-        if (error) await dialog.showMessageBox(win, { type: 'warning', message: 'Could not open the diagnostics folder.', detail: diagnostics.directory });
-      },
-      openTools: async () => {
-        const opened = await openDeveloperTools(contents, async () => {
-          const answer = await dialog.showMessageBox(win, { type: 'warning', title: 'Developer Tools',
-            message: 'Open Developer Tools for this authenticated terminal UI?',
-            detail: 'Console code can read page data and operate connected terminals. Only run code you trust. '
-              + 'This opens a local frontend debugger, not a remote debugging port or a Node.js bridge.',
-            buttons: ['Cancel', 'Open Developer Tools'], defaultId: 0, cancelId: 0, noLink: true });
-          return answer.response === 1;
-        });
-        if (opened) diagnostics.write('devtools_opened');
-      },
-    }),
-  ]));
+    ]));
+  }
+  rebuildMenu();
   const openExternal = createExternalOpener({ origin: handoff.origin, owner: contents,
     confirm: async url => {
-      const answer = await dialog.showMessageBox(win, { type: 'question', title: 'Open in default browser',
-        message: `Open ${new URL(url).host} in your default browser?`,
-        detail: `${url}\n\nThe browser uses its own login. StandTerm does not add its token or cookies.`,
-        buttons: ['Cancel', 'Open in browser'], defaultId: 0, cancelId: 0, noLink: true });
+      const answer = await dialog.showMessageBox(win, { type: 'question', title: t('desktop.external_browser.title'),
+        message: t('desktop.external_browser.message', { host: new URL(url).host }),
+        detail: t('desktop.external_browser.detail', { url }),
+        buttons: [t('desktop.common.cancel'), t('desktop.external_browser.open')], defaultId: 0, cancelId: 0, noLink: true });
       return answer.response === 1;
     },
     open: url => shell.openExternal(url),
-    notify: () => dialog.showMessageBox(win, { type: 'warning', message: 'Could not open the default browser.',
-      detail: 'Check the default HTTP/HTTPS browser in your operating system settings.' }),
+    notify: () => dialog.showMessageBox(win, { type: 'warning', message: t('desktop.external_browser.failed'),
+      detail: t('desktop.external_browser.failure_hint') }),
   });
-  installFloatingWindows(win, handoff.origin, openExternal, contents);
+  installFloatingWindows(win, handoff.origin, openExternal, contents, (result, owner) => {
+    const completed = result.state === 'completed' && !!result.path;
+    void dialog.showMessageBox(owner, {
+      type: completed ? 'info' : 'warning', title: t('desktop.download.title'),
+      message: t(completed ? 'desktop.download.complete' : 'desktop.download.incomplete'),
+      detail: completed ? t('desktop.download.saved_to', { path: result.path }) : t('desktop.download.retry'),
+      buttons: completed ? [t('desktop.download.close'), t('desktop.download.show_in_folder')] : [t('desktop.download.close')],
+      defaultId: 0, cancelId: 0, noLink: true,
+    }).then(answer => {
+      if (completed && answer.response === 1) shell.showItemInFolder(result.path);
+    }).catch(() => diagnostics.write('download_notice_failed'));
+  });
   contents.on('will-navigate', (event, url) => {
     if (!allowedNavigation(url, handoff.origin)) event.preventDefault();
   });
@@ -468,11 +506,11 @@ async function start() {
   });
   contents.on('will-attach-webview', event => event.preventDefault());
   win.on('close', event => {
-    if (capture.active) {
+    if (capture.active || capture.confirming || closePending) {
       event.preventDefault();
       if (!quitting && !closePending) {
         closePending = true;
-        capture.confirmStop('closing the window').then(allowed => {
+        capture.confirmStop('close').then(allowed => {
           closePending = false;
           if (allowed) win.close();
         }).catch(() => { closePending = false; });
@@ -501,10 +539,15 @@ async function start() {
   await contents.loadURL(`${handoff.origin}/${smoke ? '?debug=1' : ''}`);
   if (child.exitCode !== null || child.signalCode !== null) throw new Error('The owned Core exited during startup.');
   diagnostics.write('window_ready', { port: Number(new URL(handoff.origin).port) });
+  // Apply outer bounds after native frame/menu initialization, before maximizing.
+  const { x, y, width, height } = savedWindow.options;
+  win.setBounds({ x, y, width, height });
+  if (savedWindow.maximized) win.maximize();
   booting = false;
+  showWindow();
+  closeStartupWindow();
   if (smoke) {
     // WebContentsView visibility follows its owner; exercise a real visible UI.
-    showWindow();
     contents.focus();
     await require('./smoke.cjs').run(win, handoff.origin, contents, browserAccess);
     if (captureSmoke) {
@@ -513,8 +556,6 @@ async function start() {
     }
     console.log('Desktop smoke: authenticated terminal, sandbox and navigation checks passed.');
     app.quit();
-  } else {
-    showWindow();
   }
 }
 
@@ -525,6 +566,7 @@ async function stopBackend() {
 
 async function handleCoreFailure(error) {
   if (failurePending || quitting) return;
+  closeStartupWindow();
   failurePending = true;
   booting = true;
   diagnostics.write('core_failed', { code: error.code });
@@ -535,12 +577,12 @@ async function handleCoreFailure(error) {
     } else {
       exitCode = 1;
       if (smoke) console.error(error.stack || error.message);
-      else dialog.showErrorBox('StandTerm Desktop could not start', `${error.message}\n\nDiagnostics: ${diagnostics.file}`);
+      else dialog.showErrorBox(t('desktop.startup.start_failed'), t('desktop.startup.diagnostics_detail', { error: error.message, path: diagnostics.file }));
       app.quit();
     }
   } catch (failure) {
     restartRequest = null;
-    dialog.showErrorBox('StandTerm Desktop could not recover', failure.message);
+    dialog.showErrorBox(t('desktop.startup.recovery_failed'), failure.message);
     app.quit();
   } finally { failurePending = false; }
 }
@@ -563,11 +605,13 @@ app.on('before-quit', event => {
   diagnostics.write('shutdown');
   (async () => {
     if (!await confirmSetupQuit()) { restartRequest = null; quitting = false; return; }
-    if (capture?.active) {
-      const allowed = smoke ? (await capture.stop(), true) : await capture.confirmStop('quitting StandTerm');
+    if (capture?.active || capture?.confirming) {
+      const allowed = smoke ? (await capture.stop(), true) : await capture.confirmStop('quit').catch(() => false);
       if (!allowed) { restartRequest = null; quitting = false; return; }
     }
     cancelSetup();
+    windowState?.save();
+    closeStartupWindow();
     await finishBackendAndBrowser();
     if (restartRequest) {
       if (restartRequest.action) await coreStore.queue(restartRequest.action);
@@ -578,7 +622,7 @@ app.on('before-quit', event => {
     app.exit(exitCode);
   })().catch(error => {
     restartRequest = null;
-    if (!smoke) dialog.showErrorBox('StandTerm could not complete shutdown', error.message);
+    if (!smoke) dialog.showErrorBox(t('desktop.startup.shutdown_failed'), error.message);
     stopped = true;
     app.exit(1);
   });
@@ -591,6 +635,7 @@ if (!app.requestSingleInstanceLock()) {
   diagnostics.write('startup');
   app.on('second-instance', showWindow);
   app.whenReady().then(start).catch(error => {
+    closeStartupWindow();
     diagnostics.write('startup_failed', { code: error.code });
     if (error.code === 'SETUP_CANCELED') { app.quit(); return; }
     void handleCoreFailure(error);
