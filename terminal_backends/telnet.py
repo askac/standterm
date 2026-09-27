@@ -72,8 +72,7 @@ class TelnetProtocol:
                     self.state = 'command'
                 else:
                     if self.pending_cr:
-                        if byte != 0:
-                            output.append(13)
+                        output.append(13)
                         self.pending_cr = False
                         if byte == 0:
                             continue
@@ -132,8 +131,7 @@ class TelnetBridge(TerminalBridge):
             if self.network_origin == 'windows':
                 sock = WindowsNetworkSocket()
                 self.socket = sock
-                sock.settimeout(CONNECT_TIMEOUT)
-                sock.connect((self.host, self.port))
+                sock.connect((self.host, self.port), timeout=CONNECT_TIMEOUT)
             else:
                 sock = socket.create_connection((self.host, self.port), timeout=CONNECT_TIMEOUT)
                 self.socket = sock

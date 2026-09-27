@@ -38,7 +38,7 @@ def test_protocol():
     protocol.feed(bytes((IAC, 252, BINARY, IAC, 254, BINARY)))
     assert protocol.encode_input(b'command\r') == b'command\r\n'
     assert protocol.feed(b'line\r')[0] == b'line'
-    assert protocol.feed(b'\x00')[0] == b''
+    assert protocol.feed(b'\x00')[0] == b'\r'
     assert protocol.feed(b'next')[0] == b'next'
 
 
@@ -121,7 +121,7 @@ def test_windows_transport():
     with patch.object(telnet, 'WindowsNetworkSocket', return_value=sock):
         bridge = TelnetBridge('session', 'main', 'device.local', 23, 'utf-8', 'windows', runtime)
         assert bridge.connect(80, 24) == (True, None)
-        sock.connect.assert_called_once_with(('device.local', 23))
+        sock.connect.assert_called_once_with(('device.local', 23), timeout=telnet.CONNECT_TIMEOUT)
         bridge.close()
         sock.close.assert_called_once()
 
