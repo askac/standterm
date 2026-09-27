@@ -58,8 +58,8 @@ Input and value types must be compatible:
 - `number` fields must be `integer` or `number`.
 - `select` inputs and `enum` values must declare non-empty `options`.
 
-The frontend uses these fields as metadata for the existing SSH, Local Shell,
-and UART controls. It is not a generic dynamic form renderer yet. Existing
+The frontend uses these fields as metadata for the existing SSH, Telnet, Local
+Shell, and UART controls. It is not a generic dynamic form renderer yet. Existing
 controls prefer `start_fields` defaults and options, and keep legacy policy
 fallbacks for compatibility with older servers and consumers.
 

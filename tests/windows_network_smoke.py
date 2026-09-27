@@ -9,8 +9,10 @@ import sys
 import threading
 import time
 import unittest
+from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from terminal_backends.telnet import TelnetBridge
 from terminal_backends.windows_network import WindowsNetworkSocket, windows_network_executable
 
 
@@ -84,6 +86,22 @@ class WindowsNetworkTests(unittest.TestCase):
         self.assertEqual(received, data)
         server.stdin.write(b'close\n'); server.stdin.flush()
         self.assertEqual(sock.recv(1), b'')
+        self.assert_helper_gone(sock)
+
+    def test_telnet_bridge_connects_through_windows(self):
+        _, port = self.server()
+        bridge = TelnetBridge('test', 'main', '127.0.0.1', port, 'utf-8', 'windows', Mock())
+        self.addCleanup(bridge.close)
+        connected, error = bridge.connect()
+        self.assertTrue(connected, error)
+        sock = bridge.socket
+        bridge.write('ping\r')
+        received = bytearray()
+        while b'ping' not in received:
+            chunk = sock.recv(1024)
+            self.assertTrue(chunk)
+            received.extend(chunk)
+        self.assertIn(b'ping', received)
         self.assert_helper_gone(sock)
 
     def test_backpressure_is_bounded_and_close_stops_the_windows_peer(self):

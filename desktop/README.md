@@ -45,7 +45,11 @@ SSH authentication, browser keys, host-key storage and SFTP remain in Core.
 Windows `localhost` means the Windows host and never inherits Core's localhost
 automatic trust or key setup. Use a host key alias when different hosts share
 an address across the two networks. The choice applies to the current connection
-and its retries, is not saved in profiles, and never silently falls back to Core.
+and its retries. Browser SSH profiles and history retain it, including settings
+import/export. On non-WSL Core environments, the advanced control is hidden and
+a retained Windows preference uses Core networking without changing the profile.
+When WSL offers the helper and Windows is selected, a connection failure does
+not fall back to Core.
 Later jump hosts, SSH forwarding targets and local forwarding listeners keep
 their existing semantics; selecting Windows does not move those listeners.
 This preview is available in WSL browser launches too, under the same conditions.
