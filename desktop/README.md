@@ -9,7 +9,7 @@ a production release or a replacement for `run.sh` / `run.bat`.
 The 0.5.3 evaluation bundles Core 2.14.0, adds startup feedback and window
 state restoration, and includes the optional Windows SSH network source for WSL
 under the collapsed Advanced connection settings.
-The current 0.5.4-dev source bundles Core 2.15.0-dev for local Telnet and SSH
+The current 0.5.4-dev source pairs with Core 2.15.0 for local Telnet and SSH
 network-origin testing; it is not the published 0.5.3 package.
 
 Desktop copy and localization are planned in the
@@ -110,7 +110,7 @@ The published [Windows **0.5.1 / Core 2.13.0-dev** evaluation](https://github.co
 includes ordered SSH jump routes, per-site login cards, shared Direct/node key
 controls and opt-in
 profile/route saving on Connect. It retains its original development identity.
-The current source declares Core **2.15.0-dev**; matching installers require a fresh
+The current source declares Core **2.15.0**; matching installers require a fresh
 build and validation. A new Mac installer remains separate; the 0.5.0 candidates
 remain local.
 
