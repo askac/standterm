@@ -1,6 +1,6 @@
 # StandTerm
 
-StandTerm is a local-first browser terminal for SSH, host-local shells, UART
+StandTerm is a local-first browser terminal for SSH, Telnet, host-local shells, UART
 sessions, and controlled external-agent access. It is designed for WSL2, native
 Windows, macOS, and Linux, with browser-based terminal tabs that stay attached
 to the StandTerm server process across page reloads.
@@ -9,11 +9,10 @@ to the StandTerm server process across page reloads.
 [Download and install StandTerm Desktop](#desktop-downloads-evaluation), or use
 the [browser-based Core quick start](#quick-start).
 
-The current source is **[Core 2.14.0](https://github.com/askac/standterm/releases/tag/v2.14.0)**,
-paired with Desktop 0.5.3. It adds English
-and Traditional Chinese interface text, simplified Agent connection controls,
-and optional Windows networking for SSH from WSL. Both Desktop packages below
-contain Core 2.14.0 and use the same reviewed source.
+The current Core source is **[2.15.0](https://github.com/askac/standterm/releases/tag/v2.15.0)**,
+paired with Desktop 0.5.4-dev source. It adds Telnet device consoles and retains
+the Windows network choice in browser SSH profiles. The latest published Desktop
+packages below remain 0.5.3 / Core 2.14.0 and do not include these changes.
 
 **Core 2.13.0** is a [source release](https://github.com/askac/standterm/releases/tag/v2.13.0).
 It adds SSH routes with up to three jump hosts, ordered node editing and per-site
@@ -136,7 +135,7 @@ Core browser settings and keys per origin and backend mode, and is intended
 for local evaluation. About shows Desktop and Core versions separately;
 the Core version is maintained in `core_version.py`.
 
-- Runs SSH, Local Shell, and UART sessions inside browser terminal tabs.
+- Runs SSH, Telnet, Local Shell, and UART sessions inside browser terminal tabs.
 - Supports multiple persistent terminal tabs while the server process is alive.
 - Provides StandTerm Files for direct SSH and supported Local Shell sessions,
   including upload, download, rename, carefully confirmed permanent deletion,
@@ -265,9 +264,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\windows_proxy_bypa
 
 ## Terminal Backends
 
-StandTerm has three terminal backends:
+StandTerm has four terminal backends:
 
 - `ssh`: Connect to any reachable SSH server.
+- `telnet`: Connect directly to a device Telnet console without an OS Telnet
+  client. Choose UTF-8, Big5, or Latin-1; on WSL, Advanced can use the Windows
+  network when the Windows TCP helper is available. Telnet sends data in plaintext.
 - `local_shell`: Start a shell on the StandTerm host when the browser is local or
   explicitly authorized. On WSL, the UI lets you choose `bash`, `cmd.exe`, or
   `powershell.exe`; `bash` is the default.
@@ -613,8 +615,8 @@ does not roll back or retry automatically.
 ## Browser Authorization And HTTPS
 
 When StandTerm listens on a non-loopback address, HTTPS is enabled by default so
-modern browsers can use WebCrypto for browser authorization. SSH, Local Shell,
-and UART only bypass browser authorization for true loopback clients by default.
+modern browsers can use WebCrypto for browser authorization. SSH, Telnet, Local
+Shell, and UART only bypass browser authorization for true loopback clients by default.
 WSL host/NAT client IPs must authorize the browser unless you explicitly trust
 that WSL network with `STANDTERM_TRUST_WSL_CLIENT_IPS=1` or explicitly allow the
 specific remote backend.

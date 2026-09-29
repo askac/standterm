@@ -1,4 +1,4 @@
-"""Verify one-connection network selection, policy availability and bound SSH retries."""
+"""Verify saved first-hop networks, cross-environment portability and bound SSH retries."""
 
 from pathlib import Path
 import sys
@@ -47,7 +47,7 @@ def test_selection_and_route_scope(browser, url, locale):
         direct = page.evaluate('() => window.terminalTest.prepareSshConnectionForTest()')
         assert direct['network_origin'] == 'windows'
         page.evaluate('''() => window.terminalTest.setSshSessionState({version:2, revision:0,
-            profiles:[{id:'route-a',name:'Route A',startNodeId:'jump'}], history:[], nodes:[
+            profiles:[{id:'route-a',name:'Route A',startNodeId:'jump',networkOrigin:'windows'}], history:[], nodes:[
                 {id:'jump',endpoint:{host:'jump.test',port:'22',username:'u'},
                     authentication:{method:'password'},hostKeyAlias:'',nextNodeId:'target'},
                 {id:'target',endpoint:{host:'target.test',port:'22',username:'u'},
@@ -59,20 +59,146 @@ def test_selection_and_route_scope(browser, url, locale):
         assert [node['host'] for node in route['route']] == ['jump.test', 'target.test']
         assert all('network_origin' not in node for node in route['route'])
         state = page.evaluate('() => window.terminalTest.getSshSessionState()')
-        assert all('network_origin' not in entry for entry in state['profiles'] + state['nodes'])
+        assert state['profiles'][0]['networkOrigin'] == 'windows'
+        assert all('networkOrigin' not in node for node in state['nodes'])
         set_available(page, False)
         assert page.locator('#ssh-network-origin-field').is_hidden()
+        assert page.is_checked('#ssh-network-origin')
         assert page.locator('#ssh-network-origin').is_disabled()
-        assert not page.is_checked('#ssh-network-origin')
         route = page.evaluate('() => window.terminalTest.prepareSshConnectionForTest()')
         assert 'network_origin' not in route
         set_available(page, True)
-        assert page.locator('#ssh-network-origin').is_hidden()
-        page.locator('#ssh-network-origin-field summary').click()
+        page.locator('#ssh-network-origin-field').evaluate('(element) => { element.open = true; }')
         page.check('#ssh-network-origin')
         page.uncheck('#ssh-network-origin')
         route = page.evaluate('() => window.terminalTest.prepareSshConnectionForTest()')
         assert 'network_origin' not in route
+        page.click('#quick-settings')
+        page.click('.settings-nav-item[data-tab="ssh-sessions"]')
+        page.click('#ssh-profile-list [data-profile-id="route-a"]')
+        page.wait_for_function("() => !document.getElementById('ssh-profile-edit-route').disabled")
+        page.click('#ssh-profile-edit-route')
+        network = page.locator('#ssh-route-editor .ssh-network-settings')
+        assert network.is_visible()
+        assert not network.evaluate('(element) => element.open')
+        network.locator('summary').click()
+        assert network.locator('input').is_checked()
+        network.locator('input').uncheck()
+        page.locator('#ssh-route-editor button.primary').click()
+        page.locator('#ssh-route-editor').wait_for(state='detached')
+        updated = page.evaluate('() => window.terminalTest.getSshSessionState()')
+        assert updated['profiles'][0]['networkOrigin'] == 'core'
+        assert updated['nodes'] == state['nodes']
+    finally:
+        fixture.close_context(context)
+
+
+def test_saved_profiles_and_portable_export(browser, url):
+    context, page = routes.new_page(browser, url)
+    try:
+        routes.show_ssh(page)
+        set_available(page, True)
+        page.fill('#host', 'saved.test')
+        page.fill('#username', 'operator')
+        page.locator('#ssh-network-origin-field summary').click()
+        page.check('#ssh-network-origin')
+        page.check('#ssh-save-session')
+        page.evaluate('() => window.terminalTest.prepareSshConnectionForTest(true)')
+        state = page.evaluate('() => window.terminalTest.getSshSessionState()')
+        profile_id = state['profiles'][0]['id']
+        assert state['profiles'][0]['networkOrigin'] == 'windows'
+        # Load from IndexedDB again, then simulate a Core without Windows support.
+        page.reload()
+        page.wait_for_function('() => window.terminalTest && window.terminalTest.getSocketState().connected')
+        page.click('#new-tab-btn')
+        routes.show_ssh(page)
+        set_available(page, False)
+        routes.select(page, profile_id, direct=True)
+        assert page.is_checked('#ssh-network-origin')
+        assert page.locator('#ssh-network-origin-field').is_hidden()
+        assert 'network_origin' not in page.evaluate('() => window.terminalTest.prepareSshConnectionForTest()')
+        # A name-only edit must preserve the unsupported setting.
+        page.click('#quick-settings')
+        page.click('.settings-nav-item[data-tab="ssh-sessions"]')
+        page.click(f'#ssh-profile-list [data-profile-id="{profile_id}"]')
+        page.wait_for_function("() => !document.getElementById('ssh-profile-save').disabled")
+        network = page.locator('#ssh-profile-node .ssh-network-settings')
+        assert network.is_hidden()
+        assert network.locator('input').is_checked()
+        assert network.locator('input').is_disabled()
+        page.fill('#ssh-profile-name', 'Portable Windows profile')
+        page.click('#ssh-profile-save')
+        page.wait_for_function("() => document.getElementById('ssh-profile-status').textContent.startsWith('Saved Portable Windows profile.')")
+        page.click('#settings-close')
+        envelope = page.evaluate('() => window.terminalTest.createBrowserSettingsEnvelopeForTest()')
+        page.evaluate('() => window.terminalTest.setSshSessionState({profiles: [], history: []})')
+        page.once('dialog', lambda dialog: dialog.accept())
+        with page.expect_navigation(wait_until='domcontentloaded'):
+            page.evaluate('value => window.terminalTest.importBrowserSettingsEnvelopeForTest(value)', envelope)
+        page.wait_for_function('() => window.terminalTest && window.terminalTest.getSocketState().connected')
+        portable = page.evaluate("""async () => window.terminalTest.decodeBrowserSettingsEnvelopeForTest(
+            await window.terminalTest.createBrowserSettingsEnvelopeForTest())""")
+        page.click('#new-tab-btn')
+        routes.show_ssh(page)
+        set_available(page, False)
+        assert portable['ssh']['profiles'][0]['networkOrigin'] == 'windows'
+        imported = page.evaluate('() => window.terminalTest.getSshSessionState()')
+        profile_id = imported['profiles'][0]['id']
+        routes.select(page, profile_id, direct=True)
+        assert 'network_origin' not in page.evaluate('() => window.terminalTest.prepareSshConnectionForTest()')
+        page.check('#ssh-save-session')
+        page.evaluate('() => window.terminalTest.prepareSshConnectionForTest(true)')
+        assert page.evaluate('() => window.terminalTest.getSshSessionState()')['profiles'][0]['networkOrigin'] == 'windows'
+        set_available(page, True)
+        start = page.evaluate('() => window.terminalTest.prepareSshConnectionForTest()')
+        assert start['network_origin'] == 'windows'
+        # Change the saved direct profile through Settings, then reload it.
+        page.click('#quick-settings')
+        page.click('.settings-nav-item[data-tab="ssh-sessions"]')
+        page.click(f'#ssh-profile-list [data-profile-id="{profile_id}"]')
+        page.wait_for_function("() => !document.getElementById('ssh-profile-save').disabled")
+        network = page.locator('#ssh-profile-node .ssh-network-settings')
+        network.locator('summary').click()
+        network.locator('input').uncheck()
+        page.click('#ssh-profile-save')
+        page.wait_for_function("() => document.getElementById('ssh-profile-status').textContent.startsWith('Saved Portable Windows profile.')")
+        page.click('#settings-close')
+        routes.select(page, profile_id, direct=True)
+        assert not page.is_checked('#ssh-network-origin')
+        assert 'network_origin' not in page.evaluate('() => window.terminalTest.prepareSshConnectionForTest()')
+    finally:
+        fixture.close_context(context)
+
+
+def test_history_distinguishes_actual_networks(browser, url):
+    context, page = routes.new_page(browser, url)
+    try:
+        for origin in ['windows', 'core']:
+            if origin == 'core':
+                page.click('#new-tab-btn')
+            routes.show_ssh(page)
+            set_available(page, True)
+            page.fill('#host', 'same.test')
+            page.fill('#username', 'operator')
+            page.check('#ssh-save-history')
+            page.locator('#ssh-network-origin-field').evaluate('(element) => { element.open = true; }')
+            page.locator('#ssh-network-origin').set_checked(origin == 'windows')
+            page.evaluate("""() => {
+                window.terminalTest.captureSshStartsForTest();
+                window.terminalTest.clearEmitted();
+                document.getElementById('connectBtn').click();
+            }""")
+            page.wait_for_function("() => window.terminalTest.getEmitted().some(item => item.event === 'start_ssh')")
+            start = page.evaluate("() => window.terminalTest.getEmitted().find(item => item.event === 'start_ssh').args[0]")
+            page.evaluate('data => window.terminalTest.handleSshOutput(data)', {
+                'terminal_id': start['terminal_id'], 'attempt_id': start['attempt_id'],
+                'message_type': 'ssh_connected', 'connection_type': 'ssh',
+                'ssh_target': {'host': 'same.test', 'port': '22', 'username': 'operator', 'network_origin': origin}})
+            page.wait_for_function("async count => (await window.terminalTest.getSshSessionState()).history.length === count",
+                                   arg=1 if origin == 'windows' else 2)
+        history = page.evaluate('() => window.terminalTest.getSshSessionState()')['history']
+        assert [entry['networkOrigin'] for entry in history] == ['core', 'windows']
+        assert history[0]['host'] == history[1]['host']
     finally:
         fixture.close_context(context)
 
@@ -133,12 +259,14 @@ def main():
             try:
                 for locale in ['en', 'zh-TW']:
                     test_selection_and_route_scope(browser, url, locale)
+                test_saved_profiles_and_portable_export(browser, url)
+                test_history_distinguishes_actual_networks(browser, url)
                 test_trust_retry_keeps_the_selected_network(browser, url)
             finally:
                 browser.close()
     finally:
         fixture.stop_server(process)
-    print('SSH network browser smoke passed: bilingual selector, route scope, unavailable capability and trust retry.')
+    print('SSH network browser smoke passed: saved profiles, route editing, portable export, capability fallback and trust retry.')
 
 
 if __name__ == '__main__':

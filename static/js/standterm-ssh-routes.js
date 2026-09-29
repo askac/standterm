@@ -189,12 +189,19 @@
     function sanitize(value) {
         const entry = item => ({
             id: item.id, name: String(item.name || '').slice(0, 64), startNodeId: item.startNodeId,
+            networkOrigin: networkOrigin(item.networkOrigin),
             sortOrder: Number(item.sortOrder) || 0, lastUsedAt: String(item.lastUsedAt || ''),
             keyId: typeof item.keyId === 'string' ? item.keyId : null,
             keyTarget: item.keyTarget ? endpoint(item.keyTarget) : null
         });
         return project({ version: 2, revision: value.revision, nodes: value.nodes.map(publicNode),
             profiles: value.profiles.map(entry), history: value.history.map(entry) });
+    }
+
+    function networkOrigin(value) {
+        if (value === undefined || value === 'core') return 'core';
+        if (value === 'windows') return value;
+        throw new Error('Invalid SSH network origin.');
     }
 
     function syncLegacyEdits(value) {

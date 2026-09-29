@@ -229,7 +229,7 @@ def test_inline_direct_save_preserves_shared_nodes_and_order(browser, url):
         fields = inline_fields(page)
         fields.get_by_label('Target Host', exact=True).fill('edited.test')
         page.fill('#ssh-profile-name', 'Edited Direct')
-        fields.locator('summary').click()
+        fields.locator('.ssh-host-identity summary').click()
         fields.get_by_label('Target Host key alias (optional)', exact=True).fill('lab')
         fields.get_by_label('Target Use key', exact=True).check()
         page.wait_for_function("() => document.querySelector('#ssh-profile-node [aria-label=\"Target Public key\"]').value.startsWith('ssh-ed25519 ')")

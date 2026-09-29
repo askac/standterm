@@ -9,6 +9,8 @@ a production release or a replacement for `run.sh` / `run.bat`.
 The 0.5.3 evaluation bundles Core 2.14.0, adds startup feedback and window
 state restoration, and includes the optional Windows SSH network source for WSL
 under the collapsed Advanced connection settings.
+The current 0.5.4-dev source pairs with Core 2.15.0 for local Telnet and SSH
+network-origin testing; it is not the published 0.5.3 package.
 
 Desktop copy and localization are planned in the
 [review plan](../docs/desktop_ui_review_plan.md), with a separate
@@ -45,7 +47,11 @@ SSH authentication, browser keys, host-key storage and SFTP remain in Core.
 Windows `localhost` means the Windows host and never inherits Core's localhost
 automatic trust or key setup. Use a host key alias when different hosts share
 an address across the two networks. The choice applies to the current connection
-and its retries, is not saved in profiles, and never silently falls back to Core.
+and its retries. Browser SSH profiles and history retain it, including settings
+import/export. On non-WSL Core environments, the advanced control is hidden and
+a retained Windows preference uses Core networking without changing the profile.
+When WSL offers the helper and Windows is selected, a connection failure does
+not fall back to Core.
 Later jump hosts, SSH forwarding targets and local forwarding listeners keep
 their existing semantics; selecting Windows does not move those listeners.
 This preview is available in WSL browser launches too, under the same conditions.
@@ -104,7 +110,7 @@ The published [Windows **0.5.1 / Core 2.13.0-dev** evaluation](https://github.co
 includes ordered SSH jump routes, per-site login cards, shared Direct/node key
 controls and opt-in
 profile/route saving on Connect. It retains its original development identity.
-The current source declares Core **2.14.0**; matching installers require a fresh
+The current source declares Core **2.15.0**; matching installers require a fresh
 build and validation. A new Mac installer remains separate; the 0.5.0 candidates
 remain local.
 
