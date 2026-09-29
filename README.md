@@ -11,8 +11,10 @@ the [browser-based Core quick start](#quick-start).
 
 The current Core source is **[2.15.0](https://github.com/askac/standterm/releases/tag/v2.15.0)**,
 paired with Desktop 0.5.4-dev source. It adds Telnet device consoles and retains
-the Windows network choice in browser SSH profiles. The latest published Desktop
-packages below remain 0.5.3 / Core 2.14.0 and do not include these changes.
+the Windows network choice in browser SSH profiles. The latest
+[Desktop 0.5.4-dev / Core 2.15.0-dev evaluation](https://github.com/askac/standterm/releases/tag/desktop-v0.5.4-dev-2.15.0-dev)
+contains these changes from an earlier development source commit; it does not
+bundle the final Core 2.15.0 version identity.
 
 **Core 2.13.0** is a [source release](https://github.com/askac/standterm/releases/tag/v2.13.0).
 It adds SSH routes with up to three jump hosts, ordered node editing and per-site
@@ -29,8 +31,22 @@ controls may differ.*
 
 ## Desktop Downloads (Evaluation)
 
+[Desktop 0.5.4-dev / Core 2.15.0-dev](https://github.com/askac/standterm/releases/tag/desktop-v0.5.4-dev-2.15.0-dev)
+is a development evaluation pre-release for Windows x64 and macOS Apple Silicon.
+The Mac full packaged capture smoke did not pass, and the earlier window-position
+drift remains unresolved. Windows installed-app acceptance was not performed for
+this candidate. See the release notes before installing.
+
+| Platform | Download | Required before installation |
+| --- | --- | --- |
+| Windows x64, including Windows + WSL | [Desktop 0.5.4-dev / Core 2.15.0-dev (.exe)](https://github.com/askac/standterm/releases/download/desktop-v0.5.4-dev-2.15.0-dev/StandTerm-Desktop-0.5.4-dev-2.15.0-dev-win32-x64-Setup.exe) | Python 3.10+ with venv/ensurepip in each selected environment; WSL mode also needs an existing WSL distribution. |
+| macOS Apple Silicon | [Desktop 0.5.4-dev / Core 2.15.0-dev (.dmg)](https://github.com/askac/standterm/releases/download/desktop-v0.5.4-dev-2.15.0-dev/StandTerm-Desktop-0.5.4-dev-2.15.0-dev-mac-arm64.dmg) | Native arm64 Python 3.10+ with venv/ensurepip. Intel/Rosetta is not qualified. |
+
+[SHA256SUMS for 0.5.4-dev](https://github.com/askac/standterm/releases/download/desktop-v0.5.4-dev-2.15.0-dev/SHA256SUMS)
+covers both installers.
+
 [Desktop 0.5.3 / Core 2.14.0](https://github.com/askac/standterm/releases/tag/desktop-v0.5.3-2.14.0)
-is an evaluation pre-release for Windows x64 and macOS Apple Silicon.
+is the previous evaluation pre-release for Windows x64 and macOS Apple Silicon.
 
 **Known issue:** repeated maximize, restore and reopen cycles can accumulate
 window position and size drift on macOS. A shared-code fix and Windows regression
@@ -42,14 +58,17 @@ retain the tested source rather than including an unverified fix.
 | Windows x64, including Windows + WSL | [Desktop 0.5.3 / Core 2.14.0 (.exe)](https://github.com/askac/standterm/releases/download/desktop-v0.5.3-2.14.0/StandTerm-Desktop-0.5.3-2.14.0-win32-x64-Setup.exe) | Python 3.10+ with venv/ensurepip in each selected environment; WSL mode also needs an existing WSL distribution. |
 | macOS Apple Silicon | [Desktop 0.5.3 / Core 2.14.0 (.dmg)](https://github.com/askac/standterm/releases/download/desktop-v0.5.3-2.14.0/StandTerm-Desktop-0.5.3-2.14.0-mac-arm64.dmg) | Native arm64 Python 3.10+ with venv/ensurepip. Intel/Rosetta is not qualified. |
 
+[SHA256SUMS for 0.5.3](https://github.com/askac/standterm/releases/download/desktop-v0.5.3-2.14.0/SHA256SUMS)
+covers both previous installers.
+
 Packages include Electron and Core. **Git, Node.js and npm are not required**;
 Python and its virtual environment are not bundled.
 Desktop includes an optional advanced Git Core source, which
 requires Git in the selected backend environment, plus bundled Core recovery
 without Git.
 
-1. Download the package for your platform and verify its checksum:
-   [SHA256SUMS for both platforms](https://github.com/askac/standterm/releases/download/desktop-v0.5.3-2.14.0/SHA256SUMS).
+1. Download the package for your platform and verify it against that release's
+   `SHA256SUMS`.
 2. On Windows, run the installer and choose **Windows only**, **Windows + WSL**
    or **WSL only**. Native Windows mode needs 64-bit Windows Python; installing
    Windows Python does not satisfy WSL mode. On macOS, copy the app to a
