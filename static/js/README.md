@@ -48,3 +48,24 @@ The development build enables it through `IME_ANCHOR_POC_ENABLED` in
 native positioning. It uses guarded private APIs and must be reassessed on an
 xterm upgrade. Synthetic browser checks do not qualify actual OS candidate
 windows. The source checkout includes `docs/ime_anchor_poc.md` with manual checks.
+
+## StandTerm font recommendations
+
+`standterm-font-recommendations.js` measures independent xterm instances at the
+active terminal's viewport size, renderer, and the draft font settings. It uses
+FitAddon for columns/rows and divides the actual `.xterm-screen` size by those
+counts for cell geometry. A guard against xterm 6.0.0's private renderer cell
+metrics rejects deferred/stale layouts; reassess this guard on an xterm upgrade.
+Measurement hosts stay inside the viewport but invisible, so IntersectionObserver
+does not pause their renderer resize. Instances are disposed after measurement;
+only one separate visual preview remains until settings close or change.
+
+The candidate lists, wait bound, and reference aspect ratio live in this helper.
+Capacity ranks by columns times rows; aspect ranks by distance from 2.0, then
+capacity. Ties preserve the current font. Requested font names are not verified
+as installed: fallback geometry is measured without requesting font permissions.
+The settings goal and results are temporary. Selecting a result only updates the
+font draft; the existing Save preferences path persists it and updates terminals
+and Agent mirrors. Display/typography changes invalidate results instead of
+automatically switching fonts. Preview glyphs help inspect fallback coverage and
+geometry but are not an automated font quality check.
