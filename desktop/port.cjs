@@ -5,6 +5,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const net = require('node:net');
 const { create } = require('./i18n.js');
+const { controlResponseError } = require('./policy.cjs');
 
 const validPort = value => Number.isInteger(value) && value >= 1 && value <= 65535;
 const HOST_PORT_ATTEMPTS = 20;
@@ -32,12 +33,13 @@ function checkHostPort(port, { backendBound = false } = {}, createServer = () =>
 }
 
 function parsePortConflict(line, requestedPort) {
-  const data = JSON.parse(line);
+  let data;
+  try { data = JSON.parse(line); } catch { throw controlResponseError('invalid_json'); }
   if (data?.type !== 'standterm_desktop_bind_error') return null;
   if (data.version !== 1 || data.code !== 'address_in_use' || data.port !== requestedPort
       || !validPort(data.port) || (data.suggested_port !== null
         && (!validPort(data.suggested_port) || data.suggested_port < 49152
-          || data.suggested_port === data.port))) throw new Error('Invalid desktop bind response.');
+          || data.suggested_port === data.port))) throw controlResponseError('invalid_bind');
   return Object.assign(new Error('The selected desktop port is already in use.'), {
     code: 'PORT_IN_USE', port: data.port, suggestedPort: data.suggested_port,
   });
