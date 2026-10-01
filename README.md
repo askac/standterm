@@ -15,6 +15,10 @@ or the optional Desktop app.
 
 ## Features
 
+- **Cross-tab AI collaboration.** Let an external AI agent observe and operate
+  the SSH tabs you authorize, comparing configurations or correlating logs
+  across hosts. Each tab retains its own permissions, with human-in-the-loop
+  approval, pause and revocation controls.
 - **Visual SSH jump routes.** Connect through up to three jump hosts, with
   separate login and host-key verification at each hop. See where a connection
   stops and retry that login without restarting the completed hops.
@@ -27,10 +31,6 @@ or the optional Desktop app.
 - **Browser-held SSH keys.** Generate non-extractable Ed25519 keys and sign in
   the browser, keeping private key bytes out of the Python backend. Settings
   exports exclude private keys; see [key management](docs/user-guide.md#browser-managed-ssh-profiles-and-keys).
-- **Cross-tab AI collaboration.** Let an external AI agent observe and operate
-  the SSH tabs you authorize, comparing configurations or correlating logs
-  across hosts. Each tab retains its own permissions, with human-in-the-loop
-  approval, pause and revocation controls.
 
 AI access uses the CLI, JSON API or optional MCP adapter; no AI runtime is
 required on the SSH targets. AI collaboration is optional.
