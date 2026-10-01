@@ -3,11 +3,12 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { create } = require('./i18n.js');
+const { CONTROL_FAILURE_REASONS, CONTROL_FIELDS } = require('./policy.cjs');
 const EVENTS = new Set(['startup', 'setup_start', 'setup_ready', 'backend_launch', 'backend_ready',
-  'backend_exit', 'backend_spawn_failed', 'backend_verify_retry', 'backend_verified',
+  'backend_exit', 'backend_spawn_failed', 'backend_control_failed', 'backend_verify_retry', 'backend_verified',
   'host_port_rejected', 'port_change', 'window_ready', 'window_state_save_failed', 'startup_failed', 'core_failed', 'shutdown', 'devtools_opened', 'capture_failed']);
 const CODES = new Set(['EACCES', 'EADDRINUSE', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT',
-  'ENOENT', 'EPIPE', 'HOST_PORT_UNAVAILABLE', 'PORT_IN_USE', 'SETUP_CANCELED',
+  'ENOENT', 'EPIPE', 'HOST_PORT_UNAVAILABLE', 'PORT_IN_USE', 'SETUP_CANCELED', 'BACKEND_CONTROL_INVALID',
   'git_required', 'git_dirty', 'git_diverged', 'git_source_changed', 'invalid_git_workspace',
   'git_needs_setup', 'git_failed', 'invalid_archive', 'modified_runtime', 'invalid_bundle',
   'setup_busy', 'unsafe_runtime_path', 'dependencies_failed', 'venv_failed', 'setup_failed', 'setup_timeout']);
@@ -29,6 +30,15 @@ function createDiagnostics(directory, { mode, version }) {
       if (Number.isSafeInteger(details[key]) && details[key] >= 0 && details[key] <= 2147483647) record[key] = details[key];
     }
     if (CODES.has(details.code)) record.code = details.code;
+    if (event === 'backend_control_failed') {
+      if (Object.hasOwn(CONTROL_FAILURE_REASONS, details.reason)) record.reason = details.reason;
+      if (CONTROL_FIELDS.includes(details.field)) record.field = details.field;
+      if (Number.isSafeInteger(details.bufferBytes) && details.bufferBytes >= 0
+          && details.bufferBytes <= 2147483647) record.bufferBytes = details.bufferBytes;
+      for (const key of ['containsNul', 'utf8Bom']) {
+        if (typeof details[key] === 'boolean') record[key] = details[key];
+      }
+    }
     if (typeof details.expected === 'boolean') record.expected = details.expected;
     for (const key of ['visible', 'minimized', 'focused']) {
       if (typeof details[key] === 'boolean') record[key] = details[key];

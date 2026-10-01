@@ -2,7 +2,39 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { backendCommand, parseHandoff, allowedRequest, allowedNavigation } = require('../policy.cjs');
+const { backendCommand, parseHandoff, controlResponseError, allowedRequest, allowedNavigation } = require('../policy.cjs');
+
+test('handshake failures identify the rejected field without retaining its value', () => {
+  const secret = 'private-value-that-must-not-appear';
+  const frame = { type: 'standterm_desktop_ready', version: 1, origin: 'http://127.0.0.1:45678',
+    instance_id: 'instance', launcher_token: 'launcher', session_token: 'session', cookie_name: 'cookie' };
+  const cases = [
+    [secret, 'invalid_json', undefined],
+    [' '.repeat(4097), 'too_large', undefined],
+    ['null', 'invalid_type', 'type'],
+    [JSON.stringify({ ...frame, type: secret }), 'invalid_type', 'type'],
+    [JSON.stringify({ ...frame, version: secret }), 'invalid_protocol_version', 'version'],
+    [JSON.stringify({ ...frame, origin: secret }), 'invalid_origin', 'origin'],
+    [JSON.stringify({ ...frame, session_token: secret + '!' }), 'invalid_auth', 'session_token'],
+    [JSON.stringify({ ...frame, core_version: secret }), 'invalid_version', 'core_version'],
+    [JSON.stringify({ ...frame, core_bundle_id: secret }), 'invalid_bundle', 'core_bundle_id'],
+  ];
+  for (const [line, reason, field] of cases) {
+    assert.throws(() => parseHandoff(line), error => {
+      assert.equal(error.code, 'BACKEND_CONTROL_INVALID');
+      assert.equal(error.reason, reason);
+      assert.equal(error.field, field);
+      assert.ok(error.message.includes(reason));
+      assert.ok(!error.stack.includes(secret));
+      assert.ok(!JSON.stringify(error).includes(secret));
+      return true;
+    });
+  }
+  const fallback = controlResponseError(secret, secret);
+  assert.equal(fallback.reason, 'unknown');
+  assert.equal(fallback.field, undefined);
+  assert.ok(!fallback.message.includes(secret));
+});
 
 test('handoff accepts typed loopback metadata and rejects attacker origins', () => {
   const frame = {

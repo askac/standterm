@@ -747,6 +747,13 @@ terminal content and authentication/SSH credentials are never collected. Logs
 rotate at 256 KiB and retain one previous file; write failure does not stop Core.
 Startup error dialogs include the diagnostic file location even if no terminal
 window could be opened.
+Handshake failures add a `backend_control_failed` event before HTTP verification:
+`reason` identifies invalid JSON, rejected metadata, a port mismatch or oversized
+output; `field` identifies the rejected field when applicable. `bufferBytes`,
+`containsNul` and `utf8Bom` help identify stdout contamination or encoding issues
+without recording the response or token values. The error dialog also shows the
+reason and field. A later `backend_exit` with `expected: true` can be cleanup
+after this failure; inspect the preceding control event first.
 
 Since 0.4.0, **Diagnostics > Status and recent events...** opens an isolated,
 read-only page with the actual URL, backend mode/process state, Electron /

@@ -377,6 +377,16 @@
         .settings-theme-cursor { display: inline-block; width: 0.6em; height: 1.1em; vertical-align: text-bottom; }
         .settings-theme-palette { display: grid; grid-template-columns: 42px repeat(8, minmax(0, 1fr)); gap: 4px; align-items: center; margin-top: 8px; font-size: 10px; }
         .settings-theme-swatch { height: 14px; border: 1px solid currentColor; border-radius: 2px; }
+        .font-measurement-host { position: fixed; left: 0; top: 0; visibility: hidden; pointer-events: none; }
+        .font-measurement-host > .xterm, #font-recommendation-preview > .xterm { box-sizing: border-box; padding: 2px; }
+        #font-recommendations-fieldset { min-width: 0; }
+        #font-recommendation-results { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin-top: 10px; }
+        .font-recommendation-card { border: 1px solid #555; border-radius: 4px; padding: 8px; overflow-wrap: anywhere; }
+        .font-recommendation-card.recommended { border-color: #0a84ff; }
+        .font-recommendation-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+        #font-recommendation-preview { height: 230px; overflow: hidden; margin-top: 10px; }
+        #font-recommendation-preview[hidden] { display: none; }
+        #font-recommendation-preview-label { overflow-wrap: anywhere; }
         .settings-value { color: #f2f2f2; text-align: right; overflow-wrap: anywhere; max-width: 58%; }
         .settings-status { color: #aaa; font-size: 12px; line-height: 1.4; margin-bottom: 10px; overflow-wrap: anywhere; }
         .settings-list { display: grid; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; color: #ddd; }
@@ -1217,6 +1227,18 @@
                             </div>
                             <div class="settings-row"><label for="pref-showTerminalTitleInStatusBar" data-i18n="settings.appearance.terminal_title">Show application title in status bar</label><input type="checkbox" id="pref-showTerminalTitleInStatusBar"></div>
                         </fieldset>
+                        <fieldset class="settings-fieldset" id="font-recommendations-fieldset">
+                            <legend data-i18n="settings.fonts.title">Font recommendations</legend>
+                            <div class="settings-row"><label for="font-recommendation-goal" data-i18n="settings.fonts.goal">Prefer</label>
+                                <select id="font-recommendation-goal"><option value="capacity" data-i18n="settings.fonts.capacity">More cells</option><option value="aspect" data-i18n="settings.fonts.aspect">Cell ratio near 2.0</option></select>
+                            </div>
+                            <div class="settings-transfer-actions"><button type="button" id="font-recommendation-measure" data-i18n="settings.fonts.measure">Measure fonts</button></div>
+                            <div class="settings-status" data-i18n="settings.fonts.hint">Compares the current font and a few candidates at the draft size and weight in the active terminal's viewport. Missing fonts may use fallbacks; installation and glyph coverage are not verified. Use a font, then save preferences to apply it.</div>
+                            <div class="settings-status" id="font-recommendation-status" role="status" aria-live="polite"></div>
+                            <div id="font-recommendation-results"></div>
+                            <div class="settings-status" id="font-recommendation-preview-label"></div>
+                            <div id="font-recommendation-preview" hidden></div>
+                        </fieldset>
                     </div>
                     <div class="settings-tab" id="tab-ssh-sessions">
                         <div class="settings-status" id="ssh-profile-status" data-i18n="ssh.profiles.stored">Profiles are stored only in this browser.</div>
@@ -1713,6 +1735,7 @@
 
     <script src="{{ url_for('static', filename='js/standterm-messages.js') }}"></script>
     <script src="{{ url_for('static', filename='js/standterm-i18n.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/standterm-font-recommendations.js') }}"></script>
     <script src="{{ url_for('static', filename='js/standterm-capabilities.js') }}"></script>
     <script src="{{ url_for('static', filename='js/standterm-ssh-routes.js') }}"></script>
     <script src="{{ url_for('static', filename='js/standterm-ssh-node-auth.js') }}"></script>
@@ -1952,13 +1975,13 @@
                 }
             } catch (e) {}
         }
-        function applyCjkWidthPreference(term) {
+        function applyCjkWidthPreference(term, enabled = prefs.cjkWideAmbiguous) {
             if (!term) return;
             try {
                 const unicode = term.unicode;
                 if (!unicode || !Array.isArray(unicode.versions)) return;
                 if (!term.__baseUnicodeVersion) term.__baseUnicodeVersion = unicode.activeVersion;
-                if (!prefs.cjkWideAmbiguous) {
+                if (!enabled) {
                     if (unicode.activeVersion === CJK_WIDTH_PROVIDER_VERSION) {
                         unicode.activeVersion = term.__baseUnicodeVersion;
                     }
@@ -11886,6 +11909,213 @@
             }
 
             const settingsModal = document.getElementById('settings-modal');
+            const fontRecommendations = window.StandTermFontRecommendations;
+            const fontMeasureButton = document.getElementById('font-recommendation-measure');
+            const fontResultsElement = document.getElementById('font-recommendation-results');
+            const fontStatusElement = document.getElementById('font-recommendation-status');
+            const fontPreviewElement = document.getElementById('font-recommendation-preview');
+            const fontPreviewLabel = document.getElementById('font-recommendation-preview-label');
+            let fontEvaluationController = null;
+            let fontPreviewController = null;
+            let fontEvaluationContext = null;
+            let fontEvaluationResults = [];
+            let fontViewportObserver = null;
+
+            function resetFontRecommendations(messageKey = '') {
+                if (fontEvaluationController) fontEvaluationController.abort();
+                if (fontPreviewController) fontPreviewController.abort();
+                if (fontViewportObserver) fontViewportObserver.disconnect();
+                fontEvaluationController = null;
+                fontPreviewController = null;
+                fontViewportObserver = null;
+                fontEvaluationContext = null;
+                fontEvaluationResults = [];
+                fontResultsElement.replaceChildren();
+                fontPreviewElement.hidden = true;
+                fontPreviewLabel.textContent = '';
+                fontMeasureButton.disabled = false;
+                fontStatusElement.textContent = messageKey ? t(messageKey) : '';
+            }
+
+            function getFontEvaluationContext() {
+                const state = getActiveTerminalState();
+                if (!state || !state.term || !state.container.clientWidth || !state.container.clientHeight) return null;
+                return {
+                    terminalId: state.id,
+                    width: state.container.clientWidth, height: state.container.clientHeight,
+                    dpr: window.devicePixelRatio || 1,
+                    renderer: state.webglAddon ? 'webgl' : 'dom',
+                    fontFace: document.getElementById('pref-fontFace').value.trim(),
+                    fontSize: normalizeFontSize(document.getElementById('pref-fontSize').value, prefs.fontSize),
+                    fontWeight: normalizeFontWeight(document.getElementById('pref-fontWeight').value, prefs.fontWeight),
+                    powerlineSymbols: document.getElementById('pref-powerlineSymbols').checked,
+                    cjkWideAmbiguous: document.getElementById('pref-cjkWideAmbiguous').checked,
+                    colorScheme: document.getElementById('pref-colorScheme').value,
+                    lineHeight: state.term.options.lineHeight,
+                    letterSpacing: state.term.options.letterSpacing,
+                    fontWeightBold: state.term.options.fontWeightBold,
+                    scrollback: state.term.options.scrollback,
+                    overviewRuler: state.term.options.overviewRuler
+                };
+            }
+
+            function fontEvaluationIsCurrent() {
+                return settingsModal.classList.contains('open') && fontEvaluationContext
+                    && JSON.stringify(fontEvaluationContext) === JSON.stringify(getFontEvaluationContext());
+            }
+
+            function fontCandidateOptions(fontFace) {
+                const context = fontEvaluationContext;
+                return {
+                    allowProposedApi: true,
+                    fontFamily: context.powerlineSymbols ? '"StandTerm Powerline Symbols", ' + fontFace : fontFace,
+                    fontSize: context.fontSize, fontWeight: context.fontWeight,
+                    fontWeightBold: context.fontWeightBold,
+                    lineHeight: context.lineHeight, letterSpacing: context.letterSpacing,
+                    scrollback: context.scrollback, overviewRuler: context.overviewRuler,
+                    theme: SCHEMES[context.colorScheme] || SCHEMES.vintage
+                };
+            }
+
+            async function previewRecommendedFont(result) {
+                if (!fontEvaluationIsCurrent()) {
+                    resetFontRecommendations('settings.fonts.stale');
+                    return;
+                }
+                if (fontPreviewController) fontPreviewController.abort();
+                const controller = new AbortController();
+                fontPreviewController = controller;
+                fontPreviewElement.hidden = false;
+                fontPreviewLabel.textContent = t('settings.fonts.preview_caption', { font: result.fontFace });
+                try {
+                    const preview = await fontRecommendations.openPreview(
+                        fontPreviewElement, fontCandidateOptions(result.fontFace), fontEvaluationContext.renderer,
+                        controller.signal, () => resetFontRecommendations('settings.fonts.failed')
+                    );
+                    if (controller.signal.aborted) return;
+                    enableUnicode11WidthProvider(preview.term);
+                    applyCjkWidthPreference(preview.term, fontEvaluationContext.cjkWideAmbiguous);
+                    preview.term.write(fontRecommendations.sample());
+                } catch (error) {
+                    if (controller.signal.aborted) return;
+                    controller.abort();
+                    fontPreviewElement.hidden = true;
+                    fontPreviewLabel.textContent = t('settings.fonts.preview_failed');
+                }
+            }
+
+            function renderFontRecommendations() {
+                if (!fontEvaluationIsCurrent()) {
+                    resetFontRecommendations('settings.fonts.stale');
+                    return;
+                }
+                const ranked = fontRecommendations.rank(fontEvaluationResults, document.getElementById('font-recommendation-goal').value);
+                fontResultsElement.replaceChildren();
+                for (const result of [...ranked, ...fontEvaluationResults.filter(item => !item.metrics)]) {
+                    const card = document.createElement('div');
+                    card.className = 'font-recommendation-card';
+                    card.dataset.fontIndex = String(result.index);
+                    const family = document.createElement('div');
+                    family.textContent = result.fontFace;
+                    const summary = document.createElement('div');
+                    card.append(family, summary);
+                    if (result.metrics) {
+                        card.dataset.metrics = JSON.stringify(result.metrics);
+                        const metrics = result.metrics;
+                        summary.textContent = t('settings.fonts.metrics', {
+                            cols: metrics.cols, rows: metrics.rows, capacity: metrics.capacity,
+                            width: metrics.cellWidth.toFixed(2), height: metrics.cellHeight.toFixed(2),
+                            aspect: metrics.aspect.toFixed(3)
+                        });
+                        if (result === ranked[0]) {
+                            card.classList.add('recommended');
+                            const badge = document.createElement('strong');
+                            badge.textContent = t('settings.fonts.recommended');
+                            card.prepend(badge);
+                        }
+                        const actions = document.createElement('div');
+                        actions.className = 'font-recommendation-actions settings-transfer-actions';
+                        const preview = document.createElement('button');
+                        preview.type = 'button';
+                        preview.dataset.action = 'preview';
+                        preview.textContent = t('settings.fonts.preview');
+                        preview.onclick = () => previewRecommendedFont(result);
+                        const use = document.createElement('button');
+                        use.type = 'button';
+                        use.dataset.action = 'use';
+                        use.textContent = t('settings.fonts.use');
+                        use.onclick = () => {
+                            if (!fontEvaluationIsCurrent()) {
+                                resetFontRecommendations('settings.fonts.stale');
+                                return;
+                            }
+                            document.getElementById('pref-fontFace').value = result.fontFace;
+                            resetFontRecommendations('settings.fonts.selected');
+                        };
+                        actions.append(preview, use);
+                        card.appendChild(actions);
+                    } else {
+                        summary.textContent = t('settings.fonts.candidate_failed');
+                    }
+                    fontResultsElement.appendChild(card);
+                }
+                fontStatusElement.textContent = ranked.length ? t('settings.fonts.context', {
+                    width: fontEvaluationContext.width, height: fontEvaluationContext.height,
+                    size: fontEvaluationContext.fontSize, weight: fontEvaluationContext.fontWeight,
+                    renderer: fontEvaluationContext.renderer, dpr: fontEvaluationContext.dpr
+                }) : t('settings.fonts.failed');
+                if (ranked.length) previewRecommendedFont(ranked[0]);
+            }
+
+            fontMeasureButton.onclick = async () => {
+                resetFontRecommendations();
+                fontEvaluationContext = getFontEvaluationContext();
+                if (!fontEvaluationContext || !fontRecommendations || typeof FitAddon === 'undefined') {
+                    resetFontRecommendations('settings.fonts.failed');
+                    return;
+                }
+                const controller = new AbortController();
+                fontEvaluationController = controller;
+                fontMeasureButton.disabled = true;
+                fontStatusElement.textContent = t('settings.fonts.measuring');
+                if (typeof ResizeObserver !== 'undefined') {
+                    fontViewportObserver = new ResizeObserver(() => {
+                        if (!fontEvaluationIsCurrent()) resetFontRecommendations('settings.fonts.stale');
+                    });
+                    fontViewportObserver.observe(getActiveTerminalState().container);
+                }
+                const candidates = fontRecommendations.candidates(fontEvaluationContext.fontFace, isApplePlatform());
+                for (const [index, fontFace] of candidates.entries()) {
+                    let metrics = null;
+                    try {
+                        metrics = await fontRecommendations.measure(
+                            fontCandidateOptions(fontFace), fontEvaluationContext, fontEvaluationContext.renderer, controller.signal
+                        );
+                    } catch (error) {
+                        // A failed candidate has no score and cannot be selected.
+                    }
+                    if (controller.signal.aborted) return;
+                    if (!fontEvaluationIsCurrent()) {
+                        resetFontRecommendations('settings.fonts.stale');
+                        return;
+                    }
+                    fontEvaluationResults.push({ index, fontFace, metrics });
+                }
+                fontMeasureButton.disabled = false;
+                renderFontRecommendations();
+            };
+            document.getElementById('font-recommendation-goal').onchange = () => {
+                if (fontEvaluationResults.length) renderFontRecommendations();
+            };
+            for (const id of ['pref-fontFace', 'pref-fontSize', 'pref-fontWeight', 'pref-powerlineSymbols', 'pref-colorScheme', 'pref-cjkWideAmbiguous']) {
+                document.getElementById(id).addEventListener('input', () => {
+                    if (fontEvaluationContext) resetFontRecommendations('settings.fonts.stale');
+                });
+            }
+            window.addEventListener('resize', () => {
+                if (fontEvaluationContext) resetFontRecommendations('settings.fonts.stale');
+            });
+
             function renderColorSchemePreview() {
                 const theme = SCHEMES[document.getElementById('pref-colorScheme').value] || SCHEMES.vintage;
                 const preview = document.getElementById('settings-theme-preview');
@@ -11924,6 +12154,7 @@
             }
             document.getElementById('pref-colorScheme').onchange = renderColorSchemePreview;
             const openSettings = () => {
+                resetFontRecommendations();
                 document.getElementById('pref-uiLanguage').value = prefs.uiLanguage;
                 document.getElementById('pref-useCustomMenu').checked = prefs.useCustomMenu;
                 document.getElementById('pref-copyOnSelect').checked = prefs.copyOnSelect;
@@ -12013,7 +12244,10 @@
                     return true;
                 },
             });
-            document.getElementById('settings-close').onclick = () => settingsModal.classList.remove('open');
+            document.getElementById('settings-close').onclick = () => {
+                resetFontRecommendations();
+                settingsModal.classList.remove('open');
+            };
             if (sessionRecoveryForm) {
                 sessionRecoveryForm.onsubmit = event => {
                     event.preventDefault();
@@ -12164,6 +12398,7 @@
                 };
             });
             document.getElementById('settings-save').onclick = () => {
+                resetFontRecommendations();
                 prefs.uiLanguage = window.StandTermI18n.normalizeLocale(document.getElementById('pref-uiLanguage').value);
                 prefs.useCustomMenu = document.getElementById('pref-useCustomMenu').checked;
                 prefs.copyOnSelect = document.getElementById('pref-copyOnSelect').checked;

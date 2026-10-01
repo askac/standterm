@@ -9,6 +9,8 @@ const { EventEmitter } = require('node:events');
 const { create } = require('../i18n.js');
 const { createDiagnostics, diagnosticsMenu, agentConnectionInfo, openDeveloperTools, MAX_LOG_BYTES } = require('../diagnostics.cjs');
 const { statusHtml } = require('../diagnostics-window.cjs');
+const { parseHandoff, controlResponseError, CONTROL_RESPONSE_LIMIT } = require('../policy.cjs');
+const { parsePortConflict } = require('../port.cjs');
 
 function fixture(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'standterm-diagnostics-test-'));
@@ -33,6 +35,98 @@ test('diagnostics persist only bounded structured metadata, never payloads or cr
   assert.equal(exited.expected, true);
   assert.equal(Object.hasOwn(exited, 'exitCode'), false);
   assert.equal(Object.hasOwn(exited, 'port'), false);
+});
+
+test('control failure diagnostics whitelist reasons, field names and encoding indicators', t => {
+  const { logger } = fixture(t);
+  logger.write('backend_control_failed', { code: 'BACKEND_CONTROL_INVALID', reason: 'invalid_auth',
+    field: 'session_token', bufferBytes: 100, containsNul: false, utf8Bom: true,
+    stdout: 'private-value', stderr: 'private-value', message: 'private-value', session_token: 'private-value' });
+  logger.write('backend_control_failed', { reason: 'private-value', field: 'private-value',
+    bufferBytes: -1, containsNul: 'private-value', utf8Bom: 'private-value' });
+  const [failure, rejected] = logger.snapshot();
+  assert.equal(failure.reason, 'invalid_auth');
+  assert.equal(failure.field, 'session_token');
+  assert.equal(failure.bufferBytes, 100);
+  assert.equal(failure.containsNul, false);
+  assert.equal(failure.utf8Bom, true);
+  assert.deepEqual(Object.keys(rejected), ['time', 'event', 'mode', 'version']);
+  assert.ok(!fs.readFileSync(logger.file, 'utf8').includes('private-value'));
+});
+
+function backendFixture(t) {
+  const { logger } = fixture(t);
+  const backend = new EventEmitter();
+  backend.stdin = new EventEmitter();
+  backend.stdout = new EventEmitter();
+  backend.stderr = { resume() {} };
+  const source = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
+  const launch = source.match(/function launchBackend\([\s\S]*?\n\}/);
+  assert.ok(launch);
+  const context = vm.createContext({ diagnostics: logger, smoke: false, process, path, __dirname,
+    Buffer, URL, setTimeout: (callback, delay) => {
+      const timer = setTimeout(callback, delay);
+      t.after(() => clearTimeout(timer));
+      return timer;
+    }, clearTimeout, spawn: () => backend, parseHandoff, parsePortConflict,
+    controlResponseError, CONTROL_RESPONSE_LIMIT, expectedBackendExits: new WeakSet(), quitting: false, booting: true });
+  vm.runInContext(launch[0], context);
+  return { logger, backend, launch: port => context.launchBackend({ executable: 'fixture', args: [], cwd: __dirname }, port) };
+}
+
+test('backend launch reports the first stdout failure and ignores later ready frames', async t => {
+  const secret = 'private-value-that-must-not-appear';
+  const frame = { type: 'standterm_desktop_ready', version: 1, origin: 'http://127.0.0.1:45678',
+    instance_id: 'instance', launcher_token: secret, session_token: secret, cookie_name: 'cookie' };
+  const ready = JSON.stringify(frame) + '\n';
+  const cases = [
+    { chunks: [secret + '\n'], reason: 'invalid_json' },
+    { chunks: ['\uFEFF' + ready], reason: 'invalid_json', utf8Bom: true },
+    { chunks: ['{\0}\n'], reason: 'invalid_json', containsNul: true },
+    { chunks: ['x'.repeat(4096), 'x'], reason: 'too_large' },
+    { chunks: [JSON.stringify({ ...frame, core_version: secret }) + '\n'], reason: 'invalid_version', field: 'core_version' },
+    { chunks: [ready], port: 45679, reason: 'unexpected_port', field: 'origin' },
+    { chunks: ['{"type":"standterm_desktop_bind_error"}\n'], reason: 'invalid_bind' },
+  ];
+  for (const scenario of cases) await t.test(scenario.reason + (scenario.field || ''), async t => {
+    const { logger, backend, launch } = backendFixture(t);
+    const pending = launch(scenario.port || 0);
+    const rejected = assert.rejects(pending, error => {
+      assert.equal(error.reason, scenario.reason);
+      assert.equal(error.field, scenario.field);
+      assert.ok(!error.message.includes(secret));
+      return true;
+    });
+    for (const chunk of scenario.chunks) backend.stdout.emit('data', Buffer.from(chunk));
+    await rejected;
+    backend.stdout.emit('data', Buffer.from(ready));
+    const failures = logger.snapshot().filter(record => record.event === 'backend_control_failed');
+    assert.equal(failures.length, 1);
+    assert.equal(failures[0].reason, scenario.reason);
+    assert.equal(failures[0].bufferBytes, Buffer.byteLength(scenario.chunks.join('')));
+    assert.equal(failures[0].containsNul, !!scenario.containsNul);
+    assert.equal(failures[0].utf8Bom, !!scenario.utf8Bom);
+    assert.ok(!logger.snapshot().some(record => record.event === 'backend_ready'));
+    assert.ok(!fs.readFileSync(logger.file, 'utf8').includes(secret));
+  });
+});
+
+test('split valid handshakes and typed port conflicts preserve startup behavior', async t => {
+  const { logger, backend, launch } = backendFixture(t);
+  const ready = JSON.stringify({ type: 'standterm_desktop_ready', version: 1, origin: 'http://127.0.0.1:45678',
+    instance_id: 'instance', launcher_token: 'launcher', session_token: 'session', cookie_name: 'cookie' }) + '\n';
+  const pending = launch(0);
+  backend.stdout.emit('data', Buffer.from(ready.slice(0, 20)));
+  assert.equal(logger.snapshot().length, 1);
+  backend.stdout.emit('data', Buffer.from(ready.slice(20)));
+  assert.equal((await pending).origin, 'http://127.0.0.1:45678');
+  assert.equal(logger.snapshot().at(-1).event, 'backend_ready');
+  const conflict = backendFixture(t);
+  const denied = assert.rejects(conflict.launch(45678), { code: 'PORT_IN_USE', suggestedPort: 55679 });
+  conflict.backend.stdout.emit('data', Buffer.from(JSON.stringify({ type: 'standterm_desktop_bind_error',
+    version: 1, code: 'address_in_use', port: 45678, suggested_port: 55679 }) + '\n'));
+  await denied;
+  assert.ok(!conflict.logger.snapshot().some(record => record.event === 'backend_control_failed'));
 });
 
 test('both diagnostic languages preserve menu IDs, callbacks and literal backend URLs', t => {

@@ -6,7 +6,8 @@ const http = require('node:http');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
-const { backendCommand, parseHandoff, allowedRequest, allowedNavigation } = require('./policy.cjs');
+const { backendCommand, parseHandoff, controlResponseError, CONTROL_RESPONSE_LIMIT,
+  allowedRequest, allowedNavigation } = require('./policy.cjs');
 const { DesktopCapture } = require('./capture.cjs');
 const { preparePackagedBackend, manageCore, focusSetup, cancelSetup, confirmSetupQuit } = require('./setup.cjs');
 const { installedStore, coreController } = require('./core-source.cjs');
@@ -134,9 +135,20 @@ function launchBackend(preparedCommand, port = 0) {
   return new Promise((resolve, reject) => {
     let buffer = '';
     let received = false;
+    let controlFailed = false;
     const timer = setTimeout(() => reject(new Error(
       'Backend startup timed out. Check the selected Python environment and backend availability.',
     )), 60000);
+    function rejectControl(error) {
+      controlFailed = true;
+      clearTimeout(timer);
+      const failure = controlResponseError(error.reason, error.field);
+      diagnostics.write('backend_control_failed', { code: failure.code, reason: failure.reason,
+        field: failure.field, bufferBytes: Buffer.byteLength(buffer),
+        containsNul: buffer.includes('\0'), utf8Bom: buffer.startsWith('\uFEFF') });
+      buffer = '';
+      reject(failure);
+    }
     child.once('error', error => {
       diagnostics.write('backend_spawn_failed', { code: error.code });
       clearTimeout(timer);
@@ -151,11 +163,10 @@ function launchBackend(preparedCommand, port = 0) {
       }
     });
     child.stdout.on('data', chunk => {
-      if (received) return;
+      if (received || controlFailed) return;
       buffer += chunk.toString('utf8');
-      if (Buffer.byteLength(buffer) > 4096) {
-        clearTimeout(timer);
-        reject(new Error('Invalid backend control response.'));
+      if (Buffer.byteLength(buffer) > CONTROL_RESPONSE_LIMIT) {
+        rejectControl(controlResponseError('too_large'));
         return;
       }
       const end = buffer.indexOf('\n');
@@ -165,14 +176,13 @@ function launchBackend(preparedCommand, port = 0) {
         const conflict = parsePortConflict(buffer.slice(0, end), port);
         if (conflict) { buffer = ''; reject(conflict); return; }
         const handoff = parseHandoff(buffer.slice(0, end));
-        if (port && Number(new URL(handoff.origin).port) !== port) throw new Error('Backend bound an unexpected port.');
+        if (port && Number(new URL(handoff.origin).port) !== port) throw controlResponseError('unexpected_port', 'origin');
         received = true;
         buffer = '';
         diagnostics.write('backend_ready', { port: Number(new URL(handoff.origin).port) });
         resolve(handoff);
-      } catch {
-        buffer = '';
-        reject(new Error('Invalid backend control response.'));
+      } catch (error) {
+        rejectControl(error);
       }
     });
   });

@@ -1,6 +1,29 @@
 'use strict';
 
 const path = require('node:path');
+const CONTROL_RESPONSE_LIMIT = 4096;
+const CONTROL_FAILURE_REASONS = Object.freeze({
+  too_large: 'The stdout control buffer exceeds the size limit.',
+  invalid_json: 'The first stdout line is not valid JSON.',
+  invalid_type: 'Expected a desktop ready handshake object.',
+  invalid_protocol_version: 'The handshake protocol version is unsupported.',
+  invalid_origin: 'The backend origin must be an exact HTTP loopback origin.',
+  invalid_auth: 'An authentication field is missing or has an invalid format.',
+  invalid_version: 'A backend version field has an invalid format.',
+  invalid_bundle: 'The Core bundle identity has an invalid format.',
+  invalid_bind: 'The port-conflict response has invalid fields.',
+  unexpected_port: 'The backend port differs from the requested port.',
+  unknown: 'The backend control response could not be validated.',
+});
+const CONTROL_FIELDS = Object.freeze(['type', 'version', 'origin', 'instance_id',
+  'launcher_token', 'session_token', 'cookie_name', 'core_version', 'python_version', 'core_bundle_id']);
+
+function controlResponseError(reason, field) {
+  if (!Object.hasOwn(CONTROL_FAILURE_REASONS, reason)) reason = 'unknown';
+  if (!CONTROL_FIELDS.includes(field)) field = undefined;
+  return Object.assign(new Error(`Invalid backend control response (${reason}). ${CONTROL_FAILURE_REASONS[reason]}`
+    + (field ? ` Field: ${field}.` : '')), { code: 'BACKEND_CONTROL_INVALID', reason, field });
+}
 
 function backendCommand(root, platform, env) {
   if (platform === 'win32' && env.STANDTERM_DESKTOP_WSL_DISTRO) {
@@ -27,29 +50,32 @@ function backendCommand(root, platform, env) {
 }
 
 function parseHandoff(line) {
-  if (Buffer.byteLength(line) > 4096) throw new Error('Desktop handoff exceeds its size limit.');
-  const data = JSON.parse(line);
-  if (!data || data.type !== 'standterm_desktop_ready' || data.version !== 1) {
-    throw new Error('Invalid desktop backend handshake.');
+  if (Buffer.byteLength(line) > CONTROL_RESPONSE_LIMIT) throw controlResponseError('too_large');
+  let data;
+  try { data = JSON.parse(line); } catch { throw controlResponseError('invalid_json'); }
+  if (!data || data.type !== 'standterm_desktop_ready') {
+    throw controlResponseError('invalid_type', 'type');
   }
-  const url = new URL(data.origin);
+  if (data.version !== 1) throw controlResponseError('invalid_protocol_version', 'version');
+  let url;
+  try { url = new URL(data.origin); } catch { throw controlResponseError('invalid_origin', 'origin'); }
   if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port
       || url.origin !== data.origin || url.username || url.password) {
-    throw new Error('Desktop backend must use an exact loopback origin.');
+    throw controlResponseError('invalid_origin', 'origin');
   }
   for (const key of ['instance_id', 'launcher_token', 'session_token', 'cookie_name']) {
     if (typeof data[key] !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/.test(data[key])) {
-      throw new Error('Invalid desktop authentication metadata.');
+      throw controlResponseError('invalid_auth', key);
     }
   }
   for (const key of ['core_version', 'python_version']) {
     if (data[key] !== undefined && (typeof data[key] !== 'string' || data[key].length > 64
         || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(data[key]))) {
-      throw new Error('Invalid backend version metadata.');
+      throw controlResponseError('invalid_version', key);
     }
   }
   if (data.core_bundle_id != null && (typeof data.core_bundle_id !== 'string'
-      || !/^[a-f0-9]{64}$/.test(data.core_bundle_id))) throw new Error('Invalid Core build identity.');
+      || !/^[a-f0-9]{64}$/.test(data.core_bundle_id))) throw controlResponseError('invalid_bundle', 'core_bundle_id');
   return data;
 }
 
@@ -94,4 +120,5 @@ function allowedFilesDownload(rawUrl, origin) {
   } catch { return false; }
 }
 
-module.exports = { backendCommand, parseHandoff, allowedRequest, allowedNavigation, allowedFloatingWindow, allowedFilesDownload };
+module.exports = { backendCommand, parseHandoff, controlResponseError, CONTROL_RESPONSE_LIMIT,
+  CONTROL_FAILURE_REASONS, CONTROL_FIELDS, allowedRequest, allowedNavigation, allowedFloatingWindow, allowedFilesDownload };
