@@ -63,7 +63,7 @@ def debug_url(access_url):
     return f'{access_url}{separator}debug=1'
 
 
-def start_server():
+def start_server(desktop=False):
     port = find_free_port()
     session_recovery_dir = tempfile.mkdtemp(prefix='standterm-session-recovery-browser-smoke-')
     env = os.environ.copy()
@@ -77,8 +77,13 @@ def start_server():
         'STANDTERM_OPERATOR_OBSERVATION_DIR': tempfile.mkdtemp(prefix='standterm-observation-smoke-'),
         'STANDTERM_SESSION_RECOVERY_STORE': str(Path(session_recovery_dir) / 'credentials.json'),
     })
+    command = [str(PYTHON), 'app.py', '--force-connection', 'local-shell']
+    if desktop:
+        command = [str(PYTHON), '-c',
+                   "import app; app.app.config['DESKTOP_FLOATING_WINDOWS'] = True; raise SystemExit(app.main())",
+                   '--force-connection', 'local-shell']
     proc = subprocess.Popen(
-        [str(PYTHON), 'app.py', '--force-connection', 'local-shell'],
+        command,
         cwd=str(ROOT),
         env=env,
         stdout=subprocess.PIPE,
@@ -271,6 +276,8 @@ def test_browser_authorization_gate_hides_connection_controls(browser, access_ur
     from settings_transfer_i18n_browser_smoke import message
     context = browser.new_context(viewport={'width': 390, 'height': 844}, locale='en-US')
     page = context.new_page()
+    # Reproduce a failed standalone CSS request without exposing xterm's textarea.
+    page.route('**/static/css/xterm.css*', lambda route: route.abort('failed'))
     page.add_init_script("localStorage.setItem('terminal.pref.v1', JSON.stringify(" + json.dumps({'uiLanguage': ui_language}) + "));")
     zh = ui_language == 'zh-TW'
     try:
@@ -284,6 +291,8 @@ def test_browser_authorization_gate_hides_connection_controls(browser, access_ur
         page.wait_for_timeout(500)
         page.evaluate(
             """() => {
+                // Keep the simulated remote policy stable when localhost pairing checks reply.
+                window.terminalTest.holdTerminalPolicyForTest();
                 const policy = window.terminalTest.getTerminalPolicy();
                 policy.browser_authorization = {
                     available: true,
@@ -299,7 +308,14 @@ def test_browser_authorization_gate_hides_connection_controls(browser, access_ur
             """() => {
                 const controls = document.getElementById('controls').getBoundingClientRect();
                 const actions = document.getElementById('browser-auth-actions').getBoundingClientRect();
+                const button = document.getElementById('browser-auth-url-submit');
+                const form = document.getElementById('browser-auth-url-form').getBoundingClientRect();
+                const buttonRect = button.getBoundingClientRect();
+                const textareaStyle = getComputedStyle(document.querySelector('.xterm-helper-textarea'));
                 return {
+                    textareaHidden: textareaStyle.opacity === '0' && textareaStyle.position === 'absolute',
+                    submitTextFits: button.scrollWidth <= button.clientWidth && button.scrollHeight <= button.clientHeight,
+                    submitInsideForm: buttonRect.left >= form.left && buttonRect.right <= form.right + 1,
                     title: document.querySelector('#controls h2').innerText,
                     sessionId: document.getElementById('launcher-session-id').innerText,
                     launcherId: LAUNCHER_INSTANCE_ID,
@@ -326,6 +342,9 @@ def test_browser_authorization_gate_hides_connection_controls(browser, access_ur
         check(state['connectionDisplay'] == 'none', 'authorization gate left connection controls visible')
         check(state['sshVisible'] is False, 'authorization gate left SSH fields visible')
         check(state['actionsInsideControls'] is True, 'authorization gate actions overflow the controls panel')
+        check(state['textareaHidden'] is True, 'xterm textarea is visible when the standalone CSS request fails')
+        check(state['submitTextFits'] is True, 'authorization button clips its label')
+        check(state['submitInsideForm'] is True, 'authorization button overflows the URL form')
 
         original_url = page.url
         page.fill('#browser-auth-url-input', 'not a URL')
@@ -3066,6 +3085,7 @@ def test_file_copy_approval_shows_canonical_plan(browser, access_url, ui_languag
         queue_text = page.inner_text('.transfer-queue-item[data-action-id="copy-action-1"]')
         check(unknown_warning in queue_text and 'file_copy_publish_outcome_unknown' in queue_text,
               'transfer queue lost the unknown-result warning or diagnostic code')
+        page.click('#agent-toggle-btn')
         for width in [1280, 480]:
             page.set_viewport_size({'width': width, 'height': 700})
             for selector in ['#agent-status-detail', '.transfer-queue-status']:
@@ -3284,6 +3304,7 @@ def test_file_copy_approval_is_global_and_decision_is_single_shot(browser, acces
         approvals = get_emitted(page, 'agent_action_approve')
         check(len(approvals) == 1, 'double click emitted more than one file copy approval')
         check(page.locator('#agent-approve-btn').is_disabled(), 'approval button did not lock immediately')
+        check(page.locator('#agent-panel').is_visible(), 'copy panel closed before the backend confirmed approval')
 
         page.evaluate(
             "payload => window.terminalTest.applyAgentActionPayloadForTest(payload)",
@@ -3291,6 +3312,8 @@ def test_file_copy_approval_is_global_and_decision_is_single_shot(browser, acces
         )
         progress = page.evaluate(
             """() => ({
+                panelVisible: document.getElementById('agent-panel').classList.contains('visible'),
+                panelTerminalId: window.terminalTest.getTerminalTabsState().agentPanelTerminalId,
                 actionVisible: document.getElementById('agent-action-box').classList.contains('visible'),
                 queueButtonVisible: !document.getElementById('transfer-queue-btn').hidden,
                 queueVisible: document.getElementById('transfer-queue-panel').classList.contains('visible'),
@@ -3304,6 +3327,8 @@ def test_file_copy_approval_is_global_and_decision_is_single_shot(browser, acces
                 ]
             })"""
         )
+        check(progress['panelVisible'] is False, 'running file copy kept the Agent panel open')
+        check(progress['panelTerminalId'] == 'term-2', 'copy approval retained the source terminal override')
         check(progress['actionVisible'] is False, 'running file copy kept the approval prompt open')
         check(progress['queueButtonVisible'] is True and progress['queueVisible'] is True, 'running transfer queue was hidden')
         check(progress['count'] == '1', 'transfer queue count was incorrect')
@@ -3343,7 +3368,6 @@ def test_file_copy_approval_is_global_and_decision_is_single_shot(browser, acces
         check(completed_queue['buttonVisible'] is True, 'completed transfer disappeared immediately')
         page.wait_for_selector('#transfer-queue-btn', state='hidden', timeout=12000)
         check(page.locator('#transfer-queue-panel').get_attribute('aria-hidden') == 'true', 'empty transfer queue stayed open')
-        page.click('#agent-panel-close-btn')
         page.evaluate(
             """payload => window.terminalTest.applyAgentActionPayloadForTest(payload)""",
             {
@@ -3364,6 +3388,59 @@ def test_file_copy_approval_is_global_and_decision_is_single_shot(browser, acces
         check(normal_prompt['activeTerminalId'] == 'term-2', 'normal approval switched the active terminal')
         check(normal_prompt['panelVisible'] is False, 'normal command approval became a global prompt')
         check(normal_prompt['pending']['action_id'] == 'command-background-1', 'normal approval was not retained on its terminal')
+    finally:
+        close_context(context)
+
+
+def test_file_copy_approval_dismissal_preserves_other_panel_use(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        copy_payload = {
+            'action_id': 'copy-panel', 'action_type': 'file_copy',
+            'terminal_id': TERMINAL_ID, 'destination_terminal_id': TERMINAL_ID,
+            'action_revision': 0, 'status': 'pending_approval',
+            'source_path': '/tmp/source.bin', 'destination_path': '/tmp/destination.bin',
+            'source_size': 1536, 'total_bytes': 1536,
+        }
+        apply = 'payload => window.terminalTest.applyAgentActionPayloadForTest(payload)'
+        # The first accepted event may already report progress or completion.
+        for status in ['approved', 'running', 'committing', 'completed']:
+            action = {**copy_payload, 'action_id': f'copy-panel-{status}'}
+            page.evaluate(apply, action)
+            check(page.locator('#agent-panel').is_visible(), f'{status}: approval panel did not open')
+            page.evaluate(apply, {**action, 'action_revision': 1, 'status': status})
+            check(not page.locator('#agent-panel').is_visible(), f'{status}: approval panel stayed open')
+            check(page.locator('#transfer-queue-panel').is_visible(), f'{status}: transfer queue stayed hidden')
+            # Reopening the panel is an explicit user choice; later progress must respect it.
+            page.click('#agent-toggle-btn')
+            page.evaluate(apply, {**action, 'action_revision': 2, 'status': status})
+            check(page.locator('#agent-panel').is_visible(), f'{status}: progress closed a reopened panel')
+            page.click('#agent-panel-close-btn')
+
+        for action_type in ['file_copy', 'terminal_input']:
+            old_action = {**copy_payload, 'action_id': f'older-copy-{action_type}'}
+            new_action = {
+                **copy_payload, 'action_id': f'newer-{action_type}',
+                'action_type': action_type, 'escaped_preview': 'echo pending',
+            }
+            page.evaluate(apply, old_action)
+            page.evaluate(apply, new_action)
+            for revision, status in enumerate(['approved', 'running', 'completed'], start=1):
+                page.evaluate(apply, {**old_action, 'action_revision': revision, 'status': status})
+                check(page.locator('#agent-panel').is_visible(), 'older copy closed another approval panel')
+                check(page.locator('#agent-action-box').is_visible(), 'older copy hid another approval')
+                pending = active_agent_state(page)['pending_action']
+                check(pending['action_id'] == new_action['action_id'], 'older copy replaced another pending action')
+                check(not page.locator('#agent-approve-btn').is_disabled(), 'older copy disabled another approval')
+
+        failed_action = {**copy_payload, 'action_id': 'copy-approval-failed'}
+        page.evaluate(apply, failed_action)
+        page.evaluate(apply, {
+            **failed_action, 'action_revision': 1, 'status': 'failed',
+            'error_code': 'agent_mode_changed',
+        })
+        check(page.locator('#agent-panel').is_visible(), 'failed approval hid its error')
+        check('agent_mode_changed' in page.locator('#agent-status-detail').inner_text(), 'approval error was hidden')
     finally:
         close_context(context)
 
@@ -5456,6 +5533,7 @@ def main():
         test_agent_transfer_stop_states_and_dismissal,
         test_agent_copy_and_transfer_states_in_traditional_chinese,
         test_file_copy_approval_is_global_and_decision_is_single_shot,
+        test_file_copy_approval_dismissal_preserves_other_panel_use,
         test_file_copy_approval_keeps_controls_visible_with_long_paths,
         test_ime_anchor_poc_loads_and_fails_open,
         test_cjk_width_compatibility_defaults_off,

@@ -565,6 +565,9 @@
         "settings.general.url_newtab": "New tab",
         "settings.general.url_overlay": "Page overlay",
         "settings.general.url_popup": "Popup window",
+        "settings.images.hint": "Display SIXEL and iTerm2 images from local shell programs. Save to apply to all local shell tabs. Remote connections and Kitty images are not supported yet.",
+        "settings.images.remote": "Show images in remote connections (coming later)",
+        "settings.images.shell": "Show images in local shells (experimental)",
         "settings.language.hint": "Applies next time you open this page. Some areas remain in English.",
         "settings.language.label": "Language (preview)",
         "settings.nav.appearance": "Appearance",
@@ -824,7 +827,12 @@
         "ssh.tunnels.title": "SSH tunnels for this tab",
         "ssh.tunnels.tooltip": "Manage TCP forwarding for this SSH tab",
         "ssh.tunnels.view_changed": "The SSH connection or viewer changed. Reopen Tunnels after reconnecting.",
-        "ssh.tunnels.viewer_unavailable": "Status unavailable for this viewer."
+        "ssh.tunnels.viewer_unavailable": "Status unavailable for this viewer.",
+        "terminal.layout.actions": "Terminal actions",
+        "terminal.layout.auto_width": "Automatically fit terminal width",
+        "terminal.layout.focused": "Active",
+        "terminal.layout.resize": "Resize adjacent terminal panes",
+        "terminal.layout.width_hint": "In split view, turn this off to keep each terminal\u2019s current columns and scroll horizontally. Height still follows its pane."
     },
     "zh-TW": {
         "agent.access.current_tab": "\u76ee\u524d\u5206\u9801",
@@ -1389,6 +1397,9 @@
         "settings.general.url_newtab": "\u65b0\u5206\u9801",
         "settings.general.url_overlay": "\u9801\u5167\u9810\u89bd",
         "settings.general.url_popup": "\u5f48\u51fa\u8996\u7a97",
+        "settings.images.hint": "\u986f\u793a\u672c\u6a5f Shell \u7a0b\u5f0f\u8f38\u51fa\u7684 SIXEL \u8207 iTerm2 \u5716\u7247\u3002\u5132\u5b58\u5f8c\u5957\u7528\u81f3\u6240\u6709\u672c\u6a5f Shell \u5206\u9801\u3002\u76ee\u524d\u5c1a\u4e0d\u652f\u63f4\u9060\u7aef\u9023\u7dda\u8207 Kitty \u5716\u7247\u3002",
+        "settings.images.remote": "\u5728\u9060\u7aef\u9023\u7dda\u986f\u793a\u5716\u7247\uff08\u5c1a\u672a\u63d0\u4f9b\uff09",
+        "settings.images.shell": "\u5728\u672c\u6a5f Shell \u986f\u793a\u5716\u7247\uff08\u5be6\u9a57\u529f\u80fd\uff09",
         "settings.language.hint": "\u4e0b\u6b21\u958b\u555f\u6b64\u9801\u9762\u6642\u5957\u7528\uff0c\u90e8\u5206\u5340\u57df\u4ecd\u986f\u793a\u82f1\u6587\u3002",
         "settings.language.label": "\u8a9e\u8a00\uff08\u9810\u89bd\uff09",
         "settings.nav.appearance": "\u5916\u89c0",
@@ -1648,7 +1659,12 @@
         "ssh.tunnels.title": "\u6b64\u5206\u9801\u7684 SSH \u901a\u9053",
         "ssh.tunnels.tooltip": "\u7ba1\u7406\u6b64 SSH \u5206\u9801\u7684 TCP \u8f49\u9001",
         "ssh.tunnels.view_changed": "SSH \u9023\u7dda\u6216\u6aa2\u8996\u7aef\u5df2\u8b8a\u66f4\u3002\u91cd\u65b0\u9023\u7dda\u5f8c\uff0c\u8acb\u91cd\u65b0\u958b\u555f\u300c\u901a\u9053\u300d\u3002",
-        "ssh.tunnels.viewer_unavailable": "\u6b64\u6aa2\u8996\u7aef\u7121\u6cd5\u53d6\u5f97\u72c0\u614b\u3002"
+        "ssh.tunnels.viewer_unavailable": "\u6b64\u6aa2\u8996\u7aef\u7121\u6cd5\u53d6\u5f97\u72c0\u614b\u3002",
+        "terminal.layout.actions": "\u7d42\u7aef\u64cd\u4f5c",
+        "terminal.layout.auto_width": "\u81ea\u52d5\u8abf\u6574\u7d42\u7aef\u6b04\u5bec",
+        "terminal.layout.focused": "\u64cd\u4f5c\u4e2d",
+        "terminal.layout.resize": "\u8abf\u6574\u76f8\u9130\u7d42\u7aef\u7a97\u683c\u5927\u5c0f",
+        "terminal.layout.width_hint": "\u5206\u5272\u986f\u793a\u6642\uff0c\u95dc\u9589\u6b64\u9078\u9805\u53ef\u4fdd\u7559\u5404\u7d42\u7aef\u76ee\u524d\u6b04\u6578\uff0c\u4e26\u4ee5\u6c34\u5e73\u6372\u52d5\u6aa2\u8996\u3002\u9ad8\u5ea6\u4ecd\u96a8\u7a97\u683c\u8abf\u6574\u3002"
     }
 };
     if (typeof module === 'object' && module.exports) module.exports = messages;

@@ -33,6 +33,12 @@ for (const button of document.querySelectorAll('[data-action], [data-menu]')) {
   });
 }
 window.desktopToolbar.onState(state => {
+  if (typeof state.layoutAvailable === 'boolean') {
+    for (const button of document.querySelectorAll('[data-layout]')) {
+      button.disabled = !state.layoutAvailable || (button.dataset.layout !== 'single' && state.splitLayoutAvailable !== true);
+      button.setAttribute('aria-pressed', String(button.dataset.layout === state.terminalLayout));
+    }
+  }
   if (typeof state.locale === 'string' && state.locale !== appliedLocale) {
     i18n = window.StandTermDesktopI18n.create(state.locale);
     appliedLocale = state.locale;
@@ -55,6 +61,7 @@ window.desktopToolbar.onState(state => {
   byId('stop').disabled = !stoppable;
   byId('save').disabled = byId('copy').disabled = state.screenshotBusy === true;
   byId('recording-status').textContent = active ? state.label : '';
+  byId('recording-status').title = active ? state.label : '';
   const pauseLabel = i18n.t(state.state === 'paused' ? 'desktop.toolbar.record_resume' : 'desktop.toolbar.record_pause');
   byId('pause').title = pauseLabel;
   byId('pause').setAttribute('aria-label', pauseLabel);

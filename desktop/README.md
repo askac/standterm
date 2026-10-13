@@ -7,8 +7,8 @@ Apple Silicon macOS evaluation app/DMG. It is not
 a production release or a replacement for `run.sh` / `run.bat`.
 
 The published [0.5.4-dev / Core 2.15.0-dev evaluation](https://github.com/askac/standterm/releases/tag/desktop-v0.5.4-dev-2.15.0-dev)
-adds direct Telnet and saved SSH network-origin support. The current 0.5.4-dev
-source pairs with released Core 2.15.0; these earlier evaluation installers
+adds direct Telnet and saved SSH network-origin support. The current 0.5.5-dev
+source pairs with Core 2.16.0 and adds split layouts and experimental shell images; these earlier evaluation installers
 retain the 2.15.0-dev identity. The Mac full packaged capture smoke did not pass,
 and the prior window-position drift remains unresolved. See the release notes.
 
@@ -110,7 +110,7 @@ The published [Windows **0.5.1 / Core 2.13.0-dev** evaluation](https://github.co
 includes ordered SSH jump routes, per-site login cards, shared Direct/node key
 controls and opt-in
 profile/route saving on Connect. It retains its original development identity.
-The current source declares Core **2.15.0**; installers with that exact Core
+The current source declares Core **2.16.0**; installers with that exact Core
 identity require a fresh build and validation. The 0.5.0 candidates remain local.
 
 Staging writes `release-identity.json` from the staged package/lock versions and
@@ -281,6 +281,13 @@ Installing Windows Python does not satisfy WSL mode. For Ubuntu/Debian, the
 user can run `sudo apt install python3 python3-venv` in WSL. StandTerm explains
 these prerequisites but never runs sudo, installs Python or provisions WSL.
 Neither mode silently falls back to the other when a prerequisite is missing.
+
+After a WSL distribution upgrade, its registered name may still contain the old
+Ubuntu version; keep using the name reported by `wsl.exe --list --quiet`.
+A system Python minor-version change can invalidate existing venvs. Desktop
+checks dependency imports before launch and offers setup when they fail; use
+**Restore bundled Core** if recovery is needed. Source-run venvs are separate
+from these managed runtimes and may also need rebuilding.
 
 During installation (before the successful Finish page):
 
@@ -608,6 +615,27 @@ only the existing StandTerm main frame; it never enumerates desktop windows or
 grants camera/microphone access. The terminal page cannot initiate capture.
 
 ## Desktop menus and shared terminal toolbar
+
+The icons beside **Copy / Paste** switch between **Full** (active tab),
+**Vert.** (all tabs side by side) and **Horz.** (all tabs stacked).
+Split buttons require at least two tabs in the main window. Closing or moving
+tabs out until fewer than two remain returns to Full automatically.
+Drag the dividers to resize panes, or focus a divider and use the arrow keys.
+Each pane shows its tab name and ID, highlights the input target, and provides
+common terminal actions. One **⋯** menu in the main tab row holds additional
+actions and identifies the active tab they apply to. Narrow panes use this same
+menu; visible pane buttons are omitted from it. Switching tabs closes the menu.
+Settings and Transfer Queue stay in the main tab row. Pause Agent stays directly
+accessible on each eligible pane.
+Floating tabs stay in their own windows until returned.
+
+In the main tab bar's **⋯** menu, disable **Automatically fit terminal width**
+to retain each pane's current column count and scroll horizontally. Rows still
+follow pane height. The width preference is saved; layout starts in Full on a
+new page. Layout switching is currently exposed only by Desktop.
+
+`tests/terminal_layout_browser_smoke.py` checks both split directions, live shell
+input targeting, fixed columns, narrow menus, tab lifecycle and floating windows.
 
 Core and Web use the same persistent tab row: adjacent New Tab, an independently
 reachable Pause Agent button, and right-aligned Agent Panel, Files, Settings and

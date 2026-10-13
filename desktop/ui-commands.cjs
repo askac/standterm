@@ -8,6 +8,8 @@ const UI_ACTIONS = Object.freeze({
   settings: 'desktop.menu.settings', newTab: 'desktop.menu.new_tab', closeTab: 'desktop.menu.close_tab',
   closeAll: 'desktop.menu.close_all', files: 'desktop.menu.files', pip: 'desktop.menu.pip',
   agentPanel: 'desktop.menu.agent_panel', pauseAgent: 'desktop.menu.pause_agent',
+  layoutFull: 'desktop.toolbar.layout_full', layoutVertical: 'desktop.toolbar.layout_vertical',
+  layoutHorizontal: 'desktop.toolbar.layout_horizontal',
 });
 
 function createUiCommands(win, contents, origin, t = create('en').t, onLocale = () => {}) {
@@ -62,7 +64,7 @@ function createUiCommands(win, contents, origin, t = create('en').t, onLocale = 
   win.on('focus', () => { void refresh(); });
   win.on('blur', () => { void refresh(); });
   return {
-    run, refresh, edit,
+    run, refresh, edit, snapshot,
     item: action => ({ id: `ui-${action}`, label: t(UI_ACTIONS[action]), enabled: false, click: () => run(action) }),
   };
 }

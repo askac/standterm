@@ -9,7 +9,7 @@ const { EventEmitter } = require('node:events');
 
 function fixture(platform = 'win32', locale = 'en') {
   let handler, requestFilter, permission, device, popup = 0, calls = 0, focused;
-  const edits = [];
+  const edits = [], actions = [];
   const sent = [];
   const contents = new EventEmitter();
   Object.assign(contents, { mainFrame: {}, isDestroyed: () => false, send: (_channel, value) => sent.push(value), setWindowOpenHandler: () => {},
@@ -26,17 +26,18 @@ function fixture(platform = 'win32', locale = 'en') {
     Menu: { getApplicationMenu: () => ({ getMenuItemById: () => ({ submenu: { popup: () => { popup++; } } }) }) } };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'toolbar.cjs'), 'utf8'), {
     require: name => name === 'electron' ? electron : require(name.startsWith('.') ? path.join(__dirname, '..', name) : name), module: api,
-    __dirname: path.join(__dirname, '..'), process: { platform },
+    __dirname: path.join(__dirname, '..'), process: { platform }, setInterval: () => 0, clearInterval: () => {},
   });
   const capture = { screenshot: async () => { calls++; }, start: async () => { calls++; },
     togglePause: async () => { calls++; }, stop: async () => { calls++; } };
   const toolbar = api.exports.installToolbar(win, core, capture, {
     refresh: async () => {}, edit: action => { edits.push(action); return true; },
+    run: async action => { actions.push(action); return true; },
   }, locale);
   contents.mainFrame.url = toolbar.url;
   const event = { sender: contents, senderFrame: contents.mainFrame };
   return { invoke: (action, source = event) => handler(source, action), event, win, core, contents, toolbar,
-    unfocus: () => { focused = null; }, calls: () => calls, popup: () => popup, edits, sent,
+    unfocus: () => { focused = null; }, calls: () => calls, popup: () => popup, edits, actions, sent,
     filter: url => new Promise(resolve => requestFilter({ url }, resolve)),
     permission: () => new Promise(resolve => permission(contents, 'media', resolve)), device: () => device() };
 }
@@ -66,6 +67,19 @@ test('clipboard buttons use only fixed native edit commands from the trusted foc
   f.unfocus();
   assert.equal(await f.invoke('paste-text'), false);
   assert.deepEqual(f.edits, ['copy', 'paste']);
+});
+
+test('layout buttons accept only fixed actions from the focused toolbar', async () => {
+  const f = fixture();
+  for (const action of ['layout-full', 'layout-vertical', 'layout-horizontal']) {
+    assert.equal(await f.invoke(action), true);
+  }
+  assert.deepEqual(f.actions, ['layoutFull', 'layoutVertical', 'layoutHorizontal']);
+  assert.equal(await f.invoke('layout-unknown'), false);
+  assert.equal(await f.invoke('layout-full', { sender: f.core.webContents, senderFrame: f.event.senderFrame }), false);
+  f.unfocus();
+  assert.equal(await f.invoke('layout-full'), false);
+  assert.equal(f.actions.length, 3);
 });
 
 test('toolbar resource and permission boundaries are identical on Windows and macOS', async () => {

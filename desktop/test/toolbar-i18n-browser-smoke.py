@@ -32,7 +32,7 @@ def run():
                 """)
                 page.goto((ROOT / 'desktop' / 'toolbar.html').as_uri())
                 original_svg = page.locator('#capture-tools').evaluate('el => [...el.querySelectorAll("svg")].map(svg => svg.outerHTML)')
-                page.evaluate("locale => fixture.receive({locale, mac:false, state:'idle'})", locale)
+                page.evaluate("locale => fixture.receive({locale, mac:false, state:'idle', layoutAvailable:true, terminalLayout:'single'})", locale)
                 assert page.locator('html').get_attribute('lang') == locale
                 assert page.evaluate("""locale => {
                     const t = StandTermDesktopI18n.create(locale).t;
@@ -42,7 +42,7 @@ def run():
                             el.getAttribute(attribute) === t(el.getAttribute(`data-i18n-${attribute}`))));
                 }""", locale)
                 assert page.locator('#capture-tools').evaluate('el => [...el.querySelectorAll("svg")].map(svg => svg.outerHTML)') == original_svg
-                assert page.evaluate("""() => [...document.querySelectorAll('#menus button, #edit-tools button, #capture-tools button')]
+                assert page.evaluate("""() => [...document.querySelectorAll('#menus button, #edit-tools button, #layout-tools button, #capture-tools button')]
                     .filter(el => !el.hidden).every(el => {
                         const box = el.getBoundingClientRect(); return box.width > 0 && box.x >= 0 && box.right <= innerWidth;
                     })""")
@@ -65,6 +65,23 @@ def run():
                 expected = page.evaluate("locale => StandTermDesktopI18n.create(locale).t('desktop.toolbar.action_unconfirmed')", locale)
                 page.wait_for_function('text => document.getElementById("notice").textContent === text', arg=expected)
                 assert page.evaluate('fixture.calls') == ['ready', 'screenshot-file', 'menu:standterm']
+                page.evaluate('fixture.fail = false; fixture.result = true')
+                assert page.locator('#layout-full').is_enabled()
+                assert page.locator('#layout-vertical').is_disabled()
+                assert page.locator('#layout-horizontal').is_disabled()
+                for action, mode in [('full', 'single'), ('vertical', 'columns'), ('horizontal', 'rows')]:
+                    page.evaluate('fixture.receive({layoutAvailable:true, splitLayoutAvailable:true})')
+                    page.click('#layout-' + action)
+                    assert page.evaluate('fixture.calls.at(-1)') == 'layout-' + action
+                    page.evaluate('mode => fixture.receive({layoutAvailable:true, splitLayoutAvailable:true, terminalLayout:mode})', mode)
+                    assert page.locator(f'[data-layout="{mode}"]').get_attribute('aria-pressed') == 'true'
+                page.evaluate("fixture.receive({layoutAvailable:true, splitLayoutAvailable:false, terminalLayout:'single'})")
+                assert page.locator('#layout-full').is_enabled()
+                assert page.locator('#layout-full').get_attribute('aria-pressed') == 'true'
+                assert page.locator('#layout-vertical').is_disabled()
+                assert page.locator('#layout-horizontal').is_disabled()
+                page.evaluate('fixture.receive({layoutAvailable:false})')
+                assert page.locator('#layout-full').is_disabled()
                 page.evaluate("fixture.receive({mac:true, notice:'Literal <b>& {value}', noticeId:1})")
                 assert not page.locator('#menus').is_visible()
                 assert page.locator('#notice').text_content() == 'Literal <b>& {value}'
