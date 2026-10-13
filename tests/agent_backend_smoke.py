@@ -12,6 +12,7 @@ import re
 import stat
 import struct
 from types import SimpleNamespace
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 import zlib
 from pathlib import Path
@@ -4063,6 +4064,79 @@ def test_browser_authorization_grant_writes_pairing_file_and_is_one_time():
     standterm.BROWSER_AUTH_GRANT_TOKEN = original_grant_token
     standterm.BROWSER_AUTH_GRANT_EXPIRES_AT = original_grant_expires_at
     standterm.BROWSER_AUTH_GRANT_USED = original_grant_used
+
+
+def test_concurrent_browser_authorization_saves_use_distinct_temporary_files():
+    with tempfile.TemporaryDirectory(prefix='standterm-browser-auth-') as directory:
+        target = Path(directory) / 'browsers.json'
+        barrier = threading.Barrier(2)
+        original_replace = Path.replace
+        temporary_paths = []
+
+        def replace_together(path, destination):
+            temporary_paths.append(path)
+            barrier.wait(timeout=5)
+            return original_replace(path, destination)
+
+        with patch.object(standterm, 'AUTHORIZED_DIR', target.parent), \
+                patch.object(standterm, 'AUTHORIZED_BROWSERS_PATH', target), \
+                patch.object(Path, 'replace', replace_together):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                pending = [pool.submit(standterm.save_authorized_browsers, {'browsers': []}) for _ in range(2)]
+                for future in pending:
+                    future.result(timeout=10)
+        assert len(set(temporary_paths)) == 2
+        assert json.loads(target.read_text()) == {'browsers': []}
+        assert list(target.parent.iterdir()) == [target]
+
+
+def test_concurrent_browser_authorization_updates_preserve_grants_and_revocations():
+    with tempfile.TemporaryDirectory(prefix='standterm-browser-auth-') as directory:
+        target = Path(directory) / 'browsers.json'
+        original_load = standterm.load_authorized_browsers
+        barrier = threading.Barrier(12)
+
+        def slow_load():
+            data = original_load()
+            time.sleep(0.005)
+            return data
+
+        def update(index):
+            barrier.wait(timeout=5)
+            if index < 4:
+                return standterm.revoke_authorized_browser(f'revoked-{index}')
+            return standterm.authorize_browser(f'added-{index}', f'key-{index}')
+
+        with patch.object(standterm, 'AUTHORIZED_DIR', target.parent), \
+                patch.object(standterm, 'AUTHORIZED_BROWSERS_PATH', target):
+            for index in range(4):
+                standterm.authorize_browser(f'revoked-{index}', f'old-{index}')
+            with patch.object(standterm, 'load_authorized_browsers', slow_load):
+                with ThreadPoolExecutor(max_workers=12) as pool:
+                    results = list(pool.map(update, range(12)))
+            assert results[:4] == [True] * 4
+            browsers = standterm.load_authorized_browsers()['browsers']
+            assert {entry['browser_id'] for entry in browsers} == {f'added-{index}' for index in range(4, 12)}
+            assert len(browsers) == 8
+            assert list(target.parent.iterdir()) == [target]
+
+
+def test_failed_browser_authorization_save_preserves_store_and_cleans_temporary_file():
+    with tempfile.TemporaryDirectory(prefix='standterm-browser-auth-') as directory:
+        target = Path(directory) / 'browsers.json'
+        with patch.object(standterm, 'AUTHORIZED_DIR', target.parent), \
+                patch.object(standterm, 'AUTHORIZED_BROWSERS_PATH', target):
+            standterm.authorize_browser('existing', 'existing-key')
+            original = target.read_bytes()
+            with patch.object(Path, 'replace', side_effect=PermissionError('Replacement denied')):
+                try:
+                    standterm.authorize_browser('new', 'new-key')
+                except PermissionError:
+                    pass
+                else:
+                    raise AssertionError('Failed persistence was reported as successful')
+            assert target.read_bytes() == original
+            assert list(target.parent.iterdir()) == [target]
 
 
 def test_launcher_shutdown_requires_local_token():
@@ -8791,6 +8865,9 @@ def main():
         test_access_window_copy_token_requires_current_status,
         test_browser_authorization_gate_ui_contract,
         test_browser_authorization_grant_writes_pairing_file_and_is_one_time,
+        test_concurrent_browser_authorization_saves_use_distinct_temporary_files,
+        test_concurrent_browser_authorization_updates_preserve_grants_and_revocations,
+        test_failed_browser_authorization_save_preserves_store_and_cleans_temporary_file,
         test_launcher_shutdown_requires_local_token,
         test_wsl_local_shell_choice_is_structured_and_wsl_only,
         test_terminal_policy_creates_authorized_dir_for_fresh_checkout,

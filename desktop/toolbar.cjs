@@ -14,10 +14,22 @@ function installToolbar(win, coreView, capture, commands, locale = 'en') {
   const contents = win.webContents;
   let state = { mac: process.platform === 'darwin', state: 'idle', label: '', locale: normalizeLocale(locale) };
   let noticeId = 0;
+  let layoutRefreshing = false;
   const send = value => {
     state = { ...state, ...value };
     if (!contents.isDestroyed() && contents.mainFrame.url === TOOLBAR_URL) contents.send('standterm-toolbar-state', state);
   };
+  const refreshLayout = async () => {
+    if (layoutRefreshing || !commands.snapshot) return;
+    layoutRefreshing = true;
+    try {
+      const snapshot = await commands.snapshot();
+      send({ terminalLayout: ['single', 'columns', 'rows'].includes(snapshot?.layout) ? snapshot.layout : 'single',
+        layoutAvailable: snapshot?.actions?.layoutFull === true,
+        splitLayoutAvailable: snapshot?.actions?.layoutVertical === true && snapshot?.actions?.layoutHorizontal === true });
+    } finally { layoutRefreshing = false; }
+  };
+  const layoutTimer = setInterval(() => { void refreshLayout(); }, 750);
   const layout = () => {
     if (win.isDestroyed()) return;
     const [width, height] = win.getContentSize();
@@ -42,7 +54,7 @@ function installToolbar(win, coreView, capture, commands, locale = 'en') {
   ipcMain.handle('standterm-toolbar-action', async (event, action) => {
     if (event.sender !== contents || event.senderFrame !== contents.mainFrame
         || event.senderFrame.url !== TOOLBAR_URL || typeof action !== 'string' || win.isDestroyed()) return false;
-    if (action === 'ready') { send(state); return true; }
+    if (action === 'ready') { send(state); await refreshLayout(); return true; }
     if (BrowserWindow.getFocusedWindow() !== win || !win.isVisible() || win.isMinimized()) return false;
     if (action.startsWith('menu:')) {
       const id = action.slice(5);
@@ -56,6 +68,16 @@ function installToolbar(win, coreView, capture, commands, locale = 'en') {
     switch (action) {
       case 'copy-text': return commands.edit('copy');
       case 'paste-text': return commands.edit('paste');
+      case 'layout-full':
+      case 'layout-vertical':
+      case 'layout-horizontal': {
+        const command = { 'layout-full': 'layoutFull', 'layout-vertical': 'layoutVertical',
+          'layout-horizontal': 'layoutHorizontal' }[action];
+        const result = await commands.run(command);
+        await refreshLayout();
+        if (result && !coreView.webContents.isDestroyed()) coreView.webContents.focus();
+        return result;
+      }
       case 'screenshot-file': await capture.screenshot('file'); break;
       case 'screenshot-clipboard': await capture.screenshot('clipboard'); break;
       case 'record': await capture.start(); break;
@@ -66,6 +88,7 @@ function installToolbar(win, coreView, capture, commands, locale = 'en') {
     return true;
   });
   win.once('closed', () => {
+    clearInterval(layoutTimer);
     ipcMain.removeHandler('standterm-toolbar-action');
     if (!coreView.webContents.isDestroyed()) coreView.webContents.close();
   });

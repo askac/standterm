@@ -10,6 +10,7 @@ Current sources:
 - `xterm-addon-webgl.js`: `@xterm/addon-webgl` 0.19.0
 - `xterm-addon-fit.js`: `@xterm/addon-fit` 0.11.0
 - `xterm-addon-web-links.js`: `@xterm/addon-web-links` 0.12.0
+- `xterm-addon-image.js`: `@xterm/addon-image` 0.9.0
 
 Source checkout:
 
@@ -17,7 +18,7 @@ Source checkout:
 - tag: `6.0.0`
 - commit: `f447274f430fd22513f6adbf9862d19524471c04`
 
-StandTerm carries one downstream change in `xterm-addon-webgl.js`: custom
+StandTerm carries a downstream change in `xterm-addon-webgl.js`: custom
 Block Elements snap shared absolute octant boundaries to integer device pixels
 when the glyph's used boundaries remain distinct, while unsafe axes retain
 fractional coverage. This keeps composite quadrant glyphs seamless without
@@ -28,6 +29,12 @@ remains from the official 0.19.0 bundle.
 
 The JavaScript bundles are copied from the npm package `lib/` output. The
 matching stylesheet is copied to `../css/xterm.css` from `@xterm/xterm`.
+
+The image addon carries three small IIP decoder fixes: consume bitmap decode
+rejections, revoke fallback object URLs on completion/error/timeout, and discard
+pending decodes when the addon is disposed. `standterm-terminal-images.js` manages
+the local-shell preference and Agent mirror images. Its private renderer geometry
+adapter is pinned to xterm 6.0.0 / addon-image 0.9.0 and must be reassessed on upgrade.
 
 xterm.js and its addons are MIT licensed. Keep the matching files under
 `../licenses/` and the xterm.js section in

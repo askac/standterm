@@ -37,7 +37,8 @@ def run_case(page, directory, name, *, baseline=False, explicit=False, existing=
         subprocess.run(command + ['new-session', '-d', '-s', 'probe', '/bin/sh'],
                        env=environment, check=True)
     command += ['attach-session', '-t', 'probe'] if existing else ['new-session', '-s', 'probe', '/bin/sh']
-    prefix = 'env -u TERMINFO -u TERMINFO_DIRS ' if baseline else ''
+    # Newer tmux also detects truecolor from COLORTERM; remove every RGB hint in the negative control.
+    prefix = 'env -u TERMINFO -u TERMINFO_DIRS -u COLORTERM ' if baseline else ''
     try:
         send(page, prefix + shlex.join(command) + '\r')
         deadline = time.monotonic() + 10

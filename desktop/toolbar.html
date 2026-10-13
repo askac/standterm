@@ -15,6 +15,11 @@
     <button id="edit-copy" data-i18n-aria-label="desktop.toolbar.copy_label" data-i18n-title="desktop.toolbar.copy_hint" data-action="copy-text" title="Copy selected text (not Ctrl+C)" aria-label="Copy selected text"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 16H4V3h11v3"/><rect x="8" y="7" width="12" height="14" rx="1"/></svg></button>
     <button id="edit-paste" data-i18n-aria-label="desktop.toolbar.paste" data-i18n-title="desktop.toolbar.paste" data-action="paste-text" title="Paste clipboard text" aria-label="Paste clipboard text"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5H4v16h16V5h-4M8 12h8M8 16h6"/><rect x="8" y="3" width="8" height="4" rx="1"/></svg></button>
   </div>
+  <div id="layout-tools" role="toolbar" aria-label="Terminal layout" data-i18n-aria-label="desktop.toolbar.layout">
+    <button id="layout-full" data-action="layout-full" data-layout="single" title="Full: show the active tab" aria-label="Full: show the active tab" data-i18n-title="desktop.toolbar.layout_full" data-i18n-aria-label="desktop.toolbar.layout_full" aria-pressed="true" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="1"/></svg></button>
+    <button id="layout-vertical" data-action="layout-vertical" data-layout="columns" title="Vertical: show all tabs side by side" aria-label="Vertical: show all tabs side by side" data-i18n-title="desktop.toolbar.layout_vertical" data-i18n-aria-label="desktop.toolbar.layout_vertical" aria-pressed="false" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="M12 4v16"/></svg></button>
+    <button id="layout-horizontal" data-action="layout-horizontal" data-layout="rows" title="Horizontal: show all tabs stacked" aria-label="Horizontal: show all tabs stacked" data-i18n-title="desktop.toolbar.layout_horizontal" data-i18n-aria-label="desktop.toolbar.layout_horizontal" aria-pressed="false" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 12h18"/></svg></button>
+  </div>
   <span id="notice-area" role="status" aria-live="polite" aria-atomic="true">
     <span id="notice-indicator" aria-hidden="true"></span>
     <span id="notice"></span>

@@ -84,9 +84,17 @@ async function run(win, contents, browserAccess) {
   await until(() => evaluate("document.getElementById('settings-modal').classList.contains('open')"), 'Settings opened');
   await evaluate("document.getElementById('settings-close').click()");
   const original = await evaluate('window.terminalTest.getTerminalTabsState().tabs.length');
+  await until(() => win.webContents.executeJavaScript(`['layout-vertical', 'layout-horizontal'].every(id => document.getElementById(id).disabled === ${original < 2})`), 'initial split availability');
   await until(() => menu.getMenuItemById('ui-newTab').enabled, 'New Tab enabled');
   menu.getMenuItemById('ui-newTab').click();
   await until(async () => await evaluate('window.terminalTest.getTerminalTabsState().tabs.length') === original + 1, 'New Tab created');
+  await until(() => win.webContents.executeJavaScript("['layout-vertical', 'layout-horizontal'].every(id => !document.getElementById(id).disabled)"), 'split enabled for multiple tabs');
+  for (const [action, expected] of [['layout-vertical', 'columns'], ['layout-horizontal', 'rows'], ['layout-full', 'single']]) {
+    assert.equal(await win.webContents.executeJavaScript(`window.desktopToolbar.invoke(${JSON.stringify(action)})`), true);
+    await until(async () => await evaluate('window.standtermUi.snapshot().layout') === expected, `layout ${expected}`);
+    assert.equal(await evaluate('document.querySelectorAll(".terminal-pane.split-pane").length'), expected === 'single' ? 0 : original + 1);
+    assert.equal(await win.webContents.executeJavaScript(`document.querySelector('[data-layout="${expected}"]').getAttribute('aria-pressed')`), 'true');
+  }
   assert.equal(await evaluate("window.standtermUi.run('closeTab', 'wrong-target')"), false);
   const other = new BrowserWindow({ width: 300, height: 200, show: false,
     webPreferences: { sandbox: true, nodeIntegration: false, contextIsolation: true } });
@@ -101,8 +109,19 @@ async function run(win, contents, browserAccess) {
   win.focus(); contents.focus();
   await until(() => BrowserWindow.getFocusedWindow() === win, 'restored main focus');
   await until(() => menu.getMenuItemById('ui-closeTab').enabled, 'Close Tab enabled');
+  assert.equal(await win.webContents.executeJavaScript("window.desktopToolbar.invoke('layout-vertical')"), true);
   menu.getMenuItemById('ui-closeTab').click();
   await until(async () => await evaluate('window.terminalTest.getTerminalTabsState().tabs.length') === original, 'Tab closed');
+  if (original > 1) assert.equal(await evaluate('window.standtermUi.snapshot().layout'), 'columns');
+  for (let remaining = original; remaining > 1; remaining--) {
+    menu.getMenuItemById('ui-closeTab').click();
+    await until(async () => await evaluate('window.terminalTest.getTerminalTabsState().tabs.length') === remaining - 1, 'Close remaining tab');
+  }
+  assert.equal(await evaluate('window.standtermUi.snapshot().layout'), 'single');
+  await until(() => win.webContents.executeJavaScript(`['layout-vertical', 'layout-horizontal'].every(id => document.getElementById(id).disabled)
+    && document.getElementById('layout-full').getAttribute('aria-pressed') === 'true'`), 'single tab restores Full toolbar');
+  assert.equal(await win.webContents.executeJavaScript("window.desktopToolbar.invoke('layout-vertical')"), false);
+  console.log('Desktop layout smoke: split availability, multiple-tab layouts and automatic Full on the last tab passed.');
   win.setSize(640, 600);
   await new Promise(resolve => setTimeout(resolve, 300));
   assert.equal(await evaluate(`['new-tab-btn', 'agent-toggle-btn', 'sftp-status-btn', 'quick-settings'].every(id => {
@@ -114,9 +133,9 @@ async function run(win, contents, browserAccess) {
   assert.equal(await evaluate("document.querySelector('#status-bar #new-tab-btn, #status-bar #quick-settings, #status-bar #agent-pause-btn') === null"), true);
   assert.equal(await evaluate('innerHeight'), win.getContentSize()[1] - 36);
   assert.equal(await win.webContents.executeJavaScript(`
-    [...document.querySelectorAll('#edit-tools button, #capture-tools button')].filter(el => !el.hidden).every(el => {
+    [...document.querySelectorAll('#edit-tools button, #layout-tools button, #capture-tools button')].filter(el => !el.hidden).every(el => {
       const bounds = el.getBoundingClientRect(); return bounds.x >= 0 && bounds.right <= innerWidth;
-    })`), true, 'clipboard and capture controls must fit a narrow window');
+    })`), true, 'clipboard, layout and capture controls must fit a narrow window');
   const directory = await fs.mkdtemp(path.join(app.isPackaged ? app.getPath('temp') : path.join(__dirname, '..', 'dist'), 'toolbar-smoke-'));
   const screenshotCss = await contents.insertCSS('#debug-hud, #policy-debug-panel, #payload-log { display: none !important; }');
   console.log('Desktop toolbar smoke: capturing the Core preview.');

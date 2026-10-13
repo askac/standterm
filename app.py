@@ -677,6 +677,7 @@ EXTERNAL_AGENT_HANDOFF_PATH = EXTERNAL_AGENT_INSTANCE_DIR / 'standterm_external_
 EXTERNAL_AGENT_INFO_PATH = EXTERNAL_AGENT_INSTANCE_DIR / 'standterm_agentinfo.json'
 AUTHORIZED_DIR = APP_DIR / 'authorized'
 AUTHORIZED_BROWSERS_PATH = AUTHORIZED_DIR / 'browsers.json'
+AUTHORIZED_BROWSERS_LOCK = threading.Lock()
 SESSION_RECOVERY_CREDENTIALS_PATH = Path(
     get_prefixed_env('SESSION_RECOVERY_STORE').strip()
     or AUTHORIZED_DIR / 'session_recovery_credentials.json'
@@ -1748,9 +1749,7 @@ def load_authorized_browsers():
 def save_authorized_browsers(data):
     if not ensure_authorized_dir():
         raise OSError(f'Browser authorization directory is unavailable: {AUTHORIZED_DIR}')
-    tmp_path = AUTHORIZED_BROWSERS_PATH.with_suffix('.json.tmp')
-    tmp_path.write_text(json.dumps(data, indent=2, sort_keys=True) + '\n', encoding='utf-8')
-    tmp_path.replace(AUTHORIZED_BROWSERS_PATH)
+    write_json_file_atomic(AUTHORIZED_BROWSERS_PATH, data)
 
 def get_authorized_browser(browser_id):
     for entry in load_authorized_browsers().get('browsers', []):
@@ -1763,32 +1762,34 @@ def is_browser_authorized(browser_id, public_key_b64):
     return bool(entry and entry.get('public_key') == public_key_b64)
 
 def authorize_browser(browser_id, public_key_b64):
-    data = load_authorized_browsers()
-    browsers = [
-        entry for entry in data.get('browsers', [])
-        if isinstance(entry, dict) and entry.get('browser_id') != browser_id
-    ]
-    browsers.append({
-        'browser_id': browser_id,
-        'public_key': public_key_b64,
-        'authorized_at': int(time.time()),
-    })
-    data['browsers'] = sorted(browsers, key=lambda entry: entry.get('browser_id', ''))
-    save_authorized_browsers(data)
+    with AUTHORIZED_BROWSERS_LOCK:
+        data = load_authorized_browsers()
+        browsers = [
+            entry for entry in data.get('browsers', [])
+            if isinstance(entry, dict) and entry.get('browser_id') != browser_id
+        ]
+        browsers.append({
+            'browser_id': browser_id,
+            'public_key': public_key_b64,
+            'authorized_at': int(time.time()),
+        })
+        data['browsers'] = sorted(browsers, key=lambda entry: entry.get('browser_id', ''))
+        save_authorized_browsers(data)
 
 def revoke_authorized_browser(browser_id):
     if not isinstance(browser_id, str) or not browser_id:
         return False
-    data = load_authorized_browsers()
-    browsers = [
-        entry for entry in data.get('browsers', [])
-        if not (isinstance(entry, dict) and entry.get('browser_id') == browser_id)
-    ]
-    if len(browsers) == len(data.get('browsers', [])):
-        return False
-    data['browsers'] = browsers
-    save_authorized_browsers(data)
-    return True
+    with AUTHORIZED_BROWSERS_LOCK:
+        data = load_authorized_browsers()
+        browsers = [
+            entry for entry in data.get('browsers', [])
+            if not (isinstance(entry, dict) and entry.get('browser_id') == browser_id)
+        ]
+        if len(browsers) == len(data.get('browsers', [])):
+            return False
+        data['browsers'] = browsers
+        save_authorized_browsers(data)
+        return True
 
 def canonical_pairing_payload(pairing):
     payload = {
@@ -6301,6 +6302,7 @@ def set_session_cookie(response, session_token):
 def build_index_response():
     return make_response(render_template(
         'index.html',
+        xterm_stylesheet=(APP_DIR / 'static/css/xterm.css').read_text(encoding='utf-8'),
         ssh_term=SSH_TERM,
         terminal_policy=build_terminal_policy(),
         launcher_instance_id=LAUNCHER_INSTANCE_ID,

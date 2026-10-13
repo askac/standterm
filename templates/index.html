@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
     <title>StandTerm</title>
-    <!-- Local Fallback Assets -->
-    <link rel="stylesheet" href="/static/css/xterm.css" />
+    <!-- Ship required terminal styles with the page, even if a separate asset request fails. -->
+    <style id="xterm-stylesheet">{{ xterm_stylesheet|safe }}</style>
     <style>
         @font-face {
             font-family: "StandTerm Powerline Symbols";
@@ -21,10 +21,12 @@
         #tabs-list { display: flex; align-items: center; gap: 4px; min-width: 0; overflow-x: auto; overflow-y: hidden; height: 100%; }
         #tabs-list .terminal-tab { flex-shrink: 0; }
         #terminal-tools { display: flex; align-items: center; gap: 4px; margin-left: auto; flex-shrink: 0; }
+        body.has-split-terminals #terminal-tabs [data-terminal-action] { display: none !important; }
         #tab-more { position: relative; }
         #tab-more > summary { display: flex; align-items: center; list-style: none; }
         #tab-more > summary::-webkit-details-marker { display: none; }
-        #tab-more-actions { position: absolute; right: 0; top: 29px; padding: 8px; background: #202020; border: 1px solid #444; border-radius: 5px; white-space: nowrap; }
+        #tab-more-actions { position: absolute; right: 0; top: 29px; max-width: calc(100vw - 16px); max-height: calc(100vh - 48px); overflow: auto; padding: 8px; background: #202020; border: 1px solid #444; border-radius: 5px; white-space: nowrap; }
+        #tab-more-actions label { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; color: #ddd; font-size: 12px; }
         #terminal-tabs button:focus-visible, #tab-more > summary:focus-visible { outline: 2px solid #0a84ff; outline-offset: 1px; }
         .tab-close[hidden] { display: none; }
         .terminal-tab { height: 25px; min-width: 120px; max-width: 220px; display: flex; align-items: center; gap: 6px; border: 1px solid #333; background: #202020; color: #aaa; border-radius: 5px; padding: 0 4px 0 10px; cursor: pointer; user-select: none; font-size: 12px; box-sizing: border-box; }
@@ -66,9 +68,37 @@
         body.operator-observing #status-bar { background: #5a1010; border-top-color: #ff453a; color: #fff; }
         #terminal { position: absolute; top: 0; left: 0; right: 0; height: calc(100vh - var(--status-bar-height)); width: 100vw; background: #000; z-index: 1; display: none; }
         body.has-terminal-tabs #terminal { top: var(--tab-bar-height); height: calc(100vh - var(--status-bar-height) - var(--tab-bar-height)); }
-        .terminal-pane { height: 100%; width: 100%; display: none; }
+        .terminal-pane { height: 100%; width: 100%; min-width: 0; min-height: 0; overflow: hidden; display: none; }
         .terminal-pane.active { display: block; }
-        .terminal-pane > .xterm { box-sizing: border-box; padding: 2px; }
+        .terminal-viewport { height: 100%; width: 100%; overflow-x: auto; overflow-y: hidden; }
+        .terminal-surface { height: 100%; width: 100%; }
+        .terminal-surface > .xterm { box-sizing: border-box; padding: 2px; }
+        .terminal-pane-heading { display: none; }
+        #terminal.split-view { display: grid !important; }
+        .terminal-pane.split-pane { display: block; position: relative; container-type: inline-size; outline: 1px solid #444; outline-offset: -1px; }
+        .terminal-pane.split-pane.active::after { content: ''; position: absolute; inset: 0; border: 1px solid #0a84ff; pointer-events: none; z-index: 3; }
+        .split-pane .terminal-viewport { height: calc(100% - 30px); }
+        .split-pane .terminal-pane-heading { display: flex; align-items: center; gap: 4px; height: 30px; width: 100%; box-sizing: border-box; border-bottom: 1px solid #444; padding: 0 4px; background: #202020; color: #bbb; }
+        .split-pane.active .terminal-pane-heading { background: #153a61; color: #fff; border-bottom-color: #0a84ff; }
+        .terminal-pane-select { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; height: 100%; padding: 0 4px; border: none; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+        .terminal-pane-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+        .terminal-pane-id { flex: 0 0 auto; font-size: 11px; opacity: 0.8; }
+        .terminal-pane-focus { flex: 0 0 auto; font-size: 11px; }
+        .terminal-pane:not(.active) .terminal-pane-focus { display: none; }
+        .terminal-pane-quick { display: none; align-items: center; gap: 4px; }
+        .terminal-pane-pause { border-color: #7a1f1f; background: #3a1212; color: #ff6b6b; }
+        @container (min-width: 700px) { .terminal-pane-quick { display: flex; } }
+        @container (max-width: 220px) { .terminal-pane-focus { display: none; } }
+        #terminal-more-actions { padding-bottom: 8px; margin-bottom: 10px; border-bottom: 1px solid #444; color: #eee; font-size: 12px; }
+        #terminal-more-actions strong { display: block; max-width: 320px; white-space: normal; overflow-wrap: anywhere; margin: 4px 8px 8px; }
+        #terminal-more-actions button { display: block; width: 100%; text-align: left; color: inherit; background: transparent; border: none; padding: 8px; cursor: pointer; }
+        #terminal-more-actions button:hover, #terminal-more-actions button:focus-visible { background: #153a61; }
+        #terminal-more-actions button:disabled { opacity: 0.4; cursor: default; }
+        .terminal-tab.split-tab:not(.active) { border-color: #6786a5; }
+        .terminal-splitter { background: #333; touch-action: none; }
+        .terminal-splitter[aria-orientation="vertical"] { cursor: col-resize; }
+        .terminal-splitter[aria-orientation="horizontal"] { cursor: row-resize; }
+        .terminal-splitter:hover, .terminal-splitter:focus-visible { background: #0a84ff; outline: none; }
         .xterm .xterm-viewport { scrollbar-color: #444 transparent; }
         .xterm .xterm-viewport::-webkit-scrollbar { width: 14px; }
         .xterm .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
@@ -588,8 +618,8 @@
         #browser-auth-title { margin-bottom: 6px; color: #fff; font-size: 1rem; font-weight: 700; text-align: center; }
         #browser-auth-message { min-height: 34px; margin-bottom: 14px; color: #bbb; font-size: 12px; line-height: 1.4; text-align: center; overflow-wrap: anywhere; }
         #browser-auth-url-form { display: flex; align-items: stretch; gap: 8px; }
-        #browser-auth-url-input { min-width: 0; margin: 0 !important; }
-        #browser-auth-url-submit { width: 48px !important; flex: 0 0 48px; padding: 10px 8px !important; }
+        #browser-auth-url-input { flex: 1; min-width: 0; margin: 0 !important; }
+        #browser-auth-url-submit { width: auto !important; flex: 0 0 auto; padding: 10px 12px !important; white-space: nowrap; }
         #browser-auth-url-error { display: none; margin-top: 7px; color: #ff9f0a; font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; }
         .browser-auth-divider { display: flex; align-items: center; gap: 10px; margin: 16px 0 12px; color: #777; font-size: 11px; }
         .browser-auth-divider::before, .browser-auth-divider::after { content: ""; height: 1px; flex: 1; background: #444; }
@@ -1159,6 +1189,9 @@
                             <div class="settings-row"><label for="pref-useCustomMenu" data-i18n="settings.general.custom_menu">Use StandTerm context menu</label><input type="checkbox" id="pref-useCustomMenu"></div>
                             <div class="settings-row"><label for="pref-copyOnSelect" title="On mouse release, copies terminal selection without surrounding whitespace, then clears it." data-i18n-title="settings.general.copy_on_select_hint" data-i18n="settings.general.copy_on_select">Copy terminal selection automatically</label><input type="checkbox" id="pref-copyOnSelect"></div>
                             <div class="settings-row"><label for="pref-enablePicPreview" data-i18n="settings.general.picture_preview">Preview image links in page overlay</label><input type="checkbox" id="pref-enablePicPreview"></div>
+                            <div class="settings-row"><label for="pref-enableShellImages" data-i18n="settings.images.shell">Show images in local shells (experimental)</label><input type="checkbox" id="pref-enableShellImages" aria-describedby="terminal-images-hint"></div>
+                            <div class="settings-row" style="opacity:0.5;"><label for="pref-remoteImages" data-i18n="settings.images.remote">Show images in remote connections (coming later)</label><input type="checkbox" id="pref-remoteImages" disabled aria-describedby="terminal-images-hint"></div>
+                            <div class="settings-status" id="terminal-images-hint" data-i18n="settings.images.hint">Display SIXEL and iTerm2 images from local shell programs. Save to apply to all local shell tabs. Remote connections and Kitty images are not supported yet.</div>
                             <div class="settings-row"><label for="pref-detectUrls" data-i18n="settings.general.detect_urls">Make terminal URLs clickable</label><input type="checkbox" id="pref-detectUrls"></div>
                             <div class="settings-row"><label for="pref-showDetailedSshLabels" data-i18n="settings.general.detailed_ssh_labels">Show detailed SSH labels</label><input type="checkbox" id="pref-showDetailedSshLabels"></div>
                             <div class="settings-row"><label for="pref-cjkWideAmbiguous" data-i18n-title="settings.general.cjk_width_hint" title="Render ambiguous-width characters, such as box drawing and symbols, as two cells. Enable only when the BBS or terminal layout requires it." data-i18n="settings.general.cjk_width">Use wide ambiguous characters (BBS)</label><input type="checkbox" id="pref-cjkWideAmbiguous"></div>
@@ -1501,21 +1534,25 @@
             <div id="tabs-list"></div>
             <button id="new-tab-btn" class="status-action" type="button" title="New terminal tab" aria-label="New terminal tab" data-i18n-aria-label="browser.chrome.new_terminal" data-i18n-title="browser.chrome.new_terminal">+</button>
         </div>
-        <button id="agent-pause-btn" class="status-action" type="button" title="Pause Agent access" data-i18n="agent.pause.action">Pause Agent</button>
-        <button id="agent-status-mint-btn" class="status-action agent-status-mint" title="Create a standard token for the active terminal">Create token</button>
-        <button id="agent-status-mint-3x-btn" class="status-action agent-status-mint" title="Create a token with 3× idle time for the active terminal">Create token 3&times;</button>
+        <button id="agent-pause-btn" data-terminal-action class="status-action" type="button" title="Pause Agent access" data-i18n="agent.pause.action">Pause Agent</button>
+        <button id="agent-status-mint-btn" data-terminal-action class="status-action agent-status-mint" title="Create a standard token for the active terminal">Create token</button>
+        <button id="agent-status-mint-3x-btn" data-terminal-action class="status-action agent-status-mint" title="Create a token with 3× idle time for the active terminal">Create token 3&times;</button>
         <div id="terminal-tools">
-            <button id="agent-access-mint-btn" class="status-action" type="button" title="Authorize Direct input access and create a standard token for the current tab" data-i18n="agent.access.grant">Authorize agent</button>
-            <button id="agent-connect-btn" class="status-action" type="button" title="View Agent connection info for the current tab's environment" data-i18n="agent.connection.title" data-i18n-title="agent.connection.tooltip">Agent connection</button>
-            <button id="agent-toggle-btn" class="status-action" type="button" title="Show Agent panel">Show Agent Panel</button>
-            <button id="agent-tunnel-btn" class="status-action" type="button" title="Set up Agent access from this SSH host" data-i18n-title="agent.tunnel.tooltip" data-i18n="agent.tunnel.title" hidden>Agent Tunnel</button>
-            <button id="ssh-tunnels-btn" class="status-action" type="button" title="Manage TCP forwarding for this SSH tab" data-i18n-title="ssh.tunnels.tooltip" data-i18n="ssh.tunnels.action" hidden>Tunnels</button>
-            <button id="sftp-status-btn" class="status-action status-sftp" type="button" title="Open Files" aria-label="Open Files" hidden>&#x1F4C1;</button>
+            <button id="agent-access-mint-btn" data-terminal-action class="status-action" type="button" title="Authorize Direct input access and create a standard token for the current tab" data-i18n="agent.access.grant">Authorize agent</button>
+            <button id="agent-connect-btn" data-terminal-action class="status-action" type="button" title="View Agent connection info for the current tab's environment" data-i18n="agent.connection.title" data-i18n-title="agent.connection.tooltip">Agent connection</button>
+            <button id="agent-toggle-btn" data-terminal-action class="status-action" type="button" title="Show Agent panel">Show Agent Panel</button>
+            <button id="agent-tunnel-btn" data-terminal-action class="status-action" type="button" title="Set up Agent access from this SSH host" data-i18n-title="agent.tunnel.tooltip" data-i18n="agent.tunnel.title" hidden>Agent Tunnel</button>
+            <button id="ssh-tunnels-btn" data-terminal-action class="status-action" type="button" title="Manage TCP forwarding for this SSH tab" data-i18n-title="ssh.tunnels.tooltip" data-i18n="ssh.tunnels.action" hidden>Tunnels</button>
+            <button id="sftp-status-btn" data-terminal-action class="status-action status-sftp" type="button" title="Open Files" aria-label="Open Files" hidden>&#x1F4C1;</button>
             <button id="transfer-queue-btn" class="status-action" type="button" title="Transfer Queue" aria-label="Transfer Queue" data-i18n-title="agent.transfer.queue" data-i18n-aria-label="agent.transfer.queue" hidden><span aria-hidden="true">&#x21C4;</span> <span id="transfer-queue-count">0</span></button>
             <button id="quick-settings" data-i18n-title="settings.title" data-i18n-aria-label="settings.title" class="status-action" type="button" title="Settings" aria-label="Settings">&#x2699;&#xFE0F;</button>
             <details id="tab-more">
                 <summary class="status-action" title="More terminal actions" aria-label="More terminal actions" data-i18n-title="browser.chrome.more_actions" data-i18n-aria-label="browser.chrome.more_actions">&#x22EF;</summary>
-                <div id="tab-more-actions"><button id="close-tabs-btn" class="status-action" type="button" data-i18n="browser.chrome.close_tabs">Close all terminal tabs&hellip;</button></div>
+                <div id="tab-more-actions">
+                    <div id="terminal-more-actions" role="group" hidden></div>
+                    {% if desktop_floating_windows | default(false) %}<label data-i18n-title="terminal.layout.width_hint"><input type="checkbox" id="terminal-auto-width" checked><span data-i18n="terminal.layout.auto_width">Automatically fit terminal width</span></label>{% endif %}
+                    <button id="close-tabs-btn" class="status-action" type="button" data-i18n="browser.chrome.close_tabs">Close all terminal tabs&hellip;</button>
+                </div>
             </details>
         </div>
     </div>
@@ -1737,6 +1774,7 @@
     <script src="{{ url_for('static', filename='js/standterm-i18n.js') }}"></script>
     <script src="{{ url_for('static', filename='js/standterm-font-recommendations.js') }}"></script>
     <script src="{{ url_for('static', filename='js/standterm-capabilities.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/standterm-terminal-images.js') }}"></script>
     <script src="{{ url_for('static', filename='js/standterm-ssh-routes.js') }}"></script>
     <script src="{{ url_for('static', filename='js/standterm-ssh-node-auth.js') }}"></script>
     <script src="{{ url_for('static', filename='js/standterm-ssh-route-editor.js') }}"></script>
@@ -1827,6 +1865,7 @@
             useCustomMenu: true,
             copyOnSelect: false,
             enablePicPreview: true,
+            enableShellImages: true,
             detectUrls: true,
             showDetailedSshLabels: true,
             saveSshHistory: true,
@@ -1841,6 +1880,7 @@
             colorScheme: 'vintage',
             cursorStyle: 'block',
             showTerminalTitleInStatusBar: true,
+            splitAutoFitWidth: true,
             agentAccessMintMode: AGENT_MODE_DIRECT_ACTIVE,
             // Render East Asian Ambiguous characters (box drawing, symbols)
             // as wide cells. Keep this off by default; enable it only for
@@ -2390,6 +2430,8 @@
                 await loadScript('/static/js/xterm-addon-fit.js');
                 document.getElementById('progress-bar').style.width = '80%';
                 await loadScript('/static/js/xterm-addon-web-links.js');
+                try { await loadScript('/static/js/xterm-addon-image.js'); }
+                catch { console.warn('Terminal image rendering unavailable; continuing without images.'); }
                 document.getElementById('progress-bar').style.width = '100%';
             } catch (e) {
                 clearInterval(timerInterval);
@@ -2411,6 +2453,9 @@
 
         function startMainLogic() {
             const terminalContainer = document.getElementById('terminal');
+            const terminalAutoWidth = document.getElementById('terminal-auto-width');
+            const tabMore = document.getElementById('tab-more');
+            const terminalMoreActions = document.getElementById('terminal-more-actions');
             const socketStatusEl = document.getElementById('socketStatus');
             const sshStatusEl = document.getElementById('sshStatus');
             const errorEl = document.getElementById('errorBox');
@@ -2581,6 +2626,12 @@
             let nextTerminalIndex = 2;
             let nextTerminalInstanceId = 1;
             const terminals = new Map();
+            const TERMINAL_SPLITTER_SIZE = 6;
+            const TERMINAL_PANE_MIN_SIZE = 80;
+            let terminalLayout = 'single';
+            let terminalLayoutKey = '';
+            let terminalSplitDrag = null;
+            let terminalLayoutFrame = null;
             let payloadEntries = [];
             let pendingAction = null;
             let pendingActionId = null;
@@ -3497,6 +3548,13 @@
                 agentPauseBtn.disabled = !(visible && socket && socket.connected && state && state.connected);
                 agentPauseBtn.title = t('agent.pause.target', { target: state ? `${getTerminalDisplayLabel(state)} (${state.id})` : t('agent.access.current_tab') });
                 agentPauseBtn.setAttribute('aria-label', agentPauseBtn.title);
+                terminals.forEach(terminal => {
+                    const button = terminal.panePause;
+                    button.hidden = !hasAgentPauseCapability(terminal);
+                    button.disabled = !canUseAgentPanel(terminal);
+                    button.title = t('agent.pause.target', { target: `${getTerminalDisplayLabel(terminal)} (${terminal.id})` });
+                    button.setAttribute('aria-label', button.title);
+                });
                 updatePipStatus(pipTerminalState);
             }
 
@@ -4551,6 +4609,7 @@
                         }
                     }
                 }
+                state.mirrorImages?.drawViewport(context, activeBuffer, cols, rows, geometry.cellWidth, geometry.cellHeight);
                 return {
                     imageBase64: dataUrlToBase64(canvas.toDataURL('image/png')),
                     pixelWidth: geometry.pixelWidth,
@@ -4815,6 +4874,12 @@
                     if (previousRevision !== undefined && actionRevision < previousRevision) return;
                     state.agent.actionRevisions.set(actionId, actionRevision);
                 }
+                const pendingAction = state.agent.pendingAction;
+                const closeCopyApproval = isFileCopy
+                    && ['approved', 'running', 'committing', 'completed'].includes(status)
+                    && pendingAction && pendingAction.action_id === actionId
+                    && pendingAction.status === 'pending_approval'
+                    && getAgentPanelTerminalState() === state;
                 if (actionId && status !== 'pending_approval') agentDecisionActionIds.delete(actionId);
                 if (isFileCopy) updateAgentTransfer(data);
                 state.agent.lastAction = {
@@ -4840,7 +4905,8 @@
                         state.agent.pendingActions = Math.max(state.agent.pendingActions, state.agent.openActionIds.size);
                         if (
                             status === 'pending_approval'
-                            || (isFileCopy && ['approved', 'running', 'committing'].includes(status))
+                            || (isFileCopy && ['approved', 'running', 'committing'].includes(status)
+                                && (!pendingAction || pendingAction.action_id === actionId))
                         ) {
                             state.agent.pendingAction = data;
                         }
@@ -4856,6 +4922,10 @@
                     restoreAgentPanelToMainDocument();
                     agentPanelTerminalIdOverride = state.id;
                     agentPanelVisible = true;
+                } else if (closeCopyApproval) {
+                    agentPanelVisible = false;
+                    agentPanelTerminalIdOverride = null;
+                    restoreAgentPanelToMainDocument();
                 }
                 updateAgentPauseButton();
                 updateAgentPanel();
@@ -6507,7 +6577,7 @@
 
             function notifyTerminalResize(state = getActiveTerminalState()) {
                 if (!isCurrentTerminalState(state)) return;
-                if (!state || (state.id !== activeTerminalId && !state.inPip)) return;
+                if (!state || (state.id !== activeTerminalId && !state.inPip && terminalLayout === 'single')) return;
                 if (state.id === activeTerminalId) updateTerminalSizeStatus();
                 updatePipStatus(state);
                 syncAgentTerminalMirrorSize(state);
@@ -6519,15 +6589,261 @@
             }
 
             function fitAndNotifyResize() {
-                const state = getActiveTerminalState();
-                fitTerminalState(state);
+                const states = terminalLayout === 'single' ? [getActiveTerminalState()] : getVisibleTerminalStates();
+                states.forEach(fitTerminalState);
             }
 
             function fitTerminalState(state) {
                 if (!state) return;
-                if (state.fitAddon) state.fitAddon.fit();
+                state.surface.style.width = '';
+                state.surface.style.height = '';
+                if (state.fitAddon) {
+                    if (terminalLayout !== 'single' && !state.inPip && prefs.splitAutoFitWidth === false) {
+                        if (state.splitCols === null) state.splitCols = state.term.cols;
+                        const dimensions = state.fitAddon.proposeDimensions();
+                        const screen = state.term.element.querySelector('.xterm-screen');
+                        const cellWidth = screen ? screen.getBoundingClientRect().width / state.term.cols : 0;
+                        if (dimensions && cellWidth > 0) {
+                            const reservedWidth = state.surface.clientWidth - dimensions.cols * cellWidth;
+                            state.surface.style.width = `${Math.ceil(state.splitCols * cellWidth + reservedWidth)}px`;
+                            state.surface.style.height = `${state.viewport.clientHeight}px`;
+                            const fixedDimensions = state.fitAddon.proposeDimensions();
+                            if (fixedDimensions) state.term.resize(state.splitCols, fixedDimensions.rows);
+                        }
+                    } else {
+                        state.fitAddon.fit();
+                    }
+                }
                 notifyTerminalResize(state);
             }
+
+            function scheduleTerminalLayoutFit() {
+                if (terminalLayoutFrame !== null) return;
+                terminalLayoutFrame = requestAnimationFrame(() => {
+                    terminalLayoutFrame = null;
+                    fitAndNotifyResize();
+                });
+            }
+
+            function applyTerminalSplitTracks() {
+                const states = getVisibleTerminalStates();
+                const tracks = states.map(state => `minmax(0, ${state.splitWeight}fr)`)
+                    .join(` ${TERMINAL_SPLITTER_SIZE}px `);
+                terminalContainer.style.gridTemplateColumns = terminalLayout === 'columns' ? tracks : 'minmax(0, 1fr)';
+                terminalContainer.style.gridTemplateRows = terminalLayout === 'rows' ? tracks : 'minmax(0, 1fr)';
+                terminalContainer.querySelectorAll('.terminal-splitter').forEach((splitter, index) => {
+                    const first = states[index].splitWeight;
+                    const second = states[index + 1].splitWeight;
+                    splitter.setAttribute('aria-valuenow', String(Math.round(100 * first / (first + second))));
+                });
+            }
+
+            function updateTerminalLayout() {
+                const states = getVisibleTerminalStates();
+                if (terminalLayout !== 'single' && states.length < 2) {
+                    terminalLayout = 'single';
+                    tabMore.open = false;
+                }
+                const split = terminalLayout !== 'single';
+                terminalContainer.classList.toggle('split-view', split);
+                document.body.classList.toggle('has-split-terminals', split);
+                if (terminalAutoWidth) terminalAutoWidth.checked = prefs.splitAutoFitWidth !== false;
+                terminals.forEach(state => {
+                    const visible = split && !state.inPip;
+                    state.container.classList.toggle('split-pane', visible);
+                    state.tabEl.classList.toggle('split-tab', visible);
+                    state.container.style.gridColumn = '';
+                    state.container.style.gridRow = '';
+                    if (!visible || prefs.splitAutoFitWidth !== false) state.splitCols = null;
+                    else if (state.splitCols === null) state.splitCols = state.term.cols;
+                    const label = `${getTerminalDisplayLabel(state)} · ${state.id}`;
+                    state.paneLabel.textContent = getTerminalDisplayLabel(state);
+                    state.paneHeading.title = label;
+                    state.paneSelect.setAttribute('aria-pressed', String(state.id === activeTerminalId));
+                    state.paneFocus.textContent = t('terminal.layout.focused');
+                    state.paneAuthorize.textContent = t('agent.access.grant');
+                    state.paneAuthorize.disabled = !canUseAgentPanel(state);
+                    state.paneAgent.textContent = t('agent.panel.show');
+                    state.paneAgent.disabled = !canUseAgentPanel(state);
+                    state.paneFiles.hidden = !shouldShowSftpAction(state);
+                    state.paneFiles.disabled = !canUseSftpFileManager(state);
+                    state.paneFiles.title = t('browser.chrome.files_open');
+                });
+                states.forEach((state, index) => {
+                    if (!split) return;
+                    state.container.style.gridColumn = terminalLayout === 'columns' ? String(index * 2 + 1) : '1';
+                    state.container.style.gridRow = terminalLayout === 'rows' ? String(index * 2 + 1) : '1';
+                });
+                const key = JSON.stringify([terminalLayout, states.map(state => state.instanceId)]);
+                if (key !== terminalLayoutKey) {
+                    terminalLayoutKey = key;
+                    terminalSplitDrag = null;
+                    terminalContainer.querySelectorAll('.terminal-splitter').forEach(element => element.remove());
+                    if (split) states.slice(0, -1).forEach((state, index) => {
+                        const splitter = document.createElement('div');
+                        splitter.className = 'terminal-splitter';
+                        splitter.tabIndex = 0;
+                        splitter.dataset.before = state.id;
+                        splitter.dataset.after = states[index + 1].id;
+                        splitter.setAttribute('role', 'separator');
+                        splitter.setAttribute('aria-label', t('terminal.layout.resize'));
+                        splitter.setAttribute('aria-orientation', terminalLayout === 'columns' ? 'vertical' : 'horizontal');
+                        splitter.setAttribute('aria-valuemin', '0');
+                        splitter.setAttribute('aria-valuemax', '100');
+                        splitter.style.gridColumn = terminalLayout === 'columns' ? String(index * 2 + 2) : '1';
+                        splitter.style.gridRow = terminalLayout === 'rows' ? String(index * 2 + 2) : '1';
+                        terminalContainer.appendChild(splitter);
+                    });
+                    scheduleTerminalLayoutFit();
+                }
+                if (split) applyTerminalSplitTracks();
+                else {
+                    terminalContainer.style.gridTemplateColumns = '';
+                    terminalContainer.style.gridTemplateRows = '';
+                }
+            }
+
+            function resizeTerminalSplit(before, after, firstWeight) {
+                const pairWeight = before.splitWeight + after.splitWeight;
+                const states = getVisibleTerminalStates();
+                const totalWeight = states.reduce((sum, state) => sum + state.splitWeight, 0);
+                const size = terminalLayout === 'columns' ? terminalContainer.clientWidth : terminalContainer.clientHeight;
+                const available = Math.max(1, size - TERMINAL_SPLITTER_SIZE * (states.length - 1));
+                const minWeight = Math.min(pairWeight / 3, TERMINAL_PANE_MIN_SIZE * totalWeight / available);
+                before.splitWeight = Math.max(minWeight, Math.min(pairWeight - minWeight, firstWeight));
+                after.splitWeight = pairWeight - before.splitWeight;
+                applyTerminalSplitTracks();
+                scheduleTerminalLayoutFit();
+            }
+
+            function setTerminalLayout(value) {
+                if (!useDesktopFloatingWindows || !['single', 'columns', 'rows'].includes(value)) return false;
+                tabMore.open = false;
+                terminalLayout = value;
+                updateTerminalLayout();
+                return true;
+            }
+            if (terminalAutoWidth) terminalAutoWidth.onchange = () => {
+                prefs.splitAutoFitWidth = terminalAutoWidth.checked;
+                savePrefs(prefs);
+                updateTerminalLayout();
+                scheduleTerminalLayoutFit();
+            };
+            terminalContainer.addEventListener('pointerdown', event => {
+                const splitter = event.target.closest('.terminal-splitter');
+                if (!splitter || event.button !== 0) return;
+                const before = terminals.get(splitter.dataset.before);
+                const after = terminals.get(splitter.dataset.after);
+                const axis = terminalLayout === 'columns' ? 'clientX' : 'clientY';
+                const size = terminalLayout === 'columns' ? 'width' : 'height';
+                terminalSplitDrag = { before, after, axis, pointerId: event.pointerId,
+                    start: event[axis], weight: before.splitWeight,
+                    weightPerPixel: (before.splitWeight + after.splitWeight)
+                        / (before.container.getBoundingClientRect()[size] + after.container.getBoundingClientRect()[size]) };
+                splitter.setPointerCapture(event.pointerId);
+                event.preventDefault();
+            });
+            terminalContainer.addEventListener('pointermove', event => {
+                const drag = terminalSplitDrag;
+                if (!drag || drag.pointerId !== event.pointerId) return;
+                resizeTerminalSplit(drag.before, drag.after, drag.weight + (event[drag.axis] - drag.start) * drag.weightPerPixel);
+            });
+            terminalContainer.addEventListener('pointerup', event => {
+                if (!terminalSplitDrag || terminalSplitDrag.pointerId !== event.pointerId) return;
+                event.target.releasePointerCapture(event.pointerId);
+                terminalSplitDrag = null;
+            });
+            terminalContainer.addEventListener('lostpointercapture', () => { terminalSplitDrag = null; });
+            terminalContainer.addEventListener('keydown', event => {
+                const splitter = event.target.closest('.terminal-splitter');
+                if (!splitter) return;
+                const keys = terminalLayout === 'columns' ? ['ArrowLeft', 'ArrowRight'] : ['ArrowUp', 'ArrowDown'];
+                if (!keys.includes(event.key)) return;
+                const before = terminals.get(splitter.dataset.before);
+                const after = terminals.get(splitter.dataset.after);
+                const delta = (before.splitWeight + after.splitWeight) * (event.key === keys[0] ? -0.05 : 0.05);
+                resizeTerminalSplit(before, after, before.splitWeight + delta);
+                event.preventDefault();
+            });
+
+            function runTerminalPaneAction(state, sourceId) {
+                if (!isCurrentTerminalState(state) || state.inPip) return;
+                switchTerminal(state.id, false);
+                tabMore.open = false;
+                const source = document.getElementById(sourceId);
+                if (source && !source.disabled && !source.hidden) source.click();
+            }
+
+            function renderTerminalMoreActions() {
+                const state = getActiveTerminalState();
+                terminalMoreActions.replaceChildren();
+                terminalMoreActions.hidden = terminalLayout === 'single' || !isCurrentTerminalState(state) || state.inPip;
+                if (terminalMoreActions.hidden) return;
+                const title = document.createElement('strong');
+                title.textContent = `${t('terminal.layout.actions')}: ${getTerminalDisplayLabel(state)} · ${state.id}`;
+                terminalMoreActions.setAttribute('aria-label', title.textContent);
+                terminalMoreActions.appendChild(title);
+                const quickActions = {
+                    'agent-access-mint-btn': state.paneAuthorize,
+                    'agent-toggle-btn': state.paneAgent,
+                    'sftp-status-btn': state.paneFiles,
+                };
+                const sourceIds = ['agent-access-mint-btn', 'agent-connect-btn', 'agent-toggle-btn',
+                    'agent-status-mint-btn', 'agent-status-mint-3x-btn',
+                    'agent-tunnel-btn', 'ssh-tunnels-btn', 'sftp-status-btn'];
+                sourceIds.forEach(sourceId => {
+                    const source = document.getElementById(sourceId);
+                    if (!source || source.hidden) return;
+                    if (source.classList.contains('agent-status-mint') && !source.classList.contains('visible')) return;
+                    if (quickActions[sourceId]?.getClientRects().length) return;
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.dataset.sourceId = sourceId;
+                    button.textContent = source.getAttribute('aria-label') || source.textContent;
+                    button.disabled = source.disabled;
+                    button.onclick = () => {
+                        if (getActiveTerminalState() === state) runTerminalPaneAction(state, sourceId);
+                    };
+                    terminalMoreActions.appendChild(button);
+                });
+                if (canMoveActiveTerminalToPip()) {
+                    const popout = document.createElement('button');
+                    popout.type = 'button';
+                    popout.dataset.sourceId = 'pip-option';
+                    popout.textContent = t(usesBrowserPopup() ? 'browser.chrome.popout_menu' : 'browser.chrome.pip_menu');
+                    popout.onclick = () => {
+                        if (getActiveTerminalState() === state) runTerminalPaneAction(state, 'pip-option');
+                    };
+                    terminalMoreActions.appendChild(popout);
+                }
+                const close = document.createElement('button');
+                close.type = 'button';
+                close.textContent = t('browser.chrome.close_terminal');
+                close.disabled = terminals.size <= 1;
+                close.onclick = () => {
+                    tabMore.open = false;
+                    if (isCurrentTerminalState(state) && getActiveTerminalState() === state) closeTerminalState(state);
+                };
+                terminalMoreActions.appendChild(close);
+            }
+            tabMore.addEventListener('toggle', () => {
+                if (tabMore.open) renderTerminalMoreActions();
+            });
+            document.addEventListener('pointerdown', event => {
+                if (terminalLayout !== 'single' && !tabMore.contains(event.target)) tabMore.open = false;
+            });
+            tabMore.addEventListener('keydown', event => {
+                if (event.key === 'Escape') {
+                    tabMore.open = false;
+                    tabMore.querySelector('summary').focus();
+                    event.preventDefault();
+                } else if (terminalMoreActions.contains(event.target) && ['ArrowUp', 'ArrowDown'].includes(event.key)) {
+                    const buttons = [...terminalMoreActions.querySelectorAll('button:not(:disabled)')];
+                    const offset = event.key === 'ArrowDown' ? 1 : -1;
+                    buttons[(buttons.indexOf(document.activeElement) + offset + buttons.length) % buttons.length]?.focus();
+                    event.preventDefault();
+                }
+            });
 
             function configureWebLinks(state) {
                 if (state.webLinksAddon) {
@@ -6548,6 +6864,12 @@
                     });
                     state.term.loadAddon(state.webLinksAddon);
                 }
+            }
+
+            function configureTerminalImages(state) {
+                const enabled = prefs.enableShellImages === true && state.connectionType === 'local_shell';
+                state.images.setEnabled(enabled);
+                state.mirrorImages.setEnabled(enabled);
             }
 
             function getTerminalDisplayLabel(state) {
@@ -6659,6 +6981,7 @@
                 terminals.forEach(state => {
                     state.tabEl.querySelector('.tab-close').hidden = terminals.size <= 1;
                 });
+                updateTerminalLayout();
             }
 
             function updateTerminalActions() {
@@ -6738,9 +7061,10 @@
                 updateTerminalSizeStatus();
             }
 
-            function switchTerminal(terminalId) {
+            function switchTerminal(terminalId, focus = true) {
                 const nextState = terminals.get(terminalId);
                 if (!nextState || nextState.inPip || terminalId === activeTerminalId) return;
+                if (terminalLayout !== 'single') tabMore.open = false;
                 const previousState = getActiveTerminalState();
                 if (previousState) previousState.container.classList.remove('active');
                 activeTerminalId = terminalId;
@@ -6751,8 +7075,10 @@
                 updateActiveTerminalUi();
                 requestAnimationFrame(() => {
                     fitAndNotifyResize();
-                    if (sshLoginFlows.has(nextState.id) && nextState.connecting) sshLoginFlows.get(nextState.id).focus();
-                    else nextState.term.focus();
+                    if (focus) {
+                        if (sshLoginFlows.has(nextState.id) && nextState.connecting) sshLoginFlows.get(nextState.id).focus();
+                        else nextState.term.focus();
+                    }
                     scheduleAgentViewportSnapshot(nextState);
                 });
             }
@@ -6796,6 +7122,41 @@
                 const container = document.createElement('div');
                 container.className = 'terminal-pane';
                 container.dataset.terminalId = terminalId;
+                const paneHeading = document.createElement('div');
+                paneHeading.className = 'terminal-pane-heading';
+                const paneSelect = document.createElement('button');
+                paneSelect.type = 'button';
+                paneSelect.className = 'terminal-pane-select';
+                const paneLabel = document.createElement('span');
+                paneLabel.className = 'terminal-pane-label';
+                const paneFocus = document.createElement('span');
+                paneFocus.className = 'terminal-pane-focus';
+                const paneId = document.createElement('span');
+                paneId.className = 'terminal-pane-id';
+                paneId.textContent = terminalId;
+                paneSelect.append(paneLabel, paneId, paneFocus);
+                const paneQuick = document.createElement('div');
+                paneQuick.className = 'terminal-pane-quick';
+                const paneAuthorize = document.createElement('button');
+                const paneAgent = document.createElement('button');
+                const paneFiles = document.createElement('button');
+                const panePause = document.createElement('button');
+                [paneAuthorize, paneAgent, paneFiles, panePause].forEach(button => {
+                    button.type = 'button';
+                    button.className = 'status-action';
+                });
+                paneFiles.textContent = '\u{1F4C1}';
+                panePause.classList.add('terminal-pane-pause');
+                panePause.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 2v12M11 2v12" stroke="currentColor" stroke-width="3"/></svg>';
+                panePause.hidden = true;
+                paneQuick.append(paneAuthorize, paneAgent, paneFiles);
+                paneHeading.append(paneSelect, paneQuick, panePause);
+                const viewport = document.createElement('div');
+                viewport.className = 'terminal-viewport';
+                const surface = document.createElement('div');
+                surface.className = 'terminal-surface';
+                viewport.appendChild(surface);
+                container.append(paneHeading, viewport);
                 terminalContainer.appendChild(container);
 
                 const tabEl = document.createElement('div');
@@ -6833,7 +7194,7 @@
                 applyCjkWidthPreference(term);
                 const fitAddon = (typeof FitAddon !== 'undefined') ? new FitAddon.FitAddon() : null;
                 if (fitAddon) term.loadAddon(fitAddon);
-                term.open(container);
+                term.open(surface);
                 if (IME_ANCHOR_POC_ENABLED && typeof window.StandTermImeAnchorPoc === 'function') {
                     term.loadAddon(new window.StandTermImeAnchorPoc());
                 }
@@ -6859,6 +7220,18 @@
                     needsReplay: true,
                     agent: createAgentClientState(),
                     container,
+                    viewport,
+                    surface,
+                    paneHeading,
+                    paneSelect,
+                    paneLabel,
+                    paneFocus,
+                    paneAuthorize,
+                    paneAgent,
+                    paneFiles,
+                    panePause,
+                    splitCols: null,
+                    splitWeight: 1,
                     tabEl,
                     titleEl,
                     agentCountdownEl,
@@ -6886,6 +7259,8 @@
                     pipResizeHandler: null
                 };
                 enableWebglRenderer(state);
+                state.images = new window.StandTermTerminalImages(state.term);
+                state.mirrorImages = new window.StandTermTerminalImages(state.agentTerminalMirror, state.term);
                 terminals.set(terminalId, state);
                 state.capabilityAddon = new window.StandTermCapabilities(query => {
                     if (!isCurrentTerminalState(state) || !socket.connected || !state.connected) return;
@@ -6901,6 +7276,14 @@
                     updatePipStatus(state);
                 });
                 configureWebLinks(state);
+                paneSelect.onclick = () => { switchTerminal(state.id); state.term.focus(); };
+                paneAuthorize.onclick = () => runTerminalPaneAction(state, 'agent-access-mint-btn');
+                paneAgent.onclick = () => runTerminalPaneAction(state, 'agent-toggle-btn');
+                paneFiles.onclick = () => runTerminalPaneAction(state, 'sftp-status-btn');
+                panePause.onclick = () => pauseAgentForState(state);
+                const focusPane = () => { if (!state.inPip) switchTerminal(state.id, false); };
+                container.addEventListener('pointerdown', focusPane, true);
+                container.addEventListener('focusin', focusPane);
                 syncAgentTerminalMirrorSize(state);
                 term.onResize(() => notifyTerminalResize(state));
                 // Review the original clipboard text before xterm normalizes LF to CR.
@@ -6931,6 +7314,7 @@
             }
 
             function removeTerminalState(state, options = {}) {
+                if (state.id === activeTerminalId) tabMore.open = false;
                 pendingSshConnectionDrafts.delete(state.id);
                 discardSshLogin(state.id);
                 const notifyServer = options.notifyServer !== false && isCurrentTerminalState(state);
@@ -6940,6 +7324,8 @@
                 });
                 detachAgentFromTerminal(state, { notifyServer });
                 if (state.webLinksAddon) state.webLinksAddon.dispose();
+                state.images.dispose();
+                state.mirrorImages.dispose();
                 if (state.webglAddon) state.webglAddon.dispose();
                 if (state.agentTerminalMirror) state.agentTerminalMirror.dispose();
                 state.term.dispose();
@@ -7028,6 +7414,7 @@
                     state.connecting = false;
                     state.error = false;
                     state.connectionType = normalizeConnectionType(item.connection_type);
+                    configureTerminalImages(state);
                     if (item.ssh_target) state.sshTarget = { ...normalizeSshTarget(item.ssh_target),
                         network_origin: item.ssh_target.network_origin || 'core' };
                     if (state.connectionType !== 'ssh') state.sshTarget = null;
@@ -7144,6 +7531,11 @@
                             state?.agentTerminalMirror && new Promise(resolve => state.agentTerminalMirror.write('', resolve))
                         ].filter(Boolean));
                     },
+                    resumeTerminalIoForTest() {
+                        captureTerminalIo = false;
+                        socket.off('ssh_output', handleSshOutputPayload);
+                        socket.on('ssh_output', handleSshOutputPayload);
+                    },
                     clearEmitted() {
                         emitted.length = 0;
                     },
@@ -7244,6 +7636,15 @@
                                 : null
                         });
                     },
+                    getTerminalImagesForTest() {
+                        return [...terminals.values()].map(state => ({
+                            id: state.id, enabled: !!state.images.addon,
+                            usage: state.images.addon?.storageUsage || 0,
+                            mirrorUsage: state.mirrorImages.addon?.storageUsage || 0,
+                            cursor: [state.term.buffer.active.cursorX, state.term.buffer.active.cursorY],
+                            mirrorCursor: [state.agentTerminalMirror.buffer.active.cursorX, state.agentTerminalMirror.buffer.active.cursorY]
+                        }));
+                    },
                     setActiveTerminalFontSizeForTest(fontSize) {
                         const state = getActiveTerminalState();
                         if (!state || !state.term || !Number.isFinite(Number(fontSize))) return false;
@@ -7276,6 +7677,10 @@
                             tabs: [...terminals.values()].map(state => ({
                                 id: state.id,
                                 instanceId: state.instanceId,
+                                cols: state.term.cols,
+                                rows: state.term.rows,
+                                mirrorCols: state.agentTerminalMirror.cols,
+                                mirrorRows: state.agentTerminalMirror.rows,
                                 active: state.id === activeTerminalId,
                                 inPip: !!state.inPip,
                                 hidden: state.tabEl.classList.contains('in-pip'),
@@ -7387,6 +7792,9 @@
                     },
                     applyTerminalPolicy(policy) {
                         applyTerminalPolicy(cloneForTest(policy));
+                    },
+                    holdTerminalPolicyForTest() {
+                        socket.off('terminal_policy');
                     },
                     applyTerminalListForTest(payload) {
                         handleTerminalListPayload(cloneForTest(payload));
@@ -8464,6 +8872,7 @@
                 state.connecting = true;
                 state.error = false;
                 state.connectionType = formData.connection_type;
+                configureTerminalImages(state);
                 state.sshTarget = state.connectionType === 'ssh'
                     ? { ...normalizeSshTarget(formData), network_origin: formData.network_origin || 'core' } : null;
                 state.label = formData.connection_type === 'ssh' && formData.profile_name
@@ -9228,6 +9637,7 @@
                         state.connecting = false;
                         state.error = false;
                         state.connectionType = normalizeConnectionType(data.connection_type);
+                        configureTerminalImages(state);
                         if (data.ssh_target) state.sshTarget = { ...normalizeSshTarget(data.ssh_target),
                             network_origin: data.ssh_target.network_origin || 'core' };
                         if (state.connectionType !== 'ssh') state.sshTarget = null;
@@ -9264,6 +9674,7 @@
                         state.connecting = false;
                         state.error = false;
                         state.connectionType = null;
+                        configureTerminalImages(state);
                         state.sftpAvailable = null;
                         state.sftpEndpoint = null;
                         state.connectedAt = null;
@@ -11939,10 +12350,10 @@
 
             function getFontEvaluationContext() {
                 const state = getActiveTerminalState();
-                if (!state || !state.term || !state.container.clientWidth || !state.container.clientHeight) return null;
+                if (!state || !state.term || !state.surface.clientWidth || !state.surface.clientHeight) return null;
                 return {
                     terminalId: state.id,
-                    width: state.container.clientWidth, height: state.container.clientHeight,
+                    width: state.surface.clientWidth, height: state.surface.clientHeight,
                     dpr: window.devicePixelRatio || 1,
                     renderer: state.webglAddon ? 'webgl' : 'dom',
                     fontFace: document.getElementById('pref-fontFace').value.trim(),
@@ -12082,7 +12493,7 @@
                     fontViewportObserver = new ResizeObserver(() => {
                         if (!fontEvaluationIsCurrent()) resetFontRecommendations('settings.fonts.stale');
                     });
-                    fontViewportObserver.observe(getActiveTerminalState().container);
+                    fontViewportObserver.observe(getActiveTerminalState().surface);
                 }
                 const candidates = fontRecommendations.candidates(fontEvaluationContext.fontFace, isApplePlatform());
                 for (const [index, fontFace] of candidates.entries()) {
@@ -12159,6 +12570,8 @@
                 document.getElementById('pref-useCustomMenu').checked = prefs.useCustomMenu;
                 document.getElementById('pref-copyOnSelect').checked = prefs.copyOnSelect;
                 document.getElementById('pref-enablePicPreview').checked = prefs.enablePicPreview;
+                document.getElementById('pref-enableShellImages').checked = prefs.enableShellImages;
+                document.getElementById('pref-remoteImages').checked = false;
                 document.getElementById('pref-detectUrls').checked = prefs.detectUrls;
                 document.getElementById('pref-showDetailedSshLabels').checked = prefs.showDetailedSshLabels;
                 document.getElementById('pref-cjkWideAmbiguous').checked = prefs.cjkWideAmbiguous;
@@ -12211,11 +12624,16 @@
                 snapshot() {
                     const state = getActiveTerminalState();
                     const ready = !!(socket && socket.connected);
+                    const canSplit = ready && useDesktopFloatingWindows && getVisibleTerminalStates().length > 1;
                     return {
                         version: 1, ready, terminalId: state?.id || null,
                         uiLanguage: loadPrefs().uiLanguage,
+                        layout: terminalLayout,
                         actions: {
                             settings: ready, newTab: ready,
+                            layoutFull: ready && useDesktopFloatingWindows,
+                            layoutVertical: canSplit,
+                            layoutHorizontal: canSplit,
                             closeTab: ready && terminals.size > 1,
                             closeAll: ready && !closeTabsBtn.disabled,
                             files: ready && canUseSftpFileManager(state),
@@ -12239,6 +12657,9 @@
                         case 'agentPanel': toggleMainAgentPanel(); break;
                         case 'pauseAgent': pauseAgentForState(state); break;
                         case 'pip': await moveActiveTerminalToPip(); break;
+                        case 'layoutFull': return setTerminalLayout('single');
+                        case 'layoutVertical': return setTerminalLayout('columns');
+                        case 'layoutHorizontal': return setTerminalLayout('rows');
                         default: return false;
                     }
                     return true;
@@ -12403,6 +12824,7 @@
                 prefs.useCustomMenu = document.getElementById('pref-useCustomMenu').checked;
                 prefs.copyOnSelect = document.getElementById('pref-copyOnSelect').checked;
                 prefs.enablePicPreview = document.getElementById('pref-enablePicPreview').checked;
+                prefs.enableShellImages = document.getElementById('pref-enableShellImages').checked;
                 prefs.detectUrls = document.getElementById('pref-detectUrls').checked;
                 prefs.showDetailedSshLabels = document.getElementById('pref-showDetailedSshLabels').checked;
                 prefs.cjkWideAmbiguous = document.getElementById('pref-cjkWideAmbiguous').checked;
@@ -12420,6 +12842,7 @@
                 prefs.showTerminalTitleInStatusBar = document.getElementById('pref-showTerminalTitleInStatusBar').checked;
                 savePrefs(prefs);
                 terminals.forEach(state => {
+                    configureTerminalImages(state);
                     state.term.options.cursorStyle = prefs.cursorStyle;
                     state.term.options.fontFamily = getTerminalFontFace();
                     state.term.options.fontSize = prefs.fontSize;

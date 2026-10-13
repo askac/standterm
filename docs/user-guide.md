@@ -289,6 +289,16 @@ Other settings have separate actions. **Reset preferences** immediately restores
 all browser preference defaults and reloads the page, losing unsaved edits and
 stopping this page's temporary SSH tunnels. Saved SSH profiles, history and keys,
 and the Agent panel position remain stored.
+
+**Settings > General > Show images in local shells (experimental)** enables SIXEL
+and iTerm2 inline images emitted by shell programs. It defaults to on; saving
+applies to all local shell tabs. Images also appear in Agent viewport PNG captures.
+The remote option is disabled and defaults to off. Kitty graphics, clipboard image
+attachments and uploads are not part of this experiment. A shell that runs `ssh`
+still counts as a local shell tab. Image size and storage are limited per renderer.
+Run `bash scripts/image-check.sh` inside a Local Shell tab for a visual test card;
+use `--protocol sixel` or `--protocol iterm2` to check either protocol separately.
+
 Server runtime settings use individual **Apply** buttons. Their changes are shared
 across the Core instance and last until Core restarts. Connection defaults do not
 alter existing connections.
