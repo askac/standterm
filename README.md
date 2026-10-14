@@ -44,8 +44,9 @@ required on the SSH targets. AI collaboration is optional.
 
 ## Desktop Downloads (Evaluation)
 
-[Download StandTerm Desktop](https://github.com/askac/standterm/releases/tag/desktop-v0.5.4-dev-2.15.0-dev)
-for **Windows x64** or **macOS Apple Silicon**. Packages include the app and Core;
+[Windows x64 — Desktop 0.5.5-dev / Core 2.16.0](https://github.com/askac/standterm/releases/tag/desktop-v0.5.5-dev-2.16.0) ·
+[macOS Apple Silicon — Desktop 0.5.4-dev / Core 2.15.0-dev](https://github.com/askac/standterm/releases/tag/desktop-v0.5.4-dev-2.15.0-dev).
+Packages include the app and Core;
 Python 3.10+ with venv support is required separately, and WSL mode needs an
 existing WSL distribution.
 
