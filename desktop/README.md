@@ -6,11 +6,12 @@ source-run workflow, an unsigned Windows x64 evaluation installer and a native
 Apple Silicon macOS evaluation app/DMG. It is not
 a production release or a replacement for `run.sh` / `run.bat`.
 
-The published [0.5.4-dev / Core 2.15.0-dev evaluation](https://github.com/askac/standterm/releases/tag/desktop-v0.5.4-dev-2.15.0-dev)
-adds direct Telnet and saved SSH network-origin support. The current 0.5.5-dev
-source pairs with Core 2.16.0 and adds split layouts and experimental shell images; these earlier evaluation installers
-retain the 2.15.0-dev identity. The Mac full packaged capture smoke did not pass,
-and the prior window-position drift remains unresolved. See the release notes.
+The published [Windows 0.5.5-dev / Core 2.16.0 evaluation](https://github.com/askac/standterm/releases/tag/desktop-v0.5.5-dev-2.16.0)
+adds split layouts and experimental shell images, with packaged startup checks
+for Windows and WSL modes. The [macOS 0.5.4-dev / Core 2.15.0-dev evaluation](https://github.com/askac/standterm/releases/tag/desktop-v0.5.4-dev-2.15.0-dev)
+remains the latest Mac package. Its full packaged capture smoke did not pass,
+and the prior window-position drift remains unresolved. See each release's notes
+for validation and signing limits.
 
 Desktop copy and localization are planned in the
 [review plan](../docs/desktop_ui_review_plan.md), with a separate
@@ -110,8 +111,8 @@ The published [Windows **0.5.1 / Core 2.13.0-dev** evaluation](https://github.co
 includes ordered SSH jump routes, per-site login cards, shared Direct/node key
 controls and opt-in
 profile/route saving on Connect. It retains its original development identity.
-The current source declares Core **2.16.0**; installers with that exact Core
-identity require a fresh build and validation. The 0.5.0 candidates remain local.
+The current Windows **0.5.5-dev / Core 2.16.0** installer has been built and
+validated with that exact Core identity. The 0.5.0 candidates remain local.
 
 Staging writes `release-identity.json` from the staged package/lock versions and
 the manifest-hashed `core_version.py`. The builder revalidates this identity and
