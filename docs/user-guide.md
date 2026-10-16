@@ -298,6 +298,10 @@ attachments and uploads are not part of this experiment. A shell that runs `ssh`
 still counts as a local shell tab. Image size and storage are limited per renderer.
 Run `bash scripts/image-check.sh` inside a Local Shell tab for a visual test card;
 use `--protocol sixel` or `--protocol iterm2` to check either protocol separately.
+Inside tmux, native SIXEL needs a tmux build with SIXEL support and may be rescaled
+to match tmux's window/client cell sizes. The check script wraps iTerm2 PNG output
+in tmux passthrough and reserves its rows using the client cell height. This requires
+`set -g allow-passthrough on` in your tmux configuration.
 
 Server runtime settings use individual **Apply** buttons. Their changes are shared
 across the Core instance and last until Core restarts. Connection defaults do not

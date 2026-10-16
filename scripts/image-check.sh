@@ -11,13 +11,17 @@ Draw a 240x96 image test card using SIXEL and iTerm2 inline PNG output.
 Run inside a StandTerm Local Shell tab with shell images enabled. Both cards
 should show RGB panels, a white circular outline, and a checkerboard strip.
 The circle should be round, and text below each image should remain readable.
+Inside tmux, SIXEL needs a build with SIXEL support. iTerm2 PNG output uses
+tmux passthrough and requires "set -g allow-passthrough on".
+The script reads tmux's client cell height to reserve rows for the PNG.
+tmux may rescale native SIXEL to match its window/client cell sizes.
 
 Options:
   --protocol NAME  Select all (default), sixel, or iterm2.
   -h, --help       Show this help without emitting image sequences.
 
 Requires Bash and Python 3; uses only the Python standard library.
-No downloads, files, terminal queries, or screen clearing are performed.
+No downloads, files, terminal queries, or full-screen clearing are performed.
 This is a visual check; the script cannot detect whether images are displayed.
 USAGE
 }
@@ -52,7 +56,9 @@ command -v python3 >/dev/null 2>&1 || die 'Python 3 is required (no extra module
 
 python3 - "$protocol" <<'PY'
 import base64
+import os
 import struct
+import subprocess
 import sys
 import zlib
 
@@ -114,9 +120,26 @@ def draw_iterm2():
     image = (b'\x89PNG\r\n\x1a\n'
              + chunk(b'IHDR', struct.pack('>IIBBBBB', WIDTH, HEIGHT, 8, 2, 0, 0, 0))
              + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b''))
+    in_tmux = bool(os.environ.get('TMUX'))
+    if in_tmux:
+        try:
+            cell_height = int(subprocess.check_output(
+                ['tmux', 'display-message', '-p', '#{client_cell_height}'], stderr=subprocess.DEVNULL))
+        except (OSError, ValueError, subprocess.CalledProcessError):
+            raise SystemExit('Cannot read tmux client cell height.')
+        if cell_height <= 0:
+            raise SystemExit('tmux client cell height is unknown; enable shell images and reattach tmux.')
+        rows = (HEIGHT + cell_height - 1) // cell_height
+        # Reserve rows, then erase one blank cell to flush and position tmux's
+        # outer cursor before bypassing its image parser.
+        text('\r\n' * rows + f'\x1b[{rows}A\x1b[X')
+        text('\x1bPtmux;\x1b')
     text(f'\x1b]1337;File=inline=1;size={len(image)};width={WIDTH}px;height={HEIGHT}px;preserveAspectRatio=1:')
     output.write(base64.b64encode(image))
     text('\x07')
+    if in_tmux:
+        text('\x1b\\')
+        text(f'\x1b[{rows}B')
 
 
 text('StandTerm inline image check\r\n')

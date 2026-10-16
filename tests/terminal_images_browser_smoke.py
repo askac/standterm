@@ -2,6 +2,7 @@
 
 import base64
 from pathlib import Path
+import re
 import shlex
 import struct
 import tempfile
@@ -149,6 +150,35 @@ def test_shell_images_and_preferences(browser, url):
             write(page, '\x1bc' + iip() + SIXEL)
             assert images(page)[0]['usage'] == 0 and images(page)[0]['mirrorUsage'] == 0
         assert not errors, errors
+    finally:
+        fixture.close_context(context)
+
+
+def test_image_size_reports(browser, url):
+    context, page = fixture.new_page(browser, url)
+    try:
+        drain(page)
+        for enabled in [True, False, True]:
+            set_images(page, enabled)
+            page.evaluate('window.terminalTest.clearEmitted()')
+            write(page, '\x1b[14t\x1b[16t\x1b[18t')
+            replies = page.evaluate("""window.terminalTest.getEmitted()
+                .filter(item => item.event === 'ssh_input').map(item => item.args[0].data)""")
+            if enabled:
+                reports = [re.fullmatch(r'\x1b\[(4|6);(\d+);(\d+)t', reply) for reply in replies]
+                assert len(reports) == 2 and all(reports), replies
+                assert {report[1] for report in reports} == {'4', '6'}, replies
+                assert all(int(report[2]) > 0 and int(report[3]) > 0 for report in reports), replies
+            else:
+                assert not replies, replies
+        page.evaluate("""window.terminalTest.handleSshOutput({
+            terminal_id: 'main', message_type: 'ssh_connected', connection_type: 'ssh'
+        })""")
+        drain(page)
+        page.evaluate('window.terminalTest.clearEmitted()')
+        write(page, '\x1b[14t\x1b[16t\x1b[18t')
+        assert not page.evaluate("""window.terminalTest.getEmitted()
+            .some(item => item.event === 'ssh_input')""")
     finally:
         fixture.close_context(context)
 
@@ -395,7 +425,7 @@ def main():
         with fixture.load_playwright()[0]() as playwright:
             browser = playwright.chromium.launch(headless=True)
             try:
-                for test in [test_shell_images_and_preferences, test_invalid_and_chunked_images,
+                for test in [test_shell_images_and_preferences, test_image_size_reports, test_invalid_and_chunked_images,
                              test_agent_images_preserve_partial_cell_edges,
                              test_image_preferences_reload_import_reset, test_missing_image_addon_keeps_terminal_working,
                              test_legacy_image_decoder_releases_urls, test_toggle_and_close_during_image_decode]:
