@@ -855,6 +855,20 @@
         #agent-action-content { display: grid; gap: 8px; min-height: 0; overflow: auto; overscroll-behavior: contain; }
         #agent-action-controls { flex-shrink: 0; }
         #agent-action-meta { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px 10px; color: #bbb; overflow-wrap: anywhere; }
+        #image-preview-panel {
+            position: fixed; top: 52px; right: 12px; z-index: 90;
+            width: 400px; max-width: calc(100vw - 24px);
+            padding: 8px; box-sizing: border-box; border: 1px solid #555;
+            border-radius: 8px; background: #252525; color: #eee;
+            box-shadow: 0 4px 20px #0008;
+        }
+        #image-preview-panel[hidden] { display: none; }
+        #image-preview-panel[data-size="small"] { width: 240px; }
+        #image-preview-panel[data-size="large"] { width: 640px; }
+        #image-preview-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+        #image-preview-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+        #image-preview-close { padding: 2px 8px; cursor: pointer; }
+        #image-preview-image { display: block; width: 100%; max-height: 65vh; object-fit: contain; }
         #agent-file-copy-details {
             display: none;
             gap: 6px;
@@ -1190,6 +1204,8 @@
                             <div class="settings-row"><label for="pref-copyOnSelect" title="On mouse release, copies terminal selection without surrounding whitespace, then clears it." data-i18n-title="settings.general.copy_on_select_hint" data-i18n="settings.general.copy_on_select">Copy terminal selection automatically</label><input type="checkbox" id="pref-copyOnSelect"></div>
                             <div class="settings-row"><label for="pref-enablePicPreview" data-i18n="settings.general.picture_preview">Preview image links in page overlay</label><input type="checkbox" id="pref-enablePicPreview"></div>
                             <div class="settings-row"><label for="pref-enableShellImages" data-i18n="settings.images.shell">Show images in local shells (experimental)</label><input type="checkbox" id="pref-enableShellImages" aria-describedby="terminal-images-hint"></div>
+                            <div class="settings-row"><label for="pref-allowAgentImagePreview" data-i18n="settings.preview.allow">Allow agents to show images</label><input type="checkbox" id="pref-allowAgentImagePreview" aria-describedby="image-preview-hint"><select id="pref-agentImagePreviewSize" aria-label="Image preview size" data-i18n-aria-label="settings.preview.size"><option value="large" data-i18n="settings.preview.large">Large</option><option value="medium" data-i18n="settings.preview.medium">Medium</option><option value="small" data-i18n="settings.preview.small">Small</option></select></div>
+                            <div class="settings-status" id="image-preview-hint" data-i18n="settings.preview.hint">Allow local scripts to send PNG/JPEG previews to this page without an Agent token. Save to apply.</div>
                             <div class="settings-row" style="opacity:0.5;"><label for="pref-remoteImages" data-i18n="settings.images.remote">Show images in remote connections (coming later)</label><input type="checkbox" id="pref-remoteImages" disabled aria-describedby="terminal-images-hint"></div>
                             <div class="settings-status" id="terminal-images-hint" data-i18n="settings.images.hint">Display SIXEL and iTerm2 images from local shell programs. Save to apply to all local shell tabs. Remote connections and Kitty images are not supported yet.</div>
                             <div class="settings-row"><label for="pref-detectUrls" data-i18n="settings.general.detect_urls">Make terminal URLs clickable</label><input type="checkbox" id="pref-detectUrls"></div>
@@ -1755,6 +1771,11 @@
         </div>
     </div>
 
+    <aside id="image-preview-panel" data-size="medium" aria-label="Image preview" data-i18n-aria-label="preview.title" hidden>
+        <div id="image-preview-header"><span id="image-preview-title"></span><button id="image-preview-close" type="button" aria-label="Close image preview" data-i18n-aria-label="preview.close">×</button></div>
+        <img id="image-preview-image" alt="">
+    </aside>
+
     <div id="session-recovery-modal">
         <div class="session-recovery-box">
             <h3 data-i18n="browser.recovery.title">Restore StandTerm access</h3>
@@ -1866,6 +1887,8 @@
             copyOnSelect: false,
             enablePicPreview: true,
             enableShellImages: true,
+            allowAgentImagePreview: false,
+            agentImagePreviewSize: 'medium',
             detectUrls: true,
             showDetailedSshLabels: true,
             saveSshHistory: true,
@@ -6872,6 +6895,64 @@
                 state.mirrorImages.setEnabled(enabled);
             }
 
+            const imagePreviewPanel = document.getElementById('image-preview-panel');
+            const imagePreviewImage = document.getElementById('image-preview-image');
+            let imagePreviewUrl = null;
+            let pendingImagePreviewUrl = null;
+
+            function clearImagePreview() {
+                imagePreviewPanel.hidden = true;
+                imagePreviewImage.removeAttribute('src');
+                imagePreviewImage.alt = '';
+                document.getElementById('image-preview-title').textContent = '';
+                if (imagePreviewUrl) URL.revokeObjectURL(imagePreviewUrl);
+                if (pendingImagePreviewUrl) URL.revokeObjectURL(pendingImagePreviewUrl);
+                imagePreviewUrl = pendingImagePreviewUrl = null;
+            }
+
+            function configureImagePreview() {
+                imagePreviewPanel.dataset.size = ['small', 'medium', 'large'].includes(prefs.agentImagePreviewSize)
+                    ? prefs.agentImagePreviewSize : 'medium';
+                if (!prefs.allowAgentImagePreview) clearImagePreview();
+                if (socket && socket.connected) socket.emit('image_preview_set', { enabled: prefs.allowAgentImagePreview === true });
+            }
+
+            function showImagePreview(data) {
+                if (!prefs.allowAgentImagePreview || !data || !['image/png', 'image/jpeg'].includes(data.mime_type)
+                    || typeof data.image_base64 !== 'string' || data.image_base64.length > 2796204) return;
+                let bytes;
+                try { bytes = Uint8Array.from(atob(data.image_base64), char => char.charCodeAt(0)); }
+                catch (_) { return; }
+                if (pendingImagePreviewUrl) URL.revokeObjectURL(pendingImagePreviewUrl);
+                const url = URL.createObjectURL(new Blob([bytes], { type: data.mime_type }));
+                pendingImagePreviewUrl = url;
+                const image = new Image();
+                image.onload = () => {
+                    if (pendingImagePreviewUrl !== url) return;
+                    pendingImagePreviewUrl = null;
+                    if (!prefs.allowAgentImagePreview || image.naturalWidth !== data.width
+                        || image.naturalHeight !== data.height || image.naturalWidth * image.naturalHeight > 16777216) {
+                        URL.revokeObjectURL(url);
+                        return;
+                    }
+                    if (imagePreviewUrl) URL.revokeObjectURL(imagePreviewUrl);
+                    imagePreviewUrl = url;
+                    const title = typeof data.title === 'string' ? data.title.slice(0, 160) : '';
+                    document.getElementById('image-preview-title').textContent = title || t('preview.title');
+                    imagePreviewImage.alt = title;
+                    imagePreviewImage.src = url;
+                    imagePreviewPanel.hidden = false;
+                };
+                image.onerror = () => {
+                    if (pendingImagePreviewUrl !== url) return;
+                    pendingImagePreviewUrl = null;
+                    URL.revokeObjectURL(url);
+                };
+                image.src = url;
+            }
+            document.getElementById('image-preview-close').onclick = clearImagePreview;
+            window.addEventListener('pagehide', clearImagePreview);
+
             function getTerminalDisplayLabel(state) {
                 const label = state && (state.title || state.label);
                 const isSshLabel = typeof label === 'string' && (label === 'SSH' || label.startsWith('SSH - '));
@@ -8092,6 +8173,7 @@
                     visibility: document.visibilityState
                 });
                 setServerConnectionState('available');
+                configureImagePreview();
                 hideSessionRecovery();
                 scheduleSessionRenew();
                 updateDebugHud('socket.connect', 'connected');
@@ -8264,6 +8346,7 @@
                     error_code: typeof data.error_code === 'string' ? data.error_code : null
                 });
                 if (data.status === 'authorized') {
+                    configureImagePreview();
                     stopBrowserPairingAutoCheck();
                     userSelectedConnectionType = null;
                     updateBrowserAuthUi(t('browser.auth.authorized'));
@@ -8283,6 +8366,7 @@
             socket.on('agent_state', data => {
                 applyAgentStatePayload(data);
             });
+            socket.on('image_preview', showImagePreview);
             socket.on('agent_tunnel_state', applyAgentTunnelState);
             socket.on('ssh_tunnel_state', applySshTunnelState);
             socket.on('agent_connection_activity', applyAgentConnectionActivity);
@@ -8305,6 +8389,7 @@
                 applyOperatorObservationState(data);
             });
             socket.on('disconnect', (r) => {
+                clearImagePreview();
                 recordConnectionDiagnostic('socket.disconnect', {
                     reason: r || 'unknown',
                     online: navigator.onLine,
@@ -12571,6 +12656,8 @@
                 document.getElementById('pref-copyOnSelect').checked = prefs.copyOnSelect;
                 document.getElementById('pref-enablePicPreview').checked = prefs.enablePicPreview;
                 document.getElementById('pref-enableShellImages').checked = prefs.enableShellImages;
+                document.getElementById('pref-allowAgentImagePreview').checked = prefs.allowAgentImagePreview;
+                document.getElementById('pref-agentImagePreviewSize').value = prefs.agentImagePreviewSize;
                 document.getElementById('pref-remoteImages').checked = false;
                 document.getElementById('pref-detectUrls').checked = prefs.detectUrls;
                 document.getElementById('pref-showDetailedSshLabels').checked = prefs.showDetailedSshLabels;
@@ -12825,6 +12912,9 @@
                 prefs.copyOnSelect = document.getElementById('pref-copyOnSelect').checked;
                 prefs.enablePicPreview = document.getElementById('pref-enablePicPreview').checked;
                 prefs.enableShellImages = document.getElementById('pref-enableShellImages').checked;
+                prefs.allowAgentImagePreview = document.getElementById('pref-allowAgentImagePreview').checked;
+                prefs.agentImagePreviewSize = document.getElementById('pref-agentImagePreviewSize').value;
+                configureImagePreview();
                 prefs.detectUrls = document.getElementById('pref-detectUrls').checked;
                 prefs.showDetailedSshLabels = document.getElementById('pref-showDetailedSshLabels').checked;
                 prefs.cjkWideAmbiguous = document.getElementById('pref-cjkWideAmbiguous').checked;

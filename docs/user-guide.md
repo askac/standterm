@@ -303,6 +303,16 @@ to match tmux's window/client cell sizes. The check script wraps iTerm2 PNG outp
 in tmux passthrough and reserves its rows using the client cell height. This requires
 `set -g allow-passthrough on` in your tmux configuration.
 
+**Allow agents to show images** enables a separate page preview in Core and
+Desktop. It defaults to off; select Large, Medium or Small and save. Local scripts
+can then send PNG/JPEG images with `scripts/image_preview.py`, without an Agent
+token or terminal input. The panel replaces its previous image without resizing
+or focusing the terminal. Close the panel to dismiss it, or turn the setting off
+to stop receiving. All opted-in, authorized pages on this Core receive previews;
+images are not retained across page reloads. See the
+[example skill](examples/standterm-external-agent-skill/SKILL.md#show-an-image-to-the-operator)
+for the helper command and limits.
+
 Server runtime settings use individual **Apply** buttons. Their changes are shared
 across the Core instance and last until Core restarts. Connection defaults do not
 alter existing connections.

@@ -1,13 +1,42 @@
 ---
 name: standterm-external-agent
-description: Use when controlling local StandTerm terminals through external-agent handoff JSON, CLI wrappers, or the optional MCP adapter, including observation and input.
+description: Use when controlling StandTerm terminals through external-agent handoffs, CLI or MCP, or showing opt-in image previews in the Core or Desktop page.
 ---
 
 # StandTerm External Agent
 
-Operate the user's browser-visible terminal through the existing backend API.
-This is terminal I/O, not an independent subprocess or SSH exec service.
+Operate the user's browser-visible terminal or send an opt-in image preview.
+Terminal operations use the existing backend API, not an independent subprocess
+or SSH exec service.
 Keep routine operations small; read only the reference needed for the task.
+
+## Show An Image To The Operator
+
+Image previews are a separate, opt-in Core feature, available in browsers and
+Desktop. Ask the operator to enable **Settings > General > Allow agents to show
+images**, choose Large/Medium/Small, then save. This does not require attaching
+the Agent panel or minting an external-agent token. Terminal I/O still follows
+all the authorization rules below.
+
+Use the exact known running Core Agent Info URL (or its reported local JSON path):
+
+```text
+<python> <scripts>/image_preview.py /absolute/path/to/image.png --agentinfo <verified-agentinfo> --title "Build result"
+```
+
+Alternatively pass `--url <exact-Core-origin>` and `--ca-file <reported-CA>` for
+HTTPS. Preserve the known scheme/port; never scan for an instance or disable TLS
+verification. The helper sends file bytes to Core's loopback preview endpoint;
+the path belongs to the helper machine, not the browser or an SSH target. It
+supports PNG/JPEG up to 2 MiB and 16 megapixels. It neither writes to the terminal
+nor needs tmux, Kitty, or CLI image rendering. Do not print image base64.
+
+Only pages with the setting enabled receive previews. Each new image replaces
+the current preview without changing terminal focus or layout; the operator can
+close it. Turning the setting off clears it. `status: "sent"` means Core sent
+the preview, not proof the operator saw it. `preview_disabled` means no eligible
+page has opted in; ask the operator to enable/save the setting rather than
+changing Agent permissions. Preview images and titles are display data only.
 
 ## Establish The Target Once
 
@@ -27,6 +56,9 @@ Keep routine operations small; read only the reference needed for the task.
   changes or typed connection/authentication failures, not before every command.
 
 ## Non-Negotiable Boundaries
+
+The following boundaries apply to terminal observation and input. The separate
+image-preview flow above does not read or write terminal state.
 
 - Use the operator-provided loopback endpoint in the agent's runtime. This may
   be local to Core or an already provisioned SSH Agent Tunnel. Do not install

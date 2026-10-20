@@ -18,6 +18,8 @@ COMPILE_TARGETS = [
     'tests/access_window_smoke.py',
     'tests/server_startup_smoke.py',
     'scripts/agent_cli.py',
+    'scripts/image_preview.py',
+    'tests/image_preview_smoke.py',
     'scripts/agent_jsonl.py',
     'scripts/agent_repl.py',
     'scripts/agent_shcmd.py',
@@ -56,6 +58,7 @@ HEADLESS_SMOKE_TESTS = [
     'tests/agent_repl_smoke.py',
     'tests/agent_backend_smoke.py',
     'tests/agent_rsfile_smoke.py',
+    'tests/image_preview_smoke.py',
     'tests/static_site_smoke.py',
 ]
 
