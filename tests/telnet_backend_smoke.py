@@ -19,11 +19,14 @@ from terminal_backends import telnet
 
 def test_protocol():
     protocol = TelnetProtocol(80, 24)
-    assert bytes((IAC, WILL, BINARY)) in protocol.initial_commands()
+    assert bytes((IAC, WILL, BINARY)) not in protocol.initial_commands()
+    assert bytes((IAC, DO, BINARY)) not in protocol.initial_commands()
     assert protocol.feed(bytes((IAC,)))[0] == b''
     output, reply = protocol.feed(bytes((WILL, BINARY, IAC, DO, BINARY, IAC, DO, NAWS)))
     assert output == b''
     assert BINARY in protocol.remote_options and BINARY in protocol.local_options
+    assert protocol.encode_input(b'command\r') == b'command\r'
+    assert protocol.feed(b'result\n# ')[0] == b'result\n# '
     assert bytes((IAC, SB, NAWS, 0, 80, 0, 24, IAC, SE)) in reply
     assert protocol.feed(bytes((IAC, SB, TTYPE, 1, IAC, SE)))[1] == b''
     _, reply = protocol.feed(bytes((IAC, DO, TTYPE, IAC, SB, TTYPE, 1, IAC, SE)))
@@ -40,6 +43,20 @@ def test_protocol():
     assert protocol.feed(b'line\r')[0] == b'line'
     assert protocol.feed(b'\x00')[0] == b'\r'
     assert protocol.feed(b'next')[0] == b'next'
+
+
+def test_text_mode():
+    protocol = TelnetProtocol()
+    assert protocol.encode_input(b'command\r') == b'command\r\n'
+    assert protocol.encode_input(b'command\r\n') == b'command\r\n'
+    assert protocol.encode_input(b'command\n') == b'command\r\n'
+    for encoding in ('utf-8', 'cp950'):
+        text = '中文'.encode(encoding)
+        assert protocol.encode_input(text) == text
+        assert protocol.feed(text)[0] == text
+    assert protocol.feed(b'result\r')[0] == b'result'
+    assert protocol.feed(b'\n# ')[0] == b'\r\n# '
+    assert protocol.feed(b'progress\r\x00next')[0] == b'progress\rnext'
 
 
 def test_validation():
@@ -128,6 +145,7 @@ def test_windows_transport():
 
 if __name__ == '__main__':
     test_protocol()
+    test_text_mode()
     test_validation()
     test_socket()
     test_windows_transport()

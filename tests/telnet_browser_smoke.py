@@ -76,14 +76,17 @@ def test_live_connection(browser, url):
             conn, _ = listener.accept()
             with conn:
                 conn.settimeout(30)
-                conn.recv(1024)
+                received.append(conn.recv(1024))
                 conn.sendall(b'DEVICE READY\r\n')
                 while not done.is_set():
                     chunk = conn.recv(1024)
                     received.append(chunk)
                     if b'id' in b''.join(received):
                         input_received.set()
-                        conn.sendall(b'ID OK\r\n')
+                        # Device telnetd disables OPOST when the client requests binary output.
+                        binary_output = b'\xff\xfd\x00' in b''.join(received)
+                        newline = b'\n' if binary_output else b'\r\n'
+                        conn.sendall(b'ID OK' + newline + b'# ')
                         break
                 done.wait(3)
         finally:
@@ -111,6 +114,14 @@ def test_live_connection(browser, url):
         page.keyboard.press('Enter')
         assert input_received.wait(3), received
         assert b'id' in b''.join(received)
+        page.wait_for_function("""() => {
+            const cells = window.terminalTest.getActiveTerminalBufferCellsForTest(2);
+            return cells && cells.some(cell => cell.chars === '#');
+        }""")
+        cells = page.evaluate('() => window.terminalTest.getActiveTerminalBufferCellsForTest(2)')
+        assert cells[0]['chars'] == '#', cells[:10]
+        mirror = page.evaluate('() => window.terminalTest.getActiveTerminalBufferCellsForTest(2, true)')
+        assert mirror[0]['chars'] == '#', mirror[:10]
     finally:
         done.set()
         fixture.close_context(context)

@@ -85,7 +85,9 @@ Telnet declares `host`, `port` (default 23), and `encoding` (`utf-8`, `big5`,
 `latin-1`). WSL also declares `network_origin` when the existing Windows TCP
 helper is available. The browser hides that Advanced option elsewhere. Telnet
 handles IAC option negotiation and byte escaping before decoding display text;
-there is no local Telnet executable dependency.
+there is no local Telnet executable dependency. Connections start in text mode
+without requesting BINARY, preserving device console newline processing.
+Peer-initiated BINARY negotiation remains supported in each direction.
 
 UART detected port listing is still carried by the legacy `available_ports`
 policy key because the current UI uses a detected-port selector with a manual

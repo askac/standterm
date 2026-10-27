@@ -28,8 +28,9 @@ class TelnetProtocol:
         self.pending_cr = False
 
     def initial_commands(self):
+        # Requesting binary output can disable the device PTY's newline processing.
+        # Keep text mode by default; still accept BINARY when the peer requests it.
         return bytes((IAC, WILL, NAWS, IAC, WILL, TTYPE,
-                      IAC, WILL, BINARY, IAC, DO, BINARY,
                       IAC, WILL, SGA, IAC, DO, SGA))
 
     def window_size(self, cols, rows):
