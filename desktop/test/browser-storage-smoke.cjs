@@ -104,7 +104,8 @@ async function childPhase() {
 async function parent() {
   const electron = process.argv[2];
   if (!electron) throw new Error('Pass the Electron executable. Set the platform test venv environment first.');
-  const directory = fs.mkdtempSync(path.join(root, 'desktop', 'dist', 'browser-storage-smoke-'));
+  fs.mkdirSync(path.join(root, 'desktop', 'dist', 'artifacts'), { recursive: true });
+  const directory = fs.mkdtempSync(path.join(root, 'desktop', 'dist', 'artifacts', 'browser-storage-smoke-'));
   const profile = path.join(directory, 'profile');
   fs.mkdirSync(profile);
   let backend;

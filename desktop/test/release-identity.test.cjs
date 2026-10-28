@@ -9,8 +9,9 @@ const { createHash } = require('node:crypto');
 const { releaseIdentity, stagedReleaseIdentity, artifactNames } = require('../release-identity.cjs');
 
 function fixture(t, coreVersion = '2.11.0-dev', desktopVersion = '0.4.4') {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'standterm-release-test-'));
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'standterm-release-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const directory = path.join(root, 'artifacts', 'windows-build-test');
   const write = (name, value) => fs.writeFileSync(path.join(directory, name), typeof value === 'string' ? value : JSON.stringify(value));
   fs.mkdirSync(path.join(directory, 'bundle/core'), { recursive: true });
   write('package.json', { version: desktopVersion });
@@ -79,4 +80,24 @@ test('builder uses staged paired names without changing installer SemVer orderin
   assert.ok(semver.gt(releaseIdentity(f.directory).desktopVersion, '0.4.3'));
   assert.equal(semver.prerelease(releaseIdentity(f.directory).desktopVersion), null);
   assert.ok(semver.lt('0.4.4-2.11.0-dev', '0.4.4'));
+});
+
+test('builder separates installers from intermediate output and evidence', t => {
+  const f = fixture(t);
+  f.write('release-identity.json', releaseIdentity(f.directory));
+  for (const name of ['electron-builder.cjs', 'release-identity.cjs']) {
+    fs.copyFileSync(path.join(__dirname, '..', name), path.join(f.directory, name));
+  }
+  const builder = require(path.join(f.directory, 'electron-builder.cjs'));
+  const names = ['StandTerm-Desktop-test-Setup.exe', 'StandTerm-Desktop-test-Setup.exe.blockmap',
+    'StandTerm-Desktop-test.dmg', 'builder-debug.yml', 'StandTermDesktop.exe'];
+  fs.mkdirSync(path.join(f.directory, 'out'));
+  for (const name of names) f.write('out/' + name, name);
+  assert.deepEqual(builder.afterAllArtifactBuild({ artifactPaths: names.map(name => path.join(f.directory, 'out', name)) }), []);
+  const release = path.resolve(f.directory, '../../release', path.basename(f.directory));
+  assert.deepEqual(fs.readdirSync(release).sort(), names.slice(0, 3).sort());
+  for (const name of names.slice(0, 3)) {
+    assert.equal(fs.readFileSync(path.join(release, name), 'utf8'), name);
+    assert.equal(fs.readFileSync(path.join(f.directory, 'out', name), 'utf8'), name);
+  }
 });

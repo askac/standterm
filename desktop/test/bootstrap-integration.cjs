@@ -8,7 +8,8 @@ const { spawn } = require('node:child_process');
 async function run() {
   const [python, bundle, existingRoot] = process.argv.slice(2);
   if (!python || !bundle) throw new Error('Pass a prepared platform venv Python and staged bundle directory.');
-  const directory = await fs.mkdtemp(path.join(__dirname, '..', 'dist', 'core-runtime-smoke-'));
+  await fs.mkdir(path.join(__dirname, '..', 'dist', 'artifacts'), { recursive: true });
+  const directory = await fs.mkdtemp(path.join(__dirname, '..', 'dist', 'artifacts', 'core-runtime-smoke-'));
   const root = existingRoot || path.join(directory, 'runtime');
   async function call(prepare) {
     const args = [path.join(__dirname, '..', 'bootstrap.py'), '--bundle', bundle, '--test-root', root,

@@ -176,8 +176,9 @@ Use a clean checkout of the intended release commit: `HEAD` selects that Core
 revision, while the Desktop shell comes from the working tree. Staging shares
 the tracked-file allowlist used by Windows, excludes internal
 documents and Git state, and generates the native icon with macOS `sips` and
-`iconutil`. macOS outputs are in the stage's `out.noindex/` directory so local
-development app copies stay out of Spotlight results. The current build uses
+`iconutil`. Build stages live under `desktop/dist/artifacts/`. The final DMG is
+copied to `desktop/dist/release/<stage-name>/`; the stage's `out.noindex/` keeps
+intermediate app copies out of Spotlight results. The current build uses
 electron-builder 26's [macOS signing options](https://www.electron.build/v26/docs/mac/).
 
 The Desktop package workflow builds on native `macos-15` arm64 and
@@ -403,7 +404,7 @@ Build tools need Windows Node.js 22.12+ and Git. From the repository:
 
 ```powershell
 node desktop/stage-windows.cjs --core-ref v2.13.0
-# Change to the exact desktop/dist/windows-build-* path printed above.
+# Change to the exact desktop/dist/artifacts/windows-build-* path printed above.
 cd <printed-build-directory>
 npm ci
 npm run make:win
@@ -418,8 +419,11 @@ snapshots; these are not a claim that changes are already a release. Build stagi
 the development venv or `node_modules`. The new directory gets Windows build
 dependencies; the source checkout's Linux/WSLg `node_modules` is untouched.
 
-The `StandTerm-Desktop-0.5.1-2.13.0-win32-x64-Setup.exe` is under `out/`; the unpacked
-application is under `out/win-unpacked/`. Packaging uses
+The `StandTerm-Desktop-0.5.1-2.13.0-win32-x64-Setup.exe` is copied to
+`desktop/dist/release/<stage-name>/` after packaging. Build stages, dependencies,
+logs and test evidence belong under `desktop/dist/artifacts/`; the unpacked
+application remains in the stage's `out/win-unpacked/`. Each stage has its own
+release directory so builds with the same version do not overwrite each other. Packaging uses
 [electron-builder's assisted NSIS target](https://www.electron.build/nsis.html),
 with pinned build dependencies and scoped custom installer hooks. Squirrel
 packages and `RELEASES` metadata from older evaluations are not NSIS updates.
@@ -513,7 +517,7 @@ platform-specific Electron binaries: run `npm ci` again when switching the same
 checkout between Windows and WSL/Linux.
 
 For the local evaluation prepared on 2026-09-07,
-`desktop/dist/StandTerm WSL Evaluation.cmd` launches the extracted Windows
+`desktop/dist/artifacts/StandTerm WSL Evaluation.cmd` launches the extracted Windows
 Electron runtime with the `Ubuntu-24.04.1` repository venv. This machine-specific
 launcher and the downloaded binaries are ignored build artifacts. They do not
 depend on `/tmp`. The source-run instructions above reproduce the application
@@ -930,7 +934,7 @@ touching the user's clipboard, records and decodes WebM with a source-page pixel
 marker, and checks cancellation, concurrent stop, denied extra media requests,
 file collisions, partial-file retention and hide-to-save. Smoke runs use an
 isolated Electron user-data directory so they do not attach to a running app.
-Generated capture samples are retained under ignored `desktop/dist/`; unit-test
+Generated capture samples are retained under ignored `desktop/dist/artifacts/`; unit-test
 scratch files in the OS temporary directory are disposable and reproducible.
 
 `desktop/test/backend_smoke.py`, run through the selected project venv, separately
@@ -960,7 +964,7 @@ after HTTP verification and page load to check the native recovery path before
 Desktop declares itself ready. These tests use isolated profiles and do not
 replace native macOS or installer lifecycle acceptance.
 `desktop/test/bootstrap-integration.cjs <prepared-platform-venv-python> <staged-bundle>`
-creates a fresh test runtime under ignored `desktop/dist/`, installs dependencies
+creates a fresh test runtime under ignored `desktop/dist/artifacts/`, installs dependencies
 and verifies reuse. It requires internet access. Keep its stdin open while setup
 runs; parent-pipe EOF is the cancellation signal.
 

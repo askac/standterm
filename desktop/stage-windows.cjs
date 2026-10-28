@@ -43,8 +43,9 @@ const shellFiles = [
   'release-identity.cjs',
   'core-source.cjs', 'backend-stop.cjs',
 ];
-fs.mkdirSync(path.join(__dirname, 'dist'), { recursive: true });
-const stage = fs.mkdtempSync(path.join(__dirname, 'dist', `${platform}-build-`));
+const artifacts = path.join(__dirname, 'dist', 'artifacts');
+fs.mkdirSync(artifacts, { recursive: true });
+const stage = fs.mkdtempSync(path.join(artifacts, `${platform}-build-`));
 function copy(source, destination) {
   if (!fs.lstatSync(source).isFile()) throw new Error(`Not a regular input file: ${source}`);
   fs.mkdirSync(path.dirname(destination), { recursive: true });
