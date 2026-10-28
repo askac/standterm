@@ -1274,6 +1274,7 @@
                             <div class="settings-row"><label for="pref-cursorStyle" data-i18n="settings.appearance.cursor_style">Cursor style</label>
                                 <select id="pref-cursorStyle"><option value="block" data-i18n="settings.appearance.cursor_block">Block</option><option value="underline" data-i18n="settings.appearance.cursor_underline">Underline</option><option value="bar" data-i18n="settings.appearance.cursor_bar">Bar</option></select>
                             </div>
+                            <div class="settings-row"><label for="pref-cursorBlink" data-i18n="settings.appearance.cursor_blink">Blink cursor</label><input type="checkbox" id="pref-cursorBlink"></div>
                             <div class="settings-row"><label for="pref-showTerminalTitleInStatusBar" data-i18n="settings.appearance.terminal_title">Show application title in status bar</label><input type="checkbox" id="pref-showTerminalTitleInStatusBar"></div>
                         </fieldset>
                         <fieldset class="settings-fieldset" id="font-recommendations-fieldset">
@@ -1902,6 +1903,7 @@
             fontWeight: isApplePlatform() ? '500' : 'normal',
             colorScheme: 'vintage',
             cursorStyle: 'block',
+            cursorBlink: true,
             showTerminalTitleInStatusBar: true,
             splitAutoFitWidth: true,
             agentAccessMintMode: AGENT_MODE_DIRECT_ACTIVE,
@@ -7264,7 +7266,7 @@
 
                 const term = new Terminal({
                     allowProposedApi: true,
-                    cursorBlink: true,
+                    cursorBlink: prefs.cursorBlink,
                     cursorStyle: prefs.cursorStyle,
                     fontFamily: getTerminalFontFace(),
                     fontSize: prefs.fontSize,
@@ -7704,6 +7706,7 @@
                         if (!state || !state.term) return null;
                         return cloneForTest({
                             cursorStyle: state.term.options.cursorStyle,
+                            cursorBlink: state.term.options.cursorBlink,
                             fontFamily: state.term.options.fontFamily,
                             fontSize: state.term.options.fontSize,
                             fontWeight: state.term.options.fontWeight,
@@ -12671,6 +12674,7 @@
                 document.getElementById('pref-fontSize').value = prefs.fontSize;
                 document.getElementById('pref-fontWeight').value = prefs.fontWeight;
                 document.getElementById('pref-cursorStyle').value = prefs.cursorStyle;
+                document.getElementById('pref-cursorBlink').checked = prefs.cursorBlink;
                 document.getElementById('pref-showTerminalTitleInStatusBar').checked = prefs.showTerminalTitleInStatusBar;
                 syncSshProfileEditorContext();
                 renderSshProfileManager();
@@ -12929,11 +12933,13 @@
                 prefs.fontSize = normalizeFontSize(document.getElementById('pref-fontSize').value, prefs.fontSize);
                 prefs.fontWeight = normalizeFontWeight(document.getElementById('pref-fontWeight').value, prefs.fontWeight);
                 prefs.cursorStyle = normalizeCursorStyle(document.getElementById('pref-cursorStyle').value, prefs.cursorStyle);
+                prefs.cursorBlink = document.getElementById('pref-cursorBlink').checked;
                 prefs.showTerminalTitleInStatusBar = document.getElementById('pref-showTerminalTitleInStatusBar').checked;
                 savePrefs(prefs);
                 terminals.forEach(state => {
                     configureTerminalImages(state);
                     state.term.options.cursorStyle = prefs.cursorStyle;
+                    state.term.options.cursorBlink = prefs.cursorBlink;
                     state.term.options.fontFamily = getTerminalFontFace();
                     state.term.options.fontSize = prefs.fontSize;
                     state.term.options.fontWeight = prefs.fontWeight;

@@ -506,6 +506,7 @@ settings.appearance.weight_medium	Medium (500)	Medium (500)	中等（500）	Font
 settings.appearance.weight_semibold	Semibold (600)	Semibold (600)	半粗體（600）	Font weight option display label.		Preserve option value 600 and numeric weight; display text does not determine the selected value.	translation-reviewed	templates/index.html
 settings.appearance.weight_bold	Bold (700)	Bold (700)	粗體（700）	Font weight option display label.		Preserve option value bold and numeric weight; display text does not determine the selected value.	translation-reviewed	templates/index.html
 settings.appearance.cursor_style	Cursor type	Cursor style	游標樣式	Selects the terminal cursor shape, not its current position.		Display data only. Preserve preference keys, typed values, and save timing.	translation-reviewed	templates/index.html
+settings.appearance.cursor_blink		Blink cursor	游標閃爍	Toggles terminal cursor blinking; enabled by default and applied when preferences are saved.		Use the checkbox boolean value; display text must not control behavior.	translation-reviewed	templates/index.html
 settings.appearance.cursor_block	Block	Block	方塊	Cursor style option display label.		Keep option value block unchanged.	translation-reviewed	templates/index.html
 settings.appearance.cursor_underline	Underline	Underline	底線	Cursor style option display label.		Keep option value underline unchanged.	translation-reviewed	templates/index.html
 settings.appearance.cursor_bar	Bar	Bar	直線	Cursor style option display label.		Keep option value bar unchanged.	translation-reviewed	templates/index.html
