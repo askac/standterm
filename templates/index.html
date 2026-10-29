@@ -7273,6 +7273,10 @@
                     fontWeight: prefs.fontWeight,
                     theme: SCHEMES[prefs.colorScheme] || SCHEMES.vintage
                 });
+                term.onWriteParsed(() => {
+                    // DEC mode 12 from programs such as tmux must not replace the saved preference.
+                    if (term.options.cursorBlink !== prefs.cursorBlink) term.options.cursorBlink = prefs.cursorBlink;
+                });
                 enableUnicode11WidthProvider(term);
                 applyCjkWidthPreference(term);
                 const fitAddon = (typeof FitAddon !== 'undefined') ? new FitAddon.FitAddon() : null;

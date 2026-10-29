@@ -3892,6 +3892,57 @@ def test_cursor_type_setting_updates_existing_and_new_terminals(browser, access_
         close_context(context)
 
 
+def test_cursor_blink_preference_survives_tmux_modes(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        check(page.evaluate('window.terminalTest.getActiveTerminalOptions().renderer') == 'webgl',
+              'cursor blink test requires the visible WebGL renderer')
+        page.evaluate('window.terminalTest.captureTerminalIoForTest()')
+
+        def check_cursor(controls, blink):
+            page.evaluate('text => window.terminalTest.writeTerminalOutput(text)',
+                          controls + '\x1b[2J\x1b[H\x1b[?25h')
+            page.evaluate('window.terminalTest.captureTerminalIoForTest()')
+            page.locator('.terminal-pane.active .xterm-helper-textarea').focus()
+            page.wait_for_function('window.terminalTest.activeTerminalHasFocus()')
+            visible = page.evaluate("""async () => {
+                const canvas = [...document.querySelectorAll('.terminal-pane.active .xterm-screen canvas')].at(-1);
+                const gl = canvas.getContext('webgl2');
+                const cols = window.terminalTest.getActiveTerminalBufferCellsForTest(0).length;
+                const cellWidth = canvas.width / cols;
+                const cursor = new Uint8Array(4), background = new Uint8Array(4), samples = [];
+                for (let index = 0; index < 18; index++) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                    gl.readPixels(Math.floor(cellWidth / 2), canvas.height - 5, 1, 1,
+                        gl.RGBA, gl.UNSIGNED_BYTE, cursor);
+                    gl.readPixels(Math.floor(cellWidth * 2.5), canvas.height - 5, 1, 1,
+                        gl.RGBA, gl.UNSIGNED_BYTE, background);
+                    samples.push(cursor.some((value, channel) => value !== background[channel]));
+                }
+                return samples;
+            }""")
+            expected = {True, False} if blink else {True}
+            check(set(visible) == expected, f'cursor pixels did not match blink={blink}: {visible}')
+            check(page.evaluate('window.terminalTest.getActiveTerminalOptions().cursorBlink') == blink,
+                  'terminal output overwrote the cursor blink preference')
+
+        check_cursor('', True)
+        # tmux enters the alternate screen and disables DEC private mode 12.
+        check_cursor('\x1b[?1049h\x1b[?12l', True)
+        # Its exit cleanup disables blinking again before restoring the main screen.
+        check_cursor('\x1b[?12l\x1b[?1049l', True)
+        check_cursor('\x1b[?12;2004l', True)
+
+        page.click('#quick-settings')
+        page.click('.settings-nav-item[data-tab="appearance"]')
+        page.uncheck('#pref-cursorBlink')
+        page.click('#settings-save')
+        check_cursor('\x1b[?12h', False)
+        check_cursor('\x1b[?12;2004h', False)
+    finally:
+        close_context(context)
+
+
 def test_webgl_bar_cursor_is_visible_at_first_column(browser, access_url):
     context, page = new_page(browser, access_url)
     try:
@@ -5542,6 +5593,7 @@ def main():
         test_webgl_renderer_closes_block_glyph_row_gaps,
         test_unicode_provider_keeps_emoji_text_in_separate_cells,
         test_cursor_type_setting_updates_existing_and_new_terminals,
+        test_cursor_blink_preference_survives_tmux_modes,
         test_webgl_bar_cursor_is_visible_at_first_column,
         test_osc_title_updates_fixed_status_column,
         test_settings_server_tab_loads_readonly_snapshot,
