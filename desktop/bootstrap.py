@@ -120,6 +120,9 @@ def prepare(bundle, root, data, payloads=None):
                 raise SetupError('unsafe_runtime_path')
             with owner.open('x') as output:
                 json.dump({'id': data['id']}, output)
+        ready = root / '.desktop-ready.json'
+        runtime.check_path(ready)
+        ready.unlink(missing_ok=True)
         emit('progress', stage='copy')
         for name, digest in data['files'].items():
             destination = root / name
@@ -203,6 +206,12 @@ def prepare(bundle, root, data, payloads=None):
         ready = root / '.desktop-ready.json'
         if linked(ready):
             raise SetupError('unsafe_runtime_path')
+        files_record = root / '.standterm-files.json'
+        runtime.check_path(files_record)
+        with tempfile.NamedTemporaryFile(dir=root, prefix='.manifest-', delete=False) as output:
+            temporary = Path(output.name)
+            output.write(json.dumps(data).encode('utf-8'))
+        os.replace(temporary, files_record)
         ready.write_text(json.dumps({'id': data['id']}), encoding='utf-8')
 
 

@@ -98,9 +98,31 @@ def main():
     standterm.ensure_session_cleanup_task()
     standterm.write_external_agentinfo_files(base_url=origin)
 
+    def prune_previous_runtimes():
+        try:
+            spec = importlib.util.spec_from_file_location('standterm_cleanup', Path(__file__).with_name('runtime_cleanup.py'))
+            cleanup = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(cleanup)
+            results = cleanup.prune_obsolete(root)
+            if results:
+                print(json.dumps({'type': 'runtime_retention', 'results': results}), file=sys.stderr, flush=True)
+        except Exception as error:
+            # Retention is best effort and never prevents a healthy Core launch.
+            print(f'Runtime retention deferred: {type(error).__name__}', file=sys.stderr, flush=True)
+
     def watch_parent():
-        # Both clean shutdown and a crashed parent close this private pipe.
-        sys.stdin.buffer.read()
+        acknowledged = False
+        # The owning shell acknowledges authenticated startup and page loading.
+        # EOF still terminates sessions after a clean shutdown or parent crash.
+        for line in iter(lambda: sys.stdin.buffer.readline(1024), b''):
+            try:
+                command = json.loads(line)
+            except (ValueError, UnicodeError):
+                continue
+            if command == {'type': 'standterm_desktop_window_ready', 'version': 1} and not acknowledged:
+                acknowledged = True
+                if core_bundle_id and args.git_core is None and sys.platform != 'darwin':
+                    threading.Thread(target=prune_previous_runtimes, daemon=True).start()
         for token in list(standterm.active_sessions):
             standterm.close_all_terminal_bridges(token)
         standterm.cleanup_external_agent_runtime_artifacts()

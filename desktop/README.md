@@ -366,7 +366,30 @@ uninstall command is executed automatically, and no Git checkout is migrated.
 If the old entry is gone but legacy files remain, inspect them before removing
 anything. Do not use a live installation as an isolated lifecycle test.
 
-### Optional environment cleanup
+### Automatic runtime retention (Windows and WSL)
+
+After Desktop verifies its owned backend and loads the Core page, it keeps the
+current bundled runtime and the most recently prepared predecessor. It also
+retains every runtime still holding its lifetime lease. Older verified, idle
+environments have their private venv permanently removed to reclaim disk space.
+New installations record their bundle manifest, allowing retention to remove
+only listed Core files whose hashes still match. Modified and unlisted files,
+including `authorized/`, certificates and logs, stay in their original location;
+this does not migrate their data into a newer runtime.
+
+Older installations without a saved manifest keep all Core files and lose only
+their owned idle venv. Small directory remnants and their lock files remain, so
+directory count does not indicate the number of complete environments retained.
+Unowned, legacy environments without the lease protocol, linked paths and
+unavailable files are retained. Partial deletion invalidates readiness and is
+retried on a later successful launch. A failed setup or startup does not trigger
+retention. Starting an old installer again can rebuild its pruned dependencies.
+
+Retention is limited to bundled `runtimes/` in the selected Windows/WSL mode.
+Git workspaces, restored Core directories, recovery archives, other WSL
+distributions and macOS are unchanged. Source checkouts never trigger it.
+
+### Optional uninstall environment cleanup
 
 Uninstall **retains environments by default**. An unchecked optional component
 can move verified, idle venvs to a recoverable folder. Internal NSIS upgrades and

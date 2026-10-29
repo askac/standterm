@@ -6,7 +6,7 @@ const path = require('node:path');
 const SKILL_DIRS = ['standterm-external-agent-skill', 'standterm-file-transfer', 'standterm-privileged-hitl'];
 const REQUIRED = ['app.py', 'core_version.py', 'requirements.txt', 'README.md', 'run.sh', 'run.bat',
   'run.command', 'run_at_wsl.bat', 'run_at_wsl+screen.bat', 'install.sh', 'install.ps1', 'install.command',
-  'LICENSE', 'THIRD-PARTY-NOTICES.md', 'desktop/backend.py', 'desktop/runtime.py', 'docs/agent_socket_contract.md',
+  'LICENSE', 'THIRD-PARTY-NOTICES.md', 'desktop/backend.py', 'desktop/runtime.py', 'desktop/runtime_cleanup.py', 'docs/agent_socket_contract.md',
   'docs/backend_plugin_contract.md', 'docs/venv_prompt.txt', 'docs/ui_copy_review.tsv',
   'static/js/standterm-i18n.js', 'static/js/standterm-messages.js',
   ...['cli', 'jsonl', 'repl', 'shcmd', 'scp', 'type', 'rsfile', 'mcp'].map(name => `scripts/agent_${name}.py`),
