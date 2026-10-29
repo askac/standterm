@@ -100,10 +100,10 @@ def main():
 
     def prune_previous_runtimes():
         try:
-            spec = importlib.util.spec_from_file_location('standterm_cleanup', Path(__file__).with_name('runtime_cleanup.py'))
-            cleanup = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(cleanup)
-            results = cleanup.prune_obsolete(root)
+            spec = importlib.util.spec_from_file_location('standterm_upgrade', Path(__file__).with_name('runtime_upgrade.py'))
+            upgrade = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(upgrade)
+            results = upgrade.activate(root)
             if results:
                 print(json.dumps({'type': 'runtime_retention', 'results': results}), file=sys.stderr, flush=True)
         except Exception as error:

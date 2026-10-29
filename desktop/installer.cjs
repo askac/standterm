@@ -12,12 +12,15 @@ function installerRequest(argv) {
   const prepare = flags.filter(value => /^--installer-prepare=(windows|both|wsl)$/.test(value));
   const uninstall = flags.includes('--installer-uninstall');
   const cleanup = flags.includes('--installer-cleanup-venvs');
+  const cleanArtifacts = flags.filter(value => /^--installer-clean-artifacts=[01]$/.test(value));
   const parents = flags.filter(value => /^--installer-parent=[1-9][0-9]{0,9}$/.test(value));
   if (parents.length !== 1 || prepare.length + Number(uninstall) !== 1 || (cleanup && !uninstall)
-      || flags.length !== 2 + Number(cleanup)) throw new Error('Invalid installer request.');
+      || cleanArtifacts.length > 1 || (uninstall && cleanArtifacts.length)
+      || flags.length !== 2 + Number(cleanup) + cleanArtifacts.length) throw new Error('Invalid installer request.');
   const parent = Number(parents[0].split('=')[1]);
   if (parent > 0xffffffff) throw new Error('Invalid installer parent.');
   return { action: uninstall ? 'uninstall' : 'prepare', cleanup, parent,
+    cleanArtifacts: !cleanArtifacts.length || cleanArtifacts[0].endsWith('=1'),
     modes: uninstall ? [] : prepare[0].endsWith('=both') ? ['windows', 'wsl'] : [prepare[0].split('=')[1]] };
 }
 
@@ -67,12 +70,21 @@ function watchInstaller(parent, onLost, launch = spawn) {
 async function performMaintenance(request, { prepare, cleanup, shortcuts, ensureAlive, report }) {
   ensureAlive();
   if (request.action === 'prepare') {
+    const prepared = [];
     for (const mode of request.modes) {
-      await prepare(mode, { installer: true });
+      prepared.push(await prepare(mode, { installer: true }));
+      ensureAlive();
+    }
+    for (const command of prepared) {
+      await command?.finalize?.('migrate');
       ensureAlive();
     }
     await shortcuts(request.modes);
     ensureAlive();
+    for (const command of prepared) {
+      await command?.finalize?.(request.cleanArtifacts === false ? 'keep' : 'clean');
+      ensureAlive();
+    }
     return;
   }
   if (request.cleanup) {
@@ -113,9 +125,10 @@ async function runInstaller(request) {
     const ensureAlive = () => { if (!watcher.alive()) throw new Error('The owning installer exited.'); };
     await performMaintenance(request, {
       prepare: async (mode, options) => {
-        await preparePackagedBackend(mode, options);
+        const command = await preparePackagedBackend(mode, options);
         ensureAlive();
         await (await installedStore(modeProfile(mode), process.resourcesPath, app.getVersion())).reset();
+        return command;
       }, cleanup: cleanupManagedVenvs, ensureAlive,
       shortcuts: selected => applyShortcuts(shell, shortcutPlan(process.execPath, app.getPath('desktop'),
         path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs'), selected)),

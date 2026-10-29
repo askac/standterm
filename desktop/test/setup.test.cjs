@@ -100,7 +100,7 @@ async function fixture({ consent = true, pythonMissing = false, ready = false, n
       else if (args.includes('-c')) bytes = Buffer.from(JSON.stringify({ type: 'python_info',
         executable: macos ? '/opt/local/bin/python3' : 'C:\\Python\\python.exe', platform: macos ? 'darwin' : 'win32',
         machine, bits: 64, venv: true, version: [3, 12] }) + '\n');
-      else if (args.includes('--prepare') || ready) bytes = Buffer.from(JSON.stringify({
+      else if (args.includes('--prepare') || args.includes('--finish-install') || ready) bytes = Buffer.from(JSON.stringify({
         type: 'ready', bundle_id: id, root: native ? 'C:\\Runtime' : '/home/test/runtime',
         python: native ? 'C:\\Runtime\\tools\\.venv_win\\Scripts\\python.exe'
           : `/home/test/runtime/tools/${macos && !wrongVenv ? '.venv_macos' : '.venv_wsl'}/bin/python`,
@@ -161,7 +161,7 @@ test('setup requires explicit consent before installing and stores only non-secr
   assert.ok(command.args.includes('Ubuntu Test'));
   assert.equal(f.calls.filter(args => args.includes('--prepare')).length, 1);
   const saved = JSON.parse(await fs.readFile(path.join(f.root, 'launcher.json'), 'utf8'));
-  assert.deepEqual(saved, { version: 1, distro: 'Ubuntu Test' });
+  assert.deepEqual(saved, { version: 1, distro: 'Ubuntu Test', bundleId: 'a'.repeat(64), previousBundle: null });
 });
 
 test('cancel or missing Python never starts installation or stores a ready preference', async () => {
@@ -209,7 +209,7 @@ test('native Windows uses its own interpreter and never starts WSL', async () =>
   assert.equal(command.cwd, 'C:\\Runtime');
   assert.equal(f.calls.some(args => args.includes('--distribution')), false);
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(f.root, 'launcher.json'), 'utf8')),
-    { version: 1, python: 'C:\\Python\\python.exe' });
+    { version: 1, python: 'C:\\Python\\python.exe', bundleId: 'a'.repeat(64), previousBundle: null });
 });
 
 test('missing native Python does not fall back to WSL or install dependencies', async () => {
@@ -228,6 +228,33 @@ test('installer preparation writes the fixed mode profile, not its maintenance u
     const other = path.join(f.root, 'StandTermDesktopEvaluation', native ? 'wsl' : 'windows', 'launcher.json');
     await assert.rejects(fs.stat(other), { code: 'ENOENT' });
   }
+});
+
+test('migration captures the prior bundled identity before installer source reset and retains it on retry', async () => {
+  const f = await fixture({ native: true, ready: true });
+  const profile = path.join(f.root, 'StandTermDesktopEvaluation', 'windows');
+  await fs.mkdir(profile, { recursive: true });
+  await fs.writeFile(path.join(profile, 'core-source.json'), JSON.stringify({ version: 1,
+    source: 'bundled', identity: `0.5.4:${'b'.repeat(64)}`, pending: null }));
+  let command = await f.run({ installer: true });
+  assert.equal(f.calls.some(args => args.includes('--finish-install')), false);
+  await fs.writeFile(path.join(profile, 'core-source.json'), JSON.stringify({ version: 1,
+    source: 'bundled', identity: `0.5.5:${'a'.repeat(64)}`, pending: null }));
+  await command.finalize('migrate');
+  command = await f.run({ installer: true });
+  await command.finalize('keep');
+  for (const args of f.calls.filter(args => args.includes('--finish-install'))) {
+    assert.equal(args[args.indexOf('--previous-bundle') + 1], 'b'.repeat(64));
+  }
+  // A different installer following an interrupted candidate still uses the
+  // original successful source, never the last prepared bundle.
+  const launcher = path.join(profile, 'launcher.json');
+  const saved = JSON.parse(await fs.readFile(launcher, 'utf8'));
+  await fs.writeFile(launcher, JSON.stringify({ ...saved, bundleId: 'c'.repeat(64) }));
+  command = await f.run({ installer: true });
+  await command.finalize('keep');
+  assert.equal(f.calls.at(-1)[f.calls.at(-1).indexOf('--previous-bundle') + 1], 'b'.repeat(64));
+  assert.equal(f.calls.at(-1).at(-1), 'keep');
 });
 
 test('cleanup confirmation defaults to keep; approval passes only bounded runtime IDs', async () => {

@@ -52,7 +52,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue((venv / 'keep.bin').exists())
 
     def test_legacy_unowned_and_modified_markers_are_retained(self):
-        for marker in [None, {'id': 'wrong', 'lease': 1}, {'id': 'a' * 64, 'lease': 2}]:
+        for marker in [None, {'id': 'wrong', 'lease': 1}, {'id': 'a' * 64, 'lease': 99}]:
             base, root, venv = self.fixture(marker=False)
             if marker:
                 (root / '.standterm-venv.json').write_text(json.dumps(marker))
@@ -159,17 +159,26 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse((base / 'venv-recovery').exists())
 
 
+spec = importlib.util.spec_from_file_location('upgrade', Path(__file__).parents[1] / 'runtime_upgrade.py')
+upgrade = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(upgrade)
+
+
 @unittest.skipIf(sys.platform == 'darwin', 'Automatic retention awaits native macOS qualification')
 class RetentionTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix='standterm-retention-test-')
+        self.temporary = tempfile.TemporaryDirectory(prefix='standterm-upgrade-test-')
         self.addCleanup(self.temporary.cleanup)
         self.base = Path(self.temporary.name).resolve()
-        patcher = patch.object(runtime, 'runtime_base', return_value=self.base)
+        for module in [runtime, upgrade.runtime]:
+            patcher = patch.object(module, 'runtime_base', return_value=self.base)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        patcher = patch.object(upgrade, 'cleanup', side_effect=cleanup.prune_obsolete)
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def fixture(self, version, manifest=True):
+    def fixture(self, version, manifest=True, lease=2):
         payload = f'version = {version}\n'.encode()
         files = {'app.py': hashlib.sha256(payload).hexdigest()}
         identity = hashlib.sha256(json.dumps(files, separators=(',', ':')).encode()).hexdigest()
@@ -179,152 +188,235 @@ class RetentionTests(unittest.TestCase):
         (venv / 'dependency.bin').write_bytes(b'rebuildable dependency' * 100)
         (root / 'app.py').write_bytes(payload)
         for name, value in [('.standterm-bundle.json', {'id': identity}),
-                            ('.standterm-venv.json', {'id': identity, 'lease': 1}),
-                            ('.desktop-ready.json', {'id': identity})]:
-            (root / name).write_text(json.dumps(value))
-        (root / '.setup.lock').touch()
+                            ('.standterm-venv.json', {'id': identity, 'lease': lease}),
+                            ('.desktop-ready.json', {'id': identity}),
+                            ('.standterm-migration.json', {'version': 1, 'destination': identity, 'source': None,
+                                'schema': upgrade.DATA_SCHEMA, 'files': {}, 'complete': True}),
+                            ('.standterm-retention.json', {'version': 1, 'cleanArtifacts': True})]:
+            upgrade.atomic_json(root / name, value)
+        if lease == 1:
+            (root / '.setup.lock').touch()
         if manifest:
-            (root / '.standterm-files.json').write_text(json.dumps({'version': 1, 'id': identity, 'files': files}))
-        os.utime(root / '.desktop-ready.json', ns=(version * 1000000000, version * 1000000000))
+            upgrade.atomic_json(root / '.standterm-files.json', {'version': 1, 'id': identity, 'files': files})
         return root
 
-    def test_retains_current_and_previous_and_preserves_all_user_files(self):
+    def browsers(self, root, authorized=True):
+        data = {'browsers': [{'browser_id': 'a' * 64, 'public_key': 'fixture key', 'authorized_at': 1}] if authorized else []}
+        upgrade.atomic_json(root / 'authorized/browsers.json', data)
+        return data
+
+    def migrate(self, current, previous):
+        upgrade.atomic_json(self.base / 'active-runtime.json', {'version': 1, 'id': previous.name})
+        upgrade.migrate(current)
+
+    def test_migrate_readback_then_remove_all_old_runtimes(self):
         old, previous, current = [self.fixture(version) for version in range(1, 4)]
-        for relative in ['authorized/credentials.json', 'certs/private.key', 'notes.txt', 'setup.log']:
-            target = old / relative
-            target.parent.mkdir(exist_ok=True)
-            target.write_text('user data')
-        inode = (old / '.setup.lock').stat().st_ino
+        expected = self.browsers(previous)
+        self.migrate(current, previous)
+        self.assertTrue(previous.exists())
+        self.assertEqual(upgrade.read_data(current), {'browsers.json': expected})
+        upgrade.finish(current, True)
+        self.assertEqual(list((self.base / 'runtimes').iterdir()), [current])
+        self.assertTrue(runtime.venv_path(current).is_dir())
+        self.assertEqual(runtime.read_marker(self.base / 'active-runtime.json')['id'], current.name)
+        self.assertEqual(cleanup.prune_obsolete(current), [])
+        # Only authorization data is retained, never venvs or unchanged Core.
+        self.assertFalse(any((self.base / 'retained-data').rglob('dependency.bin')))
+        self.assertFalse(any((self.base / 'retained-data').rglob('app.py')))
+
+    def test_unchecked_migrates_and_persists_across_startup(self):
+        previous, current = [self.fixture(version) for version in [1, 2]]
+        self.browsers(previous)
+        self.migrate(current, previous)
+        upgrade.finish(current, False)
+        upgrade.activate(current)
+        self.assertTrue(previous.exists())
+        self.assertEqual(upgrade.read_data(current), upgrade.read_data(previous))
+        self.assertEqual(cleanup.prune_obsolete(current), [])
+
+    def test_interrupted_install_cannot_enable_cleanup_before_final_choice(self):
+        previous, current = [self.fixture(version) for version in [1, 2]]
+        (current / '.standterm-retention.json').unlink()
+        self.browsers(previous)
+        self.migrate(current, previous)
+        upgrade.activate(current)
+        self.assertTrue(previous.exists())
+        self.assertEqual(cleanup.prune_obsolete(current), [])
+
+    def test_empty_latest_authorization_never_revives_historical_grants(self):
+        historical, previous, current = [self.fixture(version) for version in [1, 2, 3]]
+        self.browsers(historical)
+        expected = self.browsers(previous, False)
+        self.migrate(current, previous)
+        self.assertEqual(upgrade.read_data(current), {'browsers.json': expected})
+        upgrade.finish(current, True)
+        self.assertFalse(historical.exists())
+
+    def test_only_explicit_predecessor_and_no_pairing_request_migration(self):
+        previous, current = [self.fixture(version) for version in [1, 2]]
+        self.browsers(previous)
+        upgrade.atomic_json(previous / 'authorized/browser-authorize_fixture.json', {'type': 'request'})
+        upgrade.migrate(current)
+        self.assertEqual(upgrade.read_data(current), {})
+        upgrade.migrate(current, previous.name)
+        self.assertEqual(upgrade.read_data(current), upgrade.read_data(previous))
+        self.assertFalse((current / 'authorized/browser-authorize_fixture.json').exists())
+
+    def test_schema_malformed_data_and_conflicts_leave_source_untouched(self):
+        previous, current = [self.fixture(version) for version in [1, 2]]
+        self.browsers(previous)
+        for path, invalid in [('authorized/browsers.json', {'browsers': [{}]}),
+                              ('.standterm-data-schema.json', {'version': 99})]:
+            target = previous / path
+            original = target.read_bytes() if target.exists() else None
+            upgrade.atomic_json(target, invalid)
+            with self.assertRaises(upgrade.MigrationError):
+                self.migrate(current, previous)
+            self.assertTrue(runtime.venv_path(previous).exists())
+            if original is None:
+                target.unlink()
+            else:
+                target.write_bytes(original)
+        self.browsers(current, False)
+        with self.assertRaises(upgrade.MigrationError):
+            self.migrate(current, previous)
+        self.assertTrue(previous.exists())
+
+    def test_pending_copy_retries_and_completed_copy_preserves_destination_changes(self):
+        previous, current = [self.fixture(version) for version in [1, 2]]
+        self.browsers(previous)
+        original = upgrade.atomic_json
+        def fail(path, value):
+            if path == current / '.standterm-data-schema.json':
+                raise OSError('Fixture interruption after copying')
+            original(path, value)
+        with patch.object(upgrade, 'atomic_json', side_effect=fail), self.assertRaises(OSError):
+            self.migrate(current, previous)
+        self.assertFalse(runtime.read_marker(current / '.standterm-migration.json')['complete'])
+        self.migrate(current, previous)
+        self.browsers(current, False)
+        upgrade.migrate(current)
+        self.assertEqual(upgrade.read_data(current)['browsers.json'], {'browsers': []})
+
+    def test_source_revocation_after_copy_is_rechecked_before_cleanup(self):
+        previous, current = [self.fixture(version) for version in [1, 2]]
+        self.browsers(previous)
+        self.migrate(current, previous)
+        self.browsers(previous, False)
+        with self.assertRaises(upgrade.MigrationError):
+            upgrade.finish(current, True)
+        self.assertEqual(runtime.read_marker(self.base / 'active-runtime.json')['id'], previous.name)
+        with self.assertRaises(upgrade.MigrationError):
+            upgrade.activate(current)
         result = cleanup.prune_obsolete(current)
-        self.assertEqual(result, [{'id': old.name, 'status': 'pruned'}])
-        self.assertFalse(runtime.venv_path(old).exists())
-        self.assertFalse((old / 'app.py').exists())
-        self.assertFalse((old / '.desktop-ready.json').exists())
-        self.assertEqual((old / '.setup.lock').stat().st_ino, inode)
-        for relative in ['authorized/credentials.json', 'certs/private.key', 'notes.txt', 'setup.log']:
-            self.assertEqual((old / relative).read_text(), 'user data')
-        for root in [previous, current]:
-            self.assertTrue(runtime.venv_path(root).is_dir())
-            self.assertTrue((root / 'app.py').is_file())
-        self.assertFalse((self.base / 'venv-recovery').exists())
-        self.assertEqual(cleanup.prune_obsolete(current)[0]['status'], 'pruned')
+        self.assertEqual(result[0]['reason'], 'source_data_changed')
+        self.assertTrue(previous.exists())
+        upgrade.migrate(current)
+        self.assertEqual(upgrade.read_data(current)['browsers.json'], {'browsers': []})
+        upgrade.finish(current, True)
+        self.assertFalse(previous.exists())
 
-    def test_legacy_core_and_modified_source_are_preserved(self):
-        legacy = self.fixture(1, manifest=False)
-        modified = self.fixture(2)
-        (modified / 'app.py').write_text('user modification')
-        self.fixture(3)
-        current = self.fixture(4)
-        cleanup.prune_obsolete(current)
-        self.assertTrue((legacy / 'app.py').exists())
-        self.assertEqual((modified / 'app.py').read_text(), 'user modification')
-        self.assertFalse(runtime.venv_path(legacy).exists())
-        self.assertFalse(runtime.venv_path(modified).exists())
+    def test_both_source_and_destination_are_locked_during_copy(self):
+        previous, current = [self.fixture(version) for version in [1, 2]]
+        self.browsers(previous)
+        original = upgrade.atomic_json
+        def observed(path, value):
+            if path == current / 'authorized/browsers.json':
+                for root in [previous, current]:
+                    with self.assertRaises(runtime.RuntimeBusy), runtime.lease(root):
+                        pass
+            original(path, value)
+        with patch.object(upgrade, 'atomic_json', side_effect=observed):
+            self.migrate(current, previous)
 
-    def test_busy_unverified_and_cleanup_interpreter_are_retained(self):
-        busy, unverified, interpreter, previous, current = [self.fixture(version) for version in range(1, 6)]
-        (unverified / '.standterm-venv.json').write_text('{}')
+    def test_busy_unknown_lease_and_current_interpreter_are_retained(self):
+        busy, unknown, interpreter, current = [self.fixture(version) for version in range(1, 5)]
+        (unknown / '.standterm-venv.json').unlink()
         with runtime.lease(busy), patch.object(sys, 'prefix', str(runtime.venv_path(interpreter))):
             result = cleanup.prune_obsolete(current)
         self.assertIn({'id': busy.name, 'status': 'retained', 'reason': 'in_use'}, result)
-        for root in [busy, unverified, interpreter, previous, current]:
-            self.assertTrue(runtime.venv_path(root).is_dir())
+        for root in [busy, unknown, interpreter, current]:
+            self.assertTrue(root.exists())
 
-    def test_partial_deletion_is_not_a_fallback_and_retries(self):
-        old, previous, current = [self.fixture(version) for version in range(1, 4)]
-        def fail_after_deleting_one_file(venv):
-            (venv / 'dependency.bin').unlink()
-            raise PermissionError('Fixture locked file')
-        with patch.object(cleanup.shutil, 'rmtree', side_effect=fail_after_deleting_one_file):
-            self.assertEqual(cleanup.prune_obsolete(current)[0]['status'], 'retained')
-        self.assertTrue(runtime.venv_path(old).exists())
-        self.assertFalse((old / '.desktop-ready.json').exists())
+    def test_unique_modified_files_archived_and_pristine_legacy_payload_verified(self):
+        legacy = self.fixture(1, manifest=False)
+        modified = self.fixture(2)
+        current = self.fixture(3)
+        (modified / 'app.py').write_text('user modification')
+        for relative in ['authorized/unknown.json', 'certs/private.key', 'notes.txt']:
+            target = modified / relative
+            target.parent.mkdir(exist_ok=True)
+            target.write_text('private data')
         cleanup.prune_obsolete(current)
-        self.assertFalse(runtime.venv_path(old).exists())
-        self.assertTrue(runtime.venv_path(previous).is_dir())
+        self.assertFalse(legacy.exists())
+        self.assertFalse(modified.exists())
+        preserved = list((self.base / 'retained-data').rglob('app.py'))
+        self.assertEqual(len(preserved), 1)
+        self.assertEqual(preserved[0].read_text(), 'user modification')
+        self.assertEqual(len(list((self.base / 'retained-data').rglob('private.key'))), 1)
 
-    def test_more_than_32_roots_are_reclaimed_independently(self):
-        roots = [self.fixture(version) for version in range(1, 42)]
-        (roots[0] / '.standterm-bundle.json').write_text('invalid')
-        cleanup.prune_obsolete(roots[-1])
-        self.assertTrue(runtime.venv_path(roots[0]).exists())
-        self.assertEqual(sum(runtime.venv_path(root).is_dir() for root in roots), 3)
+    def test_partial_deletion_retries_retired_path_and_preserves_recreated_original(self):
+        old, current = [self.fixture(version) for version in [1, 2]]
+        original = cleanup.shutil.rmtree
+        def fail(path):
+            if path.name == runtime.venv_path(old).name:
+                (path / 'dependency.bin').unlink(missing_ok=True)
+                raise PermissionError('Fixture interruption')
+            original(path)
+        with patch.object(cleanup.shutil, 'rmtree', side_effect=fail):
+            self.assertEqual(cleanup.prune_obsolete(current)[0]['status'], 'retained')
+        self.assertFalse(old.exists())
+        old.mkdir()
+        (old / 'keep.txt').write_text('new owner')
+        cleanup.prune_obsolete(current)
+        self.assertEqual((old / 'keep.txt').read_text(), 'new owner')
+        self.assertEqual(list((self.base / 'retired-runtimes').iterdir()), [])
+        self.assertEqual(list((self.base / 'retirement-records').iterdir()), [])
 
-    def test_invalid_manifests_preserve_the_environment(self):
-        old, previous, current = [self.fixture(version) for version in range(1, 4)]
-        for content in ['[]', '{}', 'x' * (1024 * 1024 + 1)]:
-            (old / '.standterm-files.json').write_text(content)
+    def test_invalid_manifest_and_linked_paths_do_not_delete_external_data(self):
+        old, current = [self.fixture(version) for version in [1, 2]]
+        manifest = old / '.standterm-files.json'
+        saved = manifest.read_bytes()
+        for value in ['{}', '[]', 'x' * (1024 * 1024 + 1)]:
+            manifest.write_text(value)
             cleanup.prune_obsolete(current)
             self.assertTrue(runtime.venv_path(old).exists())
-            self.assertTrue((old / 'app.py').exists())
-
-    def test_manifest_traversal_is_rejected_even_with_matching_digest(self):
-        old = self.fixture(1)
-        self.fixture(2)
-        current = self.fixture(3)
-        files = {'../outside': hashlib.sha256(b'private').hexdigest()}
-        identity = hashlib.sha256(json.dumps(files, separators=(',', ':')).encode()).hexdigest()
-        forged = old.with_name(identity)
-        old.rename(forged)
-        for name, value in [('.standterm-bundle.json', {'id': identity}),
-                            ('.standterm-venv.json', {'id': identity, 'lease': 1}),
-                            ('.desktop-ready.json', {'id': identity}),
-                            ('.standterm-files.json', {'version': 1, 'id': identity, 'files': files})]:
-            (forged / name).write_text(json.dumps(value))
-        os.utime(forged / '.desktop-ready.json', ns=(1000000000, 1000000000))
-        cleanup.prune_obsolete(current)
-        self.assertTrue(runtime.venv_path(forged).exists())
-
-    def test_linked_core_parent_and_venv_are_not_followed(self):
-        old = self.fixture(1)
-        self.fixture(2)
-        current = self.fixture(3)
-        venv = runtime.venv_path(old)
+        manifest.write_bytes(saved)
         external = self.base / 'external'
-        venv.rename(external)
+        runtime.venv_path(old).rename(external)
         try:
-            venv.symlink_to(external, target_is_directory=True)
+            runtime.venv_path(old).symlink_to(external, target_is_directory=True)
         except OSError:
+            external.rename(runtime.venv_path(old))
             self.skipTest('Symlink creation unavailable')
         cleanup.prune_obsolete(current)
-        self.assertTrue((external / 'dependency.bin').is_file())
-        venv.unlink()
-        external.rename(venv)
-        (old / 'app.py').unlink()
-        (old / 'app.py').symlink_to(external)
-        cleanup.prune_obsolete(current)
-        self.assertTrue(venv.is_dir())
-
-    def test_reprepared_runtime_after_inventory_is_retained(self):
-        old = self.fixture(1)
-        self.fixture(2)
-        current = self.fixture(3)
-        lease = runtime.lease
-        def changed(root, **kwargs):
-            os.utime(root / '.desktop-ready.json', None)
-            return lease(root, **kwargs)
-        with patch.object(runtime, 'lease', side_effect=changed):
-            cleanup.prune_obsolete(current)
-        self.assertTrue(runtime.venv_path(old).is_dir())
+        self.assertTrue((external / 'dependency.bin').exists())
 
     def test_source_git_restored_macos_and_unready_current_never_prune(self):
-        old = self.fixture(1)
-        self.fixture(2)
-        current = self.fixture(3)
-        for root in [self.base / 'checkout', self.base / 'git-core' / 'repo', self.base / 'restored' / current.name]:
+        old, current = [self.fixture(version) for version in [1, 2]]
+        for root in [self.base / 'checkout', self.base / 'git-core/repo', self.base / 'restored' / current.name]:
             self.assertEqual(cleanup.prune_obsolete(root), [])
         with patch.object(sys, 'platform', 'darwin'):
             self.assertEqual(cleanup.prune_obsolete(current), [])
         (current / '.desktop-ready.json').write_text('{}')
         self.assertEqual(cleanup.prune_obsolete(current), [])
-        self.assertTrue(runtime.venv_path(old).is_dir())
+        self.assertTrue(old.exists())
+
+    def test_legacy_locks_are_honored_and_windows_keeps_only_pruned_stub(self):
+        old, current = self.fixture(1, lease=1), self.fixture(2)
+        with runtime.file_lease(old / '.setup.lock'):
+            self.assertEqual(cleanup.prune_obsolete(current)[0]['reason'], 'in_use')
+        result = cleanup.prune_obsolete(current)
+        self.assertFalse(runtime.venv_path(old).exists())
+        self.assertEqual(old.exists(), sys.platform == 'win32')
+        self.assertEqual(result[0]['status'], 'pruned_legacy' if sys.platform == 'win32' else 'removed')
 
     def test_owned_backend_waits_for_parent_window_ack_and_still_handles_eof(self):
         old = self.fixture(1)
         self.fixture(2)
         current = self.fixture(3)
         (current / 'desktop').mkdir()
-        for name in ['backend.py', 'runtime.py', 'runtime_cleanup.py']:
+        for name in ['backend.py', 'runtime.py', 'runtime_cleanup.py', 'runtime_upgrade.py']:
             shutil.copyfile(Path(__file__).parents[1] / name, current / 'desktop' / name)
         # Override only this disposable backend's managed root, never HOME or a
         # live installation. Run the real backend, lease and retention code.
@@ -379,33 +471,27 @@ class RetentionTests(unittest.TestCase):
             if not acknowledge:
                 self.assertTrue(runtime.venv_path(old).exists())
 
-    @unittest.skipUnless(sys.platform == 'win32', 'Native Windows file locking')
-    def test_windows_locked_dependency_retries_without_touching_user_data(self):
+    @unittest.skipUnless(sys.platform == 'win32', 'Native Windows locked-file handling')
+    def test_windows_open_dependency_is_retained_then_retried(self):
         import ctypes
-        old = self.fixture(1)
-        previous = self.fixture(2)
-        current = self.fixture(3)
+        old, current = [self.fixture(version) for version in [1, 2]]
         dependency = runtime.venv_path(old) / 'dependency.bin'
         create = ctypes.windll.kernel32.CreateFileW
         create.restype = ctypes.c_void_p
         handle = create(str(dependency), 0x80000000, 1, None, 3, 0, None)
         self.assertNotEqual(handle, ctypes.c_void_p(-1).value)
         try:
-            result = cleanup.prune_obsolete(current)
-            self.assertEqual(result[0]['status'], 'retained')
-            self.assertTrue(dependency.exists())
-            self.assertFalse((old / '.desktop-ready.json').exists())
-            self.assertTrue(runtime.venv_path(previous).exists())
+            self.assertEqual(cleanup.prune_obsolete(current)[0]['status'], 'retained')
+            self.assertTrue(any(self.base.rglob('dependency.bin')))
         finally:
             ctypes.windll.kernel32.CloseHandle(ctypes.c_void_p(handle))
         cleanup.prune_obsolete(current)
-        self.assertFalse(runtime.venv_path(old).exists())
+        self.assertFalse(old.exists())
+        self.assertEqual(list((self.base / 'retired-runtimes').iterdir()), [])
 
     @unittest.skipUnless(sys.platform == 'win32', 'Native Windows junction handling')
     def test_windows_nested_junction_does_not_delete_external_files(self):
-        old = self.fixture(1)
-        self.fixture(2)
-        current = self.fixture(3)
+        old, current = [self.fixture(version) for version in [1, 2]]
         external = self.base / 'external'
         external.mkdir()
         (external / 'keep.txt').write_text('external data')
@@ -413,7 +499,7 @@ class RetentionTests(unittest.TestCase):
         subprocess.run(['cmd.exe', '/d', '/c', 'mklink', '/J', str(junction), str(external)],
                        check=True, capture_output=True)
         cleanup.prune_obsolete(current)
-        self.assertFalse(runtime.venv_path(old).exists())
+        self.assertFalse(old.exists())
         self.assertEqual((external / 'keep.txt').read_text(), 'external data')
 
 

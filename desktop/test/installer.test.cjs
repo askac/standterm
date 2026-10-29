@@ -52,6 +52,45 @@ test('uninstall retains environments by default and reports unavailable cleanup 
   assert.deepEqual(events, ['windows', 'wsl', []]);
 });
 
+test('clean artifacts defaults on and can be disabled only by a typed install option', () => {
+  const flags = ['--installer-prepare=both', '--installer-parent=123'];
+  assert.equal(installerRequest(flags).cleanArtifacts, true);
+  assert.equal(installerRequest([...flags, '--installer-clean-artifacts=0']).cleanArtifacts, false);
+  assert.equal(installerRequest([...flags, '--installer-clean-artifacts=1']).cleanArtifacts, true);
+  for (const extra of [['--installer-clean-artifacts=true'],
+    ['--installer-clean-artifacts=0', '--installer-clean-artifacts=1']]) {
+    assert.throws(() => installerRequest([...flags, ...extra]));
+  }
+  assert.throws(() => installerRequest(['--installer-uninstall', '--installer-parent=123', '--installer-clean-artifacts=1']));
+});
+
+test('every mode migrates before cleanup and unchecked cleanup still migrates', async () => {
+  for (const cleanArtifacts of [true, false]) {
+    const events = [];
+    await performMaintenance({ action: 'prepare', modes: ['windows', 'wsl'], cleanArtifacts }, {
+      ensureAlive() {},
+      prepare: async mode => { events.push(`prepare:${mode}`); return { finalize: async phase => events.push(`${phase}:${mode}`) }; },
+      shortcuts: async () => events.push('shortcuts'),
+    });
+    const phase = cleanArtifacts ? 'clean' : 'keep';
+    assert.deepEqual(events, ['prepare:windows', 'prepare:wsl', 'migrate:windows', 'migrate:wsl',
+      'shortcuts', `${phase}:windows`, `${phase}:wsl`]);
+  }
+});
+
+test('migration failure in either mode prevents all cleanup', async () => {
+  const events = [];
+  await assert.rejects(performMaintenance({ action: 'prepare', modes: ['windows', 'wsl'] }, {
+    ensureAlive() {},
+    prepare: async mode => ({ finalize: async phase => {
+      events.push(`${phase}:${mode}`);
+      if (mode === 'wsl') throw new Error('Incompatible Core data');
+    } }),
+    shortcuts: async () => events.push('shortcuts'),
+  }), /Incompatible Core/);
+  assert.deepEqual(events, ['migrate:windows', 'migrate:wsl']);
+});
+
 test('installer loss prevents subsequent mode setup and success publication', async () => {
   let alive = true;
   const events = [];

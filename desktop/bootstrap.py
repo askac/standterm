@@ -116,7 +116,7 @@ def prepare(bundle, root, data, payloads=None):
             if linked(owner) or json.loads(owner.read_text()) != {'id': data['id']}:
                 raise SetupError('unsafe_runtime_path')
         else:
-            if set(root.iterdir()) != {lock_path}:
+            if set(root.iterdir()) - {lock_path}:
                 raise SetupError('unsafe_runtime_path')
             with owner.open('x') as output:
                 json.dump({'id': data['id']}, output)
@@ -146,7 +146,8 @@ def prepare(bundle, root, data, payloads=None):
         marker = root / '.standterm-venv.json'
         if 'desktop/runtime.py' in data['files']:
             runtime.check_path(marker)
-            marker.write_text(json.dumps({'id': data['id'], 'lease': 1}), encoding='utf-8')
+            marker.write_text(json.dumps({'id': data['id'],
+                'lease': 2 if runtime.managed_identity(root) else 1}), encoding='utf-8')
         # All children get their own process group. Pipe EOF cancels an install
         # if the Windows parent is closed or crashes; no sudo/system pip is used.
         canceled = threading.Event()
@@ -242,6 +243,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--bundle', type=Path, required=True)
     parser.add_argument('--prepare', action='store_true')
+    parser.add_argument('--previous-bundle')
+    parser.add_argument('--finish-install', choices=['migrate', 'clean', 'keep'])
     # Only the test harness uses this override; the desktop UI has no path input.
     parser.add_argument('--test-root', type=Path)
     args = parser.parse_args()
@@ -255,6 +258,29 @@ def main():
     if not check_ready(root, data):
         emit('needs_setup', bundle_id=data['id'])
         return
+    if args.finish_install:
+        def watch_finalization_parent():
+            while os.read(sys.stdin.fileno(), 4096):
+                pass
+            # Atomic migration/retirement records make every interrupted phase
+            # retryable. Stop before the next mutation if the owner disappears.
+            os._exit(1)
+
+        threading.Thread(target=watch_finalization_parent, daemon=True).start()
+        spec = importlib.util.spec_from_file_location('standterm_upgrade', Path(__file__).with_name('runtime_upgrade.py'))
+        upgrade = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(upgrade)
+        try:
+            if args.finish_install == 'migrate':
+                upgrade.migrate(root, args.previous_bundle)
+            else:
+                upgrade.finish(root, args.finish_install == 'clean')
+        except upgrade.MigrationError as error:
+            raise SetupError('migration_failed') from error
+        except upgrade.runtime.RuntimeBusy as error:
+            raise SetupError('setup_busy') from error
+        except upgrade.runtime.UnsafeRuntime as error:
+            raise SetupError('unsafe_runtime_path') from error
     emit('ready', bundle_id=data['id'], root=str(root), python=str(environment_python(root)))
 
 

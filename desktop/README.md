@@ -366,28 +366,41 @@ uninstall command is executed automatically, and no Git checkout is migrated.
 If the old entry is gone but legacy files remain, inspect them before removing
 anything. Do not use a live installation as an isolated lifecycle test.
 
-### Automatic runtime retention (Windows and WSL)
+### Runtime migration and cleanup (Windows and WSL)
 
-After Desktop verifies its owned backend and loads the Core page, it keeps the
-current bundled runtime and the most recently prepared predecessor. It also
-retains every runtime still holding its lifetime lease. Older verified, idle
-environments have their private venv permanently removed to reclaim disk space.
-New installations record their bundle manifest, allowing retention to remove
-only listed Core files whose hashes still match. Modified and unlisted files,
-including `authorized/`, certificates and logs, stay in their original location;
-this does not migrate their data into a newer runtime.
+The installer checks **Clean artifacts** by default. It prepares every selected
+mode, migrates compatible data from that mode's last installed/started bundled
+runtime, verifies the copy, and then removes older idle runtimes. Unchecking the
+option still migrates data and persists the choice; later launches also retain
+older environments. Normal launch retries permitted cleanup after Desktop has
+verified its owned backend and loaded the Core page.
 
-Older installations without a saved manifest keep all Core files and lose only
-their owned idle venv. Small directory remnants and their lock files remain, so
-directory count does not indicate the number of complete environments retained.
-Unowned, legacy environments without the lease protocol, linked paths and
-unavailable files are retained. Partial deletion invalidates readiness and is
-retried on a later successful launch. A failed setup or startup does not trigger
-retention. Starting an old installer again can rebuild its pruned dependencies.
+Migration uses an explicit bundle identity, never directory timestamps or the
+first nonempty authorization directory. The first upgrade can use the existing
+mode profile's bundled Core identity. Browser authorizations and version 1
+session recovery credentials are checked against the supported data schema.
+Missing/empty authorization data remains empty; historical grants are never
+merged. Process-specific pairing requests are not migrated. Unknown schemas,
+malformed credentials, conflicting destination data or a busy predecessor stop
+migration and preserve the source. Atomic receipts support interrupted retries,
+and cleanup rechecks source data before removing the predecessor.
 
-Retention is limited to bundled `runtimes/` in the selected Windows/WSL mode.
-Git workspaces, restored Core directories, recovery archives, other WSL
-distributions and macOS are unchanged. Source checkouts never trigger it.
+Cleanup removes reproducible venvs and unchanged Core files. A saved manifest,
+or a reconstructed manifest matching an older bundle's digest, identifies Core
+files. Remaining historical data, certificates and modified/unlisted files are
+moved to `retained-data/` for manual recovery, not activated as new credentials.
+This directory contains retained data, not copies of complete environments.
+Git workspaces, restored Core directories, other recovery archives, other WSL
+distributions and macOS are unchanged. Source checkouts never trigger cleanup.
+
+New runtimes use stable locks under `runtime-locks/`, outside disposable runtime
+directories. An atomic rename and durable `retirement-records/` entry make
+partial removal retryable without touching a recreated original path. Busy,
+unowned, linked or pre-lease environments are retained. Windows runtimes made
+by older versions may retain a minimal lock stub when the old in-directory lock
+prevents renaming; their verified payloads are still reclaimed. The tiny stable
+lock files are intentionally never removed. Restarting an older installer can
+rebuild its pruned dependencies.
 
 ### Optional uninstall environment cleanup
 

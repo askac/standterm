@@ -57,6 +57,7 @@ copy(path.join(__dirname, 'bootstrap.py'), path.join(stage, 'bundle', 'bootstrap
 copy(path.join(__dirname, 'windows_job.py'), path.join(stage, 'bundle', 'windows_job.py'));
 copy(path.join(__dirname, 'runtime.py'), path.join(stage, 'bundle', 'runtime.py'));
 copy(path.join(__dirname, 'runtime_cleanup.py'), path.join(stage, 'bundle', 'runtime_cleanup.py'));
+copy(path.join(__dirname, 'runtime_upgrade.py'), path.join(stage, 'bundle', 'runtime_upgrade.py'));
 copy(path.join(__dirname, 'core_manager.py'), path.join(stage, 'bundle', 'core_manager.py'));
 copy(path.join(__dirname, 'backend.py'), path.join(stage, 'bundle', 'backend.py'));
 writeIcon(path.join(stage, 'standterm.ico'));

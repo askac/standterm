@@ -11,6 +11,8 @@
   Var StandTermWindows
   Var StandTermBoth
   Var StandTermWSL
+  Var StandTermCleanArtifacts
+  Var StandTermCleanCheckbox
 !endif
 Var StandTermParent
 Var StandTermExit
@@ -82,6 +84,7 @@ Var StandTermExit
     SetErrorLevel 6
     Quit
   standtermNoLegacy:
+  StrCpy $StandTermCleanArtifacts "1"
   ReadRegStr $StandTermMode HKCU "${ST_MODE_KEY}" "Mode"
   ${If} $StandTermMode != "windows"
   ${AndIf} $StandTermMode != "both"
@@ -115,12 +118,22 @@ Var StandTermExit
     ${Else}
       ${NSD_Check} $StandTermWindows
     ${EndIf}
-    ${NSD_CreateLabel} 0 110u 100% 45u "Next, select the WSL distribution when applicable and approve dependency installation. Internet access is needed. Keep the preparation window open (minimizing is safe). All selected environments must succeed before shortcuts are created."
+    ${NSD_CreateCheckbox} 0 106u 100% 14u "Clean artifacts - remove older runtime files after migration"
+    Pop $StandTermCleanCheckbox
+    ${If} $StandTermCleanArtifacts == "1"
+      ${NSD_Check} $StandTermCleanCheckbox
+    ${EndIf}
+    ${NSD_CreateLabel} 0 126u 100% 32u "Compatible data is migrated before old files are removed. Uncheck to keep older environments. All selected environments must finish preparation. Keep the preparation window open."
     Pop $0
     nsDialogs::Show
   FunctionEnd
 
   Function StandTermModeLeave
+    StrCpy $StandTermCleanArtifacts "0"
+    ${NSD_GetState} $StandTermCleanCheckbox $0
+    ${If} $0 == ${BST_CHECKED}
+      StrCpy $StandTermCleanArtifacts "1"
+    ${EndIf}
     StrCpy $StandTermMode "windows"
     ${NSD_GetState} $StandTermBoth $0
     ${If} $0 == ${BST_CHECKED}
@@ -138,7 +151,7 @@ Var StandTermExit
   StrCpy $StandTermParent $0
   DetailPrint "Preparing selected Core environments. Keep the preparation window open."
   ClearErrors
-  ExecWait '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --installer-prepare=$StandTermMode --installer-parent=$StandTermParent' $StandTermExit
+  ExecWait '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --installer-prepare=$StandTermMode --installer-parent=$StandTermParent --installer-clean-artifacts=$StandTermCleanArtifacts' $StandTermExit
   ${If} ${Errors}
     StrCpy $StandTermExit 1
   ${EndIf}
