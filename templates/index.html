@@ -73,6 +73,8 @@
         .terminal-viewport { height: 100%; width: 100%; overflow-x: auto; overflow-y: hidden; }
         .terminal-surface { height: 100%; width: 100%; }
         .terminal-surface > .xterm { box-sizing: border-box; padding: 2px; }
+        .terminal-cursor-hint { display: none; position: absolute; width: 6px; height: 6px; border-radius: 50%; box-shadow: 0 0 0 1px #0008, 0 0 0 2px #fff6; pointer-events: none; z-index: 6; }
+        .xterm.focus .terminal-cursor-hint:not([hidden]) { display: block; }
         .terminal-pane-heading { display: none; }
         #terminal.split-view { display: grid !important; }
         .terminal-pane.split-pane { display: block; position: relative; container-type: inline-size; outline: 1px solid #444; outline-offset: -1px; }
@@ -1275,6 +1277,8 @@
                                 <select id="pref-cursorStyle"><option value="block" data-i18n="settings.appearance.cursor_block">Block</option><option value="underline" data-i18n="settings.appearance.cursor_underline">Underline</option><option value="bar" data-i18n="settings.appearance.cursor_bar">Bar</option></select>
                             </div>
                             <div class="settings-row"><label for="pref-cursorBlink" data-i18n="settings.appearance.cursor_blink">Blink cursor</label><input type="checkbox" id="pref-cursorBlink"></div>
+                            <div class="settings-row"><label for="pref-cursorHint" data-i18n="settings.appearance.cursor_hint">Show cursor hint</label><input type="checkbox" id="pref-cursorHint"></div>
+                            <div class="settings-row"><label for="pref-cursorHintColor" data-i18n="settings.appearance.cursor_hint_color">Cursor hint color</label><input type="color" id="pref-cursorHintColor"></div>
                             <div class="settings-row"><label for="pref-showTerminalTitleInStatusBar" data-i18n="settings.appearance.terminal_title">Show application title in status bar</label><input type="checkbox" id="pref-showTerminalTitleInStatusBar"></div>
                         </fieldset>
                         <fieldset class="settings-fieldset" id="font-recommendations-fieldset">
@@ -1904,6 +1908,8 @@
             colorScheme: 'vintage',
             cursorStyle: 'block',
             cursorBlink: true,
+            cursorHint: false,
+            cursorHintColor: '#0a84ff',
             showTerminalTitleInStatusBar: true,
             splitAutoFitWidth: true,
             agentAccessMintMode: AGENT_MODE_DIRECT_ACTIVE,
@@ -1950,6 +1956,9 @@
             const text = String(value).trim();
             return CURSOR_STYLE_OPTIONS.includes(text) ? text : fallback;
         }
+        function normalizeCursorHintColor(value, fallback = PREF_DEFAULTS.cursorHintColor) {
+            return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value.toLowerCase() : fallback;
+        }
         function normalizeAgentAccessMintMode(value, fallback = PREF_DEFAULTS.agentAccessMintMode) {
             const text = String(value).trim();
             return AGENT_ACCESS_MINT_MODE_OPTIONS.includes(text) ? text : fallback;
@@ -1966,6 +1975,8 @@
         prefs.fontSize = normalizeFontSize(prefs.fontSize);
         prefs.fontWeight = normalizeFontWeight(prefs.fontWeight);
         prefs.cursorStyle = normalizeCursorStyle(prefs.cursorStyle);
+        prefs.cursorHint = prefs.cursorHint === true;
+        prefs.cursorHintColor = normalizeCursorHintColor(prefs.cursorHintColor);
         prefs.agentAccessMintMode = normalizeAgentAccessMintMode(prefs.agentAccessMintMode);
 
         const UNICODE11_WIDTH_PROVIDER_VERSION = '11';
@@ -4195,6 +4206,44 @@
                 enableUnicode11WidthProvider(term);
                 applyCjkWidthPreference(term);
                 return term;
+            }
+
+            function createCursorHint(term) {
+                const screen = term.element.querySelector('.xterm-screen');
+                const hint = document.createElement('span');
+                hint.className = 'terminal-cursor-hint';
+                hint.setAttribute('aria-hidden', 'true');
+                hint.hidden = true;
+                screen.appendChild(hint);
+                const update = () => {
+                    const buffer = term.buffer.active;
+                    const row = buffer.baseY + buffer.cursorY - buffer.viewportY;
+                    // xterm 6.0 has no public DECTCEM visibility property.
+                    hint.hidden = !prefs.cursorHint || !!term._core?.coreService?.isCursorHidden
+                        || row < 0 || row >= term.rows;
+                    if (hint.hidden) return;
+                    const width = parseFloat(screen.style.width) / term.cols;
+                    const height = parseFloat(screen.style.height) / term.rows;
+                    if (!(width > 0 && height > 0)) {
+                        hint.hidden = true;
+                        return;
+                    }
+                    hint.style.left = Math.min(buffer.cursorX, term.cols - 1) * width + 'px';
+                    hint.style.top = Math.max(0, row * height - 6) + 'px';
+                    hint.style.backgroundColor = prefs.cursorHintColor;
+                };
+                const listeners = [term.onRender(update), term.onWriteParsed(update), term.onScroll(update)];
+                const observer = new ResizeObserver(update);
+                observer.observe(screen);
+                update();
+                return {
+                    update,
+                    dispose() {
+                        for (const listener of listeners) listener.dispose();
+                        observer.disconnect();
+                        hint.remove();
+                    }
+                };
             }
 
             function enableWebglRenderer(state) {
@@ -6433,6 +6482,7 @@
                 if ('fontSize' in result) result.fontSize = normalizeFontSize(result.fontSize);
                 if ('fontWeight' in result) result.fontWeight = normalizeFontWeight(result.fontWeight);
                 if ('cursorStyle' in result) result.cursorStyle = normalizeCursorStyle(result.cursorStyle);
+                if ('cursorHintColor' in result) result.cursorHintColor = normalizeCursorHintColor(result.cursorHintColor);
                 if ('agentAccessMintMode' in result) {
                     result.agentAccessMintMode = normalizeAgentAccessMintMode(result.agentAccessMintMode);
                 }
@@ -7323,6 +7373,7 @@
                     titleEl,
                     agentCountdownEl,
                     term,
+                    cursorHint: createCursorHint(term),
                     fitAddon,
                     webglAddon: null,
                     webLinksAddon: null,
@@ -7415,6 +7466,7 @@
                 state.mirrorImages.dispose();
                 if (state.webglAddon) state.webglAddon.dispose();
                 if (state.agentTerminalMirror) state.agentTerminalMirror.dispose();
+                state.cursorHint.dispose();
                 state.term.dispose();
                 state.container.remove();
                 state.tabEl.remove();
@@ -12679,6 +12731,9 @@
                 document.getElementById('pref-fontWeight').value = prefs.fontWeight;
                 document.getElementById('pref-cursorStyle').value = prefs.cursorStyle;
                 document.getElementById('pref-cursorBlink').checked = prefs.cursorBlink;
+                document.getElementById('pref-cursorHint').checked = prefs.cursorHint;
+                document.getElementById('pref-cursorHintColor').value = prefs.cursorHintColor;
+                document.getElementById('pref-cursorHintColor').disabled = !prefs.cursorHint;
                 document.getElementById('pref-showTerminalTitleInStatusBar').checked = prefs.showTerminalTitleInStatusBar;
                 syncSshProfileEditorContext();
                 renderSshProfileManager();
@@ -12913,6 +12968,9 @@
                     if (item.dataset.tab === 'diagnostics') renderConnectionDiagnostics();
                 };
             });
+            document.getElementById('pref-cursorHint').onchange = event => {
+                document.getElementById('pref-cursorHintColor').disabled = !event.target.checked;
+            };
             document.getElementById('settings-save').onclick = () => {
                 resetFontRecommendations();
                 prefs.uiLanguage = window.StandTermI18n.normalizeLocale(document.getElementById('pref-uiLanguage').value);
@@ -12938,12 +12996,15 @@
                 prefs.fontWeight = normalizeFontWeight(document.getElementById('pref-fontWeight').value, prefs.fontWeight);
                 prefs.cursorStyle = normalizeCursorStyle(document.getElementById('pref-cursorStyle').value, prefs.cursorStyle);
                 prefs.cursorBlink = document.getElementById('pref-cursorBlink').checked;
+                prefs.cursorHint = document.getElementById('pref-cursorHint').checked;
+                prefs.cursorHintColor = normalizeCursorHintColor(document.getElementById('pref-cursorHintColor').value, prefs.cursorHintColor);
                 prefs.showTerminalTitleInStatusBar = document.getElementById('pref-showTerminalTitleInStatusBar').checked;
                 savePrefs(prefs);
                 terminals.forEach(state => {
                     configureTerminalImages(state);
                     state.term.options.cursorStyle = prefs.cursorStyle;
                     state.term.options.cursorBlink = prefs.cursorBlink;
+                    state.cursorHint.update();
                     state.term.options.fontFamily = getTerminalFontFace();
                     state.term.options.fontSize = prefs.fontSize;
                     state.term.options.fontWeight = prefs.fontWeight;
