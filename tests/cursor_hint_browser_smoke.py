@@ -15,15 +15,15 @@ def write(page, text):
     page.evaluate('text => window.terminalTest.writeTerminalOutput(text)', text)
 
 
-def expect_position(page, column, row):
-    page.wait_for_function("""({column, row}) => {
+def expect_position(page, column, row, triangle=False):
+    page.wait_for_function("""({column, row, triangle}) => {
         const hint = document.querySelector('.terminal-pane.active .terminal-cursor-hint');
         const screen = hint.parentElement;
         const tab = window.terminalTest.getTerminalTabsState().tabs.find(tab => tab.active);
         return !hint.hidden && getComputedStyle(hint).display !== 'none'
-            && Math.abs(parseFloat(hint.style.left) - column * parseFloat(screen.style.width) / tab.cols) < 0.1
-            && Math.abs(parseFloat(hint.style.top) - Math.max(0, row * parseFloat(screen.style.height) / tab.rows - 6)) < 0.1;
-    }""", arg={'column': column, 'row': row})
+            && Math.abs(parseFloat(hint.style.left) - (triangle ? column * parseFloat(screen.style.width) / tab.cols - 5 : Math.max(0, column * parseFloat(screen.style.width) / tab.cols - 3))) < 0.1
+            && Math.abs(parseFloat(hint.style.top) - Math.max(0, (row + (triangle ? 1 : 0)) * parseFloat(screen.style.height) / tab.rows - (triangle ? 0 : 7))) < 0.1;
+    }""", arg={'column': column, 'row': row, 'triangle': triangle})
 
 
 def test_cursor_hint_preferences_and_geometry(browser, url):
@@ -36,8 +36,15 @@ def test_cursor_hint_preferences_and_geometry(browser, url):
         open_appearance(page)
         assert not page.is_checked('#pref-cursorHint')
         assert page.is_disabled('#pref-cursorHintColor')
+        swatches = page.locator('#cursor-hint-palette button')
+        assert swatches.count() == 16
+        assert swatches.evaluate_all('items => items.every(item => item.disabled)')
         page.check('#pref-cursorHint')
+        swatches.nth(14).click()
+        assert page.input_value('#pref-cursorHintColor') == '#00ffff'
+        assert swatches.nth(14).get_attribute('aria-pressed') == 'true'
         page.fill('#pref-cursorHintColor', '#ff5500')
+        assert page.locator('#cursor-hint-palette button[aria-pressed="true"]').count() == 0
         page.uncheck('#pref-cursorBlink')
         page.click('#settings-save')
         page.locator(AREA).focus()
@@ -46,6 +53,9 @@ def test_cursor_hint_preferences_and_geometry(browser, url):
         assert page.locator(HINT).evaluate("e => getComputedStyle(e).backgroundColor") == 'rgb(255, 85, 0)'
         assert page.locator(HINT).get_attribute('aria-hidden') == 'true'
         assert page.locator(HINT).evaluate("e => getComputedStyle(e).pointerEvents") == 'none'
+        assert page.locator(HINT).evaluate("e => getComputedStyle(e).opacity") == '0.9'
+        assert page.locator(HINT).evaluate("e => getComputedStyle(e).backgroundImage") == 'none'
+        assert page.locator(HINT).evaluate("e => getComputedStyle(e).boxShadow") == 'none'
         assert not page.evaluate('window.terminalTest.getActiveTerminalOptions().cursorBlink')
         # The hint stays visible while the normal cursor is steady or blinking.
         page.wait_for_timeout(1200)
@@ -92,10 +102,30 @@ def test_cursor_hint_preferences_and_geometry(browser, url):
         page.wait_for_function('window.terminalTest.getTerminalTabsState().tabs.length === 1')
         assert page.locator('.terminal-cursor-hint').count() == 1, 'Closed tab retained its hint'
 
+        open_appearance(page)
+        page.select_option('#pref-cursorHintStyle', 'triangle')
+        page.click('#settings-save')
+        page.locator(AREA).focus()
+        write(page, '\x1b[4;9H')
+        expect_position(page, 8, 3, triangle=True)
+        assert page.locator(HINT).get_attribute('data-style') == 'triangle'
+        write(page, '\x1b[6;20H')
+        expect_position(page, 19, 5, triangle=True)
+        # The upward tip meets the cursor's lower-left corner, including screen edges.
+        last_row = page.evaluate('window.terminalTest.getTerminalTabsState().tabs.find(tab => tab.active).rows')
+        write(page, f'\x1b[{last_row};1H')
+        expect_position(page, 0, last_row - 1, triangle=True)
+        assert page.locator(HINT).evaluate("""hint => {
+            const bounds = hint.getBoundingClientRect();
+            const viewport = hint.closest('.terminal-viewport').getBoundingClientRect();
+            return bounds.left >= viewport.left && bounds.bottom <= viewport.bottom;
+        }"""), 'Triangle clipped at the first column or last row'
+
         page.reload(wait_until='domcontentloaded')
         page.wait_for_function('!!window.terminalTest')
         open_appearance(page)
         assert page.is_checked('#pref-cursorHint')
+        assert page.input_value('#pref-cursorHintStyle') == 'triangle'
         assert page.input_value('#pref-cursorHintColor') == '#ff5500'
         page.uncheck('#pref-cursorHint')
         page.click('#settings-save')

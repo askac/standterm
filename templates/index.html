@@ -73,7 +73,9 @@
         .terminal-viewport { height: 100%; width: 100%; overflow-x: auto; overflow-y: hidden; }
         .terminal-surface { height: 100%; width: 100%; }
         .terminal-surface > .xterm { box-sizing: border-box; padding: 2px; }
-        .terminal-cursor-hint { display: none; position: absolute; width: 6px; height: 6px; border-radius: 50%; box-shadow: 0 0 0 1px #0008, 0 0 0 2px #fff6; pointer-events: none; z-index: 6; }
+        .terminal-surface > .xterm.cursor-hint-triangle { padding-left: 7px; padding-bottom: 10px; }
+        .terminal-cursor-hint { display: none; position: absolute; width: 8px; height: 8px; border-radius: 50%; opacity: 0.9; pointer-events: none; z-index: 6; }
+        .terminal-cursor-hint[data-style="triangle"] { width: 10px; height: 8px; border-radius: 0; clip-path: polygon(50% 0, 0 100%, 100% 100%); }
         .xterm.focus .terminal-cursor-hint:not([hidden]) { display: block; }
         .terminal-pane-heading { display: none; }
         #terminal.split-view { display: grid !important; }
@@ -409,6 +411,11 @@
         .settings-theme-cursor { display: inline-block; width: 0.6em; height: 1.1em; vertical-align: text-bottom; }
         .settings-theme-palette { display: grid; grid-template-columns: 42px repeat(8, minmax(0, 1fr)); gap: 4px; align-items: center; margin-top: 8px; font-size: 10px; }
         .settings-theme-swatch { height: 14px; border: 1px solid currentColor; border-radius: 2px; }
+        .cursor-hint-palette { display: grid; grid-template-columns: 38px repeat(8, minmax(0, 1fr)); gap: 5px; align-items: center; width: 234px; max-width: 100%; margin: 6px 0 12px auto; color: #aaa; font-size: 10px; }
+        .cursor-hint-palette button { height: 18px; padding: 0; border: 1px solid #ffffff40; border-radius: 4px; cursor: pointer; }
+        .cursor-hint-palette button[aria-pressed="true"] { outline: 2px solid #0a84ff; outline-offset: 1px; }
+        .cursor-hint-palette button:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
+        .cursor-hint-palette button:disabled { opacity: 0.35; cursor: default; }
         .font-measurement-host { position: fixed; left: 0; top: 0; visibility: hidden; pointer-events: none; }
         .font-measurement-host > .xterm, #font-recommendation-preview > .xterm { box-sizing: border-box; padding: 2px; }
         #font-recommendations-fieldset { min-width: 0; }
@@ -1278,7 +1285,9 @@
                             </div>
                             <div class="settings-row"><label for="pref-cursorBlink" data-i18n="settings.appearance.cursor_blink">Blink cursor</label><input type="checkbox" id="pref-cursorBlink"></div>
                             <div class="settings-row"><label for="pref-cursorHint" data-i18n="settings.appearance.cursor_hint">Show cursor hint</label><input type="checkbox" id="pref-cursorHint"></div>
+                            <div class="settings-row"><label for="pref-cursorHintStyle" data-i18n="settings.appearance.cursor_hint_style">Cursor hint style</label><select id="pref-cursorHintStyle"><option value="dot" data-i18n="settings.appearance.cursor_hint_dot">Upper-left dot</option><option value="triangle" data-i18n="settings.appearance.cursor_hint_triangle">Lower-left triangle</option></select></div>
                             <div class="settings-row"><label for="pref-cursorHintColor" data-i18n="settings.appearance.cursor_hint_color">Cursor hint color</label><input type="color" id="pref-cursorHintColor"></div>
+                            <div id="cursor-hint-palette" class="cursor-hint-palette" role="group" aria-label="Cursor hint color" data-i18n-aria-label="settings.appearance.cursor_hint_color"></div>
                             <div class="settings-row"><label for="pref-showTerminalTitleInStatusBar" data-i18n="settings.appearance.terminal_title">Show application title in status bar</label><input type="checkbox" id="pref-showTerminalTitleInStatusBar"></div>
                         </fieldset>
                         <fieldset class="settings-fieldset" id="font-recommendations-fieldset">
@@ -1909,6 +1918,7 @@
             cursorStyle: 'block',
             cursorBlink: true,
             cursorHint: false,
+            cursorHintStyle: 'dot',
             cursorHintColor: '#0a84ff',
             showTerminalTitleInStatusBar: true,
             splitAutoFitWidth: true,
@@ -1976,6 +1986,7 @@
         prefs.fontWeight = normalizeFontWeight(prefs.fontWeight);
         prefs.cursorStyle = normalizeCursorStyle(prefs.cursorStyle);
         prefs.cursorHint = prefs.cursorHint === true;
+        if (!['dot', 'triangle'].includes(prefs.cursorHintStyle)) prefs.cursorHintStyle = PREF_DEFAULTS.cursorHintStyle;
         prefs.cursorHintColor = normalizeCursorHintColor(prefs.cursorHintColor);
         prefs.agentAccessMintMode = normalizeAgentAccessMintMode(prefs.agentAccessMintMode);
 
@@ -4216,6 +4227,9 @@
                 hint.hidden = true;
                 screen.appendChild(hint);
                 const update = () => {
+                    const triangle = prefs.cursorHintStyle === 'triangle';
+                    // Leave room for the marker below the last row and left of column zero.
+                    term.element.classList.toggle('cursor-hint-triangle', prefs.cursorHint && triangle);
                     const buffer = term.buffer.active;
                     const row = buffer.baseY + buffer.cursorY - buffer.viewportY;
                     // xterm 6.0 has no public DECTCEM visibility property.
@@ -4228,8 +4242,10 @@
                         hint.hidden = true;
                         return;
                     }
-                    hint.style.left = Math.min(buffer.cursorX, term.cols - 1) * width + 'px';
-                    hint.style.top = Math.max(0, row * height - 6) + 'px';
+                    const left = Math.min(buffer.cursorX, term.cols - 1) * width;
+                    hint.dataset.style = prefs.cursorHintStyle;
+                    hint.style.left = (triangle ? left - 5 : Math.max(0, left - 3)) + 'px';
+                    hint.style.top = Math.max(0, triangle ? (row + 1) * height : row * height - 7) + 'px';
                     hint.style.backgroundColor = prefs.cursorHintColor;
                 };
                 const listeners = [term.onRender(update), term.onWriteParsed(update), term.onScroll(update)];
@@ -6483,6 +6499,7 @@
                 if ('fontWeight' in result) result.fontWeight = normalizeFontWeight(result.fontWeight);
                 if ('cursorStyle' in result) result.cursorStyle = normalizeCursorStyle(result.cursorStyle);
                 if ('cursorHintColor' in result) result.cursorHintColor = normalizeCursorHintColor(result.cursorHintColor);
+                if ('cursorHintStyle' in result && !['dot', 'triangle'].includes(result.cursorHintStyle)) delete result.cursorHintStyle;
                 if ('agentAccessMintMode' in result) {
                     result.agentAccessMintMode = normalizeAgentAccessMintMode(result.agentAccessMintMode);
                 }
@@ -12707,6 +12724,39 @@
                     }
                 }
             }
+            function renderCursorHintPalette() {
+                const palette = document.getElementById('cursor-hint-palette');
+                const picker = document.getElementById('pref-cursorHintColor');
+                const enabled = document.getElementById('pref-cursorHint').checked;
+                picker.disabled = !enabled;
+                document.getElementById('pref-cursorHintStyle').disabled = !enabled;
+                palette.replaceChildren();
+                const colors = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'];
+                for (const bright of [false, true]) {
+                    const label = document.createElement('span');
+                    label.textContent = t(bright ? 'settings.appearance.palette_bright' : 'settings.appearance.palette_normal');
+                    palette.appendChild(label);
+                    for (const color of colors) {
+                        const key = bright ? 'bright' + color[0].toUpperCase() + color.slice(1) : color;
+                        const hex = SCHEMES.vintage[key].toLowerCase();
+                        const swatch = document.createElement('button');
+                        swatch.type = 'button';
+                        swatch.dataset.color = hex;
+                        swatch.style.backgroundColor = hex;
+                        swatch.title = t(bright ? 'settings.appearance.swatch_bright' : 'settings.appearance.swatch', {
+                            color: t('settings.appearance.color_' + color), hex
+                        });
+                        swatch.setAttribute('aria-label', swatch.title);
+                        swatch.setAttribute('aria-pressed', String(picker.value.toLowerCase() === hex));
+                        swatch.disabled = !enabled;
+                        swatch.onclick = () => {
+                            picker.value = hex;
+                            palette.querySelectorAll('button').forEach(button => button.setAttribute('aria-pressed', String(button === swatch)));
+                        };
+                        palette.appendChild(swatch);
+                    }
+                }
+            }
             document.getElementById('pref-colorScheme').onchange = renderColorSchemePreview;
             const openSettings = () => {
                 resetFontRecommendations();
@@ -12732,8 +12782,10 @@
                 document.getElementById('pref-cursorStyle').value = prefs.cursorStyle;
                 document.getElementById('pref-cursorBlink').checked = prefs.cursorBlink;
                 document.getElementById('pref-cursorHint').checked = prefs.cursorHint;
+                document.getElementById('pref-cursorHintStyle').value = prefs.cursorHintStyle;
                 document.getElementById('pref-cursorHintColor').value = prefs.cursorHintColor;
                 document.getElementById('pref-cursorHintColor').disabled = !prefs.cursorHint;
+                renderCursorHintPalette();
                 document.getElementById('pref-showTerminalTitleInStatusBar').checked = prefs.showTerminalTitleInStatusBar;
                 syncSshProfileEditorContext();
                 renderSshProfileManager();
@@ -12968,8 +13020,12 @@
                     if (item.dataset.tab === 'diagnostics') renderConnectionDiagnostics();
                 };
             });
-            document.getElementById('pref-cursorHint').onchange = event => {
-                document.getElementById('pref-cursorHintColor').disabled = !event.target.checked;
+            document.getElementById('pref-cursorHint').onchange = renderCursorHintPalette;
+            document.getElementById('pref-cursorHintColor').oninput = () => {
+                const color = document.getElementById('pref-cursorHintColor').value.toLowerCase();
+                document.querySelectorAll('#cursor-hint-palette button').forEach(button => {
+                    button.setAttribute('aria-pressed', String(button.dataset.color === color));
+                });
             };
             document.getElementById('settings-save').onclick = () => {
                 resetFontRecommendations();
@@ -12997,6 +13053,7 @@
                 prefs.cursorStyle = normalizeCursorStyle(document.getElementById('pref-cursorStyle').value, prefs.cursorStyle);
                 prefs.cursorBlink = document.getElementById('pref-cursorBlink').checked;
                 prefs.cursorHint = document.getElementById('pref-cursorHint').checked;
+                prefs.cursorHintStyle = document.getElementById('pref-cursorHintStyle').value;
                 prefs.cursorHintColor = normalizeCursorHintColor(document.getElementById('pref-cursorHintColor').value, prefs.cursorHintColor);
                 prefs.showTerminalTitleInStatusBar = document.getElementById('pref-showTerminalTitleInStatusBar').checked;
                 savePrefs(prefs);
