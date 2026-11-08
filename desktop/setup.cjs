@@ -14,7 +14,7 @@ const PYTHON_PROBE = 'import sys, struct, importlib.util, json; print(json.dumps
   + '"executable":sys.executable,"platform":sys.platform,"version":list(sys.version_info[:2]),'
   + '"machine":__import__("platform").machine(),"bits":struct.calcsize("P")*8,"venv":bool(importlib.util.find_spec("venv") and importlib.util.find_spec("ensurepip"))}))';
 const ERROR_CODES = ['dependencies_failed', 'setup_busy', 'modified_runtime', 'unsafe_runtime_path',
-  'invalid_bundle', 'setup_canceled', 'setup_timeout', 'git_required', 'git_dirty', 'git_diverged',
+  'invalid_bundle', 'migration_failed', 'setup_canceled', 'setup_timeout', 'git_required', 'git_dirty', 'git_diverged',
   'git_source_changed', 'invalid_git_workspace', 'git_needs_setup', 'git_failed', 'invalid_archive', 'setup_failed'];
 let window;
 let setupLanguage = create('en');
@@ -231,6 +231,24 @@ async function setupEnvironment(mode, installer, language) {
     args = [...prefix, 'python3', '-I', `${linuxBundle}/bootstrap.py`, '--bundle', linuxBundle];
     saved = { version: 1, distro };
   }
+  if (!macos) {
+    let previous = settings?.previousBundle;
+    if (previous !== null && (typeof previous !== 'string' || !/^[a-f0-9]{64}$/.test(previous))) {
+      try {
+        const source = JSON.parse(await fs.readFile(path.join(path.dirname(settingsPath), 'core-source.json'), 'utf8'));
+        previous = source.version === 1 && source.source === 'bundled' && typeof source.identity === 'string'
+          ? source.identity.match(/^[^:\r\n\0]{1,80}:([a-f0-9]{64})$/)?.[1] : undefined;
+      } catch { /* No historical authority is inferred from directory dates. */ }
+    }
+    saved.bundleId = metadata.id;
+    // Prepared bundleId is not evidence of a successful migration. Keep the
+    // original predecessor through retries, even across different installers.
+    saved.previousBundle = null;
+    if (typeof previous === 'string' && /^[a-f0-9]{64}$/.test(previous) && previous !== metadata.id) {
+      saved.previousBundle = previous;
+      args.push('--previous-bundle', previous);
+    }
+  }
   return { language, t, windows, macos, native, help, bundle, metadata, settingsPath, executable, args, saved, distro };
 }
 
@@ -258,14 +276,23 @@ async function preparePackagedBackend(mode, { installer = false,
       || typeof result.root !== 'string' || !runtimePath.isAbsolute(result.root)
       || result.python !== (windows ? runtimePath.join(result.root, 'tools', '.venv_win', 'Scripts', 'python.exe')
         : runtimePath.join(result.root, 'tools', macos ? '.venv_macos' : '.venv_wsl', 'bin', 'python'))) throw new Error('Invalid managed runtime response.');
+  const finalize = macos ? undefined : async phase => {
+    if (!['migrate', 'clean', 'keep'].includes(phase)) throw new Error('Invalid runtime finalization phase.');
+    const completed = await execute(executable, [...args, '--finish-install', phase],
+      { stream: true, timeout: 60000, help, t });
+    if (completed.type !== 'ready' || completed.bundle_id !== metadata.id || completed.root !== result.root) {
+      throw new Error('Invalid finalized runtime response.');
+    }
+  };
+  if (!installer) await finalize?.('migrate');
   await fs.mkdir(path.dirname(settingsPath), { recursive: true });
   // This file contains only non-secret launcher metadata, never credentials.
   const temporary = `${settingsPath}.tmp`;
   await fs.writeFile(temporary, JSON.stringify(saved, null, 2), { mode: 0o600 });
   await fs.rename(temporary, settingsPath);
-  if (native) return { executable: result.python, args: ['-u', runtimePath.join(result.root, 'desktop', 'backend.py')], cwd: result.root };
+  if (native) return { executable: result.python, args: ['-u', runtimePath.join(result.root, 'desktop', 'backend.py')], cwd: result.root, finalize };
   return { executable: 'wsl.exe', args: ['--distribution', distro, '--cd', result.root, '--exec', result.python,
-    '-u', `${result.root}/desktop/backend.py`], cwd: process.resourcesPath };
+    '-u', `${result.root}/desktop/backend.py`], cwd: process.resourcesPath, finalize };
 }
 
 async function cleanupManagedVenvs(mode, { language = createLanguage(path.join(modeProfile(mode), 'language.json')) } = {}) {

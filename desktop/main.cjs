@@ -548,6 +548,7 @@ async function start() {
   toolbar.layout();
   await contents.loadURL(`${handoff.origin}/${smoke ? '?debug=1' : ''}`);
   if (child.exitCode !== null || child.signalCode !== null) throw new Error('The owned Core exited during startup.');
+  child.stdin.write(JSON.stringify({ type: 'standterm_desktop_window_ready', version: 1 }) + '\n');
   diagnostics.write('window_ready', { port: Number(new URL(handoff.origin).port) });
   // Apply outer bounds after native frame/menu initialization, before maximizing.
   const { x, y, width, height } = savedWindow.options;

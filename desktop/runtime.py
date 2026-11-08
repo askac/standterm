@@ -80,9 +80,7 @@ def bundled_root(base, bundle_id):
 
 
 @contextmanager
-def lease(root, create=True):
-    # Never unlink this file: waiters must keep locking the same inode.
-    lock_path = root / '.setup.lock'
+def file_lease(lock_path, create=True):
     check_path(lock_path)
     with lock_path.open('a+b' if create else 'r+b') as lock:
         try:
@@ -103,3 +101,39 @@ def lease(root, create=True):
                 msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
             else:
                 fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def managed_identity(root):
+    base = runtime_base()
+    if root.parent == base / 'runtimes' and re.fullmatch('[a-f0-9]{64}', root.name):
+        return root.name
+    if root.parent == base / 'retired-runtimes' and re.fullmatch('[a-f0-9]{64}-[a-f0-9]{32}', root.name):
+        return root.name[:64]
+    return None
+
+
+@contextmanager
+def lease(root, create=True):
+    identity = managed_identity(root)
+    if identity is None:
+        with file_lease(root / '.setup.lock', create=create):
+            yield
+        return
+    # The stable lock outlives the disposable runtime directory. Never unlink
+    # it: setup and retirement of the same bundle must use the same inode.
+    locks = runtime_base() / 'runtime-locks'
+    check_path(locks)
+    locks.mkdir(mode=0o700, exist_ok=True)
+    with file_lease(locks / (identity + '.lock')):
+        check_path(root)
+        if not root.is_dir():
+            raise UnsafeRuntime()
+        legacy = root / '.setup.lock'
+        check_path(legacy)
+        if legacy.exists():
+            # Older backends only hold the in-directory lease. Honor it until
+            # that runtime is retired; it may prevent renaming on Windows.
+            with file_lease(legacy, create=False):
+                yield
+        else:
+            yield

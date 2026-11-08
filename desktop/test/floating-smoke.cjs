@@ -65,13 +65,13 @@ async function run(win, origin, contents = win.webContents) {
       { node: 'undefined', cookie: '' });
     if (filesAvailable) {
       const root = process.env.STANDTERM_DESKTOP_TEST_ROOT || path.resolve(__dirname, '../..');
-      const dist = path.join(root, 'desktop', 'dist');
+      const dist = path.join(root, 'desktop', 'dist', 'artifacts');
       fs.mkdirSync(dist, { recursive: true });
       const fixture = fs.mkdtempSync(path.join(dist, 'files-smoke-'));
       const source = Buffer.from(Array.from({ length: 1024 }, (_, index) => index % 256));
       fs.writeFileSync(path.join(fixture, 'fixture.bin'), source, { flag: 'wx' });
       const browsePath = process.env.STANDTERM_DESKTOP_WSL_REPO
-        ? `${process.env.STANDTERM_DESKTOP_WSL_REPO}/desktop/dist/${path.basename(fixture)}` : fixture;
+        ? `${process.env.STANDTERM_DESKTOP_WSL_REPO}/desktop/dist/artifacts/${path.basename(fixture)}` : fixture;
       await child.webContents.executeJavaScript(`document.querySelector('.sftp-path-input').value = ${JSON.stringify(browsePath)};
         document.querySelector('.sftp-go').click()`, true);
       await until("!!window.terminalTest.getFloatingWindowForTest()?.document.querySelector('[data-entry-name=\"fixture.bin\"]')");

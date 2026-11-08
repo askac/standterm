@@ -2,6 +2,7 @@
     'use strict';
 
     const OPTIONS = {
+        // Enable pixel queries below without opting into character-size replies.
         enableSizeReports: false,
         pixelLimit: 4 * 1024 * 1024,
         storageLimit: 32,
@@ -15,6 +16,7 @@
             this.geometryTerm = geometryTerm;
             this.enabled = false;
             this.addon = null;
+            this.windowOptions = null;
             this.disposed = false;
         }
 
@@ -26,13 +28,22 @@
             this.term.write('', () => {
                 if (this.disposed || this.enabled !== enabled) return;
                 if (!enabled) {
-                    this.addon?.dispose();
-                    this.addon = null;
+                    this.clearAddon();
                 } else if (!this.addon) {
                     const addon = new ImageAddon.ImageAddon(OPTIONS);
+                    this.windowOptions = { ...this.term.options.windowOptions };
+                    this.addon = addon;
                     try {
                         this.term.loadAddon(addon);
-                        if (this.term !== this.geometryTerm) {
+                        if (this.term === this.geometryTerm) {
+                            // tmux already has PTY rows/columns. Separate character-size
+                            // replies can race pixel replies through asynchronous input.
+                            this.term.options.windowOptions = {
+                                ...this.windowOptions,
+                                getWinSizePixels: true,
+                                getCellSizePixels: true
+                            };
+                        } else {
                             // The unopened Agent mirror needs the visible terminal's cell
                             // geometry for matching cursor movement and image tile sizes.
                             // This adapter is tied to xterm 6.0.0 / addon-image 0.9.0.
@@ -40,9 +51,8 @@
                                 get: () => this.geometryTerm._core._renderService.dimensions
                             });
                         }
-                        this.addon = addon;
                     } catch (error) {
-                        addon.dispose();
+                        this.clearAddon();
                         console.warn('Terminal image rendering unavailable.', error);
                     }
                 }
@@ -62,10 +72,16 @@
             }
         }
 
-        dispose() {
-            this.disposed = true;
+        clearAddon() {
             this.addon?.dispose();
             this.addon = null;
+            if (this.windowOptions) this.term.options.windowOptions = this.windowOptions;
+            this.windowOptions = null;
+        }
+
+        dispose() {
+            this.disposed = true;
+            this.clearAddon();
         }
     }
 

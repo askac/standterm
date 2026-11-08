@@ -25,6 +25,7 @@ from functools import partial
 from agent_tunnel import AgentTunnel, tunnel_ingress
 from ssh_tunnels import UserTunnel, parse_tunnel_spec, USER_TUNNEL_MAX_ACTIVE, USER_TUNNEL_MAX_RECORDS
 from core_version import CORE_VERSION
+from scripts.image_preview import MAX_REQUEST_BYTES as IMAGE_PREVIEW_MAX_REQUEST_BYTES, validate_preview
 from terminal_capabilities import build_capability_response
 from flask import Flask, Response, render_template, request, abort, make_response, redirect, send_file, jsonify, stream_with_context
 from flask_socketio import SocketIO, ConnectionRefusedError
@@ -2539,6 +2540,8 @@ socket_session_tokens = {}
 socket_client_ips = {}
 socket_browser_identities = {}
 socket_browser_authorized = {}
+image_preview_viewers = {}
+image_preview_lock = threading.Lock()
 socket_browser_auth_challenges = {}
 agent_states = {}
 agent_session_ids = {}
@@ -7981,6 +7984,44 @@ def external_agent_command():
     status_code = 200 if payload.get('status') != AGENT_STATUS_FAILED else 400
     return external_agent_json_response(payload, status_code)
 
+
+@socketio.on('image_preview_set')
+def on_image_preview_set(data):
+    session_token = socket_session_tokens.get(request.sid)
+    enabled = isinstance(data, dict) and data.get('enabled') is True
+    with image_preview_lock:
+        image_preview_viewers.pop(request.sid, None)
+        if enabled and session_token and is_valid_session(session_token) \
+                and (not HTTPS_ENABLED or socket_browser_authorized.get(request.sid, False)):
+            image_preview_viewers[request.sid] = session_token
+
+
+@app.route('/preview/image', methods=['POST'])
+def preview_image():
+    # CLI-only, loopback delivery. Web pages cannot use this as a cross-origin sink.
+    if not is_loopback_client_request() or request.headers.get('Origin'):
+        return external_agent_json_response({'status': 'failed', 'error_code': 'preview_origin_blocked'}, 403)
+    if request.mimetype != 'application/json':
+        return external_agent_json_response({'status': 'failed', 'error_code': 'preview_invalid'}, 400)
+    body = request.stream.read(IMAGE_PREVIEW_MAX_REQUEST_BYTES + 1)
+    if len(body) > IMAGE_PREVIEW_MAX_REQUEST_BYTES:
+        return external_agent_json_response({'status': 'failed', 'error_code': 'preview_too_large'}, 413)
+    try:
+        preview = validate_preview(json.loads(body))
+    except (ValueError, UnicodeDecodeError) as exc:
+        return external_agent_json_response({'status': 'failed', 'error_code': 'preview_invalid', 'message': str(exc)}, 400)
+    with image_preview_lock:
+        viewers = [sid for sid, token in image_preview_viewers.items()
+                   if socket_session_tokens.get(sid) == token and is_valid_session(token)
+                   and (not HTTPS_ENABLED or socket_browser_authorized.get(sid, False))]
+        if not viewers:
+            return external_agent_json_response({'status': 'failed', 'error_code': 'preview_disabled',
+                'message': 'Enable Allow agents to show images in Settings > General, then save.'}, 409)
+        for sid in viewers:
+            socketio.emit('image_preview', preview, room=sid)
+    return external_agent_json_response({'status': 'sent', 'viewers': len(viewers),
+        'preview': {key: preview[key] for key in ('mime_type', 'width', 'height', 'byte_length')}})
+
 @app.route('/download_ca')
 def download_ca():
     if not is_valid_session(request.cookies.get(SESSION_COOKIE_NAME)):
@@ -11579,6 +11620,8 @@ def on_close_all_terminals():
 @socketio.on('disconnect')
 def on_disconnect(reason=None):
     pending_backend_actions.discard(request.sid)
+    with image_preview_lock:
+        image_preview_viewers.pop(request.sid, None)
     session_token = socket_session_tokens.pop(request.sid, None)
     client_ip = socket_client_ips.pop(request.sid, 'unknown')
     socket_browser_identities.pop(request.sid, None)

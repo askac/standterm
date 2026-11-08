@@ -9,7 +9,8 @@ const { execFileSync, spawnSync } = require('node:child_process');
 assert.equal(process.platform, 'win32');
 const compiler = process.argv[2];
 assert.ok(compiler, 'Pass the cached makensis.exe path.');
-const root = fs.mkdtempSync(path.join(__dirname, '..', 'dist', 'legacy-scan-test-'));
+fs.mkdirSync(path.join(__dirname, '..', 'dist', 'artifacts'), { recursive: true });
+const root = fs.mkdtempSync(path.join(__dirname, '..', 'dist', 'artifacts', 'legacy-scan-test-'));
 const harness = path.join(root, 'legacy-scan.exe');
 execFileSync(compiler, ['/V2', `/DTEST_OUTPUT=${harness}`, path.join(__dirname, 'legacy-install-smoke.nsi')],
   { windowsHide: true, stdio: 'pipe' });

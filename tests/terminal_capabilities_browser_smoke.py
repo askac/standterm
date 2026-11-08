@@ -62,6 +62,93 @@ def run_case(page, directory, name, *, baseline=False, explicit=False, existing=
         page.wait_for_timeout(250)
 
 
+def check_tmux_images(browser, url, directory):
+    for protocol in ['sixel', 'iterm2', 'all']:
+        context, page = fixture.new_page(browser, url)
+        socket_path = directory / ('image-' + protocol)
+        command = ['env', '-u', 'TMUX', 'tmux', '-S', str(socket_path), '-f', '/dev/null',
+                   'new-session', '-s', 'images', '/bin/sh']
+        try:
+            send(page, shlex.join(command) + '\r')
+            deadline = time.monotonic() + 10
+            dimensions = []
+            while time.monotonic() < deadline:
+                result = subprocess.run(['tmux', '-S', str(socket_path), 'display-message', '-p',
+                                         '#{client_cell_width}|#{client_cell_height}|#{sixel_support}'],
+                                        capture_output=True, text=True)
+                dimensions = result.stdout.strip().split('|')
+                if len(dimensions) == 3 and all(value.isdigit() and int(value) > 0 for value in dimensions):
+                    break
+                page.wait_for_timeout(100)
+            fixture.check(len(dimensions) == 3 and all(value.isdigit() and int(value) > 0 for value in dimensions),
+                          f'{protocol}: tmux needs SIXEL support and nonzero cell pixels: {dimensions}')
+            fixture.check('sixel' in client_info(socket_path).split('|')[-1].split(','),
+                          f'{protocol}: tmux did not detect SIXEL support')
+            result = subprocess.run(['tmux', '-S', str(socket_path), 'display-message', '-p',
+                                     '#{window_cell_width}|#{window_cell_height}'],
+                                    capture_output=True, text=True, check=True)
+            window_dimensions = [int(value) for value in result.stdout.strip().split('|')]
+            # tmux scales native SIXEL from its window cells to each client's cells.
+            native_pixels = 240 * 96 * int(dimensions[0]) * int(dimensions[1])
+            native_pixels /= window_dimensions[0] * window_dimensions[1]
+            expected_pixels = native_pixels if protocol == 'sixel' else 240 * 96
+            if protocol == 'all':
+                expected_pixels += native_pixels
+            if protocol != 'sixel':
+                subprocess.run(['tmux', '-S', str(socket_path), 'set-option', '-g', 'allow-passthrough', 'on'],
+                               check=True)
+            send(page, "printf '\\033[2J\\033[HIMAGE_READY\\n'\r")
+            page.wait_for_function("""() => window.terminalTest.getActiveTerminalBufferCellsForTest(0)
+                ?.slice(0, 11).map(cell => cell.chars).join('') === 'IMAGE_READY'""")
+            send(page, "printf '\\033[2J\\033[H'; " + shlex.join(
+                ['bash', str(fixture.ROOT / 'scripts' / 'image-check.sh'), '--protocol', protocol]) + '\r')
+            name = 'SIXEL' if protocol == 'sixel' else 'iTerm2 PNG'
+            page.wait_for_function("""name => Array.from({length: 40}, (_, row) =>
+                window.terminalTest.getActiveTerminalBufferCellsForTest(row)
+                    ?.map(cell => cell.chars).join('') || '').join('\\n').includes('TEXT AFTER ' + name)
+            """, arg=name)
+            page.wait_for_function("""expectedPixels => {
+                const canvas = document.querySelector('.terminal-pane.active .xterm-image-layer');
+                if (!canvas) return false;
+                const pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+                const colors = [0, 0, 0];
+                let opaque = 0;
+                for (let offset = 0; offset < pixels.length; offset += 4) {
+                    if (pixels[offset + 3] > 240) opaque++;
+                    for (let channel = 0; channel < 3; channel++) {
+                        if (pixels[offset + channel] > 240 && pixels[offset + (channel + 1) % 3] < 10
+                            && pixels[offset + (channel + 2) % 3] < 10 && pixels[offset + 3] > 240)
+                            colors[channel]++;
+                    }
+                }
+                return colors.every(count => count > expectedPixels / 20) && opaque > expectedPixels * 0.9;
+            }""", arg=expected_pixels)
+            state = page.evaluate('window.terminalTest.getTerminalImagesForTest()[0]')
+            fixture.check(state['usage'] > 0 and state['mirrorUsage'] > 0, f'{protocol}: {state}')
+            fixture.check(state['cursor'] == state['mirrorCursor'], f'{protocol}: mirror cursor mismatch: {state}')
+            layout = page.evaluate("""name => {
+                const rows = window.terminalTest.getTerminalTabsState().tabs.find(tab => tab.active).rows;
+                const textRow = Array.from({length: rows}, (_, row) =>
+                    window.terminalTest.getActiveTerminalBufferCellsForTest(row)
+                        .map(cell => cell.chars).join('')).findIndex(line => line.includes('TEXT AFTER ' + name));
+                const canvas = document.querySelector('.terminal-pane.active .xterm-image-layer');
+                const pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+                let bottom = 0;
+                for (let offset = pixels.length - 4; offset >= 0; offset -= 4) {
+                    if (pixels[offset + 3]) {
+                        bottom = Math.floor(offset / 4 / canvas.width) + 1;
+                        break;
+                    }
+                }
+                return {textTop: textRow * canvas.height / rows, imageBottom: bottom};
+            }""", name)
+            fixture.check(layout['textTop'] >= layout['imageBottom'], f'{protocol}: text overlaps image: {layout}')
+            print(f'tmux {protocol}: cell pixels={dimensions[:2]}; RGB image and Agent mirror rendered: ok', flush=True)
+        finally:
+            subprocess.run(['tmux', '-S', str(socket_path), 'kill-server'], capture_output=True)
+            fixture.close_context(context)
+
+
 def check_query_replay(context, page, directory):
     script = directory / 'query_probe.py'
     result = directory / 'query_result.json'
@@ -136,6 +223,7 @@ def main():
                     run_case(page, Path(directory), 'automatic')
                     run_case(page, Path(directory), 'existing', existing=True)
                     run_case(page, Path(directory), 'explicit', baseline=True, explicit=True)
+                    check_tmux_images(browser, url, Path(directory))
                     check_query_replay(context, page, Path(directory))
                     fixture.test_terminal_payload_text_is_not_control(browser, url)
                     fixture.test_unicode_provider_keeps_emoji_text_in_separate_cells(browser, url)

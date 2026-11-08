@@ -12,6 +12,7 @@ SELECT_VALUES = {
                        'oneHalfLight','solarizedDark','solarizedLight','tangoDark','tangoLight'],
     'pref-fontWeight':['normal','500','600','bold'],
     'pref-cursorStyle':['block','underline','bar'],
+    'pref-cursorHintStyle':['dot','triangle'],
 }
 THEME_NAMES = ['IBM 5153 (CGA Classic)','Campbell','Campbell PowerShell','Vintage','One Half Dark',
                'One Half Light','Solarized Dark','Solarized Light','Tango Dark','Tango Light']

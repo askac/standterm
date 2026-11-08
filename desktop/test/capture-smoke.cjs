@@ -34,7 +34,7 @@ async function run(win, capture, contents = win.webContents) {
       })]);
     } finally { clearTimeout(timer); }
   };
-  const outputRoot = app.isPackaged ? app.getPath('temp') : path.join(__dirname, '..', 'dist');
+  const outputRoot = app.isPackaged ? app.getPath('temp') : path.join(__dirname, '..', 'dist', 'artifacts');
   await fs.mkdir(outputRoot, { recursive: true });
   const directory = await fs.mkdtemp(path.join(outputRoot, 'capture-smoke-'));
   const screenshot = path.join(directory, 'standterm.png');

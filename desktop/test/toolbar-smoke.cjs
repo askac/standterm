@@ -136,7 +136,9 @@ async function run(win, contents, browserAccess) {
     [...document.querySelectorAll('#edit-tools button, #layout-tools button, #capture-tools button')].filter(el => !el.hidden).every(el => {
       const bounds = el.getBoundingClientRect(); return bounds.x >= 0 && bounds.right <= innerWidth;
     })`), true, 'clipboard, layout and capture controls must fit a narrow window');
-  const directory = await fs.mkdtemp(path.join(app.isPackaged ? app.getPath('temp') : path.join(__dirname, '..', 'dist'), 'toolbar-smoke-'));
+  const outputRoot = app.isPackaged ? app.getPath('temp') : path.join(__dirname, '..', 'dist', 'artifacts');
+  await fs.mkdir(outputRoot, { recursive: true });
+  const directory = await fs.mkdtemp(path.join(outputRoot, 'toolbar-smoke-'));
   const screenshotCss = await contents.insertCSS('#debug-hud, #policy-debug-panel, #payload-log { display: none !important; }');
   console.log('Desktop toolbar smoke: capturing the Core preview.');
   try {

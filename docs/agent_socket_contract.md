@@ -67,6 +67,43 @@ server-side display view when no browser snapshot is available. Snapshot and
 headless-grid text are untrusted display data and must not be used as a control
 signal.
 
+## Opt-In Image Previews
+
+This display-only feature is separate from External Agent Mirror permissions.
+It works in Core browsers and Desktop without attaching Agent mode or minting
+an external token. An already authenticated page subscribes with Socket.IO
+`image_preview_set: {"enabled": true}` after the operator enables **Allow agents
+to show images** and saves. The browser stores its opt-in and Large/Medium/Small
+size locally. HTTPS subscribers must also have browser authorization. Disable
+or disconnect removes the subscription; disabled pages ignore queued images.
+
+Local helpers POST JSON to `/preview/image` with `title` and `image_base64`.
+The endpoint accepts only loopback clients, rejects browser Origin headers, and
+does not enable CORS. It accepts PNG/JPEG bytes up to 2 MiB and 16 megapixels,
+with a title up to 160 characters. It derives MIME and dimensions from the bytes;
+it never reads a caller-supplied filesystem path or remote URL. The request body
+is bounded before JSON decoding. No image or title is written to audit logs or
+persisted by this endpoint.
+
+Core sends `image_preview` to all current, authorized, opted-in browser sockets.
+Its payload contains `title`, `image_base64`, `mime_type`, `width`, `height` and
+`byte_length`. A page decodes it to a temporary Blob URL and shows a single panel,
+replacing its previous image. Close, opt-out, disconnect and page unload release
+the URLs. Incoming images do not focus or resize terminals; titles use text only.
+
+The HTTP response is `{"status":"sent","viewers":1,"preview":{...}}` with MIME,
+dimensions and byte length only. This confirms delivery was queued to browsers,
+not image decoding or human acknowledgement. No eligible viewer returns 409
+`preview_disabled`; invalid images return 400 `preview_invalid`; oversized HTTP
+bodies return 413 `preview_too_large`; nonlocal/browser requests return 403
+`preview_origin_blocked`. Terminal Agent permissions remain unchanged.
+
+Use `scripts/image_preview.py <PNG-or-JPEG> --agentinfo <known-agentinfo>` or
+`--url <exact-Core-origin>`, optionally `--ca-file` and `--title`. The helper
+reads images on its own machine and sends bytes over loopback without using an
+HTTP proxy. A same-user Linux current-instance pointer can supply the default
+instance; specify the target explicitly when more than one Core is running.
+
 ## Agent Connection Info Controls
 
 An authenticated local or authorized browser may send `agent_connect_info`

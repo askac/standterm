@@ -40,14 +40,14 @@ jobs:
           tools/.venv_macos/bin/python -m pip install -r requirements.txt
           tools/.venv_macos/bin/python -m pip freeze > tools/requirements_macos.txt
           npm ci --prefix desktop --no-audit --no-fund
-          mkdir -p desktop/dist/evidence
+          mkdir -p desktop/dist/artifacts/evidence
       - name: Test Desktop source
-        run: npm test --prefix desktop > desktop/dist/evidence/desktop-unit.log 2>&1
+        run: npm test --prefix desktop > desktop/dist/artifacts/evidence/desktop-unit.log 2>&1
       - name: Stage formal Core and build native DMG
         run: |
           stage=$(node desktop/stage-windows.cjs --macos --core-ref "$CORE_REF")
           echo "DESKTOP_STAGE=$stage" >> "$GITHUB_ENV"
-          node desktop/test/core-release-inspect.cjs "$stage" "$CORE_REF" > desktop/dist/evidence/core-release.json
+          node desktop/test/core-release-inspect.cjs "$stage" "$CORE_REF" > desktop/dist/artifacts/evidence/core-release.json
           npm ci --prefix "$stage" --no-audit --no-fund
           npm run make:mac --prefix "$stage"
       - name: Inspect the app and mounted DMG
@@ -56,16 +56,16 @@ jobs:
           test -d "$app"
           test "$(lipo -archs "$app/Contents/MacOS/StandTermDesktop")" = arm64
           codesign --verify --deep --strict "$app"
-          node desktop/test/package-inspect.cjs "$app/Contents/Resources" "$DESKTOP_STAGE" "$DESKTOP_STAGE/node_modules/@electron/asar" > desktop/dist/evidence/package-inspection.log
+          node desktop/test/package-inspect.cjs "$app/Contents/Resources" "$DESKTOP_STAGE" "$DESKTOP_STAGE/node_modules/@electron/asar" > desktop/dist/artifacts/evidence/package-inspection.log
           dmg=("$DESKTOP_STAGE"/out.noindex/*.dmg)
           test "${#dmg[@]}" = 1
           mountpoint=$(mktemp -d "$RUNNER_TEMP/standterm-dmg.XXXXXX")
           hdiutil attach "${dmg[0]}" -readonly -nobrowse -mountpoint "$mountpoint"
           trap 'hdiutil detach "$mountpoint"' EXIT
-          node desktop/test/package-inspect.cjs "$mountpoint/StandTermDesktop.app/Contents/Resources" "$DESKTOP_STAGE" "$DESKTOP_STAGE/node_modules/@electron/asar" >> desktop/dist/evidence/package-inspection.log
+          node desktop/test/package-inspect.cjs "$mountpoint/StandTermDesktop.app/Contents/Resources" "$DESKTOP_STAGE" "$DESKTOP_STAGE/node_modules/@electron/asar" >> desktop/dist/artifacts/evidence/package-inspection.log
           echo "DESKTOP_APP=$app" >> "$GITHUB_ENV"
       - name: Verify native shell initialization
-        run: tools/.venv_macos/bin/python desktop/test/macos_shell_smoke.py > desktop/dist/evidence/macos-shell.log 2>&1
+        run: tools/.venv_macos/bin/python desktop/test/macos_shell_smoke.py > desktop/dist/artifacts/evidence/macos-shell.log 2>&1
       - name: Exercise packaged application
         id: smoke
         continue-on-error: true
@@ -77,21 +77,21 @@ jobs:
           export STANDTERM_DESKTOP_PYTHON="$GITHUB_WORKSPACE/tools/.venv_macos/bin/python"
           export STANDTERM_AGENT_RUNTIME_DIR="$runtime/agent-state"
           export STANDTERM_SESSION_RECOVERY_STORE="$runtime/recovery.json"
-          node desktop/test/packaged-smoke-runner.cjs "$DESKTOP_APP/Contents/MacOS/StandTermDesktop" macos > desktop/dist/evidence/packaged-smoke.log 2>&1
+          node desktop/test/packaged-smoke-runner.cjs "$DESKTOP_APP/Contents/MacOS/StandTermDesktop" macos > desktop/dist/artifacts/evidence/packaged-smoke.log 2>&1
       - name: Exercise first-run setup and reuse
         id: setup
         continue-on-error: true
         timeout-minutes: 10
-        run: node desktop/node_modules/electron/cli.js desktop/test/macos-setup-integration.cjs "$GITHUB_WORKSPACE/tools/.venv_macos/bin/python" "$DESKTOP_STAGE" > desktop/dist/evidence/setup-integration.log 2>&1
+        run: node desktop/node_modules/electron/cli.js desktop/test/macos-setup-integration.cjs "$GITHUB_WORKSPACE/tools/.venv_macos/bin/python" "$DESKTOP_STAGE" > desktop/dist/artifacts/evidence/setup-integration.log 2>&1
       - name: Record build identity and verification results
         if: always() && env.DESKTOP_APP != ''
         env:
           SMOKE_RESULT: ${{ steps.smoke.outcome }}
           SETUP_RESULT: ${{ steps.setup.outcome }}
         run: |
-          cp tools/requirements_macos.txt desktop/dist/evidence/tested-runtime-dependencies.txt
-          cp "$DESKTOP_STAGE/bundle/manifest.json" desktop/dist/evidence/core-manifest.json
-          cp "$DESKTOP_STAGE/release-identity.json" desktop/dist/evidence/release-identity.json
+          cp tools/requirements_macos.txt desktop/dist/artifacts/evidence/tested-runtime-dependencies.txt
+          cp "$DESKTOP_STAGE/bundle/manifest.json" desktop/dist/artifacts/evidence/core-manifest.json
+          cp "$DESKTOP_STAGE/release-identity.json" desktop/dist/artifacts/evidence/release-identity.json
           tools/.venv_macos/bin/python - <<'PY'
           import json, os, platform
           from pathlib import Path
@@ -106,16 +106,17 @@ jobs:
               'signature': 'Ad hoc; no Developer ID or notarization',
               'manualAcceptance': 'Finder, Gatekeeper, IME and upgrade not exercised',
           }
-          Path('desktop/dist/evidence/build-metadata.json').write_text(json.dumps(info, indent=2) + '\n')
+          Path('desktop/dist/artifacts/evidence/build-metadata.json').write_text(json.dumps(info, indent=2) + '\n')
           PY
-          cp "$DESKTOP_STAGE"/out.noindex/*.dmg desktop/dist/evidence/
-          cd desktop/dist/evidence
+          cd "desktop/dist/release/$(basename "$DESKTOP_STAGE")"
           shasum -a 256 *.dmg > SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: StandTerm-Desktop-macos-arm64
-          path: desktop/dist/evidence/
+          path: |
+            desktop/dist/release/
+            desktop/dist/artifacts/evidence/
           if-no-files-found: error
           retention-days: 14
       - name: Require native interaction checks
@@ -147,22 +148,22 @@ jobs:
           tools/.venv_win/Scripts/python.exe -m pip freeze > tools/requirement_winenv.txt
           npm ci --prefix desktop --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          New-Item -ItemType Directory desktop/dist/evidence
+          New-Item -ItemType Directory desktop/dist/artifacts/evidence
       - name: Test Desktop source
-        run: npm test --prefix desktop *> desktop/dist/evidence/desktop-unit.log
+        run: npm test --prefix desktop *> desktop/dist/artifacts/evidence/desktop-unit.log
       - name: Stage formal Core and build native installer
         run: |
           $stage = node desktop/stage-windows.cjs --core-ref $env:CORE_REF
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "DESKTOP_STAGE=$stage" >> $env:GITHUB_ENV
-          node desktop/test/core-release-inspect.cjs $stage $env:CORE_REF > desktop/dist/evidence/core-release.json
+          node desktop/test/core-release-inspect.cjs $stage $env:CORE_REF > desktop/dist/artifacts/evidence/core-release.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm ci --prefix $stage --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run make:win --prefix $stage
       - name: Inspect the Windows application
         run: |
-          node desktop/test/package-inspect.cjs "$env:DESKTOP_STAGE/out/win-unpacked/resources" $env:DESKTOP_STAGE "$env:DESKTOP_STAGE/node_modules/@electron/asar" > desktop/dist/evidence/package-inspection.log
+          node desktop/test/package-inspect.cjs "$env:DESKTOP_STAGE/out/win-unpacked/resources" $env:DESKTOP_STAGE "$env:DESKTOP_STAGE/node_modules/@electron/asar" > desktop/dist/artifacts/evidence/package-inspection.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "DESKTOP_APP=$env:DESKTOP_STAGE/out/win-unpacked/StandTermDesktop.exe" >> $env:GITHUB_ENV
       - name: Exercise packaged application
@@ -177,22 +178,22 @@ jobs:
           $env:STANDTERM_DESKTOP_PYTHON = "$env:GITHUB_WORKSPACE/tools/.venv_win/Scripts/python.exe"
           $env:STANDTERM_AGENT_RUNTIME_DIR = "$runtime/agent-state"
           $env:STANDTERM_SESSION_RECOVERY_STORE = "$runtime/recovery.json"
-          node desktop/test/packaged-smoke-runner.cjs $env:DESKTOP_APP windows *> desktop/dist/evidence/packaged-smoke.log
+          node desktop/test/packaged-smoke-runner.cjs $env:DESKTOP_APP windows *> desktop/dist/artifacts/evidence/packaged-smoke.log
           exit $LASTEXITCODE
       - name: Exercise first-run preparation and reuse
         id: setup
         continue-on-error: true
         timeout-minutes: 10
-        run: node desktop/test/bootstrap-integration.cjs "$env:GITHUB_WORKSPACE/tools/.venv_win/Scripts/python.exe" "$env:DESKTOP_STAGE/out/win-unpacked/resources/bundle" *> desktop/dist/evidence/setup-integration.log
+        run: node desktop/test/bootstrap-integration.cjs "$env:GITHUB_WORKSPACE/tools/.venv_win/Scripts/python.exe" "$env:DESKTOP_STAGE/out/win-unpacked/resources/bundle" *> desktop/dist/artifacts/evidence/setup-integration.log
       - name: Record build identity and verification results
         if: always() && env.DESKTOP_APP != ''
         env:
           SMOKE_RESULT: ${{ steps.smoke.outcome }}
           SETUP_RESULT: ${{ steps.setup.outcome }}
         run: |
-          Copy-Item tools/requirement_winenv.txt desktop/dist/evidence/tested-runtime-dependencies.txt
-          Copy-Item "$env:DESKTOP_STAGE/bundle/manifest.json" desktop/dist/evidence/core-manifest.json
-          Copy-Item "$env:DESKTOP_STAGE/release-identity.json" desktop/dist/evidence/release-identity.json
+          Copy-Item tools/requirement_winenv.txt desktop/dist/artifacts/evidence/tested-runtime-dependencies.txt
+          Copy-Item "$env:DESKTOP_STAGE/bundle/manifest.json" desktop/dist/artifacts/evidence/core-manifest.json
+          Copy-Item "$env:DESKTOP_STAGE/release-identity.json" desktop/dist/artifacts/evidence/release-identity.json
           $info = [ordered]@{
             sourceCommit = $env:GITHUB_SHA; coreCommit = $env:CORE_COMMIT
             platform = 'win32'; architecture = 'x64'
@@ -202,16 +203,18 @@ jobs:
             fileVersion = (Get-Item $env:DESKTOP_APP).VersionInfo.FileVersion
             manualAcceptance = 'Installer upgrade, real IME and clipboard not exercised'
           }
-          $info | ConvertTo-Json > desktop/dist/evidence/build-metadata.json
-          Copy-Item "$env:DESKTOP_STAGE/out/*Setup.exe" desktop/dist/evidence/
-          Get-ChildItem desktop/dist/evidence/*Setup.exe | ForEach-Object {
+          $info | ConvertTo-Json > desktop/dist/artifacts/evidence/build-metadata.json
+          $release = Join-Path "desktop/dist/release" (Split-Path $env:DESKTOP_STAGE -Leaf)
+          Get-ChildItem "$release/*Setup.exe" | ForEach-Object {
             (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() + '  ' + $_.Name
-          } > desktop/dist/evidence/SHA256SUMS.txt
+          } > "$release/SHA256SUMS.txt"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: StandTerm-Desktop-windows-x64
-          path: desktop/dist/evidence/
+          path: |
+            desktop/dist/release/
+            desktop/dist/artifacts/evidence/
           if-no-files-found: error
           retention-days: 14
       - name: Require native interaction checks

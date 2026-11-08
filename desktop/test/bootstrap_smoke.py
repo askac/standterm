@@ -113,6 +113,22 @@ class BootstrapTests(unittest.TestCase):
             if aware:
                 self.assertEqual(json.loads(marker.read_text()), {'id': data['id'], 'lease': 1})
 
+    def test_preparation_records_files_and_failed_repair_invalidates_readiness(self):
+        root, bundle, data = self.fixture(lease_aware=True)
+        target = root / 'runtime'
+        class Child:
+            pid = 999999
+            def __init__(self, *args, **kwargs): pass
+            def wait(self, **kwargs): return 0
+        with patch.object(bootstrap.threading.Thread, 'start'), patch.object(bootstrap.subprocess, 'Popen', Child):
+            bootstrap.prepare(bundle, target, data)
+        self.assertEqual(json.loads((target / '.standterm-files.json').read_text()), data)
+        self.assertTrue((target / '.desktop-ready.json').exists())
+        (target / 'app.py').write_text('modified')
+        with self.assertRaises(bootstrap.SetupError):
+            bootstrap.prepare(bundle, target, data)
+        self.assertFalse((target / '.desktop-ready.json').exists())
+
     def test_parent_disconnect_cancels_setup(self):
         root, bundle, _ = self.fixture()
         runtime = root / 'runtime'
