@@ -5322,6 +5322,8 @@ def test_browser_ssh_key_lifecycle_and_settings_transfer(browser, access_url):
         )
         page.evaluate(
             """async () => {
+                // Keep delayed server policy refreshes from replacing this SSH fixture.
+                window.terminalTest.holdTerminalPolicyForTest();
                 await window.terminalTest.setSshSessionState({
                     profiles: [
                         { id: 'profile-primary', sortOrder: 0, name: 'Primary', host: 'primary.example', port: '22', username: 'alice', keyId: null },
