@@ -8,7 +8,7 @@ const fs = require('node:fs/promises');
 const syncFs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 const electron = require('electron');
 const { app } = electron;
 syncFs.mkdirSync(path.join(__dirname, '..', 'dist', 'artifacts'), { recursive: true });
@@ -59,6 +59,10 @@ async function main() {
   assert.equal(preparations, 1, 'ready reuse must not run pip again');
   assert.equal(confirmations, 1);
   assert.equal(electron.BrowserWindow.getAllWindows().length, 0);
+  console.log(JSON.stringify({ type: 'tested_runtime_dependencies', platform: process.platform,
+    pythonVersion: execFileSync(command.executable, ['--version'], { encoding: 'utf8' }).trim(),
+    packages: JSON.parse(execFileSync(command.executable,
+      ['-m', 'pip', '--disable-pip-version-check', '--no-cache-dir', 'list', '--format=json'], { encoding: 'utf8' })) }));
   console.log(`macOS setup integration passed: real progress window, dependency install and reuse; ${runtime}`);
   app.exit(0);
 }

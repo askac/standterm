@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 
 async function run() {
   const [python, bundle, existingRoot] = process.argv.slice(2);
@@ -31,6 +31,10 @@ async function run() {
   assert.equal(ready.type, 'ready');
   assert.equal(ready.root, root);
   assert.deepEqual(await call(false), ready);
+  console.log(JSON.stringify({ type: 'tested_runtime_dependencies', platform: process.platform,
+    pythonVersion: execFileSync(ready.python, ['--version'], { encoding: 'utf8' }).trim(),
+    packages: JSON.parse(execFileSync(ready.python,
+      ['-m', 'pip', '--disable-pip-version-check', '--no-cache-dir', 'list', '--format=json'], { encoding: 'utf8' })) }));
   console.log(`Managed runtime smoke passed: ${root}`);
 }
 
