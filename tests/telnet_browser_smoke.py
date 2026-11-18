@@ -100,6 +100,12 @@ def test_live_connection(browser, url):
         page.evaluate("() => window.terminalTest.setConnectionTypeForTest('telnet')")
         page.fill('#telnet-host', '127.0.0.1')
         page.fill('#telnet-port', str(listener.getsockname()[1]))
+        page.click('#telnet-profiles summary')
+        page.fill('#telnet-profile-name', 'Local device')
+        page.click('#telnet-profile-save')
+        page.fill('#telnet-host', 'unused.test')
+        page.select_option('#telnet-profile-picker', '')
+        page.select_option('#telnet-profile-picker', 'Local device')
         page.click('#connectBtn')
         try:
             page.wait_for_function("() => window.terminalTest.getActiveAgentState()?.connected === true", timeout=8000)
@@ -129,6 +135,65 @@ def test_live_connection(browser, url):
     assert not thread.is_alive()
 
 
+def test_saved_profiles(browser, url):
+    context, page = fixture.new_page(browser, url, ui_language='zh-TW')
+
+    def show_telnet(windows):
+        page.evaluate("""windows => {
+            window.terminalTest.holdTerminalPolicyForTest();
+            const policy = window.terminalTest.getTerminalPolicy();
+            const telnet = policy.connection_options.find(option => option.connection_type === 'telnet');
+            telnet.allowed = true;
+            telnet.start_fields = telnet.start_fields.filter(field => field.name !== 'network_origin');
+            if (windows) telnet.start_fields.push({name: 'network_origin',
+                options: [{value: 'core'}, {value: 'windows'}]});
+            window.terminalTest.applyTerminalPolicy(policy);
+            window.terminalTest.setConnectionTypeForTest('telnet');
+        }""", windows)
+
+    try:
+        page.click('#new-tab-btn')
+        show_telnet(True)
+        page.click('#telnet-profiles summary')
+        assert page.locator('#telnet-profiles summary').inner_text() == 'Telnet 連線設定'
+        page.fill('#telnet-profile-name', '<Device>')
+        page.fill('#telnet-host', 'device.test')
+        page.fill('#telnet-port', '65536')
+        page.click('#telnet-profile-save')
+        assert page.locator('#telnet-profile-picker option').count() == 1
+        page.fill('#telnet-port', '2323')
+        page.select_option('#telnet-encoding', 'big5')
+        page.click('#telnet-network-origin-field summary')
+        page.check('#telnet-network-origin')
+        page.click('#telnet-profile-save')
+        assert page.locator('#telnet-profile-picker').input_value() == '<Device>'
+        page.reload()
+        page.wait_for_function('() => window.terminalTest?.getSocketState().connected')
+        page.click('#new-tab-btn')
+        show_telnet(False)
+        page.click('#telnet-profiles summary')
+        page.select_option('#telnet-profile-picker', '<Device>')
+        form = page.evaluate('() => window.terminalTest.getConnectionFormDataForTest()')
+        assert (form['host'], form['port'], form['encoding']) == ('device.test', '2323', 'big5')
+        assert 'network_origin' not in form
+        page.fill('#telnet-profile-name', 'Renamed')
+        page.fill('#telnet-port', '2424')
+        page.click('#telnet-profile-save')
+        assert page.locator('#telnet-profile-picker option').count() == 2
+        show_telnet(True)
+        assert page.locator('#telnet-network-origin').is_checked()
+        form = page.evaluate('() => window.terminalTest.getConnectionFormDataForTest()')
+        assert form['network_origin'] == 'windows' and form['port'] == '2424'
+        page.once('dialog', lambda dialog: dialog.dismiss())
+        page.click('#telnet-profile-delete')
+        assert page.locator('#telnet-profile-picker').input_value() == 'Renamed'
+        page.once('dialog', lambda dialog: dialog.accept())
+        page.click('#telnet-profile-delete')
+        assert page.locator('#telnet-profile-picker option').count() == 1
+    finally:
+        fixture.close_context(context)
+
+
 def main():
     original_popen = fixture.subprocess.Popen
 
@@ -144,6 +209,7 @@ def main():
             try:
                 for locale in ('en', 'zh-TW'):
                     test_form(browser, url, locale)
+                test_saved_profiles(browser, url)
                 test_live_connection(browser, url)
             finally:
                 browser.close()

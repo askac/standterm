@@ -866,6 +866,35 @@ def test_agent_mint_quick_action_applies_saved_permission(browser, access_url):
         close_context(context)
 
 
+def test_tab_authorize_switches_and_grants_only_clicked_terminal(browser, access_url):
+    context, page = new_page(browser, access_url)
+    try:
+        page.click('#quick-settings')
+        page.select_option('#pref-agentAccessMintMode', 'approval_pending')
+        page.click('#settings-save')
+        page.click('#new-tab-btn')
+        other_id = page.evaluate('() => window.terminalTest.getTerminalTabsState().activeTerminalId')
+        other_button = page.locator(f'[data-terminal-id="{other_id}"] .tab-agent-authorize')
+        check(other_button.is_hidden(), 'disconnected tab exposed the Agent authorization button')
+        page.click('#connectBtn')
+        page.wait_for_function('() => window.terminalTest.getActiveAgentState()?.connected === true')
+        active = page.locator('.terminal-tab.active')
+        check(active.get_attribute('data-terminal-id') == other_id, 'second tab was not active')
+        authorize = page.locator(f'[data-terminal-id="{TERMINAL_ID}"] .tab-agent-authorize')
+        check(authorize.get_attribute('title') == 'Authorize agent', 'tab authorization hint was missing')
+        clear_emitted(page)
+        authorize.click()
+        wait_for_agent(page, "state.mode === 'approval_pending' && state.external_token?.status === 'active'")
+        check(active.get_attribute('data-terminal-id') == TERMINAL_ID, 'authorization did not switch to the clicked tab')
+        requests = [entry['args'][0] for entry in get_emitted(page, 'agent_mode_set')]
+        check(requests == [{'terminal_id': TERMINAL_ID, 'mode': 'approval_pending'}],
+              'authorization request targeted the wrong terminal or permission')
+        check(page.evaluate('id => window.terminalTest.getAgentStateForTest(id).mode', other_id) == 'disabled',
+              'authorization changed the other terminal')
+    finally:
+        close_context(context)
+
+
 def test_agent_language_preview_preserves_access_and_applies_on_next_page(browser, access_url):
     context, page = new_page(browser, access_url, ui_language='zh-TW')
     token_requests = []
@@ -5564,6 +5593,7 @@ def main():
         test_agent_panel_can_be_dragged,
         test_toolbar_pause_targets_main_tab_not_panel_override,
         test_agent_mint_quick_action_applies_saved_permission,
+        test_tab_authorize_switches_and_grants_only_clicked_terminal,
         test_agent_language_preview_preserves_access_and_applies_on_next_page,
         test_terminal_pip_hides_selected_tab_and_keeps_background_tab,
         test_sftp_status_actions_and_terminal_pip_transition,
