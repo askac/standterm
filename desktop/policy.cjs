@@ -31,9 +31,10 @@ function backendCommand(root, platform, env) {
     if (!repo || !repo.startsWith('/')) {
       throw new Error('Set STANDTERM_DESKTOP_WSL_REPO to the absolute Linux repository path.');
     }
+    // The backend selects its cwd without relying on version-dependent --cd parsing.
     return {
       executable: 'wsl.exe',
-      args: ['--distribution', env.STANDTERM_DESKTOP_WSL_DISTRO, '--cd', repo,
+      args: ['--distribution', env.STANDTERM_DESKTOP_WSL_DISTRO,
         '--exec', env.STANDTERM_DESKTOP_WSL_PYTHON || `${repo}/tools/.venv_wsl/bin/python`,
         '-u', `${repo}/desktop/backend.py`],
       cwd: root,

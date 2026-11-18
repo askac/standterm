@@ -291,7 +291,8 @@ async function preparePackagedBackend(mode, { installer = false,
   await fs.writeFile(temporary, JSON.stringify(saved, null, 2), { mode: 0o600 });
   await fs.rename(temporary, settingsPath);
   if (native) return { executable: result.python, args: ['-u', runtimePath.join(result.root, 'desktop', 'backend.py')], cwd: result.root, finalize };
-  return { executable: 'wsl.exe', args: ['--distribution', distro, '--cd', result.root, '--exec', result.python,
+  // backend.py selects the Linux cwd without relying on wsl.exe --cd semantics.
+  return { executable: 'wsl.exe', args: ['--distribution', distro, '--exec', result.python,
     '-u', `${result.root}/desktop/backend.py`], cwd: process.resourcesPath, finalize };
 }
 
@@ -386,7 +387,7 @@ async function manageCore(mode, action, { language = createLanguage(path.join(ap
   const backendArgs = git ? ['-u', runtimePath.join(bundle, 'backend.py'), '--git-core', result.core_root]
     : ['-u', runtimePath.join(result.root, 'desktop', 'backend.py')];
   const command = native ? { executable: result.python, args: backendArgs, cwd: result.root }
-    : { executable: 'wsl.exe', args: ['--distribution', distro, '--cd', result.root, '--exec', result.python, ...backendArgs],
+    : { executable: 'wsl.exe', args: ['--distribution', distro, '--exec', result.python, ...backendArgs],
       cwd: process.resourcesPath };
   return { ...command, source: git ? 'git' : 'bundled',
     coreSource: git ? `Git ${result.commit}${result.dirty ? ' (local changes)' : ''}` : 'Bundled' };
