@@ -51,6 +51,7 @@
         .status-action:hover { color: #fff; border-color: #0a84ff; background: #252b33; }
         .status-action:disabled { opacity: 0.28; cursor: default; border-color: #262626; background: transparent; color: #777; }
         .status-action:disabled:hover { border-color: #262626; background: transparent; color: #777; }
+        .status-action.tab-agent-authorize { width: 22px; height: 19px; padding: 0; }
         .status-sftp { min-width: 28px; padding: 0 4px; display: inline-flex; align-items: center; justify-content: center; }
         .status-sftp[hidden] { display: none; }
         .status-sftp.unavailable:disabled { opacity: 1; }
@@ -608,6 +609,12 @@
         #controls #ssh-network-origin, #controls #telnet-network-origin { width: auto; margin: 0; padding: 0; }
         #ssh-network-origin-hint, #telnet-network-origin-field p { margin: 8px 0 0; line-height: 1.5; }
         #telnet-fields > p { color: #aaa; font-size: 12px; line-height: 1.5; }
+        #telnet-profiles { margin: 10px 0; color: #bbb; font-size: 12px; }
+        #telnet-profiles summary { cursor: pointer; margin-bottom: 8px; }
+        #controls .telnet-profile-actions { display: flex; gap: 8px; }
+        #controls .telnet-profile-actions button { padding: 7px 9px; }
+        #controls .telnet-profile-actions button:disabled { opacity: 0.5; cursor: default; }
+        #telnet-profile-status { margin: 8px 0 0; }
         .ssh-session-picker { position: relative; margin-bottom: 15px; }
         #controls #ssh-session-picker-toggle { width: 100%; padding: 9px 10px; background: #333; border: 1px solid #555; color: #ddd; border-radius: 4px; font-weight: normal; text-align: left; }
         #controls #ssh-session-picker-toggle::after { content: "\25BE"; float: right; color: #888; }
@@ -1524,6 +1531,18 @@
                 <select id="uart-baud" aria-label="Baud rate" data-i18n-aria-label="connection.baud"></select>
             </div>
             <div id="telnet-fields" style="display: none;">
+                <details id="telnet-profiles">
+                    <summary data-i18n="telnet.profiles.title">Telnet profiles</summary>
+                    <select id="telnet-profile-picker" aria-label="Telnet profiles" data-i18n-aria-label="telnet.profiles.title">
+                        <option value="" data-i18n="ssh.profiles.create">New profile</option>
+                    </select>
+                    <input type="text" id="telnet-profile-name" maxlength="64" autocomplete="off" aria-label="Profile name" data-i18n-aria-label="ssh.profiles.name" placeholder="Profile name" data-i18n-placeholder="ssh.profiles.name">
+                    <div class="telnet-profile-actions">
+                        <button type="button" id="telnet-profile-save" data-i18n="connection.save_profile">Save connection profile</button>
+                        <button type="button" id="telnet-profile-delete" data-i18n="ssh.profiles.delete" disabled>Delete</button>
+                    </div>
+                    <div class="settings-status" id="telnet-profile-status" role="status"></div>
+                </details>
                 <div style="display: flex; gap: 10px;">
                     <input type="text" id="telnet-host" aria-label="Host" data-i18n-aria-label="connection.host" placeholder="Host" data-i18n-placeholder="connection.host" style="flex: 3;">
                     <input type="text" id="telnet-port" aria-label="Port" data-i18n-aria-label="connection.port" placeholder="Port" data-i18n-placeholder="connection.port" value="23" style="flex: 1;">
@@ -2546,7 +2565,16 @@
             const localShellKindSelect = document.getElementById('local-shell-kind');
             const uartFields = document.getElementById('uart-fields');
             const telnetFields = document.getElementById('telnet-fields');
+            const telnetHost = document.getElementById('telnet-host');
+            const telnetPort = document.getElementById('telnet-port');
+            const telnetEncoding = document.getElementById('telnet-encoding');
             const telnetNetworkOrigin = document.getElementById('telnet-network-origin');
+            const telnetProfilePicker = document.getElementById('telnet-profile-picker');
+            const telnetProfileName = document.getElementById('telnet-profile-name');
+            const telnetProfileDelete = document.getElementById('telnet-profile-delete');
+            const telnetProfileStatus = document.getElementById('telnet-profile-status');
+            const TELNET_PROFILES_KEY = 'standterm.telnetProfiles.v1';
+            let selectedTelnetProfile = null;
             const uartPortSelect = document.getElementById('uart-port-select');
             const uartPortInput = document.getElementById('uart-port');
             const uartPortList = document.getElementById('uart-port-list');
@@ -5109,6 +5137,7 @@
                 const field = document.getElementById('ssh-network-origin-field');
                 field.hidden = !available;
                 sshNetworkOrigin.disabled = !available;
+                sshProfileNodeDraft?.network?.setAvailable(available);
             }
 
             function applySshNetworkOrigin(entry) {
@@ -6040,7 +6069,6 @@
                     .some(option => option.value === 'windows');
                 document.getElementById('telnet-network-origin-field').hidden = !telnetWindowsAvailable;
                 telnetNetworkOrigin.disabled = !telnetWindowsAvailable;
-                if (!telnetWindowsAvailable) telnetNetworkOrigin.checked = false;
                 if (normalized === 'uart') requestFreshUartPorts('select_uart');
                 updateBrowserAuthUi();
                 connectBtn.innerText = getConnectButtonText();
@@ -7048,6 +7076,9 @@
 
             function updateTabAgentIndicator(state) {
                 const token = getCurrentAgentExternalToken(state);
+                state.tabAuthorize.hidden = !state.connected;
+                state.tabAuthorize.disabled = !canUseAgentPanel(state) || agentAccessMintPending.has(state.id)
+                    || token?.status === 'minting';
                 const eligible = canUseAgentPanel(state) && !state.connecting && !state.error
                     && state.agent.mode !== AGENT_MODE_DISABLED && !state.agent.paused
                     && state.agent.mode !== AGENT_MODE_PAUSED
@@ -7323,12 +7354,19 @@
                 const agentCountdownEl = document.createElement('span');
                 agentCountdownEl.className = 'tab-agent-countdown';
                 agentCountdownEl.hidden = true;
+                const tabAuthorize = document.createElement('button');
+                tabAuthorize.type = 'button';
+                tabAuthorize.className = 'status-action tab-agent-authorize';
+                tabAuthorize.textContent = '🤖';
+                tabAuthorize.title = t('agent.access.grant');
+                tabAuthorize.setAttribute('aria-label', tabAuthorize.title);
+                tabAuthorize.hidden = true;
                 const closeBtn = document.createElement('button');
                 closeBtn.type = 'button';
                 closeBtn.className = 'tab-close';
                 closeBtn.title = t('browser.chrome.close_terminal');
                 closeBtn.innerText = '×';
-                tabEl.append(stateEl, titleEl, agentCountdownEl, closeBtn);
+                tabEl.append(stateEl, titleEl, agentCountdownEl, tabAuthorize, closeBtn);
                 tabsList.appendChild(tabEl);
 
                 const term = new Terminal({
@@ -7389,6 +7427,7 @@
                     tabEl,
                     titleEl,
                     agentCountdownEl,
+                    tabAuthorize,
                     term,
                     cursorHint: createCursorHint(term),
                     fitAddon,
@@ -7433,6 +7472,10 @@
                 configureWebLinks(state);
                 paneSelect.onclick = () => { switchTerminal(state.id); state.term.focus(); };
                 paneAuthorize.onclick = () => runTerminalPaneAction(state, 'agent-access-mint-btn');
+                tabAuthorize.onclick = event => {
+                    event.stopPropagation();
+                    runTerminalPaneAction(state, 'agent-access-mint-btn');
+                };
                 paneAgent.onclick = () => runTerminalPaneAction(state, 'agent-toggle-btn');
                 paneFiles.onclick = () => runTerminalPaneAction(state, 'sftp-status-btn');
                 panePause.onclick = () => pauseAgentForState(state);
@@ -8990,13 +9033,103 @@
                     formData.serial_port = getSelectedUartPort();
                     formData.baud_rate = uartBaudSelect.value;
                 } else if (connectionType === 'telnet') {
-                    formData.host = document.getElementById('telnet-host').value.trim();
-                    formData.port = document.getElementById('telnet-port').value;
-                    formData.encoding = document.getElementById('telnet-encoding').value;
+                    formData.host = telnetHost.value.trim();
+                    formData.port = telnetPort.value;
+                    formData.encoding = telnetEncoding.value;
                     if (!telnetNetworkOrigin.disabled && telnetNetworkOrigin.checked) formData.network_origin = 'windows';
                 }
                 return formData;
             }
+
+            function validTelnetProfile(profile) {
+                const port = getConnectionFieldSchema('telnet', 'port');
+                return profile && typeof profile.name === 'string' && profile.name.trim() === profile.name
+                    && profile.name.length > 0 && profile.name.length <= telnetProfileName.maxLength
+                    && typeof profile.host === 'string' && profile.host.length > 0
+                    && profile.host.length <= (getConnectionFieldSchema('telnet', 'host')?.max_length ?? 255)
+                    && !/[\u0000-\u0020\u007f]/.test(profile.host)
+                    && typeof profile.port === 'string' && /^[0-9]+$/.test(profile.port)
+                    && Number(profile.port) >= (port?.min_value ?? 1) && Number(profile.port) <= (port?.max_value ?? 65535)
+                    && [...telnetEncoding.options].some(option => option.value === profile.encoding)
+                    && ['core', 'windows'].includes(profile.networkOrigin);
+            }
+
+            function readTelnetProfiles() {
+                const profiles = JSON.parse(localStorage.getItem(TELNET_PROFILES_KEY) ?? '[]');
+                if (!Array.isArray(profiles) || !profiles.every(validTelnetProfile)
+                        || new Set(profiles.map(profile => profile.name)).size !== profiles.length) {
+                    throw new Error(t('telnet.profiles.storage_unavailable'));
+                }
+                return profiles;
+            }
+
+            function renderTelnetProfiles(profiles) {
+                telnetProfilePicker.replaceChildren(new Option(t('ssh.profiles.create'), ''), ...profiles.map(
+                    profile => new Option(profile.name, profile.name)));
+                telnetProfilePicker.value = selectedTelnetProfile?.name || '';
+                if (telnetProfilePicker.selectedIndex < 0) telnetProfilePicker.selectedIndex = 0;
+                telnetProfileDelete.disabled = !selectedTelnetProfile;
+            }
+
+            function editTelnetProfiles(edit) {
+                try {
+                    edit(readTelnetProfiles());
+                } catch {
+                    telnetProfileStatus.textContent = t('telnet.profiles.storage_unavailable');
+                }
+            }
+
+            document.getElementById('telnet-profiles').addEventListener('toggle', event => {
+                if (event.target.open) editTelnetProfiles(renderTelnetProfiles);
+            });
+            telnetProfilePicker.onchange = () => editTelnetProfiles(profiles => {
+                const profile = profiles.find(item => item.name === telnetProfilePicker.value);
+                selectedTelnetProfile = profile || null;
+                telnetProfileName.value = profile?.name || '';
+                telnetProfileStatus.textContent = '';
+                telnetProfileDelete.disabled = !profile;
+                if (!profile) return;
+                telnetHost.value = profile.host;
+                telnetPort.value = profile.port;
+                telnetEncoding.value = profile.encoding;
+                telnetNetworkOrigin.checked = profile.networkOrigin === 'windows';
+            });
+
+            function saveTelnetProfile(remove = false) {
+                if (remove && (!selectedTelnetProfile
+                    || !window.confirm(t('telnet.profiles.confirm_delete', { name: selectedTelnetProfile.name })))) return;
+                editTelnetProfiles(profiles => {
+                    const index = profiles.findIndex(profile => profile.name === selectedTelnetProfile?.name);
+                    if (selectedTelnetProfile && JSON.stringify(profiles[index]) !== JSON.stringify(selectedTelnetProfile)) {
+                        selectedTelnetProfile = null;
+                        telnetProfileStatus.textContent = t('telnet.profiles.changed_elsewhere');
+                        renderTelnetProfiles(profiles);
+                        return;
+                    }
+                    const profile = { name: telnetProfileName.value.trim(), host: telnetHost.value.trim(),
+                        port: telnetPort.value.trim(), encoding: telnetEncoding.value,
+                        networkOrigin: telnetNetworkOrigin.checked ? 'windows' : 'core' };
+                    if (!remove && !validTelnetProfile(profile)) {
+                        telnetProfileStatus.textContent = t('telnet.profiles.invalid');
+                        return;
+                    }
+                    if (!remove && profiles.some((item, i) => i !== index && item.name === profile.name)) {
+                        telnetProfileStatus.textContent = t('telnet.profiles.duplicate');
+                        return;
+                    }
+                    if (remove) profiles.splice(index, 1);
+                    else if (index < 0) profiles.push(profile);
+                    else profiles[index] = profile;
+                    localStorage.setItem(TELNET_PROFILES_KEY, JSON.stringify(profiles));
+                    const name = remove ? selectedTelnetProfile.name : profile.name;
+                    selectedTelnetProfile = remove ? null : profile;
+                    telnetProfileName.value = selectedTelnetProfile?.name || '';
+                    renderTelnetProfiles(profiles);
+                    telnetProfileStatus.textContent = t(remove ? 'telnet.profiles.deleted' : 'telnet.profiles.saved', { name });
+                });
+            }
+            document.getElementById('telnet-profile-save').onclick = () => saveTelnetProfile();
+            telnetProfileDelete.onclick = () => saveTelnetProfile(true);
 
             function resetSshFormFields() {
                 sshNetworkOrigin.checked = false;
@@ -9478,6 +9611,7 @@
                 if (!canUseAgentPanel(state) || agentAccessMintPending.has(state.id)) return;
                 const targetMode = normalizeAgentAccessMintMode(prefs.agentAccessMintMode);
                 agentAccessMintPending.add(state.id);
+                updateTabAgentIndicator(state);
                 updateAgentAccessMintButton();
                 try {
                     if (state.agent.mode !== targetMode || state.agent.paused) {

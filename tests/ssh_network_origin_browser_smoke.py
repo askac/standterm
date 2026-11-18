@@ -10,6 +10,7 @@ import ssh_routes_browser_smoke as routes
 
 def set_available(page, available):
     page.evaluate('''available => {
+        window.terminalTest.holdTerminalPolicyForTest();
         const policy = window.terminalTest.getTerminalPolicy();
         const ssh = policy.connection_options.find(item => item.connection_type === 'ssh');
         ssh.start_fields = ssh.start_fields.filter(field => field.name !== 'network_origin');
@@ -170,6 +171,37 @@ def test_saved_profiles_and_portable_export(browser, url):
         fixture.close_context(context)
 
 
+def test_profile_editor_tracks_network_capability(browser, url):
+    context, page = routes.new_page(browser, url)
+    try:
+        routes.show_ssh(page)
+        set_available(page, False)
+        page.fill('#host', 'profile.test')
+        page.fill('#username', 'operator')
+        page.click('#quick-settings')
+        page.click('.settings-nav-item[data-tab="ssh-sessions"]')
+        page.wait_for_function("() => !document.getElementById('ssh-profile-save').disabled")
+        network = page.locator('#ssh-profile-node .ssh-network-settings')
+        assert network.is_hidden()
+        set_available(page, True)
+        assert network.is_visible()
+        network.locator('summary').click()
+        network.locator('input').check()
+        set_available(page, False)
+        assert network.is_hidden()
+        page.fill('#ssh-profile-name', 'Windows profile')
+        page.click('#ssh-profile-save')
+        page.wait_for_function("""async () => (await window.terminalTest.getSshSessionState()).profiles
+            .some(profile => profile.name === 'Windows profile' && profile.networkOrigin === 'windows')""")
+        page.click('#settings-close')
+        profile_id = page.evaluate('async () => (await window.terminalTest.getSshSessionState()).profiles[0].id')
+        set_available(page, True)
+        routes.select(page, profile_id, direct=True)
+        assert page.evaluate('() => window.terminalTest.prepareSshConnectionForTest()')['network_origin'] == 'windows'
+    finally:
+        fixture.close_context(context)
+
+
 def test_history_distinguishes_actual_networks(browser, url):
     context, page = routes.new_page(browser, url)
     try:
@@ -260,6 +292,7 @@ def main():
                 for locale in ['en', 'zh-TW']:
                     test_selection_and_route_scope(browser, url, locale)
                 test_saved_profiles_and_portable_export(browser, url)
+                test_profile_editor_tracks_network_capability(browser, url)
                 test_history_distinguishes_actual_networks(browser, url)
                 test_trust_retry_keeps_the_selected_network(browser, url)
             finally:

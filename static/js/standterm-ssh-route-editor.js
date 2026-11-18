@@ -68,11 +68,14 @@
         label.append(input, document.createTextNode(translate('connection.use_windows_network')));
         const hint = document.createElement('p');
         hint.textContent = translate('connection.network_hint');
-        details.hidden = !available;
-        input.disabled = !available;
+        function setAvailable(enabled) {
+            details.hidden = !enabled;
+            input.disabled = !enabled;
+        }
+        setAvailable(available);
         details.append(summary, label, hint);
         parent.append(details);
-        return { read: () => input.checked ? 'windows' : 'core', element: details };
+        return { read: () => input.checked ? 'windows' : 'core', setAvailable, element: details };
     };
 
     routes.edit = function({ state, entryId, target, onDone, keys = [], temporaryKeys = [], saveRoute = false, keyAllowed = false,
