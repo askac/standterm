@@ -63,6 +63,14 @@ def main():
     })
     sys.argv = [str(root / 'app.py')]
     import app as standterm
+    if os.environ.get('SHELL') == sys.executable and standterm.is_wsl():
+        # Older WSL --exec sets SHELL to the executable it launches.
+        import pwd
+        try:
+            login_shell = pwd.getpwuid(os.getuid()).pw_shell
+        except KeyError:
+            login_shell = ''
+        os.environ['SHELL'] = login_shell or '/bin/sh'
     standterm.app.config['DESKTOP_FLOATING_WINDOWS'] = True
     # Finder starts apps without the login-shell environment used by Terminal.
     # Let each local shell load its own profile (MacPorts/Homebrew/user PATH).

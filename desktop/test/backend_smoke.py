@@ -24,7 +24,7 @@ def main():
                    STANDTERM_SESSION_RECOVERY_STORE=str(Path(temporary) / 'credentials.json'))
         proc = subprocess.Popen(
             [sys.executable, '-u', str(ROOT / 'desktop' / 'backend.py')],
-            cwd=ROOT, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            cwd=temporary, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, text=True,
         )
         try:

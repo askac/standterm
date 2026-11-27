@@ -157,19 +157,26 @@ async function run(win, contents, browserAccess) {
     const visible = () => toolbar("document.getElementById('notice-area').classList.contains('visible')");
     const background = new BrowserWindow({ width: 300, height: 200, show: false,
       webPreferences: { sandbox: true, nodeIntegration: false, contextIsolation: true } });
+    const originalNoticeCopy = clipboard.writeText;
     try {
       await background.loadURL('data:text/html,<p>Background timer fixture</p>');
       background.show(); background.focus();
       await until(() => BrowserWindow.getFocusedWindow() === background, 'background timer focus');
-      for (const [noticeId, error, minimumMs] of [[-1, false, 4900], [-2, true, 9900]]) {
+      await until(async () => !await visible()
+        && await toolbar("document.getElementById('notice').textContent") === '', 'previous notice cleared');
+      for (const [error, minimumMs] of [[false, 4900], [true, 9900]]) {
+        clipboard.writeText = () => {
+          if (error) throw new Error('Isolated clipboard failure.');
+        };
         const started = Date.now();
-        win.webContents.send('standterm-toolbar-state', { notice: 'Isolated Mac notice fixture.', noticeId, error });
+        assert.equal(await browserAccess.run('copy-token'), !error);
         await until(visible, 'notice visible');
+        assert.equal(await toolbar("document.getElementById('notice-area').classList.contains('error')"), error);
         await until(async () => !await visible(), 'notice fade');
         assert.ok(Date.now() - started >= minimumMs, 'notice must not disappear early');
         await until(async () => await toolbar("document.getElementById('notice').textContent") === '', 'notice text cleared');
       }
-    } finally { background.destroy(); }
+    } finally { clipboard.writeText = originalNoticeCopy; background.destroy(); }
     win.focus(); contents.focus();
     await until(() => BrowserWindow.getFocusedWindow() === win, 'focus after background notices');
     const layout = await toolbar(`({

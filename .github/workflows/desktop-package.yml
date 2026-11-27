@@ -9,8 +9,9 @@ permissions:
   contents: read
 
 env:
-  CORE_REF: v2.17.0
-  CORE_COMMIT: 3ee553ed6237e2aab618b33e6c1a5a3357dbb35e
+  CORE_REF: v2.17.1
+  CORE_COMMIT: e4b2b788e6d3ac043bd9e7fa125798b0981f7bf8
+  CORE_SOURCE_COMMIT: 58af7e1156b1443ea3cac88d3cd0b5dafd89345d
   CSC_IDENTITY_AUTO_DISCOVERY: 'false'
   STANDTERM_DISABLE_AGENTINFO_CURRENT: '1'
   PYTHONDONTWRITEBYTECODE: '1'
@@ -20,13 +21,13 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '24'
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           architecture: arm64
@@ -43,11 +44,11 @@ jobs:
           mkdir -p desktop/dist/artifacts/evidence
       - name: Test Desktop source
         run: npm test --prefix desktop > desktop/dist/artifacts/evidence/desktop-unit.log 2>&1
-      - name: Stage formal Core and build native DMG
+      - name: Stage pinned Core source and build native DMG
         run: |
-          stage=$(node desktop/stage-windows.cjs --macos --core-ref "$CORE_REF")
+          stage=$(node desktop/stage-windows.cjs --macos --core-ref "$CORE_SOURCE_COMMIT")
           echo "DESKTOP_STAGE=$stage" >> "$GITHUB_ENV"
-          node desktop/test/core-release-inspect.cjs "$stage" "$CORE_REF" > desktop/dist/artifacts/evidence/core-release.json
+          node desktop/test/core-release-inspect.cjs "$stage" "$CORE_REF" "$CORE_SOURCE_COMMIT" > desktop/dist/artifacts/evidence/core-release.json
           npm ci --prefix "$stage" --no-audit --no-fund
           npm run make:mac --prefix "$stage"
       - name: Inspect the app and mounted DMG
@@ -77,7 +78,7 @@ jobs:
           export STANDTERM_DESKTOP_PYTHON="$GITHUB_WORKSPACE/tools/.venv_macos/bin/python"
           export STANDTERM_AGENT_RUNTIME_DIR="$runtime/agent-state"
           export STANDTERM_SESSION_RECOVERY_STORE="$runtime/recovery.json"
-          node desktop/test/packaged-smoke-runner.cjs "$DESKTOP_APP/Contents/MacOS/StandTermDesktop" macos > desktop/dist/artifacts/evidence/packaged-smoke.log 2>&1
+          node desktop/test/packaged-smoke-runner.cjs "$DESKTOP_APP/Contents/MacOS/StandTermDesktop" macos --desktop-capture-smoke > desktop/dist/artifacts/evidence/packaged-smoke.log 2>&1
       - name: Exercise first-run setup and reuse
         id: setup
         continue-on-error: true
@@ -97,7 +98,8 @@ jobs:
           from pathlib import Path
           info = {
               'sourceCommit': os.environ['GITHUB_SHA'],
-              'coreCommit': os.environ['CORE_COMMIT'],
+              'coreReleaseCommit': os.environ['CORE_COMMIT'],
+              'coreCommit': os.environ['CORE_SOURCE_COMMIT'],
               'platform': platform.platform(), 'architecture': platform.machine(),
               'python': platform.python_version(),
               'runUrl': f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
@@ -110,7 +112,7 @@ jobs:
           PY
           cd "desktop/dist/release/$(basename "$DESKTOP_STAGE")"
           shasum -a 256 *.dmg > SHA256SUMS.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: StandTerm-Desktop-macos-arm64
@@ -127,13 +129,13 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '24'
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           architecture: x64
@@ -151,12 +153,12 @@ jobs:
           New-Item -ItemType Directory desktop/dist/artifacts/evidence
       - name: Test Desktop source
         run: npm test --prefix desktop *> desktop/dist/artifacts/evidence/desktop-unit.log
-      - name: Stage formal Core and build native installer
+      - name: Stage pinned Core source and build native installer
         run: |
-          $stage = node desktop/stage-windows.cjs --core-ref $env:CORE_REF
+          $stage = node desktop/stage-windows.cjs --core-ref $env:CORE_SOURCE_COMMIT
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "DESKTOP_STAGE=$stage" >> $env:GITHUB_ENV
-          node desktop/test/core-release-inspect.cjs $stage $env:CORE_REF > desktop/dist/artifacts/evidence/core-release.json
+          node desktop/test/core-release-inspect.cjs $stage $env:CORE_REF $env:CORE_SOURCE_COMMIT > desktop/dist/artifacts/evidence/core-release.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm ci --prefix $stage --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -178,7 +180,7 @@ jobs:
           $env:STANDTERM_DESKTOP_PYTHON = "$env:GITHUB_WORKSPACE/tools/.venv_win/Scripts/python.exe"
           $env:STANDTERM_AGENT_RUNTIME_DIR = "$runtime/agent-state"
           $env:STANDTERM_SESSION_RECOVERY_STORE = "$runtime/recovery.json"
-          node desktop/test/packaged-smoke-runner.cjs $env:DESKTOP_APP windows *> desktop/dist/artifacts/evidence/packaged-smoke.log
+          node desktop/test/packaged-smoke-runner.cjs $env:DESKTOP_APP windows --desktop-capture-smoke *> desktop/dist/artifacts/evidence/packaged-smoke.log
           exit $LASTEXITCODE
       - name: Exercise first-run preparation and reuse
         id: setup
@@ -195,7 +197,7 @@ jobs:
           Copy-Item "$env:DESKTOP_STAGE/bundle/manifest.json" desktop/dist/artifacts/evidence/core-manifest.json
           Copy-Item "$env:DESKTOP_STAGE/release-identity.json" desktop/dist/artifacts/evidence/release-identity.json
           $info = [ordered]@{
-            sourceCommit = $env:GITHUB_SHA; coreCommit = $env:CORE_COMMIT
+            sourceCommit = $env:GITHUB_SHA; coreReleaseCommit = $env:CORE_COMMIT; coreCommit = $env:CORE_SOURCE_COMMIT
             platform = 'win32'; architecture = 'x64'
             runUrl = "https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
             packagedSmoke = $env:SMOKE_RESULT; firstRunSetup = $env:SETUP_RESULT
@@ -208,7 +210,7 @@ jobs:
           Get-ChildItem "$release/*Setup.exe" | ForEach-Object {
             (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() + '  ' + $_.Name
           } > "$release/SHA256SUMS.txt"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: StandTerm-Desktop-windows-x64

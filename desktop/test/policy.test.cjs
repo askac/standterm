@@ -73,13 +73,22 @@ test('page cannot navigate to other origins, files or executable URLs', () => {
   assert.equal(allowedNavigation('data:text/html,hello', origin), false);
 });
 
-test('WSL arguments preserve paths without shell interpolation', () => {
-  const config = backendCommand('/repo', 'win32', {
-    STANDTERM_DESKTOP_WSL_DISTRO: 'Ubuntu',
-    STANDTERM_DESKTOP_WSL_REPO: '/mnt/d/My Project/standterm',
-  });
-  assert.equal(config.executable, 'wsl.exe');
-  assert.ok(config.args.includes('/mnt/d/My Project/standterm/desktop/backend.py'));
-  assert.ok(config.args.includes('--exec'));
+test('WSL source launches use absolute arguments without legacy --cd handling', () => {
+  const root = 'C:\\StandTerm Source';
+  const distro = 'Ubuntu Test';
+  for (const repo of ['/home/test/StandTerm Project', '/mnt/d/My Project/standterm']) {
+    for (const python of [undefined, '/opt/Shared Python/bin/python']) {
+      const config = backendCommand(root, 'win32', {
+        STANDTERM_DESKTOP_WSL_DISTRO: distro,
+        STANDTERM_DESKTOP_WSL_REPO: repo,
+        STANDTERM_DESKTOP_WSL_PYTHON: python,
+      });
+      assert.equal(config.executable, 'wsl.exe');
+      assert.equal(config.args.includes('--cd'), false, 'the backend selects its Linux working directory');
+      assert.deepEqual(config.args, ['--distribution', distro, '--exec', python || `${repo}/tools/.venv_wsl/bin/python`,
+        '-u', `${repo}/desktop/backend.py`]);
+      assert.equal(config.cwd, root);
+    }
+  }
   assert.throws(() => backendCommand('/repo', 'win32', { STANDTERM_DESKTOP_WSL_DISTRO: 'Ubuntu' }));
 });

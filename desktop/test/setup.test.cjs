@@ -179,6 +179,38 @@ test('ready managed environments are reused without running pip again', async ()
   assert.equal(f.calls.some(args => args.includes('--prepare')), false);
 });
 
+test('fresh and reused WSL runtimes launch without legacy --cd handling', async () => {
+  const runtime = '/home/test/runtime';
+  for (const ready of [false, true]) {
+    const f = await fixture({ ready });
+    const command = await f.run();
+    assert.equal(command.executable, 'wsl.exe');
+    assert.equal(command.args.includes('--cd'), false, 'the backend selects its Linux working directory');
+    assert.deepEqual(Array.from(command.args), ['--distribution', 'Ubuntu Test', '--exec',
+      path.posix.join(runtime, 'tools', '.venv_wsl', 'bin', 'python'),
+      '-u', path.posix.join(runtime, 'desktop', 'backend.py')]);
+    assert.equal(command.cwd, f.root);
+  }
+});
+
+test('WSL Git Core checks and bundled recovery avoid legacy --cd handling', async () => {
+  const runtime = '/home/test/runtime';
+  for (const action of ['check', 'recover']) {
+    const f = await fixture();
+    const command = await f.manage(action);
+    const request = f.calls.find(args => args.includes('--action'));
+    const bundle = request[request.indexOf('--bundle') + 1];
+    const git = action !== 'recover';
+    const script = git ? path.posix.join(bundle, 'backend.py') : path.posix.join(runtime, 'desktop', 'backend.py');
+    assert.equal(command.executable, 'wsl.exe');
+    assert.equal(command.args.includes('--cd'), false, 'the backend selects its Linux working directory');
+    assert.deepEqual(Array.from(command.args), ['--distribution', 'Ubuntu Test', '--exec',
+      path.posix.join(runtime, 'tools', '.venv_wsl', 'bin', 'python'), '-u', script,
+      ...(git ? ['--git-core', path.posix.join(runtime, 'repo')] : [])]);
+    assert.equal(command.cwd, f.root);
+  }
+});
+
 test('macOS prepares a native runtime and reuses it with only Python launcher metadata', async () => {
   for (const ready of [false, true]) {
     const f = await fixture({ macos: true, ready });
